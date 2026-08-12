@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -40,6 +41,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupActivatesAllocationLifecycle(t *testing.T) {
+	group := groupop.NewArgument()
+	defer group.Release()
+	_, ownsAllocation := any(group).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeGroup := groupop.NewArgumentMergeGroup()
+	defer mergeGroup.Release()
+	_, ownsAllocation = any(mergeGroup).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+}
 
 func TestJoinAllocationLifecycleErrorsPreservesSingle(t *testing.T) {
 	primary := moerr.NewDuplicateEntryNoCtx("duplicate", "primary")

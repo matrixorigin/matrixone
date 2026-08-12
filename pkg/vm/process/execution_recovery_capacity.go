@@ -43,6 +43,40 @@ func NewExecutionRecoveryCapacity(
 	return &ExecutionRecoveryCapacity{generation: generation}, nil
 }
 
+// NewExecutionRecoveryCapacitySlot creates an inactive controller whose stable
+// address can be registered with an allocation account before an execution
+// attempt starts. Activate binds the slot to that attempt. Keeping registration
+// in the allocation-owner lifecycle avoids rebuilding controller metadata in
+// every operator Prepare while preserving the same per-attempt capacity floor.
+func NewExecutionRecoveryCapacitySlot() *ExecutionRecoveryCapacity {
+	return &ExecutionRecoveryCapacity{closed: true}
+}
+
+// Activate binds an inactive slot to one execution generation. A live slot may
+// only be activated again with the same generation; Close must first drain it
+// before it can be reused by another attempt.
+func (c *ExecutionRecoveryCapacity) Activate(
+	generation *ExecutionResourceGeneration,
+) error {
+	if c == nil || generation == nil || generation.budget == nil || generation.Closed() {
+		return ErrExecutionResourceInvalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != nil && !c.closed {
+		if c.generation == generation {
+			return nil
+		}
+		return ErrExecutionResourceInvalid
+	}
+	if c.capacity != 0 || c.borrowed != 0 {
+		return mpool.ErrAllocationAccountLive
+	}
+	c.generation = generation
+	c.closed = false
+	return nil
+}
+
 // EnsureCapacity raises the reusable recovery floor before an operator retains
 // state which may later need that floor to make spill progress.
 func (c *ExecutionRecoveryCapacity) EnsureCapacity(target uint64) error {

@@ -979,14 +979,26 @@ func allocationAccountLiveDiagnostic(
 	for i := range globalPtrShards {
 		shard := &globalPtrShards[i]
 		shard.mu.Lock()
-		for _, lease := range shard.leases {
-			record(lease)
+		for _, metadata := range shard.accounted {
+			record(metadata.lease)
 		}
 		shard.mu.Unlock()
 	}
-	// noLock pools intentionally provide no synchronization for their local
-	// maps. Do not race unrelated single-threaded pools merely to enrich a
-	// terminal error; production query pools use the sharded metadata above.
+	// First filter noLock pools by their atomic, lifetime-stable account binding.
+	// This is essential: maps owned by unrelated queries may still be mutating.
+	// Terminal publication happens only after this account's configured owners
+	// have quiesced, so only the matching pools' owner-only maps are stable.
+	globalPools.Range(func(_, value any) bool {
+		mp, ok := value.(*MPool)
+		if !ok || mp == nil || !mp.noLock ||
+			mp.noLockAllocationAccount.Load() != account {
+			return true
+		}
+		for _, metadata := range mp.accountedPtrs {
+			record(metadata.lease)
+		}
+		return true
+	})
 	return owner, site, count
 }
 

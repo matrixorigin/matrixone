@@ -159,3 +159,19 @@ func (a *AllocationAccount) newArgumentBuffer(
 		a.capacityClass,
 	)
 }
+
+func makeAccountedScratch[T any](
+	a *AllocationAccount, mp *mpool.MPool, length int,
+) ([]T, error) {
+	if a == nil {
+		return mpool.MakeSlice[T](length, mp, true)
+	}
+	return mpool.MakeSliceAccountedWithCapacityClass[T](
+		length,
+		mp,
+		a.account,
+		a.owner,
+		a.sites.ArgumentArena,
+		a.capacityClass,
+	)
+}

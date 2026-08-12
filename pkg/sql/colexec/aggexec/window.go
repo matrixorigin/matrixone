@@ -37,6 +37,18 @@ func (s i64Slice) MarshalBinary() ([]byte, error) {
 	return types.EncodeSlice[int64](s), nil
 }
 
+func readI64Slice(reader io.Reader, state string) (i64Slice, error) {
+	size, encoded, err := types.ReadSizeBytes(reader)
+	if err != nil {
+		return nil, err
+	}
+	if size < 0 || len(encoded)%8 != 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"%s state is not an int64 slice", state)
+	}
+	return types.DecodeSlice[int64](encoded), nil
+}
+
 // special structure for a single column window function.
 type singleWindowExec struct {
 	singleAggInfo
@@ -104,27 +116,52 @@ func (exec *percentRankExec) SaveIntermediateResultOfChunk(chunk int, writer io.
 }
 
 func (exec *percentRankExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacementValue, err := makePercentRankExec(
+		mp, exec.singleAggInfo.aggID, exec.singleAggInfo.distinct)
+	if err != nil {
+		return err
+	}
+	replacement := replacementValue.(*percentRankExec)
+	if err = replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *percentRankExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"percent_rank group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "percent_rank group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *percentRankExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -234,27 +271,47 @@ func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io
 }
 
 func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeRankDenseRankRowNumber(mp, exec.singleAggInfo).(*singleWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *singleWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"window group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "window group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -478,32 +535,52 @@ func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.
 }
 
 func (exec *ntileWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeNtileWindowExec(mp, exec.singleAggInfo).(*ntileWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *ntileWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		exec.bucketCounts = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"ntile group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		exec.bucketCounts = make([]int64, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			data, err := readI64Slice(reader, "ntile group")
 			if err != nil {
 				return err
 			}
-			data := types.DecodeSlice[int64](bs)
 			if len(data) > 0 {
 				exec.bucketCounts[i] = data[len(data)-1]
 				exec.groups[i] = data[:len(data)-1]
 			}
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *ntileWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -644,27 +721,47 @@ func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, writer 
 }
 
 func (exec *cumeDistWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeCumeDist(mp, exec.singleAggInfo).(*cumeDistWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *cumeDistWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"cume_dist group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "cume_dist group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *cumeDistWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {

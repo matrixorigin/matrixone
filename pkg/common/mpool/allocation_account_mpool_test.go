@@ -195,6 +195,85 @@ func TestMPoolTerminalLeakDiagnosticUsesPublishedProvenance(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestMPoolTerminalLeakDiagnosticScansNoLockPool(t *testing.T) {
+	registry, account := newTestAllocationAccount(t, 64, 1)
+	mp := MustNewNoLock("accounted-terminal-no-lock-diagnostic")
+	require.NoError(t, mp.BindAllocationAccount(account))
+	buffer, err := mp.AllocAccounted(
+		64,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.True(t, first)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Equal(t, testAllocationOwner, snapshot.LiveOwner)
+	require.Equal(t, testAllocationSite, snapshot.LiveSite)
+	require.Equal(t, uint64(1), snapshot.LiveAllocations)
+
+	mp.Free(buffer)
+	DeleteMPool(mp)
+	require.False(t, registry.AdmissionSuspended())
+	_, ok := registry.Resolve(snapshot.Handle)
+	require.False(t, ok)
+}
+
+func TestMPoolTerminalLeakDiagnosticSkipsUnrelatedActiveNoLockPool(t *testing.T) {
+	firstRegistry, first := newTestAllocationAccount(t, 64, 1)
+	secondRegistry, second := newTestAllocationAccount(t, 64, 1)
+	firstMP := MustNewNoLock("accounted-terminal-first-no-lock-diagnostic")
+	secondMP := MustNewNoLock("accounted-terminal-second-no-lock-diagnostic")
+	require.NoError(t, firstMP.BindAllocationAccount(first))
+	require.NoError(t, secondMP.BindAllocationAccount(second))
+
+	firstBuffer, err := firstMP.AllocAccounted(
+		64, first, testAllocationOwner, testAllocationSite)
+	require.NoError(t, err)
+	secondBuffer, err := secondMP.AllocAccounted(
+		64, second, testAllocationOwner, testAllocationSite)
+	require.NoError(t, err)
+
+	snapshot, firstPublication, err := firstRegistry.CompleteTerminal(first)
+	require.True(t, firstPublication)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Equal(t, uint64(1), snapshot.LiveAllocations)
+
+	firstMP.Free(firstBuffer)
+	secondMP.Free(secondBuffer)
+	DeleteMPool(firstMP)
+	DeleteMPool(secondMP)
+	require.False(t, firstRegistry.AdmissionSuspended())
+	finalizeTestAllocationAccount(t, secondRegistry, second)
+}
+
+func TestMPoolAccountedNoLockPoolRequiresMatchingBinding(t *testing.T) {
+	firstRegistry, first := newTestAllocationAccount(t, 64, 1)
+	secondRegistry, second := newTestAllocationAccount(t, 64, 1)
+	mp := MustNewNoLock("accounted-no-lock-binding")
+
+	_, err := mp.AllocAccounted(
+		64, first, testAllocationOwner, testAllocationSite)
+	require.ErrorIs(t, err, ErrAllocationAccountInvariant)
+	require.Zero(t, first.Snapshot().Used)
+
+	require.NoError(t, mp.BindAllocationAccount(first))
+	_, err = mp.AllocAccounted(
+		64, second, testAllocationOwner, testAllocationSite)
+	require.ErrorIs(t, err, ErrAllocationAccountMismatch)
+	require.Zero(t, second.Snapshot().Used)
+
+	buffer, err := mp.AllocAccounted(
+		64, first, testAllocationOwner, testAllocationSite)
+	require.NoError(t, err)
+	mp.Free(buffer)
+	DeleteMPool(mp)
+	finalizeTestAllocationAccount(t, firstRegistry, first)
+	finalizeTestAllocationAccount(t, secondRegistry, second)
+}
+
 func TestMPoolMakeSliceAccounted(t *testing.T) {
 	registry, account := newTestAllocationAccount(t, 64, 2)
 	mp := MustNew("accounted-typed-slice")
@@ -608,6 +687,7 @@ func TestMPoolAccountedCrossPoolAndTeardown(t *testing.T) {
 	t.Run("no-lock-teardown", func(t *testing.T) {
 		registry, account := newTestAllocationAccount(t, 64, 1)
 		mp := MustNewNoLock("accounted-no-lock-teardown")
+		require.NoError(t, mp.BindAllocationAccount(account))
 		globalBefore := GlobalStats().NumCurrBytes.Load()
 		_, err := mp.AllocAccounted(
 			64,

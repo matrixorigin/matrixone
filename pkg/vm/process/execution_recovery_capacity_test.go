@@ -51,6 +51,30 @@ func TestExecutionRecoveryCapacitySupports256Workers(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestExecutionRecoveryCapacitySlotActivationLifecycle(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1024, 1024)
+	first, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	second, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+
+	slot := NewExecutionRecoveryCapacitySlot()
+	require.ErrorIs(t, slot.EnsureCapacity(1), ErrExecutionSpillReservationInactive)
+	require.NoError(t, slot.Activate(first))
+	require.NoError(t, slot.Activate(first))
+	require.ErrorIs(t, slot.Activate(second), ErrExecutionResourceInvalid)
+	require.NoError(t, slot.EnsureCapacity(64))
+	require.Equal(t, uint64(64), first.Used())
+	require.NoError(t, slot.Close())
+	require.Zero(t, first.Used())
+
+	require.NoError(t, slot.Activate(second))
+	require.NoError(t, slot.EnsureCapacity(32))
+	require.Equal(t, uint64(32), second.Used())
+	require.NoError(t, slot.Close())
+	require.Zero(t, second.Used())
+}
+
 func TestExecutionRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
 	budget := MustNewExecutionResourceBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)

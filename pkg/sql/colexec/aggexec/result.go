@@ -104,11 +104,13 @@ func (r *aggResultWithFixedType[T]) Size() int64 {
 }
 
 func (r *aggResultWithFixedType[T]) setupT() {
-	if len(r.optSplitResult.resultList) > 0 {
-		r.values = make([][]T, len(r.optSplitResult.resultList))
-		for i := range r.values {
-			r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
-		}
+	if len(r.optSplitResult.resultList) == 0 {
+		r.values = nil
+		return
+	}
+	r.values = make([][]T, len(r.optSplitResult.resultList))
+	for i := range r.values {
+		r.values[i] = vector.MustFixedColNoTypeCheck[T](r.optSplitResult.resultList[i])
 	}
 }
 
@@ -231,8 +233,13 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) err
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
+		selection, err := aggregateChunkSelection(
+			flags, i, r.resultList[i].Length())
+		if err != nil {
+			return err
+		}
 		if err := rvec.UnionBatch(
-			r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp,
+			r.resultList[i], 0, r.resultList[i].Length(), selection, r.mp,
 		); err != nil {
 			return err
 		}
@@ -250,8 +257,13 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) err
 		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
+			selection, err := aggregateChunkSelection(
+				flags, i, r.emptyList[i].Length())
+			if err != nil {
+				return err
+			}
 			if err := mvec.UnionBatch(
-				r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp,
+				r.emptyList[i], 0, r.emptyList[i].Length(), selection, r.mp,
 			); err != nil {
 				return err
 			}
@@ -267,12 +279,48 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, writer io.Writer) err
 			return err
 		}
 	} else {
-		cnt = int64(rvec.Length())
+		if len(r.distinct) != len(r.resultList) {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state chunks do not match result chunks")
+		}
+		selectedMaps := int64(0)
+		for i := range r.distinct {
+			if len(r.distinct[i].maps) != r.resultList[i].Length() {
+				return moerr.NewInvalidInputNoCtx(
+					"aggregate distinct-state rows do not match result rows")
+			}
+			selection, err := aggregateChunkSelection(
+				flags, i, r.resultList[i].Length())
+			if err != nil {
+				return err
+			}
+			count, err := r.distinct[i].selectedCount(selection)
+			if err != nil {
+				return err
+			}
+			selectedMaps += count
+		}
+		if selectedMaps != int64(rvec.Length()) {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate selected distinct states do not match result rows")
+		}
+		// Unmarshal compacts every selected result into one physical chunk, so
+		// encode the corresponding distinct maps as one flat frame as well.
+		cnt = 1
 		if err := types.WriteInt64(writer, cnt); err != nil {
 			return err
 		}
+		if err := types.WriteInt64(writer, selectedMaps); err != nil {
+			return err
+		}
 		for i := range r.distinct {
-			if err := r.distinct[i].marshalToBuffers(flags[i], writer); err != nil {
+			selection, err := aggregateChunkSelection(
+				flags, i, r.resultList[i].Length())
+			if err != nil {
+				return err
+			}
+			if err := r.distinct[i].marshalSelectedMaps(
+				selection, writer); err != nil {
 				return err
 			}
 		}
@@ -303,7 +351,12 @@ func (r *optSplitResult) marshalChunkToBuffer(chunk int, writer io.Writer) error
 			return err
 		}
 	} else {
-		cnt = int64(len(r.distinct[chunk].maps))
+		if chunk >= len(r.distinct) ||
+			len(r.distinct[chunk].maps) != r.resultList[chunk].Length() {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state rows do not match result chunk")
+		}
+		cnt = 1
 		if err := types.WriteInt64(writer, cnt); err != nil {
 			return err
 		}
@@ -358,24 +411,51 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 			"invalid aggregate distinct-state count %d", cnt)
 	}
 	if cnt > 0 {
-		maxInt := int64(^uint(0) >> 1)
-		if cnt > maxInt {
-			return mpool.ErrAllocationAllocatorLimit
+		expectedRows := r.resultList[0].Length()
+		if expectedRows == 0 {
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct state exists for an empty result")
 		}
-		// Every distinct state starts with an eight-byte map count. Bound
-		// complete in-memory records before corrupt framing can trigger a
-		// data-scaled Go allocation.
-		if sized, ok := reader.(interface{ Len() int }); ok &&
-			cnt > int64(sized.Len()/8) {
-			return io.ErrUnexpectedEOF
+		// The current wire writes one flat distinct frame. Older writers used
+		// the selected map count as this outer value and then emitted one frame
+		// per physical result chunk. Accept both forms and normalize them to the
+		// single compacted result chunk decoded above.
+		legacy := cnt != 1
+		if legacy && cnt != int64(expectedRows) {
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid legacy aggregate distinct-state count %d for %d result rows",
+				cnt, expectedRows)
 		}
-		r.distinct = make([]distinctHash, int(cnt))
-		for i := range r.distinct {
-			r.distinct[i] = newDistinctHash(r.mp)
-			if err = r.distinct[i].unmarshalFromReader(reader, r.mp); err != nil {
+		flattened := newDistinctHash(r.mp)
+		for len(flattened.maps) < expectedRows {
+			var frame distinctHash
+			frame = newDistinctHash(r.mp)
+			if err = frame.unmarshalFromReader(reader, r.mp); err != nil {
+				frame.free()
+				flattened.free()
 				return err
 			}
+			if len(frame.maps) == 0 ||
+				len(frame.maps) > expectedRows-len(flattened.maps) {
+				frame.free()
+				flattened.free()
+				return moerr.NewInvalidInputNoCtx(
+					"aggregate distinct-state frame does not match result rows")
+			}
+			flattened.maps = append(flattened.maps, frame.maps...)
+			flattened.itrs = append(flattened.itrs, frame.itrs...)
+			frame.maps = nil
+			frame.itrs = nil
+			if !legacy {
+				break
+			}
 		}
+		if len(flattened.maps) != expectedRows {
+			flattened.free()
+			return moerr.NewInvalidInputNoCtx(
+				"aggregate distinct-state rows do not match result rows")
+		}
+		r.distinct = []distinctHash{flattened}
 	}
 	return nil
 }
@@ -389,17 +469,23 @@ func (r *optSplitResult) init(
 	r.optInformation.shouldSetNullToEmptyGroup = needEmptyList
 	r.optInformation.chunkSize = GetChunkSizeFromType(typ)
 	r.optInformation.hasDistinct = hasDistinct
+	r.resetEmpty()
+}
 
-	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(typ))
-	if needEmptyList {
+func (r *optSplitResult) resetEmpty() {
+	r.free()
+	r.resultList = append(r.resultList, vector.NewOffHeapVecWithType(r.resultType))
+	if r.optInformation.doesThisNeedEmptyList {
 		r.emptyList = append(r.emptyList, vector.NewOffHeapVecWithType(types.T_bool.ToType()))
 		r.bsFromEmptyList = append(r.bsFromEmptyList, nil)
 	}
 
-	if hasDistinct {
-		r.distinct = append(r.distinct, newDistinctHash(mp))
+	if r.optInformation.hasDistinct {
+		r.distinct = append(r.distinct, newDistinctHash(r.mp))
 	}
 	r.nowIdx1 = 0
+	r.accessIdx1 = 0
+	r.accessIdx2 = 0
 }
 
 func (r *optSplitResult) getChunkSize() int {

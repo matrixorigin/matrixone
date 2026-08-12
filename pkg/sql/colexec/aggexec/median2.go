@@ -17,7 +17,9 @@ package aggexec
 import (
 	"cmp"
 	io "io"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +41,7 @@ func MedianReturnType(args []types.Type) types.Type {
 
 type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
+	accounted    *aggExec
 	distinctHash distinctHash
 	ret          aggResultWithFixedType[R]
 	groups       []*Vectors[T]
@@ -58,10 +61,16 @@ func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R t
 }
 
 func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
+	if exec.accounted != nil {
+		return exec.accounted
+	}
 	return &exec.ret.optSplitResult
 }
 
 func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
+	if exec.accounted != nil {
+		return exec.accounted.GroupGrow(more)
+	}
 	if exec.IsDistinct() {
 		if err := exec.distinctHash.grows(more); err != nil {
 			return err
@@ -81,6 +90,9 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 }
 
 func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
+	if exec.accounted != nil {
+		return exec.accounted.PreAllocateGroups(more)
+	}
 	if len(exec.groups) == 0 {
 		exec.groups = make([]*Vectors[T], 0, more)
 	} else {
@@ -92,30 +104,121 @@ func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	if exec.accounted != nil {
+		return exec.saveAccountedIntermediate(cnt, flags, writer)
+	}
 	return marshalRetAndGroupsToBuffer(cnt, flags, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	if exec.accounted != nil {
+		if chunk < 0 || chunk >= len(exec.accounted.state) {
+			return moerr.NewInvalidInputNoCtx("invalid median chunk")
+		}
+		return exec.saveAccountedIntermediateChunk(chunk, writer)
+	}
 	return marshalChunkToBuffer(chunk, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
+func (exec *medianColumnExecSelf[T, R]) saveAccountedIntermediateChunk(
+	chunk int,
+	writer io.Writer,
+) error {
+	if exec.accounted == nil || writer == nil ||
+		chunk < 0 || chunk >= len(exec.accounted.state) {
+		return moerr.NewInvalidInputNoCtx("invalid accounted median chunk")
+	}
+	state := &exec.accounted.state[chunk]
+	cnt := int(state.length)
+	if err := types.WriteInt64(writer, int64(cnt)); err != nil || cnt == 0 {
+		return err
+	}
+	result, err := exec.accounted.allocation.newVector(exec.retType)
+	if err != nil {
+		return err
+	}
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	if err != nil {
+		result.Free(exec.mp)
+		return err
+	}
+	defer result.Free(exec.mp)
+	defer empty.Free(exec.mp)
+	if err = result.PreExtend(cnt, exec.mp); err != nil {
+		return err
+	}
+	if err = empty.PreExtend(cnt, exec.mp); err != nil {
+		return err
+	}
+	result.SetLength(cnt)
+	empty.SetLength(cnt)
+	emptyValues := vector.MustFixedColNoTypeCheck[bool](empty)
+	for row := range cnt {
+		emptyValues[row] = state.argCnt[row] == 0
+	}
+	if err = result.MarshalBinaryTo(writer); err != nil {
+		return err
+	}
+	if err = types.WriteInt64(writer, 1); err != nil {
+		return err
+	}
+	if err = empty.MarshalBinaryTo(writer); err != nil {
+		return err
+	}
+	if err = types.WriteInt64(writer, 0); err != nil {
+		return err
+	}
+	if err = types.WriteInt64(writer, int64(cnt)); err != nil {
+		return err
+	}
+	for row := range cnt {
+		if err = exec.writeLegacyMedianGroup(
+			state, uint16(row), writer); err != nil {
+			return err
+		}
+	}
+	return types.WriteInt64(writer, 0)
+}
+
 func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	if err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult); err != nil {
+	if exec.accounted != nil {
+		return exec.unmarshalAccountedIntermediate(reader, mp)
+	}
+	replacement := newMedianColumnExecSelf[T, R](
+		mp, exec.singleAggInfo, exec.ret.InitialValue)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = replacement
+	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) unmarshalFromReader(
+	reader io.Reader,
+	mp *mpool.MPool,
+) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
-	expectedGroups := 0
-	for _, vec := range exec.ret.resultList {
-		expectedGroups += vec.Length()
+	if decodedGroups == 0 {
+		exec.freeGroups()
+		exec.distinctHash.free()
+		return nil
 	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
-	if ngrp < 0 || ngrp != int64(expectedGroups) {
-		return moerr.NewInternalErrorNoCtxf("median unmarshal: invalid group count %d, expected %d", ngrp, expectedGroups)
+	if ngrp < 0 || ngrp != int64(decodedGroups) {
+		return moerr.NewInternalErrorNoCtxf("median unmarshal: invalid group count %d, expected %d", ngrp, decodedGroups)
 	}
+	exec.freeGroups()
+	exec.distinctHash.free()
 	if ngrp != 0 {
 		exec.groups = make([]*Vectors[T], ngrp)
 		for i := range exec.groups {
@@ -136,15 +239,340 @@ func (exec *medianColumnExecSelf[T, R]) UnmarshalFromReader(reader io.Reader, mp
 		}
 	}
 
-	extraCnt, err := types.ReadInt64(reader)
+	return readAggregateExtra(reader)
+}
+
+// saveAccountedIntermediate preserves median's stable partial-result wire.
+// The allocation-accounted arena is an execution-local representation only;
+// changing the cross-pipeline codec would make mixed-version CNs unable to
+// exchange partial median state.
+func (exec *medianColumnExecSelf[T, R]) saveAccountedIntermediate(
+	cnt int64,
+	flags [][]uint8,
+	writer io.Writer,
+) error {
+	if exec.accounted == nil || writer == nil {
+		return moerr.NewInvalidInputNoCtx("invalid accounted median state")
+	}
+	if cnt < 0 {
+		return moerr.NewInvalidInputNoCtx("invalid median selection count")
+	}
+	selected := int64(0)
+	for chunk, state := range exec.accounted.state {
+		selection, err := aggregateChunkSelection(
+			flags, chunk, int(state.length))
+		if err != nil {
+			return err
+		}
+		for _, flag := range selection {
+			selected += int64(flag)
+		}
+	}
+	for chunk := len(exec.accounted.state); chunk < len(flags); chunk++ {
+		if len(flags[chunk]) != 0 {
+			return moerr.NewInvalidInputNoCtx("median selection chunk out of range")
+		}
+	}
+	if selected != cnt {
+		return moerr.NewInvalidInputNoCtxf(
+			"median selection count %d does not match %d", selected, cnt)
+	}
+	if err := types.WriteInt64(writer, cnt); err != nil || cnt == 0 {
+		return err
+	}
+
+	result, empty, err := exec.accountedIntermediateResult(flags, int(cnt))
 	if err != nil {
 		return err
 	}
-	for i := int64(0); i < extraCnt; i++ {
-		if _, _, err = types.ReadSizeBytes(reader); err != nil {
+	defer result.Free(exec.mp)
+	defer empty.Free(exec.mp)
+	if err = result.MarshalBinaryTo(writer); err != nil {
+		return err
+	}
+	if err = types.WriteInt64(writer, 1); err != nil {
+		return err
+	}
+	if err = empty.MarshalBinaryTo(writer); err != nil {
+		return err
+	}
+	// Median never used optSplitResult's distinct sidecar; DISTINCT is rebuilt
+	// from the serialized retained values by the legacy decoder.
+	if err = types.WriteInt64(writer, 0); err != nil {
+		return err
+	}
+	if err = types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
+	for chunk, state := range exec.accounted.state {
+		selection, err := aggregateChunkSelection(
+			flags, chunk, int(state.length))
+		if err != nil {
 			return err
 		}
+		for row, flag := range selection {
+			if flag == 0 {
+				continue
+			}
+			if err = exec.writeLegacyMedianGroup(
+				&state, uint16(row), writer); err != nil {
+				return err
+			}
+		}
 	}
+	return types.WriteInt64(writer, 0)
+}
+
+func (exec *medianColumnExecSelf[T, R]) accountedIntermediateResult(
+	flags [][]uint8,
+	rows int,
+) (*vector.Vector, *vector.Vector, error) {
+	result, err := exec.accounted.allocation.newVector(exec.retType)
+	if err != nil {
+		return nil, nil, err
+	}
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	if err != nil {
+		result.Free(exec.mp)
+		return nil, nil, err
+	}
+	if err := result.PreExtend(rows, exec.mp); err != nil {
+		result.Free(exec.mp)
+		empty.Free(exec.mp)
+		return nil, nil, err
+	}
+	if err := empty.PreExtend(rows, exec.mp); err != nil {
+		result.Free(exec.mp)
+		empty.Free(exec.mp)
+		return nil, nil, err
+	}
+	result.SetLength(rows)
+	empty.SetLength(rows)
+	emptyValues := vector.MustFixedColNoTypeCheck[bool](empty)
+	selected := 0
+	for chunk, state := range exec.accounted.state {
+		selection, err := aggregateChunkSelection(
+			flags, chunk, int(state.length))
+		if err != nil {
+			result.Free(exec.mp)
+			empty.Free(exec.mp)
+			return nil, nil, err
+		}
+		for row, flag := range selection {
+			if flag == 0 {
+				continue
+			}
+			emptyValues[selected] = state.argCnt[row] == 0
+			selected++
+		}
+	}
+	return result, empty, nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) writeLegacyMedianGroup(
+	state *aggState,
+	row uint16,
+	writer io.Writer,
+) error {
+	if state == nil || writer == nil {
+		return moerr.NewInvalidInputNoCtx("invalid median group state")
+	}
+	count := int(state.argCnt[row])
+	typeSize := exec.argType.TypeSize()
+	const nullsSize = 0
+	vectorSize := 1 + types.TSize + 4 + 4 + count*typeSize + 4 + 4 + nullsSize + 1
+	groupSize := 8 + 4 + vectorSize
+	if groupSize > math.MaxInt32 {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	if err := types.WriteInt32(writer, int32(groupSize)); err != nil {
+		return err
+	}
+	if err := types.WriteInt64(writer, 1); err != nil {
+		return err
+	}
+	if err := types.WriteUint32(writer, uint32(vectorSize)); err != nil {
+		return err
+	}
+	if _, err := writeBytesRaw([]byte{byte(vector.FLAT)}, writer); err != nil {
+		return err
+	}
+	if _, err := writeBytesRaw(types.EncodeType(&exec.argType), writer); err != nil {
+		return err
+	}
+	if err := types.WriteUint32(writer, uint32(count)); err != nil {
+		return err
+	}
+	if err := types.WriteUint32(writer, uint32(count*typeSize)); err != nil {
+		return err
+	}
+	if err := state.iter(row, func(key []byte) error {
+		payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+		if len(payload) != typeSize {
+			return moerr.NewInvalidInputNoCtx("invalid median retained argument")
+		}
+		written, err := writer.Write(payload)
+		if err == nil && written != len(payload) {
+			return io.ErrShortWrite
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := types.WriteUint32(writer, 0); err != nil {
+		return err
+	}
+	if err := types.WriteUint32(writer, uint32(nullsSize)); err != nil {
+		return err
+	}
+	_, err := writeBytesRaw([]byte{0}, writer)
+	return err
+}
+
+func (exec *medianColumnExecSelf[T, R]) unmarshalAccountedIntermediate(
+	reader io.Reader,
+	mp *mpool.MPool,
+) error {
+	if reader == nil || mp == nil || exec.accounted == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	rows, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if rows < 0 || rows > int64(math.MaxInt) {
+		return moerr.NewInvalidInputNoCtx("median has invalid result row count")
+	}
+	if rows == 0 {
+		exec.accounted.Free()
+		return nil
+	}
+	result, err := exec.accounted.allocation.newVector(exec.retType)
+	if err != nil {
+		return err
+	}
+	defer result.Free(mp)
+	if err = result.UnmarshalWithReader(reader, mp); err != nil {
+		return err
+	}
+	if !result.GetType().Eq(exec.retType) || result.Length() != int(rows) {
+		return moerr.NewInvalidInputNoCtx("median result rows do not match")
+	}
+	emptyCount, err := types.ReadInt64(reader)
+	if err != nil || emptyCount != 1 {
+		return moerr.NewInvalidInputNoCtx("median has invalid empty-state count")
+	}
+	empty, err := exec.accounted.allocation.newVector(types.T_bool.ToType())
+	if err != nil {
+		return err
+	}
+	defer empty.Free(mp)
+	if err = empty.UnmarshalWithReader(reader, mp); err != nil {
+		return err
+	}
+	if !empty.GetType().Eq(types.T_bool.ToType()) || empty.Length() != int(rows) {
+		return moerr.NewInvalidInputNoCtx("median empty-state rows do not match")
+	}
+	emptyValues := vector.MustFixedColNoTypeCheck[bool](empty)
+	distinctCount, err := types.ReadInt64(reader)
+	if err != nil || distinctCount != 0 {
+		return moerr.NewInvalidInputNoCtx("median has invalid distinct sidecar")
+	}
+	groupCount, err := types.ReadInt64(reader)
+	if err != nil || groupCount != rows {
+		return moerr.NewInvalidInputNoCtx("median group rows do not match")
+	}
+
+	replacement := *exec.accounted
+	replacement.state = nil
+	replacement.standby = nil
+	committed := false
+	defer func() {
+		if !committed {
+			replacement.Free()
+		}
+	}()
+	if err = replacement.PreAllocateGroups(int(rows)); err != nil {
+		return err
+	}
+	if err = replacement.GroupGrow(int(rows)); err != nil {
+		return err
+	}
+	var mapping [hashmap.UnitLimit]uint64
+	for group := 0; group < int(rows); group++ {
+		groupSize, err := types.ReadInt32AsInt(reader)
+		if err != nil || groupSize < 0 {
+			return moerr.NewInvalidInputNoCtx("median has invalid group frame")
+		}
+		limited := &io.LimitedReader{R: reader, N: int64(groupSize)}
+		vectorCount, err := types.ReadInt64(limited)
+		if err != nil || vectorCount <= 0 {
+			return moerr.NewInvalidInputNoCtx("median has invalid vector count")
+		}
+		totalRows := 0
+		for range vectorCount {
+			wireSize, err := types.ReadUint32(limited)
+			if err != nil || int64(wireSize) > limited.N {
+				return io.ErrUnexpectedEOF
+			}
+			wire := &io.LimitedReader{R: limited, N: int64(wireSize)}
+			source, err := exec.accounted.allocation.newVector(exec.argType)
+			if err != nil {
+				return err
+			}
+			if err = source.UnmarshalWithReader(wire, mp); err != nil {
+				source.Free(mp)
+				return err
+			}
+			if wire.N != 0 || !source.GetType().Eq(exec.argType) {
+				source.Free(mp)
+				return moerr.NewInvalidInputNoCtx("median has invalid argument vector")
+			}
+			if source.IsConst() || source.HasNull() ||
+				source.Length() > math.MaxInt-totalRows {
+				source.Free(mp)
+				return moerr.NewInvalidInputNoCtx(
+					"median has invalid argument vector")
+			}
+			totalRows += source.Length()
+			for offset := 0; offset < source.Length(); offset += hashmap.UnitLimit {
+				n := min(hashmap.UnitLimit, source.Length()-offset)
+				for i := range n {
+					mapping[i] = uint64(group + 1)
+				}
+				if err = replacement.PreflightBatchFill(
+					offset, mapping[:n], []*vector.Vector{source}); err == nil {
+					err = replacement.batchFillArgs(
+						offset, mapping[:n], []*vector.Vector{source}, exec.IsDistinct())
+				}
+				if err != nil {
+					source.Free(mp)
+					return err
+				}
+			}
+			source.Free(mp)
+		}
+		if limited.N != 0 {
+			return moerr.NewInvalidInputNoCtx("median group frame was not consumed")
+		}
+		if emptyValues[group] != (totalRows == 0) {
+			return moerr.NewInvalidInputNoCtx(
+				"median empty state does not match retained arguments")
+		}
+	}
+	extraCount, err := types.ReadInt64(reader)
+	if err != nil {
+		return err
+	}
+	if extraCount != 0 {
+		return moerr.NewInvalidInputNoCtx("median has invalid extra state")
+	}
+	exec.accounted.Free()
+	exec.accounted.state = replacement.state
+	exec.accounted.standby = replacement.standby
+	replacement.state = nil
+	replacement.standby = nil
+	committed = true
 	return nil
 }
 
@@ -169,6 +597,10 @@ func (exec *medianColumnExecSelf[T, R]) rebuildDistinctHash() error {
 }
 
 func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	if exec.accounted != nil {
+		return exec.accounted.batchFillArgs(
+			row, []uint64{uint64(groupIndex + 1)}, vectors, exec.IsDistinct())
+	}
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
 	}
@@ -188,6 +620,28 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 }
 
 func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if exec.accounted != nil {
+		if len(vectors) == 0 || vectors[0] == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		var groups [hashmap.UnitLimit]uint64
+		for i := range groups {
+			groups[i] = uint64(groupIndex + 1)
+		}
+		for offset := 0; offset < vectors[0].Length(); offset += hashmap.UnitLimit {
+			n := min(hashmap.UnitLimit, vectors[0].Length()-offset)
+			mapping := groups[:n]
+			if err := exec.accounted.PreflightBatchFill(
+				offset, mapping, vectors); err != nil {
+				return err
+			}
+			if err := exec.accounted.batchFillArgs(
+				offset, mapping, vectors, exec.IsDistinct()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if vectors[0].IsConstNull() {
 		return nil
 	}
@@ -256,6 +710,9 @@ func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors
 }
 
 func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.accounted != nil {
+		return exec.accounted.batchFillArgs(offset, groups, vectors, exec.IsDistinct())
+	}
 	if vectors[0].IsConstNull() {
 		return nil
 	}
@@ -370,6 +827,16 @@ func (exec *medianColumnExecSelf[T, R]) mergeDistinctGroup(other *medianColumnEx
 }
 
 func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R], groupIdx1, groupIdx2 int) error {
+	if !exec.mergeCompatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if exec.accounted != nil || other.accounted != nil {
+		if exec.accounted == nil || other.accounted == nil {
+			return mpool.ErrAllocationAccountMismatch
+		}
+		return exec.accounted.batchMergeArgs(
+			other.accounted, groupIdx2, []uint64{uint64(groupIdx1 + 1)}, exec.IsDistinct())
+	}
 	if exec.IsDistinct() {
 		return exec.mergeDistinctGroup(other, groupIdx1, groupIdx2)
 	}
@@ -382,6 +849,16 @@ func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R],
 }
 
 func (exec *medianColumnExecSelf[T, R]) BatchMerge(next *medianColumnExecSelf[T, R], offset int, groups []uint64) error {
+	if !exec.mergeCompatible(next) {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if exec.accounted != nil || next.accounted != nil {
+		if exec.accounted == nil || next.accounted == nil {
+			return mpool.ErrAllocationAccountMismatch
+		}
+		return exec.accounted.batchMergeArgs(
+			next.accounted, offset, groups, exec.IsDistinct())
+	}
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -391,6 +868,16 @@ func (exec *medianColumnExecSelf[T, R]) BatchMerge(next *medianColumnExecSelf[T,
 		}
 	}
 	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) mergeCompatible(
+	other *medianColumnExecSelf[T, R],
+) bool {
+	return exec != nil && other != nil &&
+		exec.AggID() == other.AggID() &&
+		exec.IsDistinct() == other.IsDistinct() &&
+		exec.argType.Eq(other.argType) &&
+		exec.retType.Eq(other.retType)
 }
 
 func (exec *medianColumnExecSelf[T, R]) SetExtraInformation(partialResult any, groupIndex int) error {
@@ -403,28 +890,147 @@ func (exec *medianColumnExecSelf[T, R]) SetAllocationAccount(
 	if exec == nil || allocation == nil || allocation.account == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	return moerr.NewNotSupportedNoCtx(
-		"median has allocation state without a bounded spill codec")
-}
-
-func (exec *medianColumnExecSelf[T, R]) ClearAllocationAccount(
-	_ *AllocationAccount,
-) error {
+	if exec.accounted != nil {
+		return exec.accounted.SetAllocationAccount(allocation)
+	}
+	if len(exec.groups) != 0 || len(exec.ret.resultList) != 1 ||
+		exec.ret.resultList[0].Length() != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	base := &aggExec{
+		mp: exec.mp,
+		aggInfo: aggInfo{
+			aggId:      exec.AggID(),
+			isDistinct: exec.IsDistinct(),
+			argTypes:   []types.Type{exec.argType},
+			retType:    exec.retType,
+			emptyNull:  true,
+			saveArg:    true,
+		},
+	}
+	if err := base.SetAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.distinctHash.free()
+	exec.accounted = base
 	return nil
 }
 
+func (exec *medianColumnExecSelf[T, R]) ClearAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	if exec.accounted != nil {
+		return exec.accounted.ClearAllocationAccount(allocation)
+	}
+	return nil
+}
+
+func (*medianColumnExecSelf[T, R]) PrepareParamKindChunkCount() int {
+	return 0
+}
+
+func (*medianColumnExecSelf[T, R]) PrepareParamKindVectorForChunk(int) *vector.Vector {
+	return nil
+}
+
+func (*medianColumnExecSelf[T, R]) SetPrepareParamKind(vector.PrepareParamKind) {}
+
+func (exec *medianColumnExecSelf[T, R]) GetNumGroups() int {
+	if exec == nil {
+		return 0
+	}
+	if exec.accounted != nil {
+		return exec.accounted.GetNumGroups()
+	}
+	return len(exec.groups)
+}
+
+func (*medianColumnExecSelf[T, R]) AdditionalMemorySize() int64 { return 0 }
+
+func (exec *medianColumnExecSelf[T, R]) PreflightBatchFill(
+	offset int, groups []uint64, vectors []*vector.Vector,
+) error {
+	if exec.accounted == nil {
+		return nil
+	}
+	return exec.accounted.PreflightBatchFill(offset, groups, vectors)
+}
+
+func (exec *medianColumnExecSelf[T, R]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	if exec.accounted == nil {
+		return nil
+	}
+	carrier, ok := next.(medianAccountedCarrier[T, R])
+	if !ok || !exec.mergeCompatible(carrier.medianAccountedSelf()) ||
+		carrier.medianAccountedSelf().accounted == nil {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return exec.accounted.preflightBatchMergeArgs(
+		carrier.medianAccountedSelf().accounted, offset, groups)
+}
+
+type medianAccountedCarrier[
+	T numeric | types.Decimal64 | types.Decimal128,
+	R types.FixedSizeTExceptStrType,
+] interface {
+	medianAccountedSelf() *medianColumnExecSelf[T, R]
+}
+
+func (exec *medianColumnExecSelf[T, R]) medianAccountedSelf() *medianColumnExecSelf[T, R] {
+	return exec
+}
+
+func (exec *medianColumnExecSelf[T, R]) SaveSpillIntermediateResult(
+	cnt int64, chunk int, flags []uint8, writer io.Writer,
+) error {
+	if exec.accounted == nil {
+		return moerr.NewNotSupportedNoCtx("median has no bounded spill state")
+	}
+	return exec.accounted.SaveSpillIntermediateResult(cnt, chunk, flags, writer)
+}
+
+func (exec *medianColumnExecSelf[T, R]) UnmarshalSpillFromReader(
+	reader io.Reader, mp *mpool.MPool,
+) error {
+	if exec.accounted == nil {
+		return moerr.NewNotSupportedNoCtx("median has no bounded spill state")
+	}
+	return exec.accounted.UnmarshalSpillFromReader(reader, mp)
+}
+
 func (exec *medianColumnExecSelf[T, R]) Free() {
+	if exec.accounted != nil {
+		exec.accounted.Free()
+	}
+	exec.freeGroups()
+	exec.ret.free()
+	exec.distinctHash.free()
+}
+
+func (exec *medianColumnExecSelf[T, R]) freeGroups() {
 	for _, group := range exec.groups {
 		if group != nil {
 			group.Free(exec.mp)
 		}
 	}
 	exec.groups = nil
-	exec.ret.free()
-	exec.distinctHash.free()
 }
 
 func (exec *medianColumnExecSelf[T, R]) Size() int64 {
+	if exec.accounted != nil {
+		var size int64
+		for _, state := range exec.accounted.state {
+			size += int64(cap(state.argCnt))*4 +
+				int64(cap(state.argbuf)) + int64(cap(state.argScratch))
+		}
+		for _, state := range exec.accounted.standby {
+			size += int64(cap(state.argCnt))*4 +
+				int64(cap(state.argbuf)) + int64(cap(state.argScratch))
+		}
+		return size
+	}
 	var size int64
 	for _, group := range exec.groups {
 		if group != nil {
@@ -507,6 +1113,9 @@ func (exec *medianColumnNumericExec[T]) BatchMerge(next AggFuncExec, offset int,
 }
 
 func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
+	if exec.accounted != nil {
+		return flushAccountedMedianNumeric(exec)
+	}
 	vs := exec.ret.values
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
@@ -545,6 +1154,9 @@ func (exec *medianColumnDecimalExec[T]) BatchMerge(next AggFuncExec, offset int,
 }
 
 func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
+	if exec.accounted != nil {
+		return flushAccountedMedianDecimal(exec)
+	}
 	vs := exec.ret.values
 	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
 	groups := len(exec.groups)
@@ -579,6 +1191,136 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 		}
 	}
 	return exec.ret.flushAll(), nil
+}
+
+func flushAccountedMedianNumeric[T numeric](
+	exec *medianColumnNumericExec[T],
+) (_ []*vector.Vector, retErr error) {
+	results := make([]*vector.Vector, len(exec.accounted.state))
+	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
+	for chunk := range exec.accounted.state {
+		state := &exec.accounted.state[chunk]
+		result, err := exec.accounted.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
+		results[chunk] = result
+		if err = result.PreExtendNulls(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		if err = result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		result.SetLength(int(state.length))
+		values := vector.MustFixedColNoTypeCheck[float64](result)
+		for row := uint16(0); row < uint16(state.length); row++ {
+			if state.argCnt[row] == 0 {
+				result.SetNull(uint64(row))
+				continue
+			}
+			scratch, err := makeAccountedScratch[T](
+				exec.accounted.allocation, exec.mp, int(state.argCnt[row]))
+			if err != nil {
+				return nil, err
+			}
+			index := 0
+			err = state.iter(row, func(key []byte) error {
+				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+				if len(payload) != exec.argType.TypeSize() || index >= len(scratch) {
+					return moerr.NewInternalErrorNoCtx("median has invalid retained argument")
+				}
+				scratch[index] = types.DecodeFixed[T](payload)
+				index++
+				return nil
+			})
+			if err == nil && index != len(scratch) {
+				err = moerr.NewInternalErrorNoCtx("median retained argument count mismatch")
+			}
+			if err == nil {
+				values[row] = medianNumericVals(scratch)
+			}
+			mpool.FreeSlice(exec.mp, scratch)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return results, nil
+}
+
+func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
+	exec *medianColumnDecimalExec[T],
+) (_ []*vector.Vector, retErr error) {
+	results := make([]*vector.Vector, len(exec.accounted.state))
+	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
+	for chunk := range exec.accounted.state {
+		state := &exec.accounted.state[chunk]
+		result, err := exec.accounted.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
+		results[chunk] = result
+		if err = result.PreExtendNulls(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		if err = result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		result.SetLength(int(state.length))
+		values := vector.MustFixedColNoTypeCheck[types.Decimal128](result)
+		for row := uint16(0); row < uint16(state.length); row++ {
+			if state.argCnt[row] == 0 {
+				result.SetNull(uint64(row))
+				continue
+			}
+			scratch, err := makeAccountedScratch[T](
+				exec.accounted.allocation, exec.mp, int(state.argCnt[row]))
+			if err != nil {
+				return nil, err
+			}
+			index := 0
+			err = state.iter(row, func(key []byte) error {
+				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+				if len(payload) != exec.argType.TypeSize() || index >= len(scratch) {
+					return moerr.NewInternalErrorNoCtx("median has invalid retained argument")
+				}
+				scratch[index] = types.DecodeFixed[T](payload)
+				index++
+				return nil
+			})
+			if err == nil && index != len(scratch) {
+				err = moerr.NewInternalErrorNoCtx("median retained argument count mismatch")
+			}
+			if err == nil {
+				switch vals := any(scratch).(type) {
+				case []types.Decimal64:
+					values[row], err = medianDecimal64Vals(vals)
+				case []types.Decimal128:
+					values[row], err = medianDecimal128Vals(vals)
+				default:
+					err = moerr.NewInternalErrorNoCtx("median decimal type mismatch")
+				}
+			}
+			mpool.FreeSlice(exec.mp, scratch)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return results, nil
+}
+
+func freeAggregateResultsOnError(
+	mp *mpool.MPool, results []*vector.Vector, resultErr *error,
+) {
+	if resultErr == nil || *resultErr == nil {
+		return
+	}
+	for _, result := range results {
+		if result != nil {
+			result.Free(mp)
+		}
+	}
 }
 
 func appendMedianValue[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], value T, mp *mpool.MPool) error {

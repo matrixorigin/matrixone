@@ -418,6 +418,29 @@ HashBuild regression above 2% blocks the change unless independently explained.
 
 ### M3. Migrate Group and MergeGroup
 
+Status (2026-08-12): the account-aware storage, spill, recovery, and lifecycle
+implementation is complete for the Group aggregate capability matrix below.
+`Group` and `MergeGroup` implement the compile-time allocation-owner contract,
+so compile attaches the statement account before `Prepare`; there is no
+aggregate-dependent shadow execution path. Local correctness, failure-path,
+lifecycle, and resident-performance evidence is recorded in the M3 evidence
+document.
+
+Within `aggexec`, `GroupAggFuncExec` is the single static contract for Group's
+allocation ownership, capacity preflight, bounded spill codec, decoded group
+count, extra-memory observation, and prepared-parameter state. Group constructs
+and binds that interface once through its Group-specific factory, then keeps
+typed resident/reload slices; execution does not repeat capability assertions
+or allocate a throwaway MergeGroup probe.
+
+Group and MergeGroup also use one transactional hash preview/commit path for
+both accounted execution and direct compatibility callers. The preview's exact
+new-group selection drives vector/aggregate preflight and publication; the old
+normal-iterator insert, reconstructed insert bitmap, and worst-case duplicate
+preallocation path have been removed. Compatibility differences are confined
+to allocation ownership and the existing spill/wire boundary, not a parallel
+grouping algorithm.
+
 This is the highest-value new family because Group already has a spill
 algorithm and dedicated MPool isolation, but not a statement hard boundary.
 
@@ -448,7 +471,8 @@ Required changes:
    controlled error; never silently retain beyond the hard account;
 10. remove the 1 TiB DISTINCT escape. Ordinary DISTINCT uses the exact
     argument-arena spill codec; special DISTINCT implementations without that
-    representation return a controlled capability error during `Prepare`.
+    representation return a controlled factory error before publishing group
+    state.
 
 Aggregate closure is a prerequisite for enabling Group hard admission. In
 particular, `AdditionalMemorySize` may remain a diagnostic, but it cannot be
@@ -467,9 +491,10 @@ Acceptance:
 - common non-spill Group performance and allocations per operation do not
   materially regress.
 
-The M3 implementation uses the following closed aggregate capability matrix.
-An aggregate outside the supported rows is rejected during Group `Prepare`;
-it cannot begin consuming input and later escape the hard account.
+The M3 implementation currently has the following capability matrix. Every
+aggregate family reachable through Group has either a closed accounted path
+or a controlled factory rejection; window-only IDs remain an independent
+operator milestone.
 
 | Aggregate family | Accounted Group mode | Physical boundary |
 | --- | --- | --- |
@@ -481,16 +506,26 @@ it cannot begin consuming input and later escape the hard account.
 | `COUNT(*)` | non-DISTINCT | state vector is transferred without changing provenance |
 | unordered non-DISTINCT `GROUP_CONCAT` | supported | retained arguments and result vectors are accounted; one reusable account-backed finalization buffer is capped at the published result length; each formatted field is independently bounded by the existing 16-bit unit limit |
 | `AVG_TW_CACHE`, `AVG_TW_RESULT` | non-DISTINCT | state and materialized result vectors are allocation-accounted |
-| bitmap, HLL/approx-count, approximate percentile | rejected | library-owned opaque state has no physical allocator hook |
-| median and window executors | rejected | data-scaled Go/vector state does not implement the bounded Group spill contract |
-| JSON array/object aggregates | rejected | finalization currently constructs data-scaled Go arrays/maps before producing binary JSON |
-| DISTINCT or ordered `GROUP_CONCAT` | rejected | DISTINCT maps, ordered entries/sort selectors, and merge-run scratch are not yet closed under the Group account |
+| approximate percentile | supported | retained KLL levels, exact preflight growth, finalization scratch, and result vectors use the allocation account; stable partial and spill state stream the bounded sketch wire |
+| bitmap | supported | retained values use an account-owned sorted representation; portable Roaring wires are validated and decoded without data-scaled Go-heap scratch, and final wire output preserves compatibility |
+| HLL/approx-count | supported | the dense p=14 register array is MPool/account owned; its fixed 16 KiB per-group capacity is allocated before group publication, spill streams the stable HLL wire, and result vectors keep account provenance |
+| median | ordinary and DISTINCT | retained fixed-width arguments use the allocation-accounted argument arena; Group spill streams that state and final selection uses account-backed scratch/result vectors |
+| ordered percentile (`PERCENTILE_CONT`/`PERCENTILE_DISC`) | supported | accounted Group mode reuses the exact saved-argument arena and Group spill codec; final sorting scratch and result vectors use the same allocation account, while the standalone ordered-run path remains isolated to unaccounted callers |
+| JSON array/object aggregates | supported | retained payloads, DISTINCT state, merge state, binary-JSON finalization scratch, and result vectors are allocation-accounted; final encoding writes into pre-admitted storage |
+| unordered `GROUP_CONCAT` | ordinary and DISTINCT | retained arguments use the exact allocation-accounted arena; DISTINCT uses its key representation directly rather than an auxiliary Go hash; finalization writes through a bounded accounted buffer |
+| ordered `GROUP_CONCAT` | ordinary and DISTINCT | retained concat/order payloads, selectors, DISTINCT ordering scratch, restored order vectors, spill state, finalization buffer, and results are allocation-accounted |
 
 Aggregate executor Go metadata is structurally bounded: one chunk descriptor
 and a constant number of vector pointers per 8,192 admitted group rows. It is
-not charged as guessed payload. Unsupported opaque families remain available
-to callers that do not install the Group hard account, preserving their legacy
-execution while making the M3 safety boundary explicit.
+not charged as guessed payload. There is no aggregate-dependent runtime
+fallback: production Group and MergeGroup use the same allocation-accounted
+contract for every reachable aggregate family.
+
+Window executor IDs share the `aggexec` factory and serialization helpers, but
+normal plans place them under `colexec/window`, not in `Group.Aggs`. Their
+serde must remain correct, while their retained-memory migration belongs to
+the window operator milestone and does not block Group activation without a
+demonstrated reachable Group plan.
 
 This milestone should be split by closed behavioral contracts: aggregate
 storage primitives, Group account integration, and spill resource/lifecycle

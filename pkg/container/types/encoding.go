@@ -705,11 +705,11 @@ func Uint32ToInt32(ux uint32) int32 {
 
 func WriteSizeBytes(bs []byte, w io.Writer) error {
 	sz := int32(len(bs))
-	if _, err := w.Write(EncodeInt32(&sz)); err != nil {
+	if err := writeFull(w, EncodeInt32(&sz)); err != nil {
 		return err
 	}
 	if sz > 0 {
-		if _, err := w.Write(bs); err != nil {
+		if err := writeFull(w, bs); err != nil {
 			return err
 		}
 	}
@@ -735,15 +735,13 @@ func ReadUint64(r io.Reader) (uint64, error) {
 func WriteInt64(w io.Writer, v int64) error {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], uint64(v))
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
 }
 
 func WriteUint64(w io.Writer, v uint64) error {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], v)
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
 }
 
 func ReadBool(r io.Reader) (bool, error) {
@@ -765,8 +763,7 @@ func ReadInt16(r io.Reader) (int16, error) {
 func WriteInt16(w io.Writer, v int16) error {
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], uint16(v))
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
 }
 
 func ReadUint16(r io.Reader) (uint16, error) {
@@ -780,8 +777,7 @@ func ReadUint16(r io.Reader) (uint16, error) {
 func WriteUint16(w io.Writer, v uint16) error {
 	var buf [2]byte
 	binary.LittleEndian.PutUint16(buf[:], v)
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
 }
 
 func ReadInt32(r io.Reader) (int32, error) {
@@ -795,8 +791,7 @@ func ReadInt32(r io.Reader) (int32, error) {
 func WriteInt32(w io.Writer, v int32) error {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], uint32(v))
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
 }
 
 func ReadUint32(r io.Reader) (uint32, error) {
@@ -810,8 +805,18 @@ func ReadUint32(r io.Reader) (uint32, error) {
 func WriteUint32(w io.Writer, v uint32) error {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], v)
-	_, err := w.Write(buf[:])
-	return err
+	return writeFull(w, buf[:])
+}
+
+func writeFull(w io.Writer, data []byte) error {
+	written, err := w.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func ReadInt32AsInt(r io.Reader) (int, error) {

@@ -112,7 +112,7 @@ func modifyChunkSizeOfAggregator(a AggFuncExec, n int) {
 	}
 }
 
-func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
+func SyncAggregatorsToChunkSize[T AggFuncExec](as []T, syncLimit int) {
 	for _, a := range as {
 		modifyChunkSizeOfAggregator(a, syncLimit)
 	}
@@ -295,4 +295,14 @@ func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
 		err = io.ErrShortWrite
 	}
 	return int64(wn + written), err
+}
+
+// writeBytesRaw writes b without a length prefix and rejects writers that
+// report success after consuming only a prefix.
+func writeBytesRaw(b []byte, w io.Writer) (n int, err error) {
+	n, err = w.Write(b)
+	if err == nil && n != len(b) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }

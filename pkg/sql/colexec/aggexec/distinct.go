@@ -112,34 +112,68 @@ func (d *distinctHash) Size() int64 {
 	return size
 }
 
-func (d *distinctHash) marshalToBuffers(flags []uint8, writer io.Writer) error {
-	if flags != nil && len(flags) != len(d.maps) {
-		return moerr.NewInvalidInputNoCtxf(
+func (d *distinctHash) selectedCount(flags []uint8) (int64, error) {
+	if flags != nil && len(flags) > len(d.maps) {
+		return 0, moerr.NewInvalidInputNoCtxf(
 			"distinct selection length %d does not match state count %d",
 			len(flags), len(d.maps))
 	}
-	var cnt int64
 	if flags == nil {
-		cnt = int64(len(d.maps))
-	} else {
-		for _, f := range flags {
-			if f != 0 {
-				cnt += 1
+		return int64(len(d.maps)), nil
+	}
+	var count int64
+	for _, selected := range flags {
+		if selected > 1 {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"distinct selection flag must be zero or one")
+		}
+		if selected == 1 {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (d *distinctHash) marshalSelectedMaps(
+	flags []uint8,
+	writer io.Writer,
+) error {
+	if _, err := d.selectedCount(flags); err != nil {
+		return err
+	}
+	for i := range d.maps {
+		if flags == nil || i < len(flags) && flags[i] == 1 {
+			// Prefix the payload for independent validation, but stream it directly
+			// instead of materializing a data-scaled Go-heap copy.
+			payloadSize, err := d.maps[i].MarshalBinarySize()
+			if err != nil {
+				return err
+			}
+			if err = types.WriteUint64(writer, uint64(payloadSize)); err != nil {
+				return err
+			}
+			written, err := d.maps[i].WriteTo(writer)
+			if err != nil {
+				return err
+			}
+			if written != payloadSize {
+				return io.ErrShortWrite
 			}
 		}
+	}
+	return nil
+}
+
+func (d *distinctHash) marshalToBuffers(flags []uint8, writer io.Writer) error {
+	cnt, err := d.selectedCount(flags)
+	if err != nil {
+		return err
 	}
 
 	if err := types.WriteInt64(writer, cnt); err != nil {
 		return err
 	}
-	for i := range d.maps {
-		if flags == nil || flags[i] != 0 {
-			if _, err := d.maps[i].WriteTo(writer); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return d.marshalSelectedMaps(flags, writer)
 }
 
 func (d *distinctHash) unmarshalFromReader(
@@ -177,6 +211,13 @@ func (d *distinctHash) unmarshalFromReader(
 		}
 		if l > uint64(^uint64(0)>>1) {
 			return mpool.ErrAllocationAllocatorLimit
+		}
+		if sized, ok := buf.(interface{ Len() int }); ok &&
+			l > uint64(sized.Len()) {
+			return io.ErrUnexpectedEOF
+		}
+		if limited, ok := buf.(*io.LimitedReader); ok && int64(l) > limited.N {
+			return io.ErrUnexpectedEOF
 		}
 		limited := &io.LimitedReader{R: buf, N: int64(l)}
 		d.maps[i] = &hashmap.StrHashMap{}

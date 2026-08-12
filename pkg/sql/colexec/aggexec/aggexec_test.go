@@ -243,7 +243,7 @@ func TestAggExecUnmarshalReplacesExistingState(t *testing.T) {
 	})
 }
 
-func TestAggExecSpillDecodePreservesFixedChunkCapacity(t *testing.T) {
+func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {
 		require.Zero(t, mp.CurrNB())
@@ -269,7 +269,63 @@ func TestAggExecSpillDecodePreservesFixedChunkCapacity(t *testing.T) {
 		bytes.NewReader(encoded.Bytes()), mp))
 	require.Len(t, target.state, 1)
 	require.Len(t, target.state[0].vecs, 1)
-	require.GreaterOrEqual(t, target.state[0].vecs[0].Capacity(), AggBatchSize)
+	require.Equal(t, 2, target.state[0].vecs[0].Capacity())
+
+	// Exact-capacity spill state is still a valid immutable BatchMerge source;
+	// source access must not require the destination's 8K array backing.
+	destination := newExec()
+	require.NoError(t, destination.GroupGrow(2))
+	require.NoError(t, destination.BatchMerge(target, 0, []uint64{1, 2}))
+	results, err := destination.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 0}, vector.MustFixedColNoTypeCheck[int64](results[0]))
+	results[0].Free(mp)
+	destination.Free()
+	target.Free()
+}
+
+func TestAggExecSpillDecodeReusesLargeSmallLargeCapacity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	newExec := func() *countColumnExec {
+		return newCountColumnExec(
+			mp,
+			AggIdOfCountColumn,
+			false,
+			[]types.Type{types.T_int64.ToType()},
+		).(*countColumnExec)
+	}
+	encode := func(rows int) []byte {
+		source := newExec()
+		require.NoError(t, source.GroupGrow(rows))
+		flags := make([]uint8, rows)
+		for i := range flags {
+			flags[i] = 1
+		}
+		var encoded bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateResult(
+			int64(rows), 0, flags, &encoded))
+		source.Free()
+		return encoded.Bytes()
+	}
+
+	large := encode(256)
+	small := encode(1)
+	target := newExec()
+	require.NoError(t, target.UnmarshalSpillFromReader(bytes.NewReader(large), mp))
+	require.Equal(t, int32(256), target.state[0].capacity)
+	allocated := mp.CurrNB()
+	require.Positive(t, allocated)
+
+	require.NoError(t, target.UnmarshalSpillFromReader(bytes.NewReader(small), mp))
+	require.Equal(t, int32(1), target.state[0].length)
+	require.Equal(t, int32(256), target.state[0].capacity)
+	require.Equal(t, allocated, mp.CurrNB())
+
+	require.NoError(t, target.UnmarshalSpillFromReader(bytes.NewReader(large), mp))
+	require.Equal(t, int32(256), target.state[0].length)
+	require.Equal(t, int32(256), target.state[0].capacity)
+	require.Equal(t, allocated, mp.CurrNB())
 	target.Free()
 }
 
@@ -443,7 +499,7 @@ func TestAggStateReadRejectsInconsistentAndTruncatedState(t *testing.T) {
 
 	newOpaqueInfo := func() aggInfo {
 		return aggInfo{
-			makeMarshalerUnmarshaler: func(*mpool.MPool) (MarshalerUnmarshaler, error) {
+			makeMarshalerUnmarshaler: func(*mpool.MPool, *AllocationAccount) (MarshalerUnmarshaler, error) {
 				return &nonConsumingAggregateState{}, nil
 			},
 		}

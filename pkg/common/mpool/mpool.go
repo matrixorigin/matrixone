@@ -338,7 +338,43 @@ type MPool struct {
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
-	leases map[unsafe.Pointer]allocationLease
+	// noLockAllocationAccount identifies the single account whose allocations
+	// may live in this noLock pool.  It is set once, before the pool starts
+	// allocating, so terminal diagnostics can reject unrelated active pools
+	// without touching their owner-only pointer maps.
+	noLockAllocationAccount atomic.Pointer[AllocationAccount]
+	// accountedPtrs keeps the physical header and its capacity lease in one
+	// entry.  Accounted allocations are not duplicated in ptrs: a dedicated
+	// map preserves the compact memHdr value for the much more common
+	// unaccounted pool while avoiding two map insertions/lookups per accounted
+	// allocation.
+	accountedPtrs map[unsafe.Pointer]accountedPtrMetadata
+}
+
+type accountedPtrMetadata struct {
+	hdr   memHdr
+	lease allocationLease
+}
+
+// BindAllocationAccount binds a noLock pool to one allocation account for its
+// lifetime.  The caller must establish the binding before the first physical
+// allocation and retain the noLock pool's single-owner contract.  Normal pools
+// keep their metadata in the synchronized global shards and need no binding.
+func (mp *MPool) BindAllocationAccount(account *AllocationAccount) error {
+	if mp == nil || account == nil || account.registry == nil || account.handle == 0 {
+		return ErrAllocationAccountInvalid
+	}
+	if !mp.noLock || len(mp.ptrs) != 0 || len(mp.accountedPtrs) != 0 ||
+		mp.stats.NumCurrBytes.Load() != 0 {
+		return ErrAllocationAccountInvariant
+	}
+	if mp.noLockAllocationAccount.CompareAndSwap(nil, account) {
+		return nil
+	}
+	if mp.noLockAllocationAccount.Load() == account {
+		return nil
+	}
+	return ErrAllocationAccountMismatch
 }
 
 const (
@@ -351,6 +387,9 @@ func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 		return gRecordPtr(ptr, pHdr)
 	}
 	if _, ok := mp.ptrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
+	if _, ok := mp.accountedPtrs[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
 	mp.ptrs[ptr] = pHdr
@@ -372,14 +411,13 @@ func (mp *MPool) recordAccountedPtrMetadata(
 	if _, ok := mp.ptrs[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	if _, ok := mp.leases[ptr]; ok {
-		return moerr.NewInternalErrorNoCtx("account lease already recorded")
+	if _, ok := mp.accountedPtrs[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	if mp.leases == nil {
-		mp.leases = make(map[unsafe.Pointer]allocationLease)
+	if mp.accountedPtrs == nil {
+		mp.accountedPtrs = make(map[unsafe.Pointer]accountedPtrMetadata)
 	}
-	mp.ptrs[ptr] = pHdr
-	mp.leases[ptr] = lease
+	mp.accountedPtrs[ptr] = accountedPtrMetadata{hdr: pHdr, lease: lease}
 	return nil
 }
 
@@ -388,7 +426,11 @@ func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
 		return gGetPtr(ptr)
 	}
 	hdr, ok := mp.ptrs[ptr]
-	return hdr, ok
+	if ok {
+		return hdr, true
+	}
+	metadata, ok := mp.accountedPtrs[ptr]
+	return metadata.hdr, ok
 }
 
 func (mp *MPool) getPtrMetadata(
@@ -398,21 +440,15 @@ func (mp *MPool) getPtrMetadata(
 	if !mp.noLock {
 		return gGetPtrMetadata(ptr, lease)
 	}
-	hdr, ok := mp.ptrs[ptr]
+	if hdr, ok := mp.ptrs[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := mp.accountedPtrs[ptr]
 	if !ok {
 		return memHdr{}, false
 	}
-	if !hdr.isAccounted() {
-		return hdr, true
-	}
-	accountedLease, hasLease := mp.leases[ptr]
-	if !hasLease {
-		panic(moerr.NewInternalErrorNoCtx(
-			"accounted allocation has no account lease",
-		))
-	}
-	*lease = accountedLease
-	return hdr, true
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 func (mp *MPool) removePtrMetadata(
@@ -422,50 +458,35 @@ func (mp *MPool) removePtrMetadata(
 	if !mp.noLock {
 		return gRemovePtrMetadata(ptr, lease)
 	}
-	hdr, ok := mp.ptrs[ptr]
-	if !ok {
-		if _, hasLease := mp.leases[ptr]; hasLease {
-			panic(moerr.NewInternalErrorNoCtx(
-				"account lease exists without allocation header",
-			))
-		}
-		return memHdr{}, false
-	}
-	if !hdr.isAccounted() {
+	if hdr, ok := mp.ptrs[ptr]; ok {
 		delete(mp.ptrs, ptr)
 		return hdr, true
 	}
-	accountedLease, hasLease := mp.leases[ptr]
-	if !hasLease {
-		panic(moerr.NewInternalErrorNoCtx(
-			"accounted allocation has no account lease",
-		))
+	metadata, ok := mp.accountedPtrs[ptr]
+	if !ok {
+		return memHdr{}, false
 	}
-	delete(mp.ptrs, ptr)
-	delete(mp.leases, ptr)
-	*lease = accountedLease
-	return hdr, true
+	delete(mp.accountedPtrs, ptr)
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 func (mp *MPool) deallocateAllPtrs() {
 	for ptr, hdr := range mp.ptrs {
-		lease, hasLease := mp.leases[ptr]
-		if hdr.isAccounted() != hasLease {
-			panic(moerr.NewInternalErrorNoCtx(
-				"allocation header and account lease disagree during teardown",
-			))
-		}
 		if hdr.isOffHeap() {
 			sz := int(hdr.allocSz)
 			profileRecordFree(uintptr(ptr), int64(sz))
 			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
-			if hasLease {
-				lease.release(uint64(sz))
-			}
 		}
 	}
+	for ptr, metadata := range mp.accountedPtrs {
+		sz := int(metadata.hdr.allocSz)
+		profileRecordAccountedFree(metadata.lease, int64(sz))
+		simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
+		metadata.lease.release(uint64(sz))
+	}
 	mp.ptrs = nil
-	mp.leases = nil
+	mp.accountedPtrs = nil
 }
 
 func (mp *MPool) EnableDetailRecording() {
@@ -713,9 +734,9 @@ var globalPools sync.Map
 const numPtrShards = 128
 
 type ptrShard struct {
-	mu     sync.Mutex
-	m      map[unsafe.Pointer]memHdr
-	leases map[unsafe.Pointer]allocationLease
+	mu        sync.Mutex
+	m         map[unsafe.Pointer]memHdr
+	accounted map[unsafe.Pointer]accountedPtrMetadata
 }
 
 var globalPtrShards [numPtrShards]ptrShard
@@ -930,6 +951,15 @@ func (mp *MPool) allocAccounted(
 	sz int64,
 	request allocationAccountRequest,
 ) ([]byte, error) {
+	if mp.noLock {
+		bound := mp.noLockAllocationAccount.Load()
+		if bound == nil {
+			return nil, ErrAllocationAccountInvariant
+		}
+		if bound != request.account {
+			return nil, ErrAllocationAccountMismatch
+		}
+	}
 	var bs []byte
 	var err error
 	accountHeld := false
@@ -1543,6 +1573,9 @@ func gRecordPtr(
 	if _, ok := shard.m[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
+	if _, ok := shard.accounted[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
+	}
 	shard.m[ptr] = hdr
 	return nil
 }
@@ -1558,14 +1591,13 @@ func gRecordAccountedPtrMetadata(
 	if _, ok := shard.m[ptr]; ok {
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	if _, ok := shard.leases[ptr]; ok {
-		return moerr.NewInternalErrorNoCtx("account lease already recorded")
+	if _, ok := shard.accounted[ptr]; ok {
+		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
-	if shard.leases == nil {
-		shard.leases = make(map[unsafe.Pointer]allocationLease)
+	if shard.accounted == nil {
+		shard.accounted = make(map[unsafe.Pointer]accountedPtrMetadata)
 	}
-	shard.m[ptr] = hdr
-	shard.leases[ptr] = lease
+	shard.accounted[ptr] = accountedPtrMetadata{hdr: hdr, lease: lease}
 	return nil
 }
 
@@ -1573,8 +1605,11 @@ func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	hdr, ok := shard.m[ptr]
-	return hdr, ok
+	if hdr, ok := shard.m[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := shard.accounted[ptr]
+	return metadata.hdr, ok
 }
 
 func gGetPtrMetadata(
@@ -1584,21 +1619,15 @@ func gGetPtrMetadata(
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	hdr, ok := shard.m[ptr]
+	if hdr, ok := shard.m[ptr]; ok {
+		return hdr, true
+	}
+	metadata, ok := shard.accounted[ptr]
 	if !ok {
 		return memHdr{}, false
 	}
-	if !hdr.isAccounted() {
-		return hdr, true
-	}
-	accountedLease, hasLease := shard.leases[ptr]
-	if !hasLease {
-		panic(moerr.NewInternalErrorNoCtx(
-			"accounted allocation has no account lease",
-		))
-	}
-	*lease = accountedLease
-	return hdr, true
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 func gRemovePtrMetadata(
@@ -1608,29 +1637,17 @@ func gRemovePtrMetadata(
 	shard := getPtrShard(ptr)
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
-	hdr, ok := shard.m[ptr]
-	if !ok {
-		if _, hasLease := shard.leases[ptr]; hasLease {
-			panic(moerr.NewInternalErrorNoCtx(
-				"account lease exists without allocation header",
-			))
-		}
-		return memHdr{}, false
-	}
-	if !hdr.isAccounted() {
+	if hdr, ok := shard.m[ptr]; ok {
 		delete(shard.m, ptr)
 		return hdr, true
 	}
-	accountedLease, hasLease := shard.leases[ptr]
-	if !hasLease {
-		panic(moerr.NewInternalErrorNoCtx(
-			"accounted allocation has no account lease",
-		))
+	metadata, ok := shard.accounted[ptr]
+	if !ok {
+		return memHdr{}, false
 	}
-	delete(shard.m, ptr)
-	delete(shard.leases, ptr)
-	*lease = accountedLease
-	return hdr, true
+	delete(shard.accounted, ptr)
+	*lease = metadata.lease
+	return metadata.hdr, true
 }
 
 // alignUp rounds n up to a multiple of a. a must be a power of 2.

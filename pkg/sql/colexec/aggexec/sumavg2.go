@@ -485,7 +485,7 @@ func (exec *sumAvgExec[T, A]) BatchMerge(next AggFuncExec, offset int, groups []
 		y2 := g2 & aggBatchSizeMask
 
 		sums1 := chunkArr[T](exec.state[x1].vecs[0])
-		sums2 := chunkArr[T](other.state[x2].vecs[0])
+		sums2 := chunkRows[T](other.state[x2].vecs[0])
 
 		if exec.isSum {
 			if other.state[x2].vecs[0].IsNull(y2) {
@@ -1068,7 +1068,7 @@ func (exec *sumAvgDecExec[A, S]) BatchMerge(next AggFuncExec, offset int, groups
 		y2 := g2 & aggBatchSizeMask
 
 		sums1 := chunkArr[S](exec.state[x1].vecs[0])
-		sums2 := chunkArr[S](other.state[x2].vecs[0])
+		sums2 := chunkRows[S](other.state[x2].vecs[0])
 
 		if exec.isSum {
 			if other.state[x2].vecs[0].IsNull(y2) {

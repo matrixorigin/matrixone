@@ -227,7 +227,8 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 	}
 
 	lastX1, lastX2 := -1, -1
-	var sums1, sums2 *[AggBatchSize]types.Decimal128
+	var sums1 *[AggBatchSize]types.Decimal128
+	var sums2 []types.Decimal128
 	var cnts1, cnts2 []int64
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
@@ -245,7 +246,7 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 		}
 		if x2 != lastX2 {
 			lastX2 = x2
-			sums2 = chunkArr[types.Decimal128](other.state[x2].vecs[0])
+			sums2 = chunkRows[types.Decimal128](other.state[x2].vecs[0])
 			cnts2 = vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
 		}
 		y1 := g1 & aggBatchSizeMask

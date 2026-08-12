@@ -57,7 +57,6 @@ const (
 	GroupAllocationSiteHashCell mpool.AllocationSite = iota + 24
 	GroupAllocationSiteHashDescriptor
 	GroupAllocationSiteHashIterator
-	GroupAllocationSiteHashInserted
 	GroupAllocationSiteKeyData
 	GroupAllocationSiteKeyArea
 	GroupAllocationSiteKeyNulls
@@ -77,6 +76,7 @@ const (
 	GroupAllocationSiteSpillFlags
 	GroupAllocationSiteSpillMetadata
 	GroupAllocationSiteSpillRead
+	GroupAllocationSiteSpillRows
 )
 
 var _ vm.Operator = &Group{}
@@ -203,6 +203,8 @@ type container struct {
 
 	recoveryCapacity         *process.ExecutionRecoveryCapacity
 	recoveryCapacityClass    mpool.AllocationCapacityClass
+	recoveryCapacityActive   bool
+	recoveryCapacityFloor    uint64
 	spillGroupByAllocation   *vector.AllocationAccountSelection
 	spillAggregateAllocation *aggexec.AllocationAccount
 
@@ -214,6 +216,9 @@ type container struct {
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
+	// groupingAware selects the collision-free HStr key grammar whenever a
+	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
+	groupingAware bool
 
 	// x, y of `group by x, y`.
 	groupByEvaluate colexec.ExprEvalVector
@@ -234,7 +239,7 @@ type container struct {
 	mergePartialMetadataSet bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                []aggexec.AggFuncExec
+	aggList                []aggexec.GroupAggFuncExec
 	aggExprs               []aggexec.AggFuncExecExpression
 	prepareParamKind       aggexec.PrepareParamKindStates
 	prepareParamKindWireV1 bool
@@ -242,15 +247,16 @@ type container struct {
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
-	spillAggList    []aggexec.AggFuncExec
+	spillAggList    []aggexec.GroupAggFuncExec
 	spillBkts       list.Deque[*spillBucket]
 	currentSpillBkt []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
-	spillFlagFlat  []uint8           // scratch 0/1 flags for one batch's rows during spill
-	spillHashCodes []uint64          // reused buffer for AllGroupHash output
-	spillReader    *groupSpillReader // reused across loadSpilledData calls
-	spillGbBatch   *batch.Batch      // reused staging batch across spillDataToDisk calls
+	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
+	spillHashCodes  []uint64          // reused buffer for AllGroupHash output
+	spillBucketRows []int32           // counting-partitioned row ids, total capacity O(batch rows)
+	spillReader     *groupSpillReader // reused across loadSpilledData calls
+	spillGbBatch    *batch.Batch      // reused staging batch across spillDataToDisk calls
 
 	// Largest number of groups already held by this operator before a spill.
 	// A spill reload may preallocate up to this proven in-memory high-water mark,
@@ -329,58 +335,32 @@ func (ctr *container) setAllocationAccount(
 		return err
 	}
 
-	ctr.allocationAccount = account
-	ctr.hashAllocation = hashAllocation
-	ctr.hashIterator = hashIterator
-	ctr.groupByAllocation = groupByAllocation
-	ctr.expressionAllocation = expressionAllocation
-	ctr.aggregateAllocation = aggregateAllocation
-	return nil
-}
-
-func (ctr *container) installRecoveryCapacity() error {
-	if ctr == nil || ctr.allocationAccount == nil || ctr.budget == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	if ctr.recoveryCapacity != nil {
-		if ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
-			ctr.spillGroupByAllocation == nil || ctr.spillAggregateAllocation == nil {
-			return mpool.ErrAllocationAccountInvariant
-		}
-		return nil
-	}
-	if ctr.recoveryCapacityClass != mpool.AllocationCapacityClassDefault {
-		return mpool.ErrAllocationAccountInvariant
-	}
-
-	capacity, err := process.NewExecutionRecoveryCapacity(ctr.budget)
+	// The recovery class belongs to the same allocation-owner lifecycle as the
+	// ordinary selections. Register its stable controller once, before Prepare;
+	// Prepare only activates it for the current execution generation.
+	recoveryCapacity := process.NewExecutionRecoveryCapacitySlot()
+	recoveryClass, err := account.RegisterCapacityController(recoveryCapacity)
 	if err != nil {
 		return err
 	}
-	class, err := ctr.allocationAccount.RegisterCapacityController(capacity)
-	if err != nil {
-		_ = capacity.Close()
-		return err
-	}
-	rollback := func(cause error) error {
-		_ = ctr.allocationAccount.UnregisterCapacityController(class, capacity)
-		_ = capacity.Close()
+	rollbackRecovery := func(cause error) error {
+		_ = account.UnregisterCapacityController(recoveryClass, recoveryCapacity)
 		return cause
 	}
-	groupByAllocation, err := vector.NewAllocationAccountSelectionWithCapacityClass(
-		ctr.allocationAccount,
+	spillGroupByAllocation, err := vector.NewAllocationAccountSelectionWithCapacityClass(
+		account,
 		mpool.AllocationOwnerGroup,
 		GroupAllocationSiteKeyData,
 		GroupAllocationSiteKeyArea,
 		GroupAllocationSiteKeyNulls,
 		GroupAllocationSiteKeyGrouping,
-		class,
+		recoveryClass,
 	)
 	if err != nil {
-		return rollback(err)
+		return rollbackRecovery(err)
 	}
-	aggregateAllocation, err := aggexec.NewAllocationAccountWithCapacityClass(
-		ctr.allocationAccount,
+	spillAggregateAllocation, err := aggexec.NewAllocationAccountWithCapacityClass(
+		account,
 		mpool.AllocationOwnerGroup,
 		aggexec.AllocationAccountSites{
 			VectorData:     GroupAllocationSiteAggregateData,
@@ -390,19 +370,63 @@ func (ctr *container) installRecoveryCapacity() error {
 			ArgumentCount:  GroupAllocationSiteAggregateArgumentCount,
 			ArgumentArena:  GroupAllocationSiteAggregateArgumentArena,
 		},
-		class,
+		recoveryClass,
 	)
 	if err != nil {
-		return rollback(err)
+		return rollbackRecovery(err)
 	}
-	ctr.recoveryCapacity = capacity
-	ctr.recoveryCapacityClass = class
-	ctr.spillGroupByAllocation = groupByAllocation
-	ctr.spillAggregateAllocation = aggregateAllocation
+
+	ctr.allocationAccount = account
+	ctr.hashAllocation = hashAllocation
+	ctr.hashIterator = hashIterator
+	ctr.groupByAllocation = groupByAllocation
+	ctr.expressionAllocation = expressionAllocation
+	ctr.aggregateAllocation = aggregateAllocation
+	ctr.recoveryCapacity = recoveryCapacity
+	ctr.recoveryCapacityClass = recoveryClass
+	ctr.spillGroupByAllocation = spillGroupByAllocation
+	ctr.spillAggregateAllocation = spillAggregateAllocation
+	return nil
+}
+
+func (ctr *container) installRecoveryCapacity() error {
+	if ctr == nil || ctr.allocationAccount == nil || ctr.budget == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.recoveryCapacity == nil ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault ||
+		ctr.spillGroupByAllocation == nil || ctr.spillAggregateAllocation == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if ctr.recoveryCapacityActive {
+		return nil
+	}
+	if err := ctr.recoveryCapacity.Activate(ctr.budget); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = true
 	return nil
 }
 
 func (ctr *container) releaseRecoveryCapacity(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || ctr.recoveryCapacity == nil || !ctr.recoveryCapacityActive {
+		return nil
+	}
+	if account == nil || account != ctr.allocationAccount ||
+		ctr.recoveryCapacityClass == mpool.AllocationCapacityClassDefault {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if err := ctr.recoveryCapacity.Close(); err != nil {
+		return err
+	}
+	ctr.recoveryCapacityActive = false
+	ctr.recoveryCapacityFloor = 0
+	return nil
+}
+
+func (ctr *container) clearRecoveryCapacity(
 	account *mpool.AllocationAccount,
 ) error {
 	if ctr == nil || ctr.recoveryCapacity == nil {
@@ -414,17 +438,47 @@ func (ctr *container) releaseRecoveryCapacity(
 	}
 	capacity := ctr.recoveryCapacity
 	class := ctr.recoveryCapacityClass
-	if err := capacity.Close(); err != nil {
-		return err
+	if ctr.recoveryCapacityActive {
+		if err := capacity.Close(); err != nil {
+			return err
+		}
+		ctr.recoveryCapacityActive = false
 	}
 	if err := account.UnregisterCapacityController(class, capacity); err != nil {
 		return err
 	}
 	ctr.recoveryCapacity = nil
 	ctr.recoveryCapacityClass = mpool.AllocationCapacityClassDefault
+	ctr.recoveryCapacityActive = false
+	ctr.recoveryCapacityFloor = 0
 	ctr.spillGroupByAllocation = nil
 	ctr.spillAggregateAllocation = nil
 	return nil
+}
+
+// releaseFinalRecoveryCapacity narrows the recovery floor to the phase which
+// can still spill or reload resident state. Once no bucket remains, release
+// every recovery-class borrower and return the floor before aggregate Flush
+// allocates final result vectors.
+func (ctr *container) releaseFinalRecoveryCapacity() error {
+	if ctr == nil || ctr.recoveryCapacity == nil {
+		return nil
+	}
+	if ctr.currentSpillBkt != nil ||
+		ctr.spillBkts != nil && ctr.spillBkts.Len() != 0 {
+		return nil
+	}
+	ctr.freeSpillReloadStaging()
+	if ctr.spillReader != nil {
+		ctr.spillReader.DropReadAhead()
+	}
+	freeGroupScratch(ctr, ctr.spillHashCodes)
+	ctr.spillHashCodes = nil
+	freeGroupScratch(ctr, ctr.spillFlagFlat)
+	ctr.spillFlagFlat = nil
+	freeGroupScratch(ctr, ctr.spillBucketRows)
+	ctr.spillBucketRows = nil
+	return ctr.releaseRecoveryCapacity(ctr.allocationAccount)
 }
 
 func (ctr *container) clearAllocationAccount(
@@ -443,7 +497,7 @@ func (ctr *container) clearAllocationAccount(
 		ctr.spillGbBatch != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	if err := ctr.releaseRecoveryCapacity(account); err != nil {
+	if err := ctr.clearRecoveryCapacity(account); err != nil {
 		return err
 	}
 	ctr.allocationAccount = nil
@@ -459,23 +513,7 @@ func (ctr *container) isSpilling() bool {
 	return len(ctr.currentSpillBkt) > 0
 }
 
-func (ctr *container) setSpillMem(m int64, aggs []aggexec.AggFuncExecExpression) {
-	// Legacy aggregate serialization still cannot preserve arbitrary DISTINCT
-	// state (#22725). Accounted Group uses the bounded spill codec, whose
-	// distinct argument state is allocation-owned and selection-aware.
-	if ctr.allocationAccount == nil {
-		for _, ag := range aggs {
-			if ag.IsDistinct() {
-				if ag.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER &&
-					aggexec.HasGroupConcatOrder(ag.GetExtraConfig()) {
-					continue
-				}
-				// Set to TiB, effectively disabling generic spill.
-				ctr.spillMem = common.TiB
-				return
-			}
-		}
-	}
+func (ctr *container) setSpillMem(m int64) {
 	if m == 0 {
 		// 0 means auto config.   Here the formula is made up on the fly.
 		fileCacheMem := fileservice.GlobalMemoryCacheSizeHint.Load()
@@ -590,6 +628,8 @@ func (ctr *container) free() {
 	ctr.spillHashCodes = nil
 	freeGroupScratch(ctr, ctr.spillFlagFlat)
 	ctr.spillFlagFlat = nil
+	freeGroupScratch(ctr, ctr.spillBucketRows)
+	ctr.spillBucketRows = nil
 	ctr.spillHashPreAllocSize = 0
 	ctr.groupByHashKey = nil
 	ctr.hashKeyVecs = nil
@@ -731,27 +771,6 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 	group.FreeProjection(proc)
 }
 
-func (group *Group) SetAllocationAccount(
-	account *mpool.AllocationAccount,
-) error {
-	if group == nil {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	return group.ctr.setAllocationAccount(account)
-}
-
-func (group *Group) ClearAllocationAccount(
-	account *mpool.AllocationAccount,
-) error {
-	if group == nil {
-		return nil
-	}
-	if group.HasPreparedProjection() {
-		return mpool.ErrAllocationAccountInvariant
-	}
-	return group.ctr.clearAllocationAccount(account)
-}
-
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.logDiagnostics(proc, pipelineFailed, err)
 	group.ctr.reset()
@@ -797,6 +816,26 @@ func (group Group) TypeName() string {
 
 func (group *Group) GetOperatorBase() *vm.OperatorBase {
 	return &group.OperatorBase
+}
+
+// SetAllocationAccount attaches all data-scaled Group storage to the current
+// statement attempt before Prepare performs the first physical allocation.
+func (group *Group) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if group == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return group.ctr.setAllocationAccount(account)
+}
+
+func (group *Group) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if group == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return group.ctr.clearAllocationAccount(account)
 }
 
 func NewArgument() *Group {
@@ -868,6 +907,10 @@ func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
 	mergeGroup.FreeProjection(proc)
 }
 
+func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
+	return &mergeGroup.OperatorBase
+}
+
 func (mergeGroup *MergeGroup) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
@@ -881,16 +924,9 @@ func (mergeGroup *MergeGroup) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
 	if mergeGroup == nil {
-		return nil
-	}
-	if mergeGroup.HasPreparedProjection() {
-		return mpool.ErrAllocationAccountInvariant
+		return mpool.ErrAllocationAccountInvalid
 	}
 	return mergeGroup.ctr.clearAllocationAccount(account)
-}
-
-func (mergeGroup *MergeGroup) GetOperatorBase() *vm.OperatorBase {
-	return &mergeGroup.OperatorBase
 }
 
 func (mergeGroup *MergeGroup) OpType() vm.OpType {
