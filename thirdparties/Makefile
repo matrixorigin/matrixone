@@ -88,7 +88,7 @@ else ifeq ($(UNAME_S)_$(UNAME_M),linux_arm64)
   ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
 endif
 
-all: init usearch xxhash croaring jemalloc onnxruntime
+all: init usearch xxhash croaring jemalloc
 
 init:
 	mkdir -p install
