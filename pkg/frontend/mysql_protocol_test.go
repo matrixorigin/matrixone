@@ -2584,15 +2584,18 @@ func TestSendPrepareResponse(t *testing.T) {
 	})
 }
 
-func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
+func TestPreparedNumericFunctionBinaryProtocolMetadata(t *testing.T) {
 	ctx := context.TODO()
 	tests := []struct {
-		name string
-		sql  string
+		name           string
+		sql            string
+		resultType     defines.MysqlType
+		resultDecimals uint8
 	}{
-		{name: "sum", sql: "select sum(?) as result"},
-		{name: "avg", sql: "select avg(?) as result"},
-		{name: "window sum", sql: "select sum(?) over () as result"},
+		{name: "sum", sql: "select sum(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "avg", sql: "select avg(?) as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "window sum", sql: "select sum(?) over () as result", resultType: defines.MYSQL_TYPE_DOUBLE, resultDecimals: mysqlDecimalNotSpecified},
+		{name: "ntile", sql: "select ntile(?) over () as result", resultType: defines.MYSQL_TYPE_LONGLONG},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2620,8 +2623,8 @@ func TestPreparedNumericAggregateBinaryProtocolMetadata(t *testing.T) {
 
 			result := parsePrepareColumnDefinition(t, packets[3])
 			require.Equal(t, "result", result.name)
-			require.Equal(t, defines.MYSQL_TYPE_DECIMAL, result.typ)
-			require.Equal(t, uint8(30), result.decimals)
+			require.Equal(t, test.resultType, result.typ)
+			require.Equal(t, test.resultDecimals, result.decimals)
 			require.Equal(t, byte(defines.EOFHeader), packets[4][0])
 		})
 	}
