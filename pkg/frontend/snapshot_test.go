@@ -124,6 +124,18 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		}
 	})
 
+	t.Run("capability disabled", func(t *testing.T) {
+		disabled := &mockMOCluster{cnServices: []metadata.CNService{{
+			ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+		}}}
+		runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
+		defer runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
+		require.Empty(t, bh.executedSQLs)
+	})
+
 	t.Run("success", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()

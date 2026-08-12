@@ -723,6 +723,16 @@ func TestBeginViewMetadataRevalidationResetsDurableCursor(t *testing.T) {
 	require.Contains(t, exec.sqls[0], "source_relation_kind='REVALIDATE_SCAN'")
 }
 
+func TestBeginViewMetadataRevalidationPropagatesCatalogError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testErr := moerr.NewInternalErrorNoCtx("catalog unavailable")
+	exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: testErr}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	count, err := beginViewMetadataRevalidation(proc)
+	require.Zero(t, count)
+	require.ErrorIs(t, err, testErr)
+}
+
 func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T) {
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, {}, {}}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
