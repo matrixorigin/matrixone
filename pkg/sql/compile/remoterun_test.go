@@ -3480,7 +3480,7 @@ func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
 	}
 }
 
-func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
+func TestRemoteNotifyCleanupEndDoesNotWaitForChannelCapacity(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -3488,19 +3488,27 @@ func TestRemoteNotifyCleanupUsesSharedTerminalSendBudget(t *testing.T) {
 	})
 
 	reg := process.NewPipelineEdge(1, 0)
-	reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
 
 	start := time.Now()
-	require.False(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
 	elapsed := time.Since(start)
 
 	require.Less(t, elapsed, 300*time.Millisecond)
 	select {
 	case <-reg.Done():
 	default:
-		t.Fatal("fallback abort should mark the remote notify edge terminal")
+		t.Fatal("durable End should mark the remote notify edge terminal")
 	}
-	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, reg.Err())
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+	got, err = receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
 }
 
 func TestReceiveMessageFromCnServerIfDispatch_PreservesCleanupOnOriginalRoot(t *testing.T) {

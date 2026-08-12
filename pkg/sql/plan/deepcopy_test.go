@@ -57,6 +57,20 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
+func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
+	source := &planpb.ColDef{
+		Name:          "display_name",
+		OriginName:    "source_name",
+		TblName:       "table_alias",
+		OriginTblName: "source_table",
+		DbName:        "source_db",
+	}
+
+	cloned := DeepCopyColDef(source)
+	require.NotSame(t, source, cloned)
+	require.Equal(t, source, cloned)
+}
+
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	source := &planpb.Expr{
 		Expr: &planpb.Expr_F{F: &planpb.Function{
