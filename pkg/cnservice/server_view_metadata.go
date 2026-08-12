@@ -30,24 +30,45 @@ func (s *service) startViewMetadataRecovery() error {
 	return s.stopper.RunNamedTask("view-metadata-recovery", func(ctx context.Context) {
 		ticker := time.NewTicker(viewMetadataRecoveryInterval)
 		defer ticker.Stop()
-		initialized, previouslyEnabled := false, false
 		runViewMetadataRecoveryLoop(ctx, ticker.C, func(ctx context.Context) error {
-			enabled := clusterservice.AllKnownCNsSupportViewMetadataRefresh(s.cfg.UUID)
-			if !enabled {
-				initialized, previouslyEnabled = true, false
-				return nil
-			}
-			if initialized && !previouslyEnabled {
-				if err := compile.StartViewMetadataRevalidation(ctx, s.sqlExecutor, s.cfg.UUID); err != nil {
-					return err
-				}
-			}
-			initialized, previouslyEnabled = true, true
-			return compile.RunViewMetadataRecovery(ctx, s.sqlExecutor, s.cfg.UUID)
+			return runViewMetadataRecoveryTick(
+				ctx,
+				s.viewMetadataRefreshReady(),
+				clusterservice.AllKnownCNsSupportViewMetadataRefresh(s.cfg.UUID),
+				func(ctx context.Context) error {
+					return compile.RequireViewMetadataRevalidation(ctx, s.sqlExecutor)
+				},
+				func(ctx context.Context) error {
+					return compile.StartViewMetadataRevalidation(ctx, s.sqlExecutor, s.cfg.UUID)
+				},
+				func(ctx context.Context) error {
+					return compile.RunViewMetadataRecovery(ctx, s.sqlExecutor, s.cfg.UUID)
+				},
+			)
 		}, func(err error) {
 			s.logger.Warn("View metadata recovery tick failed", zap.Error(err))
 		})
 	})
+}
+
+func runViewMetadataRecoveryTick(
+	ctx context.Context,
+	locallyReady bool,
+	globallyEnabled bool,
+	requireRevalidation func(context.Context) error,
+	startRevalidation func(context.Context) error,
+	recoverPage func(context.Context) error,
+) error {
+	if !locallyReady {
+		return nil
+	}
+	if !globallyEnabled {
+		return requireRevalidation(ctx)
+	}
+	if err := startRevalidation(ctx); err != nil {
+		return err
+	}
+	return recoverPage(ctx)
 }
 
 func runViewMetadataRecoveryLoop(

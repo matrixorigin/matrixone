@@ -733,6 +733,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err != nil {
 		return stats, err
 	}
+	if stmt.Level == tree.RESTORELEVELACCOUNT {
+		if err = invalidateAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
+	}
 
 	// restore cluster
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
@@ -2891,6 +2896,23 @@ func seedMissingViewMetadataAfterCatalogReset(
 	}
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
 	return bh.Exec(systemCtx, compile.SeedMissingViewMetadataSQL(uint64(time.Now().UnixNano())))
+}
+
+func invalidateAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		return nil
+	}
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(process.WithSystemCTELimits(systemCtx),
+		compile.AccountViewMetadataInvalidationSQL(accountID, uint64(time.Now().UnixNano())))
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

@@ -680,6 +680,13 @@ func PublicationViewMetadataInvalidationSQL(
 		}()), generation)
 }
 
+// AccountViewMetadataInvalidationSQL invalidates the complete reverse closure
+// of Views bound to relations owned by an account being restored.
+func AccountViewMetadataInvalidationSQL(sourceAccountID uint32, generation uint64) string {
+	return viewMetadataClosureInvalidationSQL(fmt.Sprintf(
+		"d.source_account_id=%d", sourceAccountID), generation)
+}
+
 // SubscriptionViewMetadataInvalidationSQL invalidates Views owned by one
 // subscriber which bind through the exact subscription database name.
 func SubscriptionViewMetadataInvalidationSQL(

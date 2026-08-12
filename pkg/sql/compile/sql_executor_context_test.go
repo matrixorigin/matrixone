@@ -88,10 +88,6 @@ func TestCompilerContextUnsupportedOperations(t *testing.T) {
 	}()
 }
 
-type compilerContextTestSQLHelper struct {
-	delegate any
-}
-
 type recordingSessionCompilerContext struct {
 	*plan.MockCompilerContext
 	snapshot             *plan.Snapshot
@@ -141,17 +137,6 @@ func (c *recordingSessionCompilerContext) Resolve(
 	c.resolvedDatabase = databaseName
 	c.resolvedTable = tableName
 	return &plan.ObjectRef{}, c.resolvedTableDef, nil
-}
-
-func (h *compilerContextTestSQLHelper) GetCompilerContext() any { return h.delegate }
-func (h *compilerContextTestSQLHelper) ExecSql(string) ([][]interface{}, error) {
-	return nil, nil
-}
-func (h *compilerContextTestSQLHelper) ExecSqlWithCtx(context.Context, string) ([][]interface{}, error) {
-	return nil, nil
-}
-func (h *compilerContextTestSQLHelper) GetSubscriptionMeta(string) (*plan.SubscriptionMeta, error) {
-	return nil, nil
 }
 
 func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {

@@ -267,7 +267,9 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 	subscriptionSQL := SubscriptionViewMetadataInvalidationSQL(11, "odd name", 12)
 	require.Contains(t, subscriptionSQL,
 		"d.account_id=11 and d.subscription_name='odd name'")
-	for _, sql := range []string{snapshotSQL, publicationSQL, accountPublicationSQL, subscriptionSQL} {
+	accountSQL := AccountViewMetadataInvalidationSQL(13, 14)
+	require.Contains(t, accountSQL, "d.source_account_id=13")
+	for _, sql := range []string{snapshotSQL, publicationSQL, accountPublicationSQL, subscriptionSQL, accountSQL} {
 		require.Contains(t, sql, "with recursive affected")
 		require.Contains(t, sql, " union select ")
 		require.NotContains(t, sql, "select distinct")
@@ -719,6 +721,25 @@ func TestBeginViewMetadataRevalidationResetsDurableCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 	require.Contains(t, exec.sqls[0], "source_relation_kind='REVALIDATE_SCAN'")
+}
+
+func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T) {
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, {}, {}}}
+	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
+	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
+	require.Len(t, exec.sqls, 3)
+	require.Contains(t, exec.sqls[0],
+		"where not exists")
+	require.Contains(t, exec.sqls[0], "'REVALIDATE_REQUIRED'")
+	require.Contains(t, exec.sqls[1],
+		"source_relation_kind='REVALIDATE_REQUIRED'")
+	require.Contains(t, exec.sqls[1],
+		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN')")
+	require.Contains(t, exec.sqls[2],
+		"source_relation_kind='REVALIDATE_SCAN'")
+	require.Contains(t, exec.sqls[2],
+		"source_relation_kind='REVALIDATE_REQUIRED'")
+	require.Contains(t, exec.sqls[2], "source_account_id=0")
 }
 
 func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {

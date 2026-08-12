@@ -39,3 +39,25 @@ func TestRunViewMetadataRecoveryLoopContinuesAfterFailureAndCancels(t *testing.T
 	require.Equal(t, 2, calls)
 	require.Equal(t, 1, failures)
 }
+
+func TestRunViewMetadataRecoveryTickUsesDurableActivationStateAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	required, started, recovered := 0, 0, 0
+	requireRevalidation := func(context.Context) error { required++; return nil }
+	startRevalidation := func(context.Context) error { started++; return nil }
+	recoverPage := func(context.Context) error { recovered++; return nil }
+
+	require.NoError(t, runViewMetadataRecoveryTick(
+		ctx, true, false, requireRevalidation, startRevalidation, recoverPage))
+	require.Equal(t, 1, required)
+	require.Zero(t, started)
+	require.Zero(t, recovered)
+
+	// A restarted CN has no process-local false observation. It still attempts
+	// the durable REQUIRED -> SCAN CAS before recovery when its first view of
+	// the cluster is enabled.
+	require.NoError(t, runViewMetadataRecoveryTick(
+		ctx, true, true, requireRevalidation, startRevalidation, recoverPage))
+	require.Equal(t, 1, started)
+	require.Equal(t, 1, recovered)
+}
