@@ -72,6 +72,10 @@ type testFlightServer struct {
 	cancelStarted       chan struct{}
 	blockCancel         chan struct{}
 	cancelOnce          sync.Once
+	doGetStarted        chan struct{}
+	blockDoGet          chan struct{}
+	doGetOnce           sync.Once
+	cancelFailures      atomic.Int32
 }
 
 func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
@@ -88,8 +92,8 @@ func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
 }
 
 func TestExecutionIdempotencyKeyMatchesProtocolVector(t *testing.T) {
-	key := executionIdempotencyKey(42, []byte("qqqqqqqqqqqqqqqq"), []byte("plan"))
-	require.Equal(t, "6acdd6974ba32f76809a1a11b372aa531a06dbe3aeb95e4c3dfb6075ce2de177", hex.EncodeToString(key[:]))
+	key := executionIdempotencyKey(42, []byte("qqqqqqqqqqqqqqqq"))
+	require.Equal(t, "77f6a676cc4bfdbc9265e1bbbcd8140f4a820ec41a2979f52706f41ff22fb33a", hex.EncodeToString(key[:]))
 }
 
 func TestRuntimeRejectsTLSVerificationBypass(t *testing.T) {
@@ -148,12 +152,12 @@ func TestRuntimeAndExecutionRejectInvalidStates(t *testing.T) {
 	}
 
 	var nilRuntime *Runtime
-	_, err := nilRuntime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil)
+	_, err := nilRuntime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightRelease)
 	require.ErrorContains(t, err, "nil runtime")
 	runtime := &Runtime{config: Config{RequestTimeout: time.Second}, stopped: true}
-	_, err = runtime.Prepare(context.Background(), 0, nil, nil, nil, nil)
+	_, err = runtime.Prepare(context.Background(), 0, nil, nil, nil, nil, testFlightRelease)
 	require.ErrorContains(t, err, "query identity")
-	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil)
+	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil, testFlightRelease)
 	require.ErrorContains(t, err, "runtime is stopping")
 
 	var nilExecution *Execution
@@ -182,7 +186,7 @@ func TestPrepareRejectsUnsafeFlightInfo(t *testing.T) {
 				config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
 				conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
 			}
-			_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+			_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, int32(1), server.cancels.Load())
 		})
@@ -223,7 +227,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
 
-	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.NoError(t, err)
 	mp := mpool.MustNewZero()
 	rows := 0
@@ -236,7 +240,7 @@ func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 	require.Equal(t, int32(0), server.cancels.Load())
 
-	execution, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	execution, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.NoError(t, err)
 	writerErr := errors.New("client disconnected")
 	runErr := execution.Run(context.Background(), mp, nil, func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -262,15 +266,130 @@ func TestPrepareCancelsByIdempotencyWhenTicketIsUnknown(t *testing.T) {
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
 
-	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.ErrorContains(t, err, "malformed endpoint ticket")
 	require.False(t, IsQuiescenceUnknown(err))
 	require.Equal(t, int32(1), server.cancelByIdempotency.Load())
 
 	server.cancelErr = status.Error(codes.Unavailable, "cleanup unavailable")
-	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.True(t, IsQuiescenceUnknown(err))
 	require.False(t, IsPreVisibilityFallback(err))
+}
+
+func TestAmbiguousPrepareCleanupIsRetriedUntilLeaseRelease(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), hash: make([]byte, sha256.Size), badInfo: true,
+	}
+	server.cancelFailures.Store(1)
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Minute, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	var releaseAttempts atomic.Int32
+
+	_, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		func(context.Context) error {
+			releaseAttempts.Add(1)
+			return nil
+		},
+	)
+	require.True(t, IsQuiescenceUnknown(err))
+	require.Eventually(t, func() bool {
+		return server.cancelByIdempotency.Load() == 2 && releaseAttempts.Load() == 1 && runtimeExecutionCount(runtime) == 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, runtime.Close(context.Background()))
+}
+
+func TestExecutionRetriesFailedCancellationAndPartialLeaseRelease(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), header: mustHex(t, fixtureHeaderHex), body: mustHex(t, fixtureBodyHex),
+		ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+	}
+	server.cancelFailures.Store(1)
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Minute, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	var releaseAttempts atomic.Int32
+	execution, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		func(context.Context) error {
+			if releaseAttempts.Add(1) == 1 {
+				return errors.New("second lease unregister failed")
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	writerErr := errors.New("writer stopped")
+	runErr := execution.Run(context.Background(), mpool.MustNewZero(), nil, func(*batch.Batch, *perfcounter.CounterSet) error {
+		return writerErr
+	})
+	require.ErrorIs(t, runErr, writerErr)
+	require.Error(t, execution.CleanupAfterRun(context.Background(), runErr))
+	require.Eventually(t, func() bool {
+		return server.cancels.Load() == 1 && releaseAttempts.Load() == 2 && runtimeExecutionCount(runtime) == 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, runtime.Close(context.Background()))
+}
+
+func TestRequestDeadlineCancelsStalledDoGet(t *testing.T) {
+	server := &testFlightServer{
+		schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+		doGetStarted: make(chan struct{}), blockDoGet: make(chan struct{}),
+	}
+	runtime := &Runtime{
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: 30 * time.Millisecond, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	copy(runtime.capabilityHash[:], server.hash)
+	typesOut, headings := fixtureOutputShape()
+	var released atomic.Int32
+	execution, err := runtime.Prepare(
+		context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings,
+		func(context.Context) error { released.Add(1); return nil },
+	)
+	require.NoError(t, err)
+	started := time.Now()
+	runErr := execution.Run(context.Background(), mpool.MustNewZero(), nil, func(*batch.Batch, *perfcounter.CounterSet) error { return nil })
+	require.Error(t, runErr)
+	require.Less(t, time.Since(started), time.Second)
+	require.Error(t, execution.CleanupAfterRun(context.Background(), runErr))
+	require.Eventually(t, func() bool {
+		return server.cancels.Load() == 1 && released.Load() == 1 && runtimeExecutionCount(runtime) == 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, runtime.Close(context.Background()))
+}
+
+func TestReplayReconciliationSurvivesRuntimeClose(t *testing.T) {
+	server := &testFlightServer{cancelErr: status.Error(codes.Unavailable, "sidecar unavailable")}
+	first := &Runtime{
+		config: Config{RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	var released atomic.Int32
+	release := func(context.Context) error { released.Add(1); return nil }
+	require.NoError(t, first.Reconcile(1, make([]byte, 16), release))
+	require.Eventually(t, func() bool { return server.cancelByIdempotency.Load() > 0 }, time.Second, time.Millisecond)
+	require.Error(t, first.Close(context.Background()))
+	require.Zero(t, released.Load())
+
+	server.cancelErr = nil
+	second := &Runtime{
+		config: Config{RequestTimeout: time.Second, CleanupTimeout: time.Second},
+		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+	}
+	require.NoError(t, second.Reconcile(1, make([]byte, 16), release))
+	require.Eventually(t, func() bool {
+		return released.Load() == 1 && runtimeExecutionCount(second) == 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, second.Close(context.Background()))
 }
 
 func TestRuntimeCloseCancelsAndJoinsInflightPreparation(t *testing.T) {
@@ -286,7 +405,7 @@ func TestRuntimeCloseCancelsAndJoinsInflightPreparation(t *testing.T) {
 	typesOut, headings := fixtureOutputShape()
 	prepareDone := make(chan error, 1)
 	go func() {
-		_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+		_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 		prepareDone <- err
 	}()
 	<-server.prepareStarted
@@ -308,7 +427,7 @@ func TestConcurrentRuntimeCloseWaitsForQuiescence(t *testing.T) {
 	}
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
-	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -339,7 +458,7 @@ func TestContextCancellationReachesSidecarWhileWriterIsBlocked(t *testing.T) {
 	}
 	copy(runtime.capabilityHash[:], server.hash)
 	typesOut, headings := fixtureOutputShape()
-	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+	execution, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings, testFlightRelease)
 	require.NoError(t, err)
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
@@ -484,6 +603,16 @@ func testDoGet(service any, stream grpc.ServerStream) error {
 	if err := stream.RecvMsg(ticket); err != nil {
 		return err
 	}
+	if server.doGetStarted != nil {
+		server.doGetOnce.Do(func() { close(server.doGetStarted) })
+	}
+	if server.blockDoGet != nil {
+		select {
+		case <-server.blockDoGet:
+		case <-stream.Context().Done():
+			return context.Cause(stream.Context())
+		}
+	}
 	if server.streamMessages != nil {
 		for _, message := range server.streamMessages {
 			if err := stream.SendMsg(message); err != nil {
@@ -507,9 +636,6 @@ func testDoAction(service any, stream grpc.ServerStream) error {
 	if action.Type == "GetCapabilities" {
 		return stream.SendMsg(&flightResult{Body: server.capabilities})
 	}
-	if server.cancelErr != nil {
-		return server.cancelErr
-	}
 	request := new(cancelExecutionRequest)
 	if action.Type != "CancelExecution" || proto.Unmarshal(action.Body, request) != nil ||
 		(len(request.Ticket) != ticketBytes && len(request.IdempotencyKey) != sha256.Size) ||
@@ -518,6 +644,12 @@ func testDoAction(service any, stream grpc.ServerStream) error {
 	}
 	if len(request.IdempotencyKey) != 0 {
 		server.cancelByIdempotency.Add(1)
+	}
+	if server.cancelFailures.Load() > 0 && server.cancelFailures.Add(-1) >= 0 {
+		return status.Error(codes.Unavailable, "transient cleanup failure")
+	}
+	if server.cancelErr != nil {
+		return server.cancelErr
 	}
 	if server.cancelStarted != nil {
 		server.cancelOnce.Do(func() { close(server.cancelStarted) })
@@ -532,6 +664,14 @@ func testDoAction(service any, stream grpc.ServerStream) error {
 	server.cancels.Add(1)
 	return stream.SendMsg(&flightResult{Body: []byte("quiesced")})
 }
+
+func runtimeExecutionCount(runtime *Runtime) int {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return len(runtime.executions)
+}
+
+func testFlightRelease(context.Context) error { return nil }
 
 func testTLSFlightServer(t *testing.T, implementation *testFlightServer) (string, *tls.Config) {
 	t.Helper()

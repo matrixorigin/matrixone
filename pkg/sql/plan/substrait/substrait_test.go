@@ -1149,6 +1149,7 @@ func TestReleaseFailureRevokesLeaseAndRetainsRetryState(t *testing.T) {
 	require.Error(t, leases.Release(context.Background(), tr.ReadRef))
 	_, ok := resolveLease(leases, tr.ReadRef)
 	require.False(t, ok)
+	require.Len(t, leases.PendingExecutions(), 1, "a same-process runtime restart must inherit partial release cleanup")
 	protector.failUnregister = false
 	require.NoError(t, leases.Release(context.Background(), tr.ReadRef))
 	_, ok = resolveLease(leases, tr.ReadRef)
@@ -1261,6 +1262,17 @@ func TestReleaseUsesIndependentBoundedCleanupContext(t *testing.T) {
 	require.NoError(t, journal.deleteContextErr)
 	require.Equal(t, []string{"store", "mark-released", "delete"}, journal.events)
 	require.Equal(t, 1, protector.unregistered)
+}
+
+func TestLeaseCleanupContextPreservesEarlierCallerDeadline(t *testing.T) {
+	callerDeadline := time.Now().Add(time.Second)
+	caller, cancelCaller := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancelCaller()
+	cleanup, cancelCleanup := leaseCleanupContext(caller)
+	defer cancelCleanup()
+	actual, ok := cleanup.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, callerDeadline, actual, time.Millisecond)
 }
 
 func TestPersistentLeaseReplayAndReleasedCrashRecovery(t *testing.T) {
@@ -1376,6 +1388,36 @@ func TestExpiredLeaseRemainsCapacityOwningUntilRelease(t *testing.T) {
 	require.NoError(t, manager.Release(context.Background(), expired.Read.ReadRef))
 	require.Equal(t, 1, protector.unregistered)
 	require.NoError(t, manager.Acquire(context.Background(), []*Lease{replacement}))
+}
+
+func TestPendingExecutionsGroupsReplayCleanupIdentity(t *testing.T) {
+	now := time.Now()
+	manager := NewLeaseManager(3, new(fakeProtector))
+	first := testDurableLease(t, 1, uint64(now.Add(time.Minute).UnixMilli()))
+	second := testDurableLease(t, 2, uint64(now.Add(time.Minute).UnixMilli()))
+	third := testDurableLease(t, 3, uint64(now.Add(time.Minute).UnixMilli()))
+	first.Read.AccountID, second.Read.AccountID, third.Read.AccountID = 7, 7, 8
+	first.Read.QueryID = []byte("statement-one")
+	second.Read.QueryID = []byte("statement-one")
+	third.Read.QueryID = []byte("statement-two")
+	for _, lease := range []*Lease{first, second, third} {
+		wire, err := MarshalTaeRead(lease.Read)
+		require.NoError(t, err)
+		lease.Wire = wire
+	}
+	require.NoError(t, manager.Acquire(context.Background(), []*Lease{first, second, third}))
+
+	pending := manager.PendingExecutions()
+	require.Len(t, pending, 2)
+	groupSizes := make(map[string]int)
+	for _, execution := range pending {
+		groupSizes[string(execution.QueryID)] = len(execution.ReadRefs)
+		if len(execution.ReadRefs) != 0 {
+			execution.ReadRefs[0][0] ^= 0xff
+		}
+	}
+	require.Equal(t, map[string]int{"statement-one": 2, "statement-two": 1}, groupSizes)
+	require.Len(t, manager.PendingExecutions(), 2, "returned identities must not alias manager state")
 }
 
 func TestJournalCapacityCountsExpiredUnreleasedLease(t *testing.T) {

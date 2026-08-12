@@ -468,9 +468,12 @@ func leaseCleanupContext(ctx context.Context) (context.Context, context.CancelFu
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithTimeoutCause(
-		context.WithoutCancel(ctx),
-		rollbackCleanupTimeout,
+	deadline := time.Now().Add(rollbackCleanupTimeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	return context.WithDeadlineCause(
+		context.WithoutCancel(ctx), deadline,
 		moerr.NewInternalErrorNoCtx("substrait: read lease cleanup timed out"),
 	)
 }
@@ -730,6 +733,54 @@ func (m *LeaseManager) Ready() bool {
 
 func (m *LeaseManager) Protected() bool {
 	return m != nil && m.protector != nil
+}
+
+// PendingExecution groups live read references by the statement that owns
+// their terminal sidecar cleanup. The identity is sufficient to
+// reconstruct Flight's cancellation key after a CN restart.
+type PendingExecution struct {
+	AccountID uint64
+	QueryID   []byte
+	ReadRefs  [][]byte
+}
+
+// PendingExecutions returns immutable copies of every live execution group.
+// Released records are cleaned during Replay and are never republished here.
+func (m *LeaseManager) PendingExecutions() []PendingExecution {
+	if m == nil {
+		return nil
+	}
+	type executionKey struct {
+		accountID uint64
+		queryID   string
+	}
+	m.mu.RLock()
+	if !m.ready {
+		m.mu.RUnlock()
+		return nil
+	}
+	grouped := make(map[executionKey]*PendingExecution)
+	for _, lease := range m.leases {
+		if lease == nil || lease.Read == nil || lease.Released {
+			continue
+		}
+		groupKey := executionKey{accountID: lease.Read.AccountID, queryID: string(lease.Read.QueryID)}
+		pending := grouped[groupKey]
+		if pending == nil {
+			pending = &PendingExecution{
+				AccountID: lease.Read.AccountID,
+				QueryID:   append([]byte(nil), lease.Read.QueryID...),
+			}
+			grouped[groupKey] = pending
+		}
+		pending.ReadRefs = append(pending.ReadRefs, append([]byte(nil), lease.Read.ReadRef...))
+	}
+	m.mu.RUnlock()
+	result := make([]PendingExecution, 0, len(grouped))
+	for _, pending := range grouped {
+		result = append(result, *pending)
+	}
+	return result
 }
 
 func validateLease(l *Lease, now uint64, allowReleased bool) error {

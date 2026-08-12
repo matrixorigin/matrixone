@@ -5237,18 +5237,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// A sidecar hint is only an explicit selector. Strip it before parsing so
-		// normal authentication, planning, tracing, and result writing remain in
-		// control; the compile cut point performs negotiated Substrait admission.
-		if isSidecar, _ := isSidecarQuery(query); isSidecar {
-			ses.addSqlCount(1)
-			if !sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				execCtx.reqCtx = compile.WithSiriusOffload(execCtx.reqCtx)
-			}
-			query = stripSidecarHint(query)
-		} else {
-			ses.addSqlCount(1)
-		}
+		// SIDECAR is an explicit statement selector. Keep the raw request intact
+		// so doComQuery can bind each hint to its own computation wrapper; a
+		// request-scoped marker would leak into unhinted sibling statements.
+		ses.addSqlCount(1)
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)

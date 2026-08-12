@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"errors"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -89,6 +88,24 @@ func (r *SiriusRuntime) Close(ctx context.Context) error {
 	return result
 }
 
+// ReconcileReplay transfers durable leases left by a prior CN generation to
+// Flight's retry owner. Cancellation by statement identity is idempotent, and
+// lease release starts only after the sidecar acknowledges quiescence.
+func (r *SiriusRuntime) ReconcileReplay() error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	var result error
+	for _, pending := range r.Leases.PendingExecutions() {
+		readRefs := cloneReadRefs(pending.ReadRefs)
+		err := r.Flight.Reconcile(pending.AccountID, pending.QueryID, func(ctx context.Context) error {
+			return releaseReadRefs(ctx, r.Leases, readRefs)
+		})
+		result = errors.Join(result, err)
+	}
+	return result
+}
+
 func lookupSiriusRuntime(service string) (*SiriusRuntime, bool) {
 	runtime := moruntime.ServiceRuntime(service)
 	if runtime == nil {
@@ -104,37 +121,23 @@ func lookupSiriusRuntime(service string) (*SiriusRuntime, bool) {
 
 type siriusReadOwner struct {
 	execution *sidecarflight.Execution
-	readPlan  *SiriusReadPlan
 	runtime   *SiriusRuntime
-
-	once sync.Once
-	done chan struct{}
-	err  error
 }
 
-func newSiriusReadOwner(execution *sidecarflight.Execution, readPlan *SiriusReadPlan, runtime *SiriusRuntime) *siriusReadOwner {
-	return &siriusReadOwner{execution: execution, readPlan: readPlan, runtime: runtime, done: make(chan struct{})}
+func newSiriusReadOwner(execution *sidecarflight.Execution, runtime *SiriusRuntime) *siriusReadOwner {
+	return &siriusReadOwner{execution: execution, runtime: runtime}
 }
 
 func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 	if o == nil {
 		return nil
 	}
-	o.once.Do(func() {
-		defer close(o.done)
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.runtime.CleanupTimeout)
-		defer cancel()
-		if !succeeded {
-			o.err = o.execution.CancelAndJoin(cleanupCtx)
-		}
-		// A failed quiescence acknowledgement deliberately retains the GC pins.
-		// Releasing them would turn a cleanup timeout into use-after-GC.
-		if o.err == nil {
-			o.err = o.readPlan.Release(cleanupCtx, o.runtime.Leases)
-		}
-	})
-	<-o.done
-	return o.err
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.runtime.CleanupTimeout)
+	defer cancel()
+	if succeeded {
+		return o.execution.CleanupAfterRun(cleanupCtx, nil)
+	}
+	return o.execution.Cleanup(cleanupCtx)
 }
 
 func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan) (bool, error) {
@@ -161,23 +164,36 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		}
 		return false, err
 	}
-	execution, prepareErr := runtime.Flight.Prepare(ctx, uint64(accountID), queryID, readPlan.Plan, readPlan.OutputTypes, readPlan.Headings)
+	execution, prepareErr := runtime.Flight.Prepare(
+		ctx, uint64(accountID), queryID, readPlan.Plan, readPlan.OutputTypes, readPlan.Headings,
+		func(releaseCtx context.Context) error {
+			return readPlan.Release(releaseCtx, runtime.Leases)
+		},
+	)
 	if prepareErr != nil {
-		if sidecarflight.IsQuiescenceUnknown(prepareErr) {
-			// The sidecar may still own an execution for this snapshot. Retain the
-			// durable pins until an operator can establish quiescence.
-			return false, prepareErr
-		}
-		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtime.CleanupTimeout)
-		releaseErr := readPlan.Release(releaseCtx, runtime.Leases)
-		cancel()
-		if sidecarflight.IsPreVisibilityFallback(prepareErr) && releaseErr == nil {
+		if sidecarflight.IsPreVisibilityFallback(prepareErr) {
 			return false, nil
 		}
-		return false, errors.Join(prepareErr, releaseErr)
+		return false, prepareErr
 	}
-	c.siriusRead = newSiriusReadOwner(execution, readPlan, runtime)
+	c.siriusRead = newSiriusReadOwner(execution, runtime)
 	return true, nil
+}
+
+func cloneReadRefs(readRefs [][]byte) [][]byte {
+	result := make([][]byte, len(readRefs))
+	for i := range readRefs {
+		result[i] = append([]byte(nil), readRefs[i]...)
+	}
+	return result
+}
+
+func releaseReadRefs(ctx context.Context, leases *substrait.LeaseManager, readRefs [][]byte) error {
+	var result error
+	for _, readRef := range readRefs {
+		result = errors.Join(result, leases.Release(ctx, readRef))
+	}
+	return result
 }
 
 func (c *Compile) runSiriusRead(ctx context.Context) (err error) {

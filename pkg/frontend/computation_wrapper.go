@@ -1193,7 +1193,11 @@ func createCompile(
 
 	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
-	proc.ReplaceTopCtx(execCtx.reqCtx)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	compileCtx := siriusCompileContext(execCtx.reqCtx, schedulingSQL, stmt)
+	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
 	var tenant string
@@ -1247,9 +1251,6 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	if schedulingSQL == "" {
-		schedulingSQL = originSQL
-	}
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
@@ -1266,12 +1267,24 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func siriusCompileContext(ctx context.Context, sql string, stmt tree.Statement) context.Context {
+	if siriusStatementSelected(sql, stmt) {
+		return compile.WithSiriusOffload(ctx)
+	}
+	return ctx
+}
+
+func siriusStatementSelected(sql string, stmt tree.Statement) bool {
+	selected, _ := isSidecarQuery(sql)
+	return selected && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect

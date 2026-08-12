@@ -76,9 +76,6 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err = resolver.Start(); err != nil {
-		return siriusInternalErrorf("substrait: start read resolver: %w", err)
-	}
 	flight, err := sidecarflight.NewRuntime(ctx, sidecarflight.Config{
 		Address: config.FlightAddress, TLSConfig: flightTLS, MaxBatchBytes: config.MaxBatchBytes,
 		RequestTimeout: config.RequestTimeout.Duration, CleanupTimeout: config.CleanupTimeout.Duration,
@@ -94,6 +91,19 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 		LeaseTTL: config.LeaseTTL.Duration, CleanupTimeout: config.CleanupTimeout.Duration,
 	}
 	if err = runtime.Validate(); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.CleanupTimeout.Duration)
+		defer cancel()
+		return errors.Join(err, runtime.Close(cleanupCtx))
+	}
+	// Make replayed lease resolution reachable before asking the sidecar to
+	// quiesce orphaned executions. The runtime is not published yet, so no new
+	// statement can enter during reconciliation setup.
+	if err = resolver.Start(); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.CleanupTimeout.Duration)
+		defer cancel()
+		return errors.Join(siriusInternalErrorf("substrait: start read resolver: %w", err), runtime.Close(cleanupCtx))
+	}
+	if err = runtime.ReconcileReplay(); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), config.CleanupTimeout.Duration)
 		defer cancel()
 		return errors.Join(err, runtime.Close(cleanupCtx))

@@ -58,8 +58,8 @@ type Config struct {
 }
 
 // Runtime owns one negotiated Flight connection and every execution prepared
-// through it. Close first stops admission, then quiesces all tickets, and only
-// then closes the transport.
+// through it. Close first stops admission, then attempts every pending cleanup
+// before closing the transport; durable lease replay owns any remaining work.
 type Runtime struct {
 	config         Config
 	capabilityHash [sha256.Size]byte
@@ -71,6 +71,10 @@ type Runtime struct {
 	preparing  map[*preparation]struct{}
 	closeDone  chan struct{}
 	closeErr   error
+
+	reconcileCtx    context.Context
+	reconcileCancel context.CancelFunc
+	reconcileWG     sync.WaitGroup
 }
 
 type preparation struct {
@@ -78,20 +82,28 @@ type preparation struct {
 	done   chan struct{}
 }
 
-// Execution owns a single-use Flight ticket. The caller must invoke either
-// FinishSuccess after EOF or CancelAndJoin before releasing read leases.
+// Execution owns a single-use Flight ticket, its restart-stable cancellation
+// identity, and the retryable release of its read leases.
 type Execution struct {
-	runtime *Runtime
-	ticket  []byte
-	schema  *Schema
+	runtime        *Runtime
+	ticket         []byte
+	idempotencyKey []byte
+	schema         *Schema
+	deadline       time.Time
+	release        func(context.Context) error
 
 	mu             sync.Mutex
 	streamCancel   context.CancelFunc
 	started        bool
+	quiesced       bool
 	terminal       bool
 	cleanupRunning bool
 	cleanupDone    chan struct{}
 	cleanupErr     error
+	releaseRunning bool
+	releaseDone    chan struct{}
+	releaseErr     error
+	reconciling    bool
 }
 
 // quiescenceUnknownError means the client could not prove that a possibly
@@ -102,6 +114,13 @@ type quiescenceUnknownError struct {
 
 func (e *quiescenceUnknownError) Error() string { return e.err.Error() }
 func (e *quiescenceUnknownError) Unwrap() error { return e.err }
+
+type cleanupPendingError struct {
+	err error
+}
+
+func (e *cleanupPendingError) Error() string { return e.err.Error() }
+func (e *cleanupPendingError) Unwrap() error { return e.err }
 
 // NewRuntime establishes the mTLS channel and performs exact capability
 // negotiation before returning it to the CN lifecycle owner.
@@ -147,20 +166,32 @@ func NewRuntime(ctx context.Context, config Config, capabilityDocument string) (
 		_ = conn.Close()
 		return nil, internalErrorf("sidecar flight: capability document mismatch")
 	}
+	runtime.reconcileCtx, runtime.reconcileCancel = context.WithCancel(context.Background())
 	return runtime, nil
 }
 
 // Prepare exchanges an already-admitted Substrait plan for a single-use
 // ticket and validates the result schema before the caller exposes metadata.
-func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan []byte, outputTypes []planpb.Type, headings []string) (*Execution, error) {
+func (r *Runtime) Prepare(
+	ctx context.Context,
+	accountID uint64,
+	queryID, plan []byte,
+	outputTypes []planpb.Type,
+	headings []string,
+	release func(context.Context) error,
+) (*Execution, error) {
 	if r == nil {
 		return nil, internalErrorf("sidecar flight: nil runtime")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if release == nil {
+		return nil, internalErrorf("sidecar flight: lease release owner is required")
+	}
 	if accountID == 0 || len(queryID) != 16 || len(plan) == 0 || len(plan) > 16<<20 {
-		return nil, internalErrorf("sidecar flight: query identity and Substrait plan are required")
+		primary := internalErrorf("sidecar flight: query identity and Substrait plan are required")
+		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
 	deadline := time.Now().Add(r.config.RequestTimeout)
 	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
@@ -172,7 +203,8 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 	if r.stopped {
 		r.mu.Unlock()
 		cancelPrepare()
-		return nil, internalErrorf("sidecar flight: runtime is stopping")
+		primary := internalErrorf("sidecar flight: runtime is stopping")
+		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
 	if r.preparing == nil {
 		r.preparing = make(map[*preparation]struct{})
@@ -186,7 +218,7 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 		close(preparing.done)
 		r.mu.Unlock()
 	}()
-	idempotencyKey := executionIdempotencyKey(accountID, queryID, plan)
+	idempotencyKey := executionIdempotencyKey(accountID, queryID)
 	request := &executeSubstraitRequest{
 		ProtocolVersion: protocolVersion, SubstraitVersion: substraitVersion,
 		CapabilityHash: r.capabilityHash[:], MaxBatchBytes: r.config.MaxBatchBytes,
@@ -196,7 +228,8 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 	}
 	command, err := proto.Marshal(request)
 	if err != nil {
-		return nil, internalErrorf("sidecar flight: encode request: %w", err)
+		primary := internalErrorf("sidecar flight: encode request: %w", err)
+		return nil, r.failBeforeVisibility(ctx, primary, release)
 	}
 	descriptor := &flightDescriptor{Type: commandDescriptor, Cmd: command}
 	info := new(flightInfo)
@@ -208,63 +241,110 @@ func (r *Runtime) Prepare(ctx context.Context, accountID uint64, queryID, plan [
 		}
 	}
 	if err != nil {
-		return nil, r.failAmbiguousPrepare(internalErrorf("sidecar flight: prepare: %w", err), idempotencyKey[:])
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: prepare: %w", err), nil, idempotencyKey[:], release, deadline)
 	}
 	if len(info.Endpoint) != 1 || info.Endpoint[0] == nil || info.Endpoint[0].Ticket == nil || len(info.Endpoint[0].Ticket.Ticket) != ticketBytes {
-		return nil, r.failAmbiguousPrepare(internalErrorf("sidecar flight: malformed endpoint ticket"), idempotencyKey[:])
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: malformed endpoint ticket"), nil, idempotencyKey[:], release, deadline)
 	}
 	ticket := append([]byte(nil), info.Endpoint[0].Ticket.Ticket...)
 	if len(info.Endpoint[0].Locations) != 0 {
-		return nil, r.failPrepared(internalErrorf("sidecar flight: endpoint redirection is not allowed"), ticket)
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: endpoint redirection is not allowed"), ticket, idempotencyKey[:], release, deadline)
 	}
 	if !bytes.Equal(info.AppMetadata, r.capabilityHash[:]) {
-		return nil, r.failPrepared(internalErrorf("sidecar flight: response capability hash mismatch"), ticket)
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: response capability hash mismatch"), ticket, idempotencyKey[:], release, deadline)
 	}
 	schema, err := ParseSchema(info.Schema, outputTypes, headings)
 	if err != nil {
-		return nil, r.failPrepared(internalErrorf("sidecar flight: validate schema: %w", err), ticket)
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: validate schema: %w", err), ticket, idempotencyKey[:], release, deadline)
 	}
 	execution := &Execution{
-		runtime:     r,
-		ticket:      ticket,
-		schema:      schema,
-		cleanupDone: make(chan struct{}),
+		runtime: r, ticket: ticket, idempotencyKey: append([]byte(nil), idempotencyKey[:]...),
+		schema: schema, deadline: deadline, release: release,
 	}
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
-		return nil, r.failPrepared(internalErrorf("sidecar flight: runtime is stopping"), ticket)
+		return nil, r.failPreparation(
+			internalErrorf("sidecar flight: runtime is stopping"), ticket, idempotencyKey[:], release, deadline)
 	}
 	r.executions[execution] = struct{}{}
 	r.mu.Unlock()
 	return execution, nil
 }
 
-func executionIdempotencyKey(accountID uint64, queryID, plan []byte) [sha256.Size]byte {
-	planHash := sha256.Sum256(plan)
-	input := make([]byte, 8, 8+len(queryID)+len(planHash))
+func (r *Runtime) failBeforeVisibility(
+	ctx context.Context,
+	primary error,
+	release func(context.Context) error,
+) error {
+	cleanupCtx, cancel := boundedContext(ctx, r.config.CleanupTimeout)
+	defer cancel()
+	execution := &Execution{runtime: r, quiesced: true, release: release}
+	if cleanupErr := execution.releaseLeases(cleanupCtx); cleanupErr != nil {
+		r.retainForReconciliation(execution)
+		return &cleanupPendingError{err: errors.Join(primary, cleanupErr)}
+	}
+	return primary
+}
+
+func executionIdempotencyKey(accountID uint64, queryID []byte) [sha256.Size]byte {
+	input := make([]byte, 8, 8+len(queryID))
 	binary.LittleEndian.PutUint64(input, accountID)
 	input = append(input, queryID...)
-	input = append(input, planHash[:]...)
 	return sha256.Sum256(input)
 }
 
-func (r *Runtime) failPrepared(primary error, ticket []byte) error {
+func (r *Runtime) failPreparation(
+	primary error,
+	ticket, idempotencyKey []byte,
+	release func(context.Context) error,
+	deadline time.Time,
+) error {
+	execution := &Execution{
+		runtime: r, ticket: append([]byte(nil), ticket...),
+		idempotencyKey: append([]byte(nil), idempotencyKey...), deadline: deadline, release: release,
+	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), r.config.CleanupTimeout)
 	defer cancel()
-	if cleanupErr := r.cancel(cleanupCtx, ticket, nil); cleanupErr != nil {
-		return &quiescenceUnknownError{err: errors.Join(primary, cleanupErr)}
+	if cleanupErr := execution.cleanup(cleanupCtx); cleanupErr != nil {
+		r.retainForReconciliation(execution)
+		joined := errors.Join(primary, cleanupErr)
+		execution.mu.Lock()
+		quiesced := execution.quiesced
+		execution.mu.Unlock()
+		if !quiesced {
+			return &quiescenceUnknownError{err: joined}
+		}
+		return &cleanupPendingError{err: joined}
 	}
 	return primary
 }
 
-func (r *Runtime) failAmbiguousPrepare(primary error, idempotencyKey []byte) error {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), r.config.CleanupTimeout)
-	defer cancel()
-	if cleanupErr := r.cancel(cleanupCtx, nil, idempotencyKey); cleanupErr != nil {
-		return &quiescenceUnknownError{err: errors.Join(primary, cleanupErr)}
+// Reconcile transfers a replayed execution identity and its durable read
+// leases to the retry worker. Query IDs are statement-unique, so the
+// idempotency key remains reconstructible after a CN restart without storing
+// the Substrait plan a second time.
+func (r *Runtime) Reconcile(
+	accountID uint64,
+	queryID []byte,
+	release func(context.Context) error,
+) error {
+	if r == nil || accountID == 0 || len(queryID) == 0 || release == nil {
+		return internalErrorf("sidecar flight: invalid replayed execution")
 	}
-	return primary
+	idempotencyKey := executionIdempotencyKey(accountID, queryID)
+	execution := &Execution{
+		runtime: r, idempotencyKey: append([]byte(nil), idempotencyKey[:]...), release: release,
+	}
+	if !r.retainForReconciliation(execution) {
+		return internalErrorf("sidecar flight: runtime is stopping")
+	}
+	return nil
 }
 
 func (r *Runtime) cancel(ctx context.Context, ticket, idempotencyKey []byte) error {
@@ -287,6 +367,90 @@ func (r *Runtime) remove(execution *Execution) {
 	r.mu.Lock()
 	delete(r.executions, execution)
 	r.mu.Unlock()
+}
+
+func (r *Runtime) retainForReconciliation(execution *Execution) bool {
+	r.mu.Lock()
+	if r.stopped {
+		if r.executions == nil {
+			r.executions = make(map[*Execution]struct{})
+		}
+		r.executions[execution] = struct{}{}
+		r.mu.Unlock()
+		return false
+	}
+	if r.executions == nil {
+		r.executions = make(map[*Execution]struct{})
+	}
+	r.executions[execution] = struct{}{}
+	if r.reconcileCtx == nil {
+		r.reconcileCtx, r.reconcileCancel = context.WithCancel(context.Background())
+	}
+	r.mu.Unlock()
+	r.scheduleReconciliation(execution)
+	return true
+}
+
+func (r *Runtime) scheduleReconciliation(execution *Execution) {
+	if r == nil || execution == nil {
+		return
+	}
+	execution.mu.Lock()
+	if execution.terminal || execution.reconciling {
+		execution.mu.Unlock()
+		return
+	}
+	execution.reconciling = true
+	execution.mu.Unlock()
+
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		execution.mu.Lock()
+		execution.reconciling = false
+		execution.mu.Unlock()
+		return
+	}
+	if r.executions == nil {
+		r.executions = make(map[*Execution]struct{})
+	}
+	r.executions[execution] = struct{}{}
+	if r.reconcileCtx == nil {
+		r.reconcileCtx, r.reconcileCancel = context.WithCancel(context.Background())
+	}
+	workerCtx := r.reconcileCtx
+	r.reconcileWG.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer r.reconcileWG.Done()
+		defer func() {
+			execution.mu.Lock()
+			execution.reconciling = false
+			execution.mu.Unlock()
+		}()
+		retryDelay := 100 * time.Millisecond
+		for {
+			cleanupCtx, cancel := context.WithTimeout(workerCtx, r.config.CleanupTimeout)
+			err := execution.cleanup(cleanupCtx)
+			cancel()
+			if err == nil {
+				return
+			}
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-workerCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if retryDelay < 5*time.Second {
+				retryDelay *= 2
+				if retryDelay > 5*time.Second {
+					retryDelay = 5 * time.Second
+				}
+			}
+		}
+	}()
 }
 
 // Close stops new preparations and quiesces every prepared or streaming
@@ -317,10 +481,6 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 	r.stopped = true
 	r.closeDone = make(chan struct{})
-	executions := make([]*Execution, 0, len(r.executions))
-	for execution := range r.executions {
-		executions = append(executions, execution)
-	}
 	preparing := make([]*preparation, 0, len(r.preparing))
 	for request := range r.preparing {
 		preparing = append(preparing, request)
@@ -337,9 +497,28 @@ func (r *Runtime) Close(ctx context.Context) error {
 			result = errors.Join(result, context.Cause(ctx))
 		}
 	}
+	if r.reconcileCancel != nil {
+		r.reconcileCancel()
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		r.reconcileWG.Wait()
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+	case <-ctx.Done():
+		result = errors.Join(result, context.Cause(ctx))
+	}
+	r.mu.Lock()
+	executions := make([]*Execution, 0, len(r.executions))
+	for execution := range r.executions {
+		executions = append(executions, execution)
+	}
+	r.mu.Unlock()
 	for _, execution := range executions {
 		cleanupCtx, cancel := boundedContext(ctx, r.config.CleanupTimeout)
-		if err := execution.CancelAndJoin(cleanupCtx); err != nil {
+		if err := execution.cleanup(cleanupCtx); err != nil {
 			result = errors.Join(result, err)
 		}
 		cancel()
@@ -387,7 +566,7 @@ func IsPreVisibilityFallback(err error) bool {
 	if err == nil {
 		return false
 	}
-	if IsQuiescenceUnknown(err) {
+	if IsCleanupPending(err) {
 		return false
 	}
 	switch status.Code(err) {
@@ -398,6 +577,14 @@ func IsPreVisibilityFallback(err error) bool {
 	return strings.Contains(message, "UNSUPPORTED_PLAN") ||
 		strings.Contains(message, "UNSUPPORTED_VERSION") ||
 		strings.Contains(message, "CAPABILITY_MISMATCH")
+}
+
+// IsCleanupPending reports that durable cleanup remains retryable because
+// either quiescence or lease release has not completed.
+func IsCleanupPending(err error) bool {
+	var unknown *quiescenceUnknownError
+	var pending *cleanupPendingError
+	return errors.As(err, &unknown) || errors.As(err, &pending)
 }
 
 // IsQuiescenceUnknown reports that a sidecar execution may still be using its
