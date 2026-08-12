@@ -115,6 +115,40 @@ func TestCanonicalizeBackupTombstone(t *testing.T) {
 	}
 }
 
+func TestVisibleAppendableRowsBroadcastsConstantCommitTS(t *testing.T) {
+	input := newBackupTombstoneTestBatch(t, types.T_int64, []types.T{types.T_TS})
+	input.Vecs[2].Free(common.DebugAllocator)
+	commitTS := types.BuildTS(10, 0)
+	var err error
+	input.Vecs[2], err = vector.NewConstFixed(
+		types.T_TS.ToType(), commitTS, input.RowCount(), common.DebugAllocator)
+	require.NoError(t, err)
+	defer input.Clean(common.DebugAllocator)
+
+	visibleRows, err := visibleAppendableRows(
+		context.Background(),
+		input,
+		backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
+		ptrTo(types.BuildTS(15, 0)),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 1, 2}, visibleRows)
+
+	input.Shrink(visibleRows, false)
+	result, err := canonicalizeBackupTombstone(
+		context.Background(),
+		input,
+		backupTombstoneLayout(2, objectio.InvalidSpecialColumnPosition, objectio.InvalidSpecialColumnPosition),
+	)
+	require.NoError(t, err)
+	defer result.Clean(common.DebugAllocator)
+	require.Equal(t, 3, result.RowCount())
+	for row := range result.RowCount() {
+		require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](
+			result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx], row))
+	}
+}
+
 func TestBackupTombstoneValidationRejectsMalformedColumns(t *testing.T) {
 	tests := []struct {
 		name   string
