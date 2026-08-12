@@ -247,6 +247,23 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.NotPanics(t, func() { ses.releasePlanCache() })
 }
 
+func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(2)}
+	first := &trackedStatement{}
+	second := &trackedStatement{}
+	ses.cachePlan("first", []tree.Statement{first}, []*plan.Plan{{}})
+	ses.cachePlan("second", []tree.Statement{second}, []*plan.Plan{{}})
+
+	ses.removeCachedPlan("first")
+	require.False(t, ses.isCached("first"))
+	require.True(t, ses.isCached("second"))
+	require.Equal(t, 1, first.freed)
+	require.Zero(t, second.freed)
+
+	require.NotPanics(t, func() { ses.removeCachedPlan("first") })
+	require.NotPanics(t, func() { ses.removeCachedPlan("") })
+}
+
 func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
