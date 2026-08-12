@@ -17,6 +17,7 @@ package explain
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -255,4 +256,43 @@ func TestTimeWindowPartitionShape(t *testing.T) {
 		require.Len(t, node.OrderBy, 1)
 		requireSlotsWithinLayout(t, node)
 	})
+}
+
+func TestGapFillInfersHalfOpenQueryBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" and updated_at < '2026-01-01 00:06:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+	require.NotNil(t, node.GapFillStart)
+	require.NotNil(t, node.GapFillEnd)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
+}
+
+func TestGapFillLeavesOneSidedPredicateUnbounded(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Nil(t, node.GapFillStart)
+	require.Nil(t, node.GapFillEnd)
+}
+
+func TestGapFillCombinesRepeatedBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" and updated_at >= '2026-01-01 00:01:00'"+
+			" and updated_at < '2026-01-01 00:06:00'"+
+			" and updated_at < '2026-01-01 00:05:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Equal(t, "greatest", node.GapFillStart.GetF().Func.ObjName)
+	require.Equal(t, "least", node.GapFillEnd.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
 }

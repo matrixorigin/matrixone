@@ -3051,7 +3051,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
 			// Call bindTimeWindow
-			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, _, _, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -3142,7 +3142,7 @@ func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-	_, _, _, _, sliding, ts, wEnd, _, err := builder.bindTimeWindow(
+	_, _, _, _, sliding, ts, wEnd, _, _, _, err := builder.bindTimeWindow(
 		bindCtx,
 		projectionBinder,
 		astTimeWindow,
@@ -3236,7 +3236,7 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-			fillType, fillVals, fillCols, _, _, _, _, _, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,

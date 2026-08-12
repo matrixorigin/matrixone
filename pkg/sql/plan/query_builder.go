@@ -4943,10 +4943,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// bind TIME WINDOW
 	var fillType plan.Node_FillType
 	var fillVals, fillCols []*Expr
-	var interval, sliding, ts, wEnd *Expr
+	var interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr
 	var boundTimeWindowOrderBy *plan.OrderBySpec
 	if astTimeWindow != nil {
-		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
+		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, gapFillStart, gapFillEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
 			ctx,
 			projectionBinder,
 			astTimeWindow,
@@ -5059,7 +5059,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			boundTimeWindowGroupBy,
 			fillType,
 			fillVals, fillCols,
-			interval, sliding, ts, wEnd,
+			interval, sliding, ts, wEnd, gapFillStart, gapFillEnd,
 			astTimeWindow,
 		); err != nil {
 			return
@@ -7741,7 +7741,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 ) (
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
@@ -7780,6 +7780,13 @@ func (builder *QueryBuilder) bindTimeWindow(
 	boundaryType := timeWindowBoundaryTypeForTimestamp(ts.Typ, astTimeWindow, ctx.timeBoundaryType)
 	ts.Typ = boundaryType
 	updateTimeWindowBoundaryTypes(ctx, boundaryType)
+
+	if astTimeWindow.GapFill {
+		gapFillStart, gapFillEnd, err = inferGapFillBounds(builder.GetContext(), ctx.whereFilters, ts)
+		if err != nil {
+			return
+		}
+	}
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7865,6 +7872,86 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+// inferGapFillBounds recognizes only the exact half-open predicate shape used
+// by the executor: timestamp >= start AND timestamp < finish. Keeping the
+// inference deliberately narrow means complex predicates retain the legacy
+// observed-range GAPFILL semantics instead of silently widening their domain.
+func inferGapFillBounds(
+	ctx context.Context,
+	filters []*Expr,
+	timestamp *Expr,
+) (start, finish *Expr, err error) {
+	tsCol := timestamp.GetCol()
+	if tsCol == nil {
+		return nil, nil, nil
+	}
+
+	var starts, finishes []*Expr
+	for _, filter := range filters {
+		fn := filter.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			continue
+		}
+		left, right := fn.Args[0], fn.Args[1]
+		name := strings.ToLower(fn.Func.ObjName)
+		switch {
+		case gapFillBoundColumnMatches(left, tsCol) && gapFillBoundIsConstant(right):
+			switch name {
+			case ">=":
+				starts = append(starts, right)
+			case "<":
+				finishes = append(finishes, right)
+			}
+		case gapFillBoundColumnMatches(right, tsCol) && gapFillBoundIsConstant(left):
+			// constant <= timestamp and constant > timestamp are the reversed
+			// spellings of the same canonical half-open predicates.
+			switch name {
+			case "<=":
+				starts = append(starts, left)
+			case ">":
+				finishes = append(finishes, left)
+			}
+		}
+	}
+	if len(starts) == 0 || len(finishes) == 0 {
+		return nil, nil, nil
+	}
+
+	start, err = combineGapFillBounds(ctx, "greatest", starts, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = combineGapFillBounds(ctx, "least", finishes, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return start, finish, nil
+}
+
+func gapFillBoundColumnMatches(expr *Expr, timestamp *plan.ColRef) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == timestamp.RelPos && col.ColPos == timestamp.ColPos
+}
+
+func gapFillBoundIsConstant(expr *Expr) bool {
+	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) && !hasSubquery(expr)
+}
+
+func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
+	casted := make([]*Expr, len(candidates))
+	for i, candidate := range candidates {
+		var err error
+		casted[i], err = appendCastBeforeExpr(ctx, DeepCopyExpr(candidate), targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(casted) == 1 {
+		return casted[0], nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, name, casted)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set
@@ -8700,7 +8787,7 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	boundTimeWindowGroupBy *plan.Expr,
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	astTimeWindow *tree.TimeWindow,
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
@@ -8751,6 +8838,8 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		TimeWindowPartitionBy: partitionBy,
 		Timestamp:             ts,
 		WEnd:                  wEnd,
+		GapFillStart:          gapFillStart,
+		GapFillEnd:            gapFillEnd,
 		GapFillMode: func() plan.Node_GapFillMode {
 			if astTimeWindow.GapFill {
 				return plan.Node_GAP_FILL_PARTITION

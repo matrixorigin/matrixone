@@ -43,6 +43,9 @@ const (
 	// result flush. The boundary window was already published by the previous
 	// aggregate generation, so this transition must not emit it again.
 	resumeAfterFlush = 8
+	// boundedEmpty emits a query-bounded grid when the child has no rows and
+	// therefore there is no observed timestamp to seed firstWindow.
+	boundedEmpty = 9
 )
 
 type container struct {
@@ -69,6 +72,14 @@ type container struct {
 	startVec *vector.Vector
 	endExe   colexec.ExpressionExecutor
 	endVec   *vector.Vector
+	// Bounds are constant expressions inferred from the query predicates and
+	// evaluated once per Prepare, so prepared parameters remain supported.
+	gapFillStartExe colexec.ExpressionExecutor
+	gapFillEndExe   colexec.ExpressionExecutor
+	gapFillStart    types.Datetime
+	gapFillEnd      types.Datetime
+	gapFillRows     int64
+	syntheticBounds bool
 
 	status int32
 	end    bool
@@ -140,6 +151,10 @@ type TimeWin struct {
 	TsType  plan.Type
 	Ts      *plan.Expr
 	EndExpr *plan.Expr
+	// GapFillStart / GapFillEnd define an optional half-open output domain.
+	// The planner sets them only as a pair after proving simple query bounds.
+	GapFillStart *plan.Expr
+	GapFillEnd   *plan.Expr
 
 	Interval types.Datetime
 	Sliding  types.Datetime
@@ -180,6 +195,10 @@ func (timeWin *TimeWin) Release() {
 	if timeWin != nil {
 		reuse.Free[TimeWin](timeWin, nil)
 	}
+}
+
+func (timeWin *TimeWin) hasGapFillBounds() bool {
+	return timeWin.GapFill && timeWin.GapFillStart != nil && timeWin.GapFillEnd != nil
 }
 
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -291,6 +310,12 @@ func (ctr *container) resetExes() {
 	if ctr.endExe != nil {
 		ctr.endExe.ResetForNextQuery()
 	}
+	if ctr.gapFillStartExe != nil {
+		ctr.gapFillStartExe.ResetForNextQuery()
+	}
+	if ctr.gapFillEndExe != nil {
+		ctr.gapFillEndExe.ResetForNextQuery()
+	}
 }
 
 // resetParam rewinds every piece of per-generation state, so a Reset/Prepare
@@ -334,6 +359,10 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.partitionWindows = 0
 	ctr.partitionCount = 0
 	ctr.gapFillWindows = 0
+	ctr.gapFillStart = 0
+	ctr.gapFillEnd = 0
+	ctr.gapFillRows = 0
+	ctr.syntheticBounds = false
 }
 
 func (ctr *container) freeExes() {
@@ -353,6 +382,12 @@ func (ctr *container) freeExes() {
 	}
 	if ctr.endExe != nil {
 		ctr.endExe.Free()
+	}
+	if ctr.gapFillStartExe != nil {
+		ctr.gapFillStartExe.Free()
+	}
+	if ctr.gapFillEndExe != nil {
+		ctr.gapFillEndExe.Free()
 	}
 }
 
