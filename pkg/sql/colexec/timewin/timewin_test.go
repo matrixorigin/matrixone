@@ -343,6 +343,40 @@ func makeInterval() types.Datetime {
 	return t
 }
 
+func TestCalcDatetimeSupportsMicrosecond(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		diff int64
+		unit types.IntervalType
+		want types.Datetime
+	}{
+		{
+			name: "microsecond",
+			diff: 1000,
+			unit: types.MicroSecond,
+			want: types.Datetime(1000),
+		},
+		{
+			name: "second",
+			diff: 1,
+			unit: types.Second,
+			want: types.Datetime(types.MicroSecsPerSec),
+		},
+		{
+			name: "minute",
+			diff: 1,
+			unit: types.Minute,
+			want: types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := calcDatetime(tc.diff, tc.unit)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ts := vector.NewVec(types.T_datetime.ToType())
@@ -358,6 +392,36 @@ func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.ZeroDatetime, ctr.right)
 	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
 	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
+}
+
+func TestFirstWindowUsesMicrosecondBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ts := vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	t.Cleanup(func() {
+		ts.Free(proc.Mp())
+		proc.Free()
+	})
+
+	value, err := types.ParseDatetime("2026-08-12 10:00:00.001100", 6)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixedList(ts, []types.Datetime{value}, nil, proc.Mp()))
+	ts.SetLength(1)
+
+	interval, err := calcDatetime(1000, types.MicroSecond)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(100, types.MicroSecond)
+	require.NoError(t, err)
+
+	window := &TimeWin{Interval: interval, Sliding: sliding}
+	ctr := container{tsVec: []*vector.Vector{ts}}
+	require.NoError(t, ctr.firstWindow(window))
+
+	require.Equal(t, value-value%interval, ctr.left)
+	require.Equal(t, ctr.left+interval, ctr.right)
+	require.Equal(t, ctr.left+sliding, ctr.nextLeft)
+	require.Equal(t, ctr.left+sliding+interval, ctr.nextRight)
+	require.Equal(t, types.Datetime(1000), interval)
+	require.Equal(t, types.Datetime(100), sliding)
 }
 
 // singleAggInfo is the basic information of single column agg.

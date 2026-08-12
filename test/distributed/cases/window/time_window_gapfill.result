@@ -12,7 +12,7 @@ select pump, _wstart, _wend, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  2026-01-01 10:01:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  2026-01-01 10:02:00  ¦  null  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  2026-01-01 10:03:00  ¦  3  𝄀
@@ -24,7 +24,7 @@ select pump, _wstart, coalesce(count(*), 0) as reading_count
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  reading_count[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  reading_count[-5,64,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  0  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  1  𝄀
@@ -36,7 +36,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(value, 99)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  99  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -48,7 +48,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(prev)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -60,7 +60,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  3  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -72,7 +72,7 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  2  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
@@ -84,12 +84,54 @@ select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) fill(null)
 order by pump, _wstart;
-➤ pump[12,-1,0]  ¦  _wstart[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  _wstart[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
 p1  ¦  2026-01-01 10:00:00  ¦  1  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  3  𝄀
 p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
 p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
 p3  ¦  2026-01-02 00:01:00  ¦  30
+set time_zone = '+00:00';
+create table hf_readings(
+device_id bigint,
+event_ts timestamp(6),
+event_dt datetime(6),
+value int
+);
+insert into hf_readings values
+(1, '2026-08-12 10:00:00.000100', '2026-08-12 10:00:00.000100', 10),
+(1, '2026-08-12 10:00:00.000900', '2026-08-12 10:00:00.000900', 20),
+(1, '2026-08-12 10:00:00.001100', '2026-08-12 10:00:00.001100', 30),
+(2, '2026-08-12 10:00:00.000150', '2026-08-12 10:00:00.000150', 40),
+(2, '2026-08-12 10:00:00.001250', '2026-08-12 10:00:00.001250', 60);
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+group by device_id interval(event_ts, 1000, microsecond)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  row_count[-5,64,0]  ¦  avg_value[8,53,31]  𝄀
+1  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  2  ¦  15.0  𝄀
+1  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  30.0  𝄀
+2  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  1  ¦  40.0  𝄀
+2  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  60.0
+select device_id, _wstart, _wend, count(*) as row_count, avg(value) as avg_value
+from hf_readings
+where device_id = 1
+group by device_id interval(event_ts, 1000, microsecond) sliding(500, microsecond)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  row_count[-5,64,0]  ¦  avg_value[8,53,31]  𝄀
+1  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.001000000  ¦  2  ¦  15.0  𝄀
+1  ¦  2026-08-12 10:00:00.000500000  ¦  2026-08-12 10:00:00.001500000  ¦  2  ¦  25.0  𝄀
+1  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.002000000  ¦  1  ¦  30.0
+select device_id, _wstart, _wend, sum(value) as value_sum
+from hf_readings
+where device_id = 2
+group by device_id interval(event_dt, 500, microsecond) gapfill(partition) fill(value, -1)
+order by device_id, _wstart;
+➤ device_id[-5,64,0]  ¦  _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2  ¦  2026-08-12 10:00:00  ¦  2026-08-12 10:00:00.000500000  ¦  40  𝄀
+2  ¦  2026-08-12 10:00:00.000500000  ¦  2026-08-12 10:00:00.001000000  ¦  -1  𝄀
+2  ¦  2026-08-12 10:00:00.001000000  ¦  2026-08-12 10:00:00.001500000  ¦  60
+drop table hf_readings;
+set time_zone = 'SYSTEM';
 create table boundary_readings(pump varchar(8), ts datetime, value int);
 insert into boundary_readings values
 ('p8193', '2026-01-01 00:00:00', 1),
@@ -104,7 +146,7 @@ group by pump interval(ts, 1, minute) gapfill(partition)
 ) as windows
 group by pump
 order by pump;
-➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
 p8193  ¦  8194  ¦  8194  𝄀
 p8194  ¦  8195  ¦  8195
 select pump, count(*) as row_count, count(distinct _wstart) as distinct_windows
@@ -115,7 +157,7 @@ group by pump interval(ts, 1, minute) gapfill(partition) fill(next)
 ) as windows
 group by pump
 order by pump;
-➤ pump[12,-1,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
+➤ pump[12,6,0]  ¦  row_count[-5,64,0]  ¦  distinct_windows[-5,64,0]  𝄀
 p8193  ¦  8194  ¦  8194  𝄀
 p8194  ¦  8195  ¦  8195
 drop table boundary_readings;

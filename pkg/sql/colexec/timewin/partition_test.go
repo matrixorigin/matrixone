@@ -51,6 +51,13 @@ func mustDatetime(t *testing.T, s string) types.Datetime {
 	return d
 }
 
+func mustDatetimeScale(t *testing.T, s string, scale int32) types.Datetime {
+	t.Helper()
+	d, err := types.ParseDatetime(s, scale)
+	require.NoError(t, err)
+	return d
+}
+
 // makePartInput builds a batch shaped (ts datetime, val int32, part int64).
 func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 	t.Helper()
@@ -261,6 +268,41 @@ func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 
 	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
 	require.Equal(t, []int64{10, 20}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	interval, err := calcDatetime(1000, types.MicroSecond)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(500, types.MicroSecond)
+	require.NoError(t, err)
+
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000100", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000900", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001100", 6),
+	}, nil, proc.Mp()))
+	in.SetRowCount(3)
+
+	arg := newPartArg(t, proc, sliding, false)
+	arg.Interval = interval
+	arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+
+	require.Equal(t, []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000000", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000500", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001000", 6),
+	}, starts)
+	require.Equal(t, []int64{30, 50, 30}, sums)
 
 	arg.Free(proc, false, nil)
 	in.Clean(proc.Mp())

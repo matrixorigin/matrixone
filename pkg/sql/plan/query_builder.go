@@ -8872,7 +8872,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewTimeUnitExpr("second")
+		arg2 = tree.NewTimeUnitExpr("microsecond")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},

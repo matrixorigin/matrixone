@@ -34,6 +34,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimeWindowIntervalHelpersSupportMicrosecond(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	num, err := getIntervalNum(1000, int64(types.MicroSecond), proc)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), num)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{500}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{500}, nil),
+		Divisor,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestTimeWindowTruncatePreservesMicrosecondScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	input, err := types.ParseDatetime("2026-08-12 10:00:00.001100", 6)
+	require.NoError(t, err)
+	expected, err := types.ParseDatetime("2026-08-12 10:00:00.001000", 6)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{input}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
+		},
+		NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{expected}, nil),
+		Truncate,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{
