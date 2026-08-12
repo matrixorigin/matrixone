@@ -282,4 +282,38 @@ drop table if exists tt1;
 create table tt1(ts timestamp primary key, a int);
 select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 
+-- unsupported calendar units should return a normal SQL error, not enter the compile panic path
+drop table if exists tw_interval_bad_unit;
+create table tw_interval_bad_unit(ts timestamp(6), v int);
+-- zero interval/sliding should return a normal SQL error before pipeline execution
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 0, minute);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 5, minute) sliding(0, minute);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, year);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, quarter);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, month);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, week);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, year);
+-- @bvt:issue
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
+-- @bvt:issue
+drop table tw_interval_bad_unit;
+
 drop database time_window;

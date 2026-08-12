@@ -43,4 +43,13 @@ SET @value = 1;
 EXECUTE p_recursive USING @value;
 DEALLOCATE PREPARE p_recursive;
 
+CREATE TABLE count_input(id INT PRIMARY KEY);
+INSERT INTO count_input SELECT result FROM generate_series(1, 10000) g;
+PREPARE p_count_table FROM 'SELECT COUNT(?) AS got FROM count_input LIMIT 1';
+SET @value = 'x';
+EXECUTE p_count_table USING @value;
+SET @value = NULL;
+EXECUTE p_count_table USING @value;
+DEALLOCATE PREPARE p_count_table;
+
 DROP DATABASE prepared_numeric_aggregate;
