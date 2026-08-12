@@ -182,6 +182,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	}
+	if len(tableDef.Fkeys) > 0 {
+		// Legacy INSERT plans depend on foreign_key_checks too. In particular,
+		// no-real-key ODKU falls back here before the modern builder can mark the
+		// query, so keep every FK child plan sensitive in either session state.
+		query.HasForeignKeyAction = true
+	}
 	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
 		dbName, tableDef.Name, tableDef.Cols, tableDef.Fkeys)
 	if err != nil {

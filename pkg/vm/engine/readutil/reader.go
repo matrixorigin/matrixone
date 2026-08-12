@@ -406,6 +406,59 @@ func (r *mergeReader) Read(
 	return true, nil
 }
 
+func (r *mergeReader) ReadWithFilter(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (bool, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+	if filter == nil {
+		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
+	}
+
+	if len(r.rds) == 0 {
+		return true, nil
+	}
+	for len(r.rds) > 0 {
+		var (
+			isEnd bool
+			err   error
+		)
+		if lateReader, ok := r.rds[0].(engine.LateMaterializationReader); ok {
+			isEnd, err = lateReader.ReadWithFilter(
+				ctx, cols, earlyColumns, filter, mp, outBatch,
+			)
+		} else {
+			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
+			if err == nil && !isEnd && !outBatch.IsEmpty() {
+				_, err = filter(outBatch, nil)
+			}
+		}
+		if err != nil {
+			return false, errors.Join(err, r.Close())
+		}
+		if isEnd {
+			child := r.rds[0]
+			r.rds = r.rds[1:]
+			if closeErr := child.Close(); closeErr != nil {
+				return false, errors.Join(closeErr, r.Close())
+			}
+		} else {
+			if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
+				logutil.Debug("merge reader catch filtered batch")
+			}
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // -----------------------------------------------------------------
 // NewReader consumes source and filterHint.BF on entry. On success the reader
 // releases them from Close; on construction failure NewReader releases them.
@@ -627,6 +680,34 @@ func (r *reader) Read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
+	isEnd, _, err = r.read(ctx, cols, expr, mp, outBatch, nil, nil)
+	return isEnd, err
+}
+
+func (r *reader) ReadWithFilter(
+	ctx context.Context,
+	cols []string,
+	earlyColumns []int,
+	filter engine.ReaderFilter,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+) (isEnd bool, err error) {
+	if filter == nil {
+		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
+	}
+	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter)
+	return isEnd, err
+}
+
+func (r *reader) read(
+	ctx context.Context,
+	cols []string,
+	expr *plan.Expr,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+	earlyColumns []int,
+	readerFilter engine.ReaderFilter,
+) (isEnd bool, lateMaterialized bool, err error) {
 	outBatch.CleanOnlyData()
 
 	var dataState engine.DataState
@@ -745,16 +826,16 @@ func (r *reader) Read(
 	dataState = state
 
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if state == engine.End {
-		return true, nil
+		return true, false, nil
 	}
 	if state == engine.InMem {
 		if r.orderByLimit != nil && !r.orderByLimit.OrderedLimit {
 			sels, dists, err := blockio.HandleOrderByLimitOnIVFFlatIndex(ctx, nil, outBatch.Vecs[r.orderByLimit.ColPos], r.orderByLimit)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 
 			// Keep batch cardinality consistent with pushed-down vector TopN result.
@@ -763,7 +844,7 @@ func (r *reader) Read(
 			if len(sels) == 0 {
 				outBatch.CleanOnlyData()
 			} else if err := outBatch.Shuffle(sels, mp); err != nil {
-				return false, err
+				return false, false, err
 			}
 
 			// Reuse the detached distVec when possible to avoid per-batch allocation.
@@ -773,12 +854,17 @@ func (r *reader) Read(
 			}
 			detachedDistVec = nil
 			if err := vector.AppendFixedList(distVec, dists, nil, mp); err != nil {
-				return false, err
+				return false, false, err
 			}
 			outBatch.Vecs = append(outBatch.Vecs, distVec)
 		}
 
-		return false, nil
+		if readerFilter != nil && !outBatch.IsEmpty() {
+			if _, err = readerFilter(outBatch, nil); err != nil {
+				return false, false, err
+			}
+		}
+		return false, false, nil
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
@@ -806,30 +892,60 @@ func (r *reader) Read(
 		detachedDistVec = nil
 	}
 
-	err = blockio.BlockDataRead(
-		statsCtx,
-		blkInfo,
-		r.source,
-		r.columns.seqnums,
-		r.columns.colTypes,
-		r.columns.phyAddrPos,
-		r.ts,
-		r.filterState.seqnums,
-		r.filterState.colTypes,
-		filter,
-		r.orderByLimit,
-		policy,
-		r.name,
-		outBatch,
-		r.cacheVectors,
-		mp,
-		r.fs,
-	)
+	if readerFilter != nil && r.orderByLimit == nil {
+		lateMaterialized = true
+		var preFilterRows int
+		preFilterRows, err = blockio.BlockDataReadWithFilter(
+			statsCtx,
+			blkInfo,
+			r.source,
+			r.columns.seqnums,
+			r.columns.colTypes,
+			r.columns.phyAddrPos,
+			r.ts,
+			r.filterState.seqnums,
+			r.filterState.colTypes,
+			filter,
+			policy,
+			r.name,
+			outBatch,
+			r.cacheVectors,
+			mp,
+			r.fs,
+			earlyColumns,
+			readerFilter,
+		)
+		if err == nil && preFilterRows == 1 {
+			// Preserve the exact-PK hit feedback that eager BlockDataRead records
+			// before TableScan applies its residual predicate.
+			r.withFilterMixin.filterState.memFilter.RecordExactHit()
+		}
+	} else {
+		err = blockio.BlockDataRead(
+			statsCtx,
+			blkInfo,
+			r.source,
+			r.columns.seqnums,
+			r.columns.colTypes,
+			r.columns.phyAddrPos,
+			r.ts,
+			r.filterState.seqnums,
+			r.filterState.colTypes,
+			filter,
+			r.orderByLimit,
+			policy,
+			r.name,
+			outBatch,
+			r.cacheVectors,
+			mp,
+			r.fs,
+		)
+	}
 	if err != nil {
-		return false, err
+		return false, lateMaterialized, err
 	}
 
-	if outBatch.RowCount() == 1 {
+	if !lateMaterialized && outBatch.RowCount() == 1 {
 		// found one row in this blk for the pk equal, record it
 		r.withFilterMixin.filterState.memFilter.RecordExactHit()
 	}
@@ -845,7 +961,13 @@ func (r *reader) Read(
 		outBatch.GetVector(int32(r.columns.indexOfFirstSortedColumn)).SetSorted(true)
 	}
 
-	return false, nil
+	if readerFilter != nil && !lateMaterialized && !outBatch.IsEmpty() {
+		if _, err = readerFilter(outBatch, nil); err != nil {
+			return false, false, err
+		}
+	}
+
+	return false, lateMaterialized, nil
 }
 
 func GetThresholdForReader(readerNum int) uint64 {

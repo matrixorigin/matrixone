@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,6 +29,69 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVisitSnapshotObjectsFiltersAndStopsOnVisitorError(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	add := func(tombstone bool, create, deleteAt types.TS) {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+		entry := objectio.ObjectEntry{ObjectStats: *stats, CreateTime: create, DeleteTime: deleteAt}
+		if tombstone {
+			state.tombstoneObjectsNameIndex.Set(entry)
+		} else {
+			state.dataObjectsNameIndex.Set(entry)
+		}
+	}
+	snapshot := types.BuildTS(20, 0)
+	add(false, types.BuildTS(10, 0), types.TS{})
+	add(false, types.BuildTS(30, 0), types.TS{})
+	add(false, types.BuildTS(5, 0), types.BuildTS(20, 0))
+	add(true, types.BuildTS(15, 0), types.TS{})
+
+	var kinds []bool
+	require.NoError(t, VisitSnapshotObjects(context.Background(), state, snapshot, func(_ objectio.ObjectStats, tombstone bool) error {
+		kinds = append(kinds, tombstone)
+		return nil
+	}))
+	require.Equal(t, []bool{false, true}, kinds)
+
+	stop := errors.New("stop")
+	calls := 0
+	err := VisitSnapshotObjects(context.Background(), state, snapshot, func(objectio.ObjectStats, bool) error {
+		calls++
+		return stop
+	})
+	require.ErrorIs(t, err, stop)
+	require.Equal(t, 1, calls)
+}
+
+func TestHasSnapshotTombstonesStopsAtVisiblePresence(t *testing.T) {
+	state := NewPartitionState("test", false, 42, false)
+	snapshot := types.BuildTS(20, 0)
+
+	has, err := state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.False(t, has)
+
+	tombstone := &PrimaryIndexEntry{Bytes: []byte("row-tombstone"), Time: types.BuildTS(15, 0), Deleted: true}
+	state.inMemTombstoneRowIdIndex.Set(tombstone)
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	state.inMemTombstoneRowIdIndex.Delete(tombstone)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, false, false, false)
+	state.tombstoneObjectsNameIndex.Set(objectio.ObjectEntry{ObjectStats: *stats, CreateTime: types.BuildTS(15, 0)})
+	has, err = state.HasSnapshotTombstones(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = state.HasSnapshotTombstones(canceled, snapshot)
+	require.ErrorIs(t, err, context.Canceled)
+}
 
 // TestTailCheckFn tests the tailCheckFn function which filters objects based on time range
 func TestTailCheckFn(t *testing.T) {

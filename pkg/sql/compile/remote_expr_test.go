@@ -129,6 +129,29 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 	}))
 }
 
+func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	percentile := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileCont,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 17",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+}
+
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
@@ -180,6 +203,29 @@ func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 			[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
 				aggexec.AggIdOfMax, false, []*plan.Expr{binaryText}, nil)}))
 	}
+}
+
+func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	merge := group.NewArgumentMergeGroup()
+	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	_, _, err := convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 17")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	_, _, err = convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
 }
 
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {

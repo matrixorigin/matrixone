@@ -1614,7 +1614,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1670,7 +1670,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingFlagOutputType(node.GroupBy[0].Typ, node.GroupingFlag, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -2481,7 +2481,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				ref := [2]int32{tag, int32(i)}
+				if colRefCnt[ref] == 0 {
+					colRefCnt[ref] = 1
+				}
 			}
 		}
 
@@ -4080,6 +4083,8 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
 const NameApproxPercentile = "approx_percentile"
+const NamePercentileCont = "percentile_cont"
+const NamePercentileDisc = "percentile_disc"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -7271,6 +7276,11 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
+	// Scalar-subquery decorrelation may need a safe outer-key domain while it
+	// is flattening one conjunct. Publish the complete bound WHERE list before
+	// walking it so the optimization is independent of SQL predicate order.
+	// The list is replaced with the flattened predicates below.
+	ctx.whereFilters = whereList
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
@@ -7437,6 +7447,11 @@ func (builder *QueryBuilder) bindGroupBy(
 				ctx.groupingFlag[i] = true
 			}
 		}
+
+		// GROUPING() is meaningful only for grouping extensions. Apart marks an
+		// internally expanded ROLLUP/CUBE/GROUPING SETS branch; GroupingSets also
+		// covers the single-set form, which does not need branch expansion.
+		ctx.groupingFuncAllowed = clause.Apart || clause.Cube || clause.GroupingSets || clause.Rollup
 	}
 
 	if astTimeWindow != nil {
@@ -9543,6 +9558,14 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.headings[i] = string(colName)
 		}
 	}
+	// Expanding a view removes the view catalog object from the executable
+	// scan nodes. Preserve that object's identity so every plan consumer,
+	// including the ordinary COM_QUERY cache, can validate the complete
+	// catalog dependency closure before reusing the expanded plan.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies,
+		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+	)
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
