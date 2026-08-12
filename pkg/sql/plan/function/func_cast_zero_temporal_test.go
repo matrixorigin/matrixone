@@ -471,6 +471,8 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	proc.GetSessionInfo().TimeZone = time.UTC
 	ts, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59.999999", 6)
 	require.NoError(t, err)
+	ts0, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59", 0)
+	require.NoError(t, err)
 
 	fcTC := NewFunctionTestCase(
 		proc,
@@ -487,6 +489,62 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	)
 	succeed, info := fcTC.Run()
 	require.True(t, succeed, info)
+
+	fcTC = NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{ts0}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1709251199}, []bool{false}),
+		builtInUnixTimestamp,
+	)
+	succeed, info = fcTC.Run()
+	require.True(t, succeed, info)
+}
+
+func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59.999999", 6)
+	require.NoError(t, err)
+	preEpoch := types.Timestamp(types.UnixToTimestamp(0) - 1)
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_timestamp.ToTypeWithScale(6),
+				[]types.Timestamp{preEpoch, ts},
+				[]bool{false, true},
+			),
+		},
+		NewFunctionTestResult(
+			types.New(types.T_decimal128, 38, 6),
+			false,
+			[]types.Decimal128{{}, {}},
+			[]bool{true, true},
+		),
+		builtInUnixTimestamp,
+	)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
+}
+
+func TestUnixTimestampNoArgReturnsCurrentSecond(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	before := time.Now().Unix()
+	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1, nil))
+	after := time.Now().Unix()
+
+	vec := result.GetResultVector()
+	require.False(t, vec.IsNull(0))
+	got := vector.MustFixedColNoTypeCheck[int64](vec)[0]
+	require.GreaterOrEqual(t, got, before)
+	require.LessOrEqual(t, got, after)
 }
 
 func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
