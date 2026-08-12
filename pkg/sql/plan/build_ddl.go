@@ -1043,6 +1043,9 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
@@ -3251,6 +3254,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
 		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
 		// not supported for temporary tables. Reject the visible temporary table
 		// here so execution can never fall through to the hidden permanent table.
@@ -3427,6 +3433,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
 	}
 
 	if obj.PubInfo != nil {
@@ -3667,6 +3676,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
@@ -3901,6 +3913,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
@@ -4041,6 +4056,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
 		}
 
 		if tableDef.IsTemporary {
@@ -5064,6 +5082,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 		return nil, err
 	}
 	if parentTableDef == nil {
