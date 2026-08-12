@@ -4062,6 +4062,55 @@ func TestToTime(t *testing.T) {
 	}
 }
 
+func TestTimestampToTimeUsesSessionTimeZone(t *testing.T) {
+	storedUTC, err := types.ParseTimestamp(time.UTC, "2024-01-02 04:30:45.654321", 6)
+	require.NoError(t, err)
+
+	timestampType := types.T_timestamp.ToTypeWithScale(6)
+	timeType := types.T_time.ToTypeWithScale(6)
+	testCases := []struct {
+		name string
+		loc  *time.Location
+		want types.Time
+	}{
+		{
+			name: "utc",
+			loc:  time.UTC,
+			want: types.TimeFromClock(false, 4, 30, 45, 654321),
+		},
+		{
+			name: "utc_plus_8",
+			loc:  time.FixedZone("UTC+8", 8*60*60),
+			want: types.TimeFromClock(false, 12, 30, 45, 654321),
+		},
+		{
+			name: "utc_minus_5",
+			loc:  time.FixedZone("UTC-5", -5*60*60),
+			want: types.TimeFromClock(false, 23, 30, 45, 654321),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().TimeZone = tc.loc
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(timestampType,
+						[]types.Timestamp{storedUTC},
+						[]bool{false}),
+				},
+				NewFunctionTestResult(timeType, false,
+					[]types.Time{tc.want},
+					[]bool{false}),
+				TimestampToTime)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+			require.Equal(t, int32(6), fcTC.GetResultVectorDirectly().GetType().Scale)
+		})
+	}
+}
+
 func initToTimestampCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	d2, _ := types.ParseDatetime("2022-01-01 00:00:00", 6)
