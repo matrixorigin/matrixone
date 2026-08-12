@@ -605,8 +605,11 @@ func (ctr *container) ntileBucketCount(idx int) (int64, error) {
 		return 1, nil
 	}
 	vec := ctr.aggVecs[idx].Vec[0]
-	if vec.Length() == 0 || vec.IsNull(0) {
+	if vec.Length() == 0 {
 		return 1, nil
+	}
+	if vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
 	}
 	bucketCount, ok := getInt64FromVec(vec, 0)
 	if !ok {
