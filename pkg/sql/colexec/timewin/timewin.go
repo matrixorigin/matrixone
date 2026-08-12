@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -159,6 +160,10 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	if !timeWin.hasGapFillBounds() {
 		return nil
 	}
+	loc := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
 	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, error) {
 		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
@@ -168,10 +173,12 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 			return 0, moerr.NewInvalidInputNoCtx("GAPFILL bounds cannot be NULL")
 		}
 		switch vec.GetType().Oid {
+		case types.T_date:
+			return vector.MustFixedColWithTypeCheck[types.Date](vec)[0].ToDatetime(), nil
 		case types.T_datetime:
 			return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[0], nil
 		case types.T_timestamp:
-			return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0]), nil
+			return vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0].ToDatetime(loc), nil
 		default:
 			return 0, moerr.NewInternalErrorNoCtxf("GAPFILL %s bound has non-temporal type %s", name, vec.GetType().Oid.String())
 		}
@@ -760,7 +767,15 @@ func (ctr *container) fillRows(t *TimeWin) error {
 		ctr.partLastVecIdx = ctr.curVecIdx
 		ctr.partLastRowIdx = ctr.curRowIdx
 
-		if vals[ctr.curRowIdx] <= ctr.nextLeft {
+		// Keep the rewind cursor at the first row tied at nextLeft. The next
+		// overlapping window is left-inclusive, so every boundary peer must be
+		// replayed, including peers split across child batches. A row strictly
+		// before the boundary remains the best cursor until that first tie is
+		// observed.
+		val := vals[ctr.curRowIdx]
+		atFirstBoundaryPeer := val == ctr.nextLeft &&
+			vector.MustFixedColNoTypeCheck[types.Datetime](ctr.tsVec[ctr.preVecIdx])[ctr.preRowIdx] != ctr.nextLeft
+		if val < ctr.nextLeft || atFirstBoundaryPeer {
 			ctr.preVecIdx = ctr.curVecIdx
 			ctr.preRowIdx = ctr.curRowIdx
 		}

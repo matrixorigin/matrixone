@@ -71,6 +71,30 @@ func datetimeBound(t testing.TB, s string) *plan.Expr {
 	}
 }
 
+func timestampBound(t testing.TB, loc *time.Location, s string) *plan.Expr {
+	t.Helper()
+	ts, err := types.ParseTimestamp(loc, s, 6)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Timestampval{Timestampval: int64(ts)},
+		}},
+	}
+}
+
+func dateBound(t testing.TB, s string) *plan.Expr {
+	t.Helper()
+	d, err := types.ParseDateCast(s)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_date)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Dateval{Dateval: int32(d)},
+		}},
+	}
+}
+
 // makePartInput builds a batch shaped (ts datetime, val int32, part int64).
 func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 	t.Helper()
@@ -273,6 +297,42 @@ func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Bat
 					parts = append(parts, vector.MustFixedColNoTypeCheck[int64](pv)[i])
 				}
 			}
+		}
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+	return
+}
+
+func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process) (starts []types.Datetime, sums []int64) {
+	t.Helper()
+	arg.Children = nil
+	arg.AppendChild(colexec.NewMockOperator())
+	require.NoError(t, arg.Prepare(proc))
+
+	for {
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		startVec := res.Batch.Vecs[1]
+		switch startVec.GetType().Oid {
+		case types.T_date:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Date](startVec)[:n] {
+				starts = append(starts, value.ToDatetime())
+			}
+		case types.T_datetime:
+			starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](startVec)[:n]...)
+		case types.T_timestamp:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Timestamp](startVec)[:n] {
+				starts = append(starts, value.ToDatetime(proc.GetSessionInfo().TimeZone))
+			}
+		default:
+			t.Fatalf("unexpected bounded time-window output type %s", startVec.GetType().Oid)
 		}
 		if res.Status == vm.ExecStop {
 			break
@@ -552,6 +612,100 @@ func TestBoundedGapFillPreservesSlidingWindowOverlap(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillSlidingReplaysAllBoundaryTiesAcrossBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := []row{
+		{"2023-08-01 00:00:03", 6, 0},
+		{"2023-08-01 00:00:07", 4, 0},
+		{"2023-08-01 00:00:08", 6, 0},
+		{"2023-08-01 00:00:12", 7, 0},
+		{"2023-08-01 00:00:12", 1, 0},
+		{"2023-08-01 00:00:12", 1, 0},
+		{"2023-08-01 00:00:12", 4, 0},
+		{"2023-08-01 00:00:14", 7, 0},
+	}
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:5]),
+		makePartInput(t, proc.Mp(), rows[5:]),
+	}
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:03", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.Interval = 4 * types.Datetime(types.MicroSecsPerSec)
+	arg.Sliding = 3 * types.Datetime(types.MicroSecsPerSec)
+
+	starts, sums, _ := runPartArgBats(t, arg, proc, bats)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:03"),
+		mustDatetime(t, "2023-08-01 00:00:06"),
+		mustDatetime(t, "2023-08-01 00:00:09"),
+		mustDatetime(t, "2023-08-01 00:00:12"),
+	}, starts)
+	require.Equal(t, []int64{6, 6, 10, 13, 20}, sums)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone := time.FixedZone("UTC+08", 8*60*60)
+	proc.GetSessionInfo().TimeZone = zone
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.GapFillStart = timestampBound(t, zone, "2023-08-01 00:00:00")
+	arg.GapFillEnd = timestampBound(t, zone, "2023-08-01 00:00:15")
+	arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	starts, sums := runTemporalBoundArg(t, arg, proc)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+	}, starts)
+	require.Equal(t, []int64{0, 0, 0}, sums)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newBoundedPartArg(
+		t, proc,
+		"1992-01-01 00:00:00", "1992-01-03 00:00:00",
+		false,
+	)
+	arg.GapFillStart = dateBound(t, "1992-01-01")
+	arg.GapFillEnd = dateBound(t, "1992-01-03")
+	day := types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+	arg.Interval = day
+	arg.Sliding = day
+	arg.TsType = plan.Type{Id: int32(types.T_date)}
+
+	starts, sums := runTemporalBoundArg(t, arg, proc)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "1992-01-01 00:00:00"),
+		mustDatetime(t, "1992-01-02 00:00:00"),
+	}, starts)
+	require.Equal(t, []int64{0, 0}, sums)
+
+	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

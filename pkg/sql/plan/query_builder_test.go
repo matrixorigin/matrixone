@@ -2706,7 +2706,7 @@ func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *test
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,

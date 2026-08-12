@@ -272,6 +272,20 @@ func TestGapFillInfersHalfOpenQueryBounds(t *testing.T) {
 	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
 }
 
+func TestGapFillInfersDateBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from orders"+
+			" where o_orderdate >= '1992-01-01'"+
+			" and o_orderdate < '1992-01-03'"+
+			" interval(o_orderdate, 1, day) gapfill(partition)")
+
+	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+	require.NotNil(t, node.GapFillStart)
+	require.NotNil(t, node.GapFillEnd)
+	require.Equal(t, int32(types.T_date), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_date), node.GapFillEnd.Typ.Id)
+}
+
 func TestGapFillLeavesOneSidedPredicateUnbounded(t *testing.T) {
 	node := timeWindowNode(t,
 		"select _wstart, count(*) from "+twTable+
