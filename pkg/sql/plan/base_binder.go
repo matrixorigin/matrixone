@@ -2510,9 +2510,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 // item; recursively binding a miss would incorrectly accept derived
 // expressions such as GROUPING(a+b) for GROUP BY a, b.
 func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, error) {
-	if b.ctx == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"Argument #1 of GROUPING function is not in GROUP BY")
+	if b.ctx == nil || !b.ctx.groupingFuncAllowed {
+		return nil, moerr.NewInvalidGroupFuncUse(b.GetContext())
 	}
 
 	args := make([]*plan.Expr, len(astExpr.Exprs))
