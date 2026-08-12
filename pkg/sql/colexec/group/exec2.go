@@ -365,7 +365,17 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// note that in prepare we already called GroupGrow(1) for each agg.
 		// just fill the result.
 		for i, ag := range group.ctr.aggList {
-			if err = ag.BulkFill(0, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+			aggArgs := group.ctr.aggArgEvaluate[i].Vec
+			// BulkFill has no separate logical row-count argument and derives it
+			// from its vectors. Prepared parameters deliberately remain one-row
+			// broadcast constants, so align their logical length with the input
+			// batch without materializing additional values.
+			for _, vec := range aggArgs {
+				if vec != nil && vec.IsConst() && vec.Length() != bat.RowCount() {
+					vec.SetLength(bat.RowCount())
+				}
+			}
+			if err = ag.BulkFill(0, aggArgs); err != nil {
 				return false, err
 			}
 		}
