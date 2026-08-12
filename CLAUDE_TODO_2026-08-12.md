@@ -21,6 +21,10 @@
 6. 对完整分支相对 verified PR base 执行 `mo-self-review`，检查 selector 从 PROJECT 输入到 generated/CHECK/PRE_INSERT/writer 的闭环，以及 Q1 资源、Q2 wait、Q3 增长边界。
 7. push 前 fetch 并 merge 最新 `mo/main`；如有变化，重跑受影响验证。正常 push 到 origin，不 force push、不评论 PR。
 
+## 上游 merge 适配
+
+最新 `mo/main` 开始让所有可用 regular index 参与 optimizer rewrite，暴露出 stage-1 multi-target UPDATE 的 target selector/dedup 计划尚不能安全穿过 index-scan 替换：`UPDATE IGNORE` 会绕过 target-local dedup 并提交唯一键错误。当前阶段对 multi-target UPDATE 禁用 source index rewrite，保持关系扫描语义；单目标 DML 和 SELECT 的索引选择不受影响。后续若支持该优化，必须先证明 selector、Rowid、dedup 与 index-only/index-join 重写的完整列映射闭环。
+
 ## 回归矩阵
 
 | 场景 | Oracle |

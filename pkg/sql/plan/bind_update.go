@@ -265,6 +265,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 	}
 	isMultiTargetUpdate := updatedTargetCount > 1
+	if isMultiTargetUpdate {
+		builder.skipIndexRewritesForMultiTargetUpdate = true
+	}
 	targetActivePos := make([]int32, len(dmlCtx.aliases))
 	targetRowNumberPos := make([]int32, len(dmlCtx.aliases))
 	for i := range dmlCtx.aliases {
