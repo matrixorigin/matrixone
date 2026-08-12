@@ -247,6 +247,30 @@ func buildIvfChildProjectionMap(childNode *plan.Node) map[[2]int32]*plan.Expr {
 	return childMap
 }
 
+// ivfIndexOnlyBoundary picks the projection that bounds which base-table columns can
+// still be read after the rewrite, and the child whose tags its expressions resolve
+// through. An index-only scan drops the base scan entirely, so anything outside this
+// boundary would fail column remap ("Missing Column: t.v") at build time.
+//
+//   - project-anchored (`select ... from (order by dist limit k)`): the boundary is the
+//     PROJECT above the Top-K, resolved through the Top-K's child project.
+//   - sort-anchored (#25967 outer ORDER BY, #25974 join input): there is no project above
+//     the Top-K — consumers live further up and reference the sort's output. That output
+//     IS the Top-K's child project, so the child bounds them: a consumer can only read a
+//     column the derived table exposes. Its expressions are already in scan terms, so
+//     they resolve through no child map.
+//   - neither (the ORDER BY expression is the distance call itself, so the sort sits
+//     straight on the scan): nothing narrows the scan's columns, so decline.
+func ivfIndexOnlyBoundary(projNode, childNode *plan.Node) (boundaryProj, boundaryChild *plan.Node) {
+	if projNode != nil {
+		return projNode, childNode
+	}
+	if childNode != nil && childNode.NodeType == plan.Node_PROJECT {
+		return childNode, nil
+	}
+	return nil, nil
+}
+
 func collectRequiredColumns(
 	projNode, childNode, scanNode *plan.Node,
 	orderExpr *plan.Expr,
@@ -1291,13 +1315,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			includeAwareColumns = nil
 		}
 	}
-	// Both maps exist only to decide (and populate) an index-only scan, which needs the
-	// PROJECT above the Top-K. Sort-anchored rewrites have no project, so skip the
-	// DeepCopy walks over the whole projection instead of building maps nothing reads.
+	// Both maps exist only to decide (and populate) an index-only scan, which needs a
+	// projection that bounds every column a consumer can still read. Resolve that
+	// boundary once; a nil boundary means "unknown", and index-only stays off.
+	boundaryProj, boundaryChild := ivfIndexOnlyBoundary(projNode, childNode)
 	var requiredCols, projectedCols map[string]struct{}
-	if projNode != nil {
-		requiredCols = collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
-		projectedCols = collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	if boundaryProj != nil {
+		requiredCols = collectRequiredColumns(boundaryProj, boundaryChild, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+		projectedCols = collectProjectedColumns(boundaryProj, boundaryChild, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	}
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
 	timeZone := time.UTC
@@ -1333,12 +1358,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// original relational plan until the deployment-wide protocol gate rises.
 		return nodeID, nil
 	}
-	// requiredCols is derived from the PROJECT above the Top-K. When the rewrite is
-	// anchored at the sort instead (the Top-K feeds an outer ORDER BY or a join), that
-	// project is not ours to read: the consumers live above and may reference any scan
-	// column, so an index-only scan could drop a column still in use. Keep the base scan
-	// in that shape — the ANN rewrite itself is the win; index-only is an extra.
-	canIndexOnly := projNode != nil &&
+	canIndexOnly := boundaryProj != nil &&
 		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {

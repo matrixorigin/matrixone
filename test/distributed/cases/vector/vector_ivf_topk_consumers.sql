@@ -268,4 +268,70 @@ select count(*) as n from (
     select l2_distance(v,'[1,1,1,1]') as d from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3
 ) x;
 
+-- ---------------- index-only scan under a consumer ---------------------------
+-- An index-only scan drops the base table and answers straight from ivf_search. It needs
+-- a projection bounding which base columns can still be read; a sort-anchored rewrite has
+-- no project above the Top-K, so the Top-K's OWN projection is that bound -- a consumer
+-- can only read what the derived table exposes. Assert the base scan is gone, not merely
+-- that ivf_search appears: without the bound these shapes keep a join back to the table.
+-- @separator:table
+-- @regex("Table Function on ivf_search", true)
+-- @regex("Table Scan on", false)
+explain with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+
+-- and the rows must still match the unindexed Top-K.
+with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+
+with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select id, d from knn order by d;
+
+-- The bound must REFUSE when the Top-K exposes a column the index does not cover: `tag`
+-- is neither the pk nor an INCLUDE column, so dropping the base scan would lose it. The
+-- base scan must survive here -- this is the assertion that keeps the optimization honest.
+-- @separator:table
+-- @regex("Table Function on ivf_search", true)
+-- @regex("Table Scan on", true)
+explain with knn as (
+    select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, tag, d from knn order by d;
+
+with knn as (
+    select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, tag, d from knn order by d;
+
+with knn as (
+    select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select id, tag, d from knn order by d;
+
+-- #25974 join consumer: the Top-K side goes index-only, so the user's own join binds
+-- directly to the table function's pkid instead of to a second scan of the base table.
+-- @separator:table
+-- @regex("Table Function on ivf_search", true)
+-- @regex("mo_ivf_alias_0.pkid", true)
+explain with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+
+with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+
+with knn as (
+    select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+    order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+
 drop database ivf_topk_consumers;

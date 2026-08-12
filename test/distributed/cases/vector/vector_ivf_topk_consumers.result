@@ -43,15 +43,9 @@ Project  𝄀
         ->  Sort  𝄀
               Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
               Limit: 3  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
-                          Runtime Filter Probe: t_ivf.id  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 3  𝄀
-                          Limit: 3
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -93,22 +87,16 @@ order by l2_distance(v,'[1,1,1,1]') limit 3
 Project  𝄀
   ->  Join  𝄀
         Join Type: RIGHT  𝄀
-        Join Cond: (m.id = t_ivf.id)  𝄀
+        Join Cond: (m.id = mo_ivf_alias_0.pkid)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on ivf_topk_consumers.meta [ForceOneCN]  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
               Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
               Limit: 3  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ivf_topk_consumers.t_ivf [ForceOneCN]  𝄀
-                          Runtime Filter Probe: t_ivf.id  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 3  𝄀
-                          Limit: 3
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -134,22 +122,16 @@ order by l2_distance(v,'[1,1,1,1]') limit 3
 Project  𝄀
   ->  Join  𝄀
         Join Type: INNER  𝄀
-        Join Cond: (m.id = t_ivf.id)  𝄀
+        Join Cond: (m.id = mo_ivf_alias_0.pkid)  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on ivf_topk_consumers.meta  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
               Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
               Limit: 3  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
-                          Runtime Filter Probe: t_ivf.id  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 3  𝄀
-                          Limit: 3
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -181,22 +163,16 @@ Project  𝄀
         Sort Key: mo_ivf_alias_0.score DESC  𝄀
         ->  Join  𝄀
               Join Type: RIGHT  𝄀
-              Join Cond: (m.id = t_ivf.id)  𝄀
+              Join Cond: (m.id = mo_ivf_alias_0.pkid)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ivf_topk_consumers.meta [ForceOneCN]  𝄀
                     Runtime Filter Probe: m.id  𝄀
               ->  Sort  𝄀
                     Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
                     Limit: 3  𝄀
-                    ->  Join  𝄀
-                          Join Type: INNER  𝄀
-                          Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                          Runtime Filter Build: #[-1,0]  𝄀
-                          ->  Table Scan on ivf_topk_consumers.t_ivf [ForceOneCN]  𝄀
-                                Runtime Filter Probe: t_ivf.id  𝄀
-                          ->  Table Function on ivf_search  𝄀
-                                Index Reader Param:  Limit: 3  𝄀
-                                Limit: 3
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -409,34 +385,22 @@ order by l2_distance(v,'[54,54,54,54]') limit 2
 ➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: t_ivf.id INTERNAL, t_ivf.id INTERNAL  𝄀
+        Sort Key: mo_ivf_alias_0.pkid INTERNAL, mo_ivf_alias_0.pkid INTERNAL  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (t_ivf.id <> t_ivf.id)  𝄀
+              Join Cond: (mo_ivf_alias_0.pkid <> mo_ivf_alias_0.pkid)  𝄀
               ->  Sort  𝄀
                     Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
                     Limit: 2  𝄀
-                    ->  Join  𝄀
-                          Join Type: INNER  𝄀
-                          Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                          Runtime Filter Build: #[-1,0]  𝄀
-                          ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
-                                Runtime Filter Probe: t_ivf.id  𝄀
-                          ->  Table Function on ivf_search  𝄀
-                                Index Reader Param:  Limit: 2  𝄀
-                                Limit: 2  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Limit: 2  𝄀
               ->  Sort  𝄀
                     Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
                     Limit: 2  𝄀
-                    ->  Join  𝄀
-                          Join Type: INNER  𝄀
-                          Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                          Runtime Filter Build: #[-1,0]  𝄀
-                          ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
-                                Runtime Filter Probe: t_ivf.id  𝄀
-                          ->  Table Function on ivf_search  𝄀
-                                Index Reader Param:  Limit: 2  𝄀
-                                Limit: 2
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Limit: 2
 with a as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 2
@@ -461,15 +425,9 @@ Project  𝄀
         ->  Sort  𝄀
               Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
               Limit: 2, Offset: 1  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
-                          Runtime Filter Probe: t_ivf.id  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 3  𝄀
-                          Limit: 3
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
 order by l2_distance(v,'[1,1,1,1]') limit 2 offset 1
@@ -504,4 +462,112 @@ select l2_distance(v,'[1,1,1,1]') as d from t_ivf order by l2_distance(v,'[1,1,1
 ) x;
 ➤ n[-5,64,0]  𝄀
 3
+explain with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+-- @regex("Table Function on ivf_search", true)
+-- @regex("Table Scan on", false)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, d from knn order by d;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select id, d from knn order by d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+explain with knn as (
+select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, tag, d from knn order by d;
+-- @regex("Table Function on ivf_search", true)
+-- @regex("Table Scan on", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ivf_topk_consumers.t_ivf  𝄀
+                          Runtime Filter Probe: t_ivf.id  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Limit: 3
+with knn as (
+select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select id, tag, d from knn order by d;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  ¦  d[8,9,0]  𝄀
+1  ¦  10  ¦  0.0  𝄀
+2  ¦  20  ¦  4.0  𝄀
+3  ¦  30  ¦  8.0
+with knn as (
+select id, tag, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select id, tag, d from knn order by d;
+➤ id[-5,64,0]  ¦  tag[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  10  ¦  0.0  𝄀
+2  ¦  20  ¦  4.0  𝄀
+3  ¦  30  ¦  8.0
+explain with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+-- @regex("Table Function on ivf_search", true)
+-- @regex("mo_ivf_alias_0.pkid", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (m.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ivf_topk_consumers.meta  𝄀
+                    Runtime Filter Probe: m.id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+                    Limit: 3  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Limit: 3
+with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+➤ id[-5,64,0]  ¦  d[8,9,0]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
+with knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
 drop database ivf_topk_consumers;

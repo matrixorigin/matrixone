@@ -246,3 +246,32 @@ func TestSpliceVectorRewrite_AnchorAwareness(t *testing.T) {
 	require.Len(t, idxColMap, 1)
 	require.Equal(t, scoreExpr, idxColMap[[2]int32{7, 1}])
 }
+
+// TestIvfIndexOnlyBoundary pins which projection bounds an index-only scan. Getting this
+// wrong is not a missed optimization but a broken plan: the index-only scan drops the base
+// table, so a column outside the boundary fails column remap at build time.
+func TestIvfIndexOnlyBoundary(t *testing.T) {
+	projNode := &plan.Node{NodeType: plan.Node_PROJECT}
+	childProj := &plan.Node{NodeType: plan.Node_PROJECT}
+
+	// Project-anchored: the project above the Top-K bounds it, resolved through the child.
+	gotProj, gotChild := ivfIndexOnlyBoundary(projNode, childProj)
+	require.Equal(t, projNode, gotProj)
+	require.Equal(t, childProj, gotChild)
+
+	// Sort-anchored (#25967 / #25974): no project above, so the Top-K's own child project
+	// bounds the consumers -- they can only read what the derived table exposes. Its
+	// expressions are already in scan terms, so there is no child map to resolve through.
+	gotProj, gotChild = ivfIndexOnlyBoundary(nil, childProj)
+	require.Equal(t, childProj, gotProj)
+	require.Nil(t, gotChild, "the boundary's own expressions must not be remapped through itself")
+
+	// Sort straight on the scan (the ORDER BY expression is the distance call itself):
+	// nothing narrows the scan's columns, so index-only must stay off.
+	gotProj, gotChild = ivfIndexOnlyBoundary(nil, nil)
+	require.Nil(t, gotProj)
+	require.Nil(t, gotChild)
+
+	gotProj, _ = ivfIndexOnlyBoundary(nil, &plan.Node{NodeType: plan.Node_AGG})
+	require.Nil(t, gotProj, "only a PROJECT bounds the readable columns")
+}
