@@ -143,7 +143,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 alter table rename06 rename column col1 to ' ';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 46 near " ' ';";
 alter table rename06 rename column col1 to 数据库系统;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 44 near " 数据库系统;";
+alter table rename06 rename column 数据库系统 to col1;
 alter table rename06 rename column col1 to 7327323467dhhjfkrnfe;
 alter table rename06 rename column col1 to **&&^^%%^&**;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 44 near " **&&^^%%^&**;";

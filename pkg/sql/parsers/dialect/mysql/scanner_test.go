@@ -100,6 +100,60 @@ func TestQuotedUnicodeIdentifier(t *testing.T) {
 	}
 }
 
+func TestUnquotedExtendedIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		value string
+	}{
+		{name: "UTF-8 continuation", input: "t_ãg", value: "t_ãg"},
+		{name: "UTF-8 leading", input: "数量", value: "数量"},
+		{name: "maximum BMP code point", input: "\uFFFF", value: "\uFFFF"},
+		{name: "digit leading", input: "1数量", value: "1数量"},
+		{name: "raw latin1 client byte", input: "t_\xe9g", value: "t_\xe9g"},
+		{name: "digit leading raw latin1 client byte", input: "1\xe9A", value: "1\xe9a"},
+		{name: "keyword prefix", input: "selectã", value: "selectã"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != ID || value != test.value {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(ID), test.value)
+			}
+		})
+	}
+}
+
+func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantTokens []int
+	}{
+		{name: "leading supplementary", input: "😀", wantTokens: []int{LEX_ERROR}},
+		{name: "ASCII then supplementary", input: "t😀", wantTokens: []int{ID, LEX_ERROR}},
+		{name: "digit then supplementary", input: "1😀", wantTokens: []int{INTEGRAL, LEX_ERROR}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			for i, want := range test.wantTokens {
+				token, _ := scanner.Scan()
+				if token != want {
+					t.Fatalf("Scan(%q) token %d = %s, want %s",
+						test.input, i, tokenName(token), tokenName(want))
+				}
+			}
+		})
+	}
+}
+
 func TestScannerSQLModePipeConcat(t *testing.T) {
 	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
 	id, _ := s.Scan()

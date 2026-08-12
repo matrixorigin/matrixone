@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -127,6 +128,11 @@ func (s *Scanner) Scan() (int, string) {
 	}
 	s.PrePos = s.Pos
 	s.skipBlank()
+	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
+		start := s.Pos
+		s.incN(size)
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
 	switch ch := s.cur(); {
 	case ch == '@':
 		tokenID := AT_ID
@@ -154,7 +160,7 @@ func (s *Scanner) Scan() (int, string) {
 			return tID, ""
 		}
 		return tokenID, tBytes
-	case isLetter(ch):
+	case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -768,7 +774,7 @@ func (s *Scanner) scanNumber() (int, string) {
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
 				s.scanIdentifier(false)
-				return token, strings.ToLower(s.buf[start:s.Pos])
+				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
 			goto exit
@@ -781,7 +787,7 @@ func (s *Scanner) scanNumber() (int, string) {
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
 				s.scanIdentifier(false)
-				return token, strings.ToLower(s.buf[start:s.Pos])
+				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
 			goto exit
@@ -811,13 +817,13 @@ exponent:
 	}
 
 exit:
-	if isLetter(s.cur()) {
+	if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
 		// TODO: optimize
 		token = ID
 		s.scanIdentifier(false)
 	}
 
-	return token, strings.ToLower(s.buf[start:s.Pos])
+	return token, toLowerASCII(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
@@ -833,7 +839,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '$' && dollarFlag {
 			break
 		}
-		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
+		if !isUnquotedIdentifierLetterAt(s.buf, s.Pos) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -933,8 +939,9 @@ func hasKeywordAt(sql string, pos int, keyword string) bool {
 	if pos+len(keyword) == len(sql) {
 		return true
 	}
-	next := uint16(sql[pos+len(keyword)])
-	return !isLetter(next) && !isDigit(next) && next != '@'
+	nextPos := pos + len(keyword)
+	next := uint16(sql[nextPos])
+	return !isUnquotedIdentifierLetterAt(sql, nextPos) && !isDigit(next) && next != '@'
 }
 
 func skipLineCommentFrom(sql string, pos int) int {
@@ -1030,6 +1037,53 @@ func (s *Scanner) peek(dist int) uint16 {
 		return eofChar
 	}
 	return uint16(s.buf[s.Pos+dist])
+}
+
+// isUnquotedIdentifierLetterAt preserves invalid UTF-8 bytes from single-byte
+// client encodings while rejecting valid supplementary UTF-8 sequences. MySQL
+// permits Unicode identifier characters only in the BMP.
+func isUnquotedIdentifierLetterAt(sql string, pos int) bool {
+	if pos < 0 || pos >= len(sql) {
+		return false
+	}
+	ch := uint16(sql[pos])
+	if isLetter(ch) {
+		return true
+	}
+	if ch < utf8.RuneSelf {
+		return false
+	}
+	r, size := utf8.DecodeRuneInString(sql[pos:])
+	return (size == 1 && r == utf8.RuneError) || r <= '\uFFFF'
+}
+
+func supplementaryUTF8SequenceSizeAt(sql string, pos int) int {
+	if pos < 0 || pos >= len(sql) || sql[pos] < utf8.RuneSelf {
+		return 0
+	}
+	r, size := utf8.DecodeRuneInString(sql[pos:])
+	if size == 4 && r > '\uFFFF' {
+		return size
+	}
+	return 0
+}
+
+// toLowerASCII retains raw client bytes. strings.ToLower cannot be used on an
+// identifier that may contain invalid UTF-8 because it replaces those bytes
+// with utf8.RuneError.
+func toLowerASCII(value string) string {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 'A' && value[i] <= 'Z' {
+			lower := []byte(value)
+			for j := i; j < len(lower); j++ {
+				if lower[j] >= 'A' && lower[j] <= 'Z' {
+					lower[j] += 'a' - 'A'
+				}
+			}
+			return string(lower)
+		}
+	}
+	return value
 }
 
 func isLetter(ch uint16) bool {
