@@ -975,6 +975,61 @@ func TestQueryBuilderBuildRollupWithGroupingFunctionExpressions(t *testing.T) {
 	require.Error(t, err, "string literal case must remain significant in grouping-expression matching")
 }
 
+func TestQueryBuilderRejectsGroupingOutsideGroupingExtensions(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "plain select",
+			sql:  `select grouping(a) from select_test.bind_select order by a, b`,
+		},
+		{
+			name: "ordinary group by",
+			sql:  `select a, grouping(a), count(*) from select_test.bind_select group by a order by a`,
+		},
+		{
+			name: "having",
+			sql:  `select a, count(*) from select_test.bind_select group by a having grouping(a) = 0 order by a`,
+		},
+		{
+			name: "order by",
+			sql:  `select a from select_test.bind_select order by grouping(a), a`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidGroupFuncUse), err)
+
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(moerr.ER_INVALID_GROUP_FUNC_USE), moErr.MySQLCode())
+			require.Equal(t, "HY000", moErr.SqlState())
+			require.Equal(t, "Invalid use of group function", moErr.Error())
+		})
+	}
+}
+
+func TestQueryBuilderAllowsGroupingWithSingleGroupingSet(t *testing.T) {
+	stmts, err := parsers.Parse(
+		context.TODO(), dialect.MYSQL,
+		`select a, grouping(a), count(*)
+		from select_test.bind_select
+		group by grouping sets ((a))`, 1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan.GetQuery())
+}
+
 func TestQueryBuilderBuildRollupRejectsNonGroupByGroupingArguments(t *testing.T) {
 	tests := []struct {
 		name          string
