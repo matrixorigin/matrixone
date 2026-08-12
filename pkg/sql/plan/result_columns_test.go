@@ -180,3 +180,38 @@ func TestGetResultColumnsFromPlanClearsNotNullForOuterJoinedColumn(t *testing.T)
 	require.False(t, columns[0].NotNull)
 	require.False(t, columns[0].Typ.NotNullable)
 }
+
+func TestGetResultColumnsFromPlanCarriesOriginMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicalPlan, err := runOneStmt(mock, t,
+		"select n.n_nationkey as key_alias from nation as n")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(logicalPlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, "key_alias", columns[0].Name)
+	require.Equal(t, "n_nationkey", columns[0].OriginName)
+	require.Equal(t, "n", columns[0].TblName)
+	require.Equal(t, "nation", columns[0].OriginTblName)
+	require.Equal(t, "tpch", columns[0].DbName)
+
+	wire, err := columns[0].Marshal()
+	require.NoError(t, err)
+	var roundTrip planpb.ColDef
+	require.NoError(t, roundTrip.Unmarshal(wire))
+	require.Equal(t, columns[0].OriginTblName, roundTrip.OriginTblName)
+}
+
+func TestGetResultColumnsFromPlanLeavesComputedOriginEmpty(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicalPlan, err := runOneStmt(mock, t,
+		"select n.n_nationkey + 1 as derived_key from nation as n")
+	require.NoError(t, err)
+
+	columns := GetResultColumnsFromPlan(logicalPlan)
+	require.Len(t, columns, 1)
+	require.Empty(t, columns[0].OriginName)
+	require.Empty(t, columns[0].TblName)
+	require.Empty(t, columns[0].OriginTblName)
+	require.Empty(t, columns[0].DbName)
+}
