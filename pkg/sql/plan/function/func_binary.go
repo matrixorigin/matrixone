@@ -8664,6 +8664,29 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 	}, selectList)
 }
 
+// L1DistanceArray is l1_distance for the native float element types: the Manhattan
+// distance sum|a-b|. It goes through the same metric kernel every other consumer of
+// Metric_L1Distance uses (ivfflat centroid assignment, brute force, cuVS), so the SQL
+// value and the value the index ranks by cannot drift. Unlike L2 there is no squared
+// form, so no transform is applied on either side.
+func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L1Distance, proc); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L1Distance[T](_v1, _v2)
+	}, selectList)
+}
+
 // StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
 func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
@@ -12214,6 +12237,10 @@ func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result 
 
 func L2DistanceSqArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2sqDistance, false)
+}
+
+func L1DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L1Distance, false)
 }
 
 func InnerProductArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

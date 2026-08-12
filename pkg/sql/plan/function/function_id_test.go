@@ -478,6 +478,7 @@ var predefinedFunids = map[int]int{
 	COSINE_SIMILARITY: 318,
 	VECTOR_DIMS:       319,
 	NORMALIZE_L2:      320,
+	L1_DISTANCE:       569,
 	L2_DISTANCE:       321,
 	L2_DISTANCE_SQ:    322,
 	COSINE_DISTANCE:   323,
@@ -741,7 +742,7 @@ var predefinedFunids = map[int]int{
 	PERCENTILE_DISC:               568,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 569,
+	FUNCTION_END_NUMBER: 570,
 }
 
 func Test_funids(t *testing.T) {

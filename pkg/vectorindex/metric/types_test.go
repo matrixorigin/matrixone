@@ -57,6 +57,56 @@ func TestCuvsQuantizationNameToType(t *testing.T) {
 	require.False(t, ok, "cuvs map must not include float64")
 }
 
+// TestOpTypeServesDistFunc pins the index-selection test to the op_type -> distance
+// function mapping:
+//
+//	vector_l2_ops, vector_l2sq_ops -> l2_distance, l2_distance_sq;
+//	vector_l1_ops -> l1_distance;  vector_ip_ops -> inner_product;
+//	vector_cosine_ops -> cosine_distance
+//
+// The L2 pair is interchangeable because both op_types build the same index and the
+// sqrt is applied from the QUERY's function name, so either serves either form with a
+// correctly scaled score. Before #25966 each function matched ONE canonical op_type, so
+// a vector_l2sq_ops index was accepted at CREATE INDEX and then never chosen.
+func TestOpTypeServesDistFunc(t *testing.T) {
+	for _, distFn := range []string{DistFn_L2Distance, DistFn_L2sqDistance} {
+		require.True(t, OpTypeServesDistFunc(OpType_L2Distance, distFn), distFn)
+		require.True(t, OpTypeServesDistFunc(OpType_L2sqDistance, distFn), distFn)
+		// A different metric must never be substituted: the score would be wrong.
+		require.False(t, OpTypeServesDistFunc(OpType_InnerProduct, distFn), distFn)
+		require.False(t, OpTypeServesDistFunc(OpType_CosineDistance, distFn), distFn)
+		require.False(t, OpTypeServesDistFunc(OpType_L1Distance, distFn), distFn)
+	}
+
+	require.True(t, OpTypeServesDistFunc(OpType_InnerProduct, DistFn_InnerProduct))
+	require.True(t, OpTypeServesDistFunc(OpType_CosineDistance, DistFn_CosineDistance))
+	require.True(t, OpTypeServesDistFunc(OpType_L1Distance, DistFn_L1Distance))
+	require.False(t, OpTypeServesDistFunc(OpType_L2Distance, DistFn_L1Distance))
+
+	// Unknown / non-indexable inputs yield no match rather than a default.
+	require.False(t, OpTypeServesDistFunc(OpType_L2Distance, "cosine_similarity"))
+	require.False(t, OpTypeServesDistFunc("", ""))
+}
+
+// TestDistFuncOpTypeSetMatchesDefaults keeps the two tables from drifting: every
+// indexable distance function must have a serving set, and the op_type it is given by
+// default must be a member of that set — otherwise CREATE INDEX would produce an index
+// the planner then refuses to use, which is the bug this pair of maps encodes.
+func TestDistFuncOpTypeSetMatchesDefaults(t *testing.T) {
+	require.Len(t, DistFuncOpTypeSet, len(DistFuncOpTypes))
+	for distFn, defaultOp := range DistFuncOpTypes {
+		require.Containsf(t, DistFuncOpTypeSet, distFn, "no serving op_types for %q", distFn)
+		require.Truef(t, OpTypeServesDistFunc(defaultOp, distFn),
+			"default op_type %q for %q is not in its own serving set", defaultOp, distFn)
+	}
+	// Every op_type named in the sets must be a real IVF op_type.
+	for distFn, ops := range DistFuncOpTypeSet {
+		for _, op := range ops {
+			require.Containsf(t, OpTypeToIvfMetric, op, "%q lists unknown op_type %q", distFn, op)
+		}
+	}
+}
+
 func TestMaxFloat(t *testing.T) {
 	require.Equal(t, float32(math.MaxFloat32), MaxFloat[float32]())
 	require.Equal(t, float64(math.MaxFloat64), MaxFloat[float64]())

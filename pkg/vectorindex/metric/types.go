@@ -102,11 +102,40 @@ func ValidQuantization(val string) bool {
 }
 
 var (
+	// DistFuncOpTypes maps an indexable SQL distance function to the op_type an index
+	// is given by default for it. Membership doubles as "this distance function can be
+	// served by a vector index at all". It is NOT the index-matching test: an index may
+	// carry a different but equivalent op_type — use OpTypeServesDistFunc for that.
 	DistFuncOpTypes = map[string]string{
 		DistFn_L2Distance:     OpType_L2Distance,
 		DistFn_L2sqDistance:   OpType_L2Distance,
 		DistFn_InnerProduct:   OpType_InnerProduct,
 		DistFn_CosineDistance: OpType_CosineDistance,
+		DistFn_L1Distance:     OpType_L1Distance,
+	}
+
+	// DistFuncOpTypeSet lists every index op_type that can serve a query on the given
+	// distance function:
+	//
+	//	vector_l2_ops    -> l2_distance, l2_distance_sq
+	//	vector_l2sq_ops  -> l2_distance, l2_distance_sq
+	//	vector_l1_ops    -> l1_distance
+	//	vector_ip_ops    -> inner_product
+	//	vector_cosine_ops-> cosine_distance
+	//
+	// It is a SET rather than one canonical op_type only because of the L2 pair: the two
+	// op_types build a byte-identical index (each maps to Metric_L2sqDistance) and whether
+	// the score is sqrt-ed is decided at SEARCH time from the query's function name
+	// (OrigFuncName -> DistanceTransformIvfflat / DistanceTransformHnsw), never from the
+	// index. So either one answers either form with a correctly scaled score, and the
+	// distinction is naming only. Matching one canonical op_type per function left every
+	// vector_l2sq_ops index unusable — accepted at CREATE INDEX, never chosen (#25966).
+	DistFuncOpTypeSet = map[string][]string{
+		DistFn_L2Distance:     {OpType_L2Distance, OpType_L2sqDistance},
+		DistFn_L2sqDistance:   {OpType_L2Distance, OpType_L2sqDistance},
+		DistFn_InnerProduct:   {OpType_InnerProduct},
+		DistFn_CosineDistance: {OpType_CosineDistance},
+		DistFn_L1Distance:     {OpType_L1Distance},
 	}
 
 	OpTypeToIvfMetric = map[string]MetricType{
@@ -155,6 +184,18 @@ var (
 		DistFn_L1Distance:     Metric_L1Distance,
 	}
 )
+
+// OpTypeServesDistFunc reports whether an index built with opType can answer a query
+// that uses distFn — the index-selection test for every vector algorithm. False for an
+// unindexable distFn and for an op_type whose metric differs from the query's.
+func OpTypeServesDistFunc(opType, distFn string) bool {
+	for _, ok := range DistFuncOpTypeSet[distFn] {
+		if ok == opType {
+			return true
+		}
+	}
+	return false
+}
 
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
