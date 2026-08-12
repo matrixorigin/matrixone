@@ -1830,9 +1830,12 @@ func writeExplainResult(
 
 	//2. fill the result set
 	//column
+	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(explainColName)
+	setMysqlColumnTypeMetadata(col1, types.New(types.T_varchar, 0, 0))
+	setCharacter(col1)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)

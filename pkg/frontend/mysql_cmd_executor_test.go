@@ -5403,6 +5403,35 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
 }
 
+func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	query := &plan0.Query{
+		StmtType: plan0.Query_DELETE,
+		Nodes:    []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps:    []int32{0},
+	}
+
+	err := writeExplainResult(
+		ctx,
+		ses,
+		tree.NewExplainStmt(&tree.Delete{}, "text"),
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		explain.NewExplainDefaultOptions(),
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+
+	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
+	require.NoError(t, err)
+	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
+	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
+	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
