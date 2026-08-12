@@ -189,7 +189,15 @@ select id, filter_col from t_retry where filter_col = 0 order by l2_distance(vec
 
 -- Test 5.4: mode = auto with limit > 1
 -- Expectation: Should return at least 'limit' rows if available
+-- probe_limit=1 (set above to force low recall) makes the ROW COUNT here depend on how
+-- k-means happened to split the 20 near-collinear points across the 5 lists: a single
+-- probed list holds 4 or 5 of them, so this assertion was on clustering luck rather than
+-- on auto mode, and it disagreed between runs (4 recorded, 5 observed). Probe every list
+-- for this one query so the answer is the true nearest 5; restore low recall afterwards
+-- so 5.5 onwards keep testing the fallback they were written for.
+set probe_limit = 5;
 select id, filter_col from t_retry where filter_col = 0 order by l2_distance(vec, '[0,0,0]') limit 5 by rank with option 'mode=auto';
+set probe_limit = 1;
 
 -- Test 5.5: Verify auto mode equals pre mode for fallback scenario
 -- Both should return id 999
@@ -205,9 +213,15 @@ set probe_limit = 2;
 drop table if exists t_edge;
 create table t_edge(id int primary key, vec vecf32(3), status int);
 
+-- Distances from the query point '[0,0,0]' must be DISTINCT (1, 2, 3), not the unit
+-- basis vectors this used to hold: those are all exactly 1 away from the origin, so
+-- `order by l2_distance(...) limit 2` was a three-way tie with no defined answer. The
+-- recorded order was then whichever two rows the IVF probe happened to visit, which
+-- differs between the CPU and GPU builds (CPU returned 2,1 and GPU 1,3 — both correct
+-- for a tie). Distinct distances keep the assertions on the search, not on tie luck.
 insert into t_edge values (1, '[1,0,0]', 1);
-insert into t_edge values (2, '[0,1,0]', 2);
-insert into t_edge values (3, '[0,0,1]', 3);
+insert into t_edge values (2, '[0,2,0]', 2);
+insert into t_edge values (3, '[0,0,3]', 3);
 
 create index idx_edge using ivfflat on t_edge(vec) lists=2 op_type 'vector_l2_ops';
 
