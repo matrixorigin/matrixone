@@ -15,32 +15,66 @@
 package top
 
 import (
-	"bytes"
+	"io"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(Top)
 
+var _ interface {
+	SetAllocationAccount(*mpool.AllocationAccount) error
+	ClearAllocationAccount(*mpool.AllocationAccount) error
+} = new(Top)
+
 const topSpillThreshold uint64 = 8192 * 2
 
-type rowRef struct {
-	batchIdx int32
-	rowIdx   int32
-}
+const (
+	// Sites 32-43 and 60 are shared spillutil sites. Top-specific storage uses
+	// a disjoint range under the Top owner.
+	topAllocationSiteRetainedData mpool.AllocationSite = iota + 64
+	topAllocationSiteRetainedArea
+	topAllocationSiteRetainedNulls
+	topAllocationSiteRetainedGrouping
+	topAllocationSiteExpressionData
+	topAllocationSiteExpressionArea
+	topAllocationSiteExpressionNulls
+	topAllocationSiteExpressionGrouping
+	topAllocationSiteOutputData
+	topAllocationSiteOutputArea
+	topAllocationSiteOutputNulls
+	topAllocationSiteOutputGrouping
+	topAllocationSiteSelections
+	topAllocationSiteRowReferences
+	topAllocationSiteSpillWriteBuffer
+)
 
-type spilledBatchInfo struct {
+type rowRef struct {
 	offset int64
 	size   int64
-	rows   int32
+	rowIdx int64
+}
+
+type spillRecordRef struct {
+	offset int64
+	size   int64
+}
+
+type spillWriteFlusher interface {
+	io.Writer
+	Flush() error
+	Free()
 }
 
 type container struct {
@@ -59,18 +93,25 @@ type container struct {
 	bat                     *batch.Batch
 	buildBat                *batch.Batch //temp batch, do not need free or reset
 
-	spilling      bool
-	spillFile     *os.File
-	spillBuf      bytes.Buffer
-	spillBatIdx   int32
-	spillIndex    []spilledBatchInfo
-	rowRefs       []rowRef
-	spillCmpPoses []int32 // remapped poses for spill mode (0-based into key-only bat)
+	allocationAccount    *mpool.AllocationAccount
+	retainedAllocation   *vector.AllocationAccountSelection
+	expressionAllocation *vector.AllocationAccountSelection
+	outputAllocation     *vector.AllocationAccountSelection
+	spillAllocation      *spillutil.SpillAllocationAccount
+	budget               *process.ExecutionResourceGeneration
+
+	spilling       bool
+	spillFile      *os.File
+	spillWriter    spillWriteFlusher
+	spillOffset    int64
+	spillFDToken   *process.ExecutionSpillFDReservation
+	spillDiskToken *process.ExecutionSpillDiskReservation
+	rowRefs        []rowRef
 
 	// streaming eval state for spill mode
-	orderedRefs []rowRef     // sorted output order, populated once at eval start
-	evalCursor  int          // next row index to output in orderedRefs
-	spillOutBat *batch.Batch // current chunk output batch, freed on next call
+	spillOrdered bool         // sels backing contains the final ascending order
+	evalCursor   int          // next row index to output in sels
+	spillOutBat  *batch.Batch // current chunk output batch, freed on next call
 }
 
 type Top struct {
@@ -135,81 +176,221 @@ func (top *Top) ExecProjection(proc *process.Process, input *batch.Batch) (*batc
 	return input, nil
 }
 
-func (ctr *container) reset(proc *process.Process) {
-	ctr.n = 0
-	ctr.state = 0
-	ctr.sels = nil
-	ctr.poses = nil
-	ctr.cmps = nil
-
-	ctr.limit = 0
-	if ctr.limitExecutor != nil {
-		ctr.limitExecutor.ResetForNextQuery()
+func (top *Top) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if top == nil {
+		return mpool.ErrAllocationAccountInvalid
 	}
+	return top.ctr.setAllocationAccount(account)
+}
 
-	for _, executor := range ctr.executorsForOrderColumn {
-		if executor != nil {
-			executor.ResetForNextQuery()
+func (top *Top) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if top == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return top.ctr.clearAllocationAccount(account)
+}
+
+func (ctr *container) setAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.allocationAccount != nil {
+		if ctr.allocationAccount == account {
+			return nil
 		}
+		return mpool.ErrAllocationAccountMismatch
 	}
-	ctr.desc = false
-	ctr.topValueZM = nil
+	if ctr.bat != nil || ctr.spillOutBat != nil || ctr.limitExecutor != nil ||
+		len(ctr.executorsForOrderColumn) != 0 || len(ctr.sels) != 0 ||
+		len(ctr.rowRefs) != 0 || ctr.spillFile != nil || ctr.spillWriter != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	retained, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerTop,
+		topAllocationSiteRetainedData,
+		topAllocationSiteRetainedArea,
+		topAllocationSiteRetainedNulls,
+		topAllocationSiteRetainedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	expression, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerTop,
+		topAllocationSiteExpressionData,
+		topAllocationSiteExpressionArea,
+		topAllocationSiteExpressionNulls,
+		topAllocationSiteExpressionGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	output, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerTop,
+		topAllocationSiteOutputData,
+		topAllocationSiteOutputArea,
+		topAllocationSiteOutputNulls,
+		topAllocationSiteOutputGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	spill, err := spillutil.NewSpillAllocationAccount(
+		account,
+		mpool.AllocationOwnerTop,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationAccount = account
+	ctr.retainedAllocation = retained
+	ctr.expressionAllocation = expression
+	ctr.outputAllocation = output
+	ctr.spillAllocation = spill
+	return nil
+}
+
+func (ctr *container) clearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if ctr.bat != nil || ctr.spillOutBat != nil || ctr.limitExecutor != nil ||
+		len(ctr.executorsForOrderColumn) != 0 || len(ctr.sels) != 0 ||
+		len(ctr.rowRefs) != 0 || ctr.spillFile != nil || ctr.spillWriter != nil ||
+		ctr.spillFDToken != nil || ctr.spillDiskToken != nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	ctr.allocationAccount = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
+	ctr.spillAllocation = nil
+	ctr.budget = nil
+	return nil
+}
+
+func (ctr *container) reset(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
-	}
-
-	if ctr.buildBat != nil {
-		ctr.buildBat = nil
 	}
 	if ctr.spillOutBat != nil {
 		ctr.spillOutBat.Clean(proc.Mp())
 		ctr.spillOutBat = nil
 	}
+	ctr.cleanupSpill(proc)
 
-	ctr.cleanupSpill()
+	ctr.n = 0
+	ctr.state = 0
+	ctr.poses = nil
+	ctr.cmps = nil
+	ctr.limit = 0
+	if ctr.limitExecutor != nil {
+		if ctr.allocationAccount != nil {
+			ctr.limitExecutor.Free()
+			ctr.limitExecutor = nil
+		} else {
+			ctr.limitExecutor.ResetForNextQuery()
+		}
+	}
+	for i, executor := range ctr.executorsForOrderColumn {
+		if executor != nil {
+			if ctr.allocationAccount != nil {
+				executor.Free()
+				ctr.executorsForOrderColumn[i] = nil
+			} else {
+				executor.ResetForNextQuery()
+			}
+		}
+	}
+	if ctr.allocationAccount != nil {
+		ctr.executorsForOrderColumn = nil
+	}
+	ctr.desc = false
+	ctr.topValueZM = nil
+	ctr.buildBat = nil
+	ctr.budget = nil
 }
 
 func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
 	}
 	if ctr.spillOutBat != nil {
 		ctr.spillOutBat.Clean(proc.Mp())
 		ctr.spillOutBat = nil
 	}
-	for _, executor := range ctr.executorsForOrderColumn {
+	ctr.cleanupSpill(proc)
+	for i, executor := range ctr.executorsForOrderColumn {
 		if executor != nil {
 			executor.Free()
+			ctr.executorsForOrderColumn[i] = nil
 		}
 	}
+	ctr.executorsForOrderColumn = nil
 	if ctr.limitExecutor != nil {
 		ctr.limitExecutor.Free()
+		ctr.limitExecutor = nil
 	}
-	ctr.cleanupSpill()
+	ctr.buildBat = nil
+	ctr.poses = nil
+	ctr.cmps = nil
+	ctr.budget = nil
 }
 
-func (ctr *container) cleanupSpill() {
+func (ctr *container) cleanupSpill(proc *process.Process) {
+	if ctr.spillWriter != nil {
+		ctr.spillWriter.Free()
+		ctr.spillWriter = nil
+	}
+	_ = ctr.closeSpillFile()
+	if ctr.allocationAccount != nil && proc != nil {
+		spillutil.FreeAccountedSlice(ctr.sels, proc.Mp())
+		spillutil.FreeAccountedSlice(ctr.rowRefs, proc.Mp())
+	}
+	ctr.sels = nil
+	ctr.rowRefs = nil
+	ctr.spilling = false
+	ctr.spillOffset = 0
+	ctr.spillOrdered = false
+	ctr.evalCursor = 0
+}
+
+func (ctr *container) closeSpillFile() error {
+	var err error
 	if ctr.spillFile != nil {
-		name := ctr.spillFile.Name()
-		ctr.spillFile.Close()
-		os.Remove(name)
+		err = ctr.spillFile.Close()
 		ctr.spillFile = nil
 	}
-	ctr.spillIndex = nil
-	ctr.rowRefs = nil
-	ctr.spillCmpPoses = nil
-	ctr.spilling = false
-	ctr.spillBatIdx = 0
-	ctr.spillBuf.Reset()
-	ctr.orderedRefs = nil
-	ctr.evalCursor = 0
-	ctr.spillOutBat = nil
+	if ctr.spillDiskToken != nil {
+		ctr.spillDiskToken.Release()
+		ctr.spillDiskToken = nil
+	}
+	if ctr.spillFDToken != nil {
+		ctr.spillFDToken.Release()
+		ctr.spillFDToken = nil
+	}
+	return err
 }
 
 func (ctr *container) compare(vi, vj int, i, j int64) int {
 	if ctr.spilling {
-		for _, pos := range ctr.spillCmpPoses {
+		for pos := range ctr.cmps {
 			if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 				return r
 			}

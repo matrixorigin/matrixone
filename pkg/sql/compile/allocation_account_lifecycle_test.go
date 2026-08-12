@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -57,6 +58,11 @@ func TestRetainingOperatorsActivateAllocationLifecycle(t *testing.T) {
 	order := mergeorder.NewArgument()
 	defer order.Release()
 	_, ownsAllocation = any(order).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	topN := top.NewArgument()
+	defer topN.Release()
+	_, ownsAllocation = any(topN).(executionAllocationAccountOwner)
 	require.True(t, ownsAllocation)
 }
 
