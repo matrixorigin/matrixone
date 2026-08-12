@@ -2586,6 +2586,96 @@ func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.
 	}
 }
 
+func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *testing.T) {
+	tests := []struct {
+		name         string
+		intervalUnit string
+		slidingUnit  string
+	}{
+		{
+			name:         "interval month",
+			intervalUnit: "month",
+		},
+		{
+			name:         "interval week",
+			intervalUnit: "week",
+		},
+		{
+			name:         "interval year",
+			intervalUnit: "year",
+		},
+		{
+			name:         "interval quarter",
+			intervalUnit: "quarter",
+		},
+		{
+			name:         "sliding month",
+			intervalUnit: "second",
+			slidingUnit:  "month",
+		},
+		{
+			name:         "sliding week",
+			intervalUnit: "day",
+			slidingUnit:  "week",
+		},
+		{
+			name:         "sliding year",
+			intervalUnit: "hour",
+			slidingUnit:  "year",
+		},
+		{
+			name:         "sliding quarter",
+			intervalUnit: "minute",
+			slidingUnit:  "quarter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.intervalUnit,
+				},
+			}
+			if tt.slidingUnit != "" {
+				astTimeWindow.Sliding = &tree.Sliding{
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.slidingUnit,
+				}
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+			require.ErrorContains(t, err, unsupportedTimeWindowIntervalUnit)
+		})
+	}
+}
+
+func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
+	err := validateTimeWindowIntervalUnit(context.Background(), "century")
+	require.ErrorContains(t, err, "invalid interval type 'century'")
+}
+
 func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 	tests := []struct {
 		name          string

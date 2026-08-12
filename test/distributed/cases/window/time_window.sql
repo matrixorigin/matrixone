@@ -349,4 +349,25 @@ select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (
 select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select device_id, _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_telemetry where metric = 'cpu_usage' and event_ts >= '2024-03-01 08:00:00.000000' and event_ts < '2024-03-01 09:00:00.000000' group by device_id interval(event_ts, 1, hour)) q;
 drop table tw_interval_fraction_telemetry;
 
+-- unsupported calendar units should return a normal SQL error, not enter the compile panic path
+drop table if exists tw_interval_bad_unit;
+create table tw_interval_bad_unit(ts timestamp(6), v int);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, year);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, quarter);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, month);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, week);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, year);
+-- @bvt:issue
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
+drop table tw_interval_bad_unit;
+
 drop database time_window;

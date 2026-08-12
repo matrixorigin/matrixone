@@ -5325,6 +5325,19 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if addCnt == 0 {
 		return nil
 	}
+	// UnionBatch permits the source to be the destination itself or a borrowed
+	// Window into it. Preserve that source before any destination growth: mpool
+	// growth may replace and release both the varlena headers and area backing,
+	// leaving an aliased source slice pointing at returned storage.
+	if v.typ.IsVarlen() && w != nil &&
+		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+		preserved, err := w.CloneWindow(int(offset), int(offset)+cnt, mp)
+		if err != nil {
+			return err
+		}
+		defer preserved.Free(mp)
+		return v.UnionBatch(preserved, 0, cnt, flags, mp)
+	}
 	oldLen := v.length
 	if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 		return err
@@ -5380,70 +5393,24 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
 
-		// Fast path: appending an entire in-order source varlen vector — the block-scan
-		// materialization path. The general loop below calls BuildVarlenaFromVarlena
-		// per row, which copies each row's content and writes each header individually:
-		// N small memmoves plus incremental area growth, which the scan CPU profile
-		// showed is ~50% of a table scan. Here we instead copy the whole source area in
-		// ONE memmove and the whole header array in another, then rebase the non-inline
-		// offsets with an unsafe walk. Nulls are fine: a null row's content is not in
-		// w.area, and its header is never read — we just propagate w's null/grouping
-		// bitmaps (shifted by oldLen) and zero the null rows' copied headers so no
-		// rebased garbage offset lingers. Semantically identical to the loop.
-		if flags == nil && offset == 0 && cnt == w.length {
+		// Fast path for a contiguous logical source range. A borrowed Window keeps
+		// the parent's complete area, so copying w.area merely because the window's
+		// offset is zero can amplify one logical range into a copy of every sibling
+		// range. Derive the live payload span from the selected descriptors first.
+		if flags == nil {
 			oldLen := v.length
-			baseOff := len(v.area)
-			if len(w.area) > 0 {
-				// preserve mpool semantics: append within cap, else mpool Grow2 (so
-				// v.area stays mpool-tracked rather than escaping to the Go heap).
-				if baseOff+len(w.area) <= cap(v.area) {
-					v.area = append(v.area, w.area...)
-				} else if mp == nil {
-					if v.allocationAccount != nil {
-						return moerr.NewInternalErrorNoCtx(
-							"accounted vector area growth does not have a mpool",
-						)
-					}
-					v.area = append(v.area, w.area...)
-				} else {
-					v.area, err = v.growArea2(mp, w.area, baseOff+len(w.area))
-					if err != nil {
-						return err
-					}
-				}
-			}
-			// one memmove of the header array; inline varlenas carry their bytes here.
-			copy(vCol[oldLen:oldLen+cnt], wCol[:cnt])
-			// non-inline headers hold an offset into w.area; rebase into v.area. An
-			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
-			// big-header sentinel, so the check is exact.
-			if baseOff != 0 && len(w.area) > 0 {
-				for i := oldLen; i < oldLen+cnt; i++ {
-					if !vCol[i].IsSmall() {
-						offset, length := vCol[i].OffsetLen()
-						vCol[i].SetOffsetLen(offset+uint32(baseOff), length)
-					}
-				}
-			}
-			// propagate null bits and clear those (never-read) headers so a copied
-			// big-header offset can't linger as a dangling reference into v.area.
-			// Same [0,cnt) bound as gsp above: a stale nsp bit at i >= cnt would
-			// index vCol (len oldLen+cnt) out of range and panic.
-			if !w.nsp.EmptyByFlag() {
-				base, ucnt := uint64(oldLen), uint64(cnt)
-				w.nsp.Foreach(func(i uint64) bool {
-					if i < ucnt {
-						nulls.Add(&v.nsp, base+i)
-						vCol[oldLen+int(i)] = types.Varlena{}
-					}
-					return true
-				})
-			}
-			v.setLengthAfterExtend(v.length + cnt)
-			if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+			var fast bool
+			fast, err = v.unionBatchContiguousVarlenRange(
+				w, vCol, wCol, int(offset), cnt, mp)
+			if err != nil {
 				return err
 			}
-			return nil
+			if fast {
+				if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
+					return err
+				}
+				return nil
+			}
 		}
 
 		// pre-grow the area once for the non-inline, non-null source rows in this
@@ -6088,6 +6055,108 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+func byteSlicesOverlap(left, right []byte) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	leftStart := uintptr(unsafe.Pointer(unsafe.SliceData(left)))
+	rightStart := uintptr(unsafe.Pointer(unsafe.SliceData(right)))
+	return leftStart < rightStart+uintptr(len(right)) &&
+		rightStart < leftStart+uintptr(len(left))
+}
+
+// unionBatchContiguousVarlenRange appends [offset, offset+cnt) when all
+// non-inline, non-null payloads in that row range form one contiguous area
+// span. It returns false without modifying vector data when the source area is
+// reordered or contains gaps, allowing UnionBatch to use its general path.
+func (v *Vector) unionBatchContiguousVarlenRange(
+	w *Vector,
+	vCol, wCol []types.Varlena,
+	offset, cnt int,
+	mp *mpool.MPool,
+) (bool, error) {
+	hasNull := !w.nsp.EmptyByFlag()
+	areaStart, areaEnd := 0, 0
+	hasArea := false
+
+	// Preserve the no-scan block-materialization path for an owned, append-built
+	// whole vector. SetLength and aliasing operations clear areaDisjoint; a
+	// borrowed Window is identified by cantFreeArea and must scan its descriptors
+	// because it retains the parent's complete area.
+	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea {
+		areaEnd = len(w.area)
+		hasArea = areaEnd > 0
+	} else {
+		for i := offset; i < offset+cnt; i++ {
+			if hasNull && w.nsp.Contains(uint64(i)) {
+				continue
+			}
+			s := &wCol[i]
+			if s.IsSmall() {
+				continue
+			}
+			off, length := s.OffsetLen()
+			end := uint64(off) + uint64(length)
+			if end > uint64(len(w.area)) {
+				return false, nil
+			}
+			if !hasArea {
+				areaStart, areaEnd = int(off), int(end)
+				hasArea = true
+				continue
+			}
+			if int(off) != areaEnd {
+				return false, nil
+			}
+			areaEnd = int(end)
+		}
+	}
+
+	oldLen := v.length
+	baseOff := len(v.area)
+	if hasArea {
+		payload := w.area[areaStart:areaEnd]
+		if baseOff+len(payload) <= cap(v.area) {
+			v.area = append(v.area, payload...)
+		} else if mp == nil {
+			if v.allocationAccount != nil {
+				return false, moerr.NewInternalErrorNoCtx(
+					"accounted vector area growth does not have a mpool",
+				)
+			}
+			v.area = append(v.area, payload...)
+		} else {
+			var err error
+			v.area, err = v.growArea2(mp, payload, baseOff+len(payload))
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+
+	copy(vCol[oldLen:oldLen+cnt], wCol[offset:offset+cnt])
+	if !hasNull && areaStart == 0 && baseOff == 0 {
+		v.setLengthAfterExtend(v.length + cnt)
+		return true, nil
+	}
+	for i := 0; i < cnt; i++ {
+		sourceRow := offset + i
+		targetRow := oldLen + i
+		if hasNull && w.nsp.Contains(uint64(sourceRow)) {
+			nulls.Add(&v.nsp, uint64(targetRow))
+			vCol[targetRow] = types.Varlena{}
+			continue
+		}
+		if !vCol[targetRow].IsSmall() {
+			off, length := vCol[targetRow].OffsetLen()
+			vCol[targetRow].SetOffsetLen(
+				uint32(baseOff)+off-uint32(areaStart), length)
+		}
+	}
+	v.setLengthAfterExtend(v.length + cnt)
+	return true, nil
 }
 
 func AppendNull(vec *Vector, mp *mpool.MPool) error {
