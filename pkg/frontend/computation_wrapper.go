@@ -66,9 +66,10 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
-	// wrapper must not return it to the AST pool. The zero value intentionally
-	// means owned so ordinary wrappers preserve their existing lifecycle.
+	// stmtBorrowed is true when another long-lived owner, such as PrepareStmt or
+	// the session plan cache, retains stmt. This wrapper must then not return it
+	// to the AST pool. The zero value intentionally means owned so ordinary
+	// wrappers preserve their existing lifecycle.
 	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
@@ -360,7 +361,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				return nil, err
 			}
 			if stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = false
 			}
@@ -379,7 +380,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 			cwft.plan = plan
 			if !stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = true
 			}
@@ -1090,7 +1091,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:            string(raw),
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
+		}
 	}
 	return values, nil
 }
@@ -1141,7 +1146,11 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value:            param,
+			IsBin:            paramIsBin[i],
+			PrepareParamKind: paramKinds[i],
+		}
 	}
 	return
 }

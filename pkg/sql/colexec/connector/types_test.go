@@ -121,7 +121,7 @@ func TestConnectorResetPreservesErrorAheadOfDeliveredTerminal(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+func TestConnectorResetRecordsEndWhenDataChannelIsFull(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
 	t.Cleanup(func() {
@@ -161,25 +161,33 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Connector.Reset blocked after normal End delivery failed")
+		t.Fatal("Connector.Reset blocked while recording End on a full channel")
 	}
 	require.Nil(t, conn.ctr.sp)
-	require.Nil(t, conn.cleanupSpool)
-	require.Equal(t, int64(0), mp.CurrNB())
+	require.Same(t, sp, conn.cleanupSpool)
+	require.Greater(t, mp.CurrNB(), int64(0))
 	select {
 	case <-reg.Done():
 	default:
-		t.Fatal("fallback abort did not close Done")
+		t.Fatal("durable End did not close Done")
 	}
-	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, reg.Err())
 
-	staleSignal := <-reg.Ch2
-	got, info := staleSignal.Action()
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	got, info := receiver.GetNextBatch(nil)
+	require.NoError(t, info)
+	require.NotNil(t, got)
+	require.Equal(t, 1024, got.RowCount())
+	got, info = receiver.GetNextBatch(nil)
 	require.Nil(t, got)
-	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
+	require.NoError(t, info)
+
+	conn.CleanupDeferredSpool()
+	require.Nil(t, conn.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
+func TestConnectorResetDurableEndWakesReceiverAfterBufferedData(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
 	t.Cleanup(func() {
@@ -213,11 +221,11 @@ func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
 	select {
 	case result := <-resultCh:
 		require.Nil(t, result.bat)
-		require.ErrorIs(t, result.err, process.ErrPipelineEndSignalDeliveryFailed)
+		require.NoError(t, result.err)
 	case <-time.After(time.Second):
 		cancelReceiver()
 		<-resultCh
-		t.Fatal("receiver remained blocked after the fallback Abort failed to enter the full channel")
+		t.Fatal("receiver remained blocked after durable End")
 	}
 }
 
@@ -257,7 +265,7 @@ func TestConnectorResetPreservesRecordedTerminalError(t *testing.T) {
 	require.NotErrorIs(t, info, process.ErrPipelineEndSignalDeliveryFailed)
 }
 
-func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
+func TestConnectorResetEndDoesNotWaitForChannelCapacity(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -276,9 +284,9 @@ func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
 	select {
 	case <-reg.Done():
 	default:
-		t.Fatal("fallback abort should mark the receiver edge terminal")
+		t.Fatal("durable End should mark the receiver edge terminal")
 	}
-	require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, reg.Err())
 }
 
 func TestConnectorResetFailedNilErrorSendsTypedErrorWithCause(t *testing.T) {
