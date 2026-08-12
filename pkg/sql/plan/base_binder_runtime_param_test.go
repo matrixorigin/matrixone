@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -95,6 +96,31 @@ func TestRuntimeBooleanDecimalComparisonUsesExactIntegerDomain(t *testing.T) {
 	}
 }
 
+func TestRuntimeFloatDecimalComparisonsKeepExactDecimalDomain(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, operator := range []string{"=", "<=>", "!=", "<", "<=", ">", ">="} {
+		for _, reversed := range []bool{false, true} {
+			t.Run(operator+strconv.FormatBool(reversed), func(t *testing.T) {
+				column := &planpb.Expr{
+					Typ:  MakePlan2Type(&decimalType),
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+				}
+				value := makePlan2Float64ConstExprWithType(9007199254740992)
+				value.ExactDecimalParam = true
+				args := []*planpb.Expr{column, value}
+				if reversed {
+					args[0], args[1] = args[1], args[0]
+				}
+				expr, err := BindFuncExprImplByPlanExpr(context.Background(), operator, args)
+				require.NoError(t, err)
+				for _, arg := range expr.GetF().Args {
+					require.True(t, types.T(arg.Typ.Id).IsDecimal(), arg.String())
+				}
+			})
+		}
+	}
+}
+
 func TestRuntimeRangeWithStaticStringUsesOneRealDomain(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	column := &planpb.Expr{
@@ -167,6 +193,135 @@ func TestRuntimeParamRebuildBindsMixedINBeforeOptimization(t *testing.T) {
 			require.False(t, exprContainsParam(expression), expression.String())
 		}
 	}
+}
+
+func TestRuntimeRebuildPreservesUnmaterializedProtocolPositions(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"9007199254740992.0001", "7"} {
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+	}
+	proc.SetOwnedPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{
+		vector.PrepareParamNone,
+		vector.PrepareParamInteger,
+	})
+
+	compilerCtx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	compilerCtx.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+	compilerCtx.GetProcessFunc = func() *process.Process { return proc }
+	compilerCtx.SetContext(WithPrepareRuntimeParams(context.Background(), 0))
+	stmt, err := parsers.ParseOne(
+		compilerCtx.GetContext(), dialect.MYSQL,
+		"prepare p from 'select p_partkey from part where p_retailprice = ? and p_partkey = ?'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	rebuilt, err := BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, runtimePlanParamPositions(rebuilt.GetDcl().GetPrepare().GetPlan()))
+}
+
+func TestRuntimeTupleINAstKeepsDecimalDomainForFloatParam(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("9007199254740992"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+
+	compilerCtx := NewMockCompilerContext(true)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	compilerCtx.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+	compilerCtx.GetProcessFunc = func() *process.Process { return proc }
+	compilerCtx.SetContext(WithPrepareRuntimeParams(context.Background(), 0))
+	stmt, err := parsers.ParseOne(
+		compilerCtx.GetContext(), dialect.MYSQL,
+		"prepare p from 'select p_partkey from part where (p_retailprice,p_partkey) in ((?,3))'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	rebuilt, err := BuildPlan(compilerCtx, stmt, false)
+	require.NoError(t, err)
+	foundDecimalComparison := false
+	for _, node := range rebuilt.GetDcl().GetPrepare().GetPlan().GetQuery().Nodes {
+		for _, filter := range node.FilterList {
+			require.False(t, decimalExpressionCastsToFloat(filter), filter.String())
+			foundDecimalComparison = foundDecimalComparison || decimalComparisonUsesExactDomain(filter)
+		}
+	}
+	require.True(t, foundDecimalComparison)
+}
+
+func decimalComparisonUsesExactDomain(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "=" && len(fn.Args) == 2 &&
+			types.T(fn.Args[0].Typ.Id).IsDecimal() && types.T(fn.Args[1].Typ.Id).IsDecimal() {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if decimalComparisonUsesExactDomain(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func decimalExpressionCastsToFloat(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+			types.T(fn.Args[0].Typ.Id).IsDecimal() && types.T(expr.Typ.Id) == types.T_float64 {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if decimalExpressionCastsToFloat(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if decimalExpressionCastsToFloat(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runtimePlanParamPositions(p *planpb.Plan) []int32 {
+	positions := make([]int32, 0)
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		if param := expr.GetP(); param != nil {
+			positions = append(positions, param.Pos)
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	query := p.GetQuery()
+	for _, node := range query.Nodes {
+		for _, expr := range append(append([]*planpb.Expr{}, node.ProjectList...), node.FilterList...) {
+			visit(expr)
+		}
+	}
+	return positions
 }
 
 func exprContainsParam(expr *planpb.Expr) bool {

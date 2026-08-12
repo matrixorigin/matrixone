@@ -2810,7 +2810,8 @@ func resetPreparePlan(
 			return nil, nil, err
 		}
 
-		getParamRule.SetParamOrder()
+		_, preserveProtocolPositions := ctx.GetContext().Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams)
+		getParamRule.SetParamOrder(preserveProtocolPositions)
 		args := getParamRule.params
 		querySchemas, err := resolveIndexDependencies(getParamRule)
 		if err != nil {
@@ -2874,7 +2875,8 @@ func resetPreparePlan(
 				return nil, nil, err
 			}
 		}
-		getParamRule.SetParamOrder()
+		_, preserveProtocolPositions := ctx.GetContext().Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams)
+		getParamRule.SetParamOrder(preserveProtocolPositions)
 		resetRule := NewResetParamOrderRule(getParamRule.params)
 		for _, item := range setVars.Items {
 			var err error
@@ -3203,7 +3205,10 @@ func FillExactDecimalComparisonParamsInPlan(ctx context.Context, preparePlan *Pl
 	}
 	params := makePrepareParamExprs(paramVals)
 	realGroups := make(map[int32]bool)
-	domainRule := &findPreparedDecimalGroupDomainsRule{params: params, realGroups: realGroups}
+	domainRule := &findPreparedDecimalGroupDomainsRule{
+		params: params, realGroups: realGroups,
+		floatGroups: make(map[int32]bool), stringGroups: make(map[int32]bool),
+	}
 	if err := NewVisitPlan(copied, []VisitPlanRule{domainRule}).Visit(ctx); err != nil {
 		return nil, err
 	}

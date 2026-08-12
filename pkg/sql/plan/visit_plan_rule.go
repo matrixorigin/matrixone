@@ -216,17 +216,26 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
-func (rule *GetParamRule) SetParamOrder() {
+func (rule *GetParamRule) SetParamOrder(preserveProtocolPositions ...bool) {
 	argPos := []int{}
 	for pos := range rule.params {
 		argPos = append(argPos, pos)
 	}
 	sort.Ints(argPos)
-	rule.paramTypes = make([]int32, len(argPos))
+	preserve := len(preserveProtocolPositions) > 0 && preserveProtocolPositions[0]
+	paramCount := len(argPos)
+	if preserve && len(argPos) > 0 {
+		paramCount = argPos[len(argPos)-1]
+	}
+	rule.paramTypes = make([]int32, paramCount)
 
 	for idx, pos := range argPos {
-		rule.params[pos] = idx
-		rule.paramTypes[idx] = rule.mapTypes[pos]
+		target := idx
+		if preserve {
+			target = pos - 1
+		}
+		rule.params[pos] = target
+		rule.paramTypes[target] = rule.mapTypes[pos]
 	}
 }
 
@@ -576,9 +585,11 @@ func (rule *ResetParamRefRule) preparedDecimalComparisonValue(expr *plan.Expr) (
 			} else {
 				numericValue = "0"
 			}
+		case *plan.Literal_Dval:
+			numericValue = strconv.FormatFloat(value.Dval, 'g', -1, 64)
+		case *plan.Literal_Fval:
+			numericValue = strconv.FormatFloat(float64(value.Fval), 'g', -1, 32)
 		default:
-			// FLOAT/DOUBLE retain the protocol REAL domain. The enclosing
-			// comparison, and any marked BETWEEN/IN group, will be rebound.
 			raw.ExactDecimalParam = true
 			return raw, true, nil
 		}
@@ -647,6 +658,8 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 	}
 	count := 0
 	real := false
+	hasFloat := false
+	hasString := false
 	for _, item := range fn.Args[1].GetList().List {
 		cast, ok := preparedDecimalComparisonCast(item)
 		if !ok {
@@ -654,11 +667,14 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 		}
 		count++
 		pos := int(cast.Args[0].GetP().Pos)
-		if pos >= 0 && pos < len(params) && preparedDecimalParamRequiresReal(params[pos]) {
-			real = true
+		if pos >= 0 && pos < len(params) {
+			paramType := types.T(params[pos].Typ.Id)
+			hasFloat = hasFloat || paramType == types.T_float32 || paramType == types.T_float64
+			hasString = hasString || paramType.IsMySQLString()
+			real = real || preparedDecimalParamRequiresReal(params[pos])
 		}
 	}
-	return count > 1, real
+	return count > 1, real || hasFloat && hasString
 }
 
 func preparedDecimalGroupNeedsReal(expr *plan.Expr) bool {
@@ -721,8 +737,10 @@ func rebindPreparedDecimalGroupAsReal(ctx context.Context, expr *plan.Expr) (*pl
 }
 
 type findPreparedDecimalGroupDomainsRule struct {
-	params     []*Expr
-	realGroups map[int32]bool
+	params       []*Expr
+	realGroups   map[int32]bool
+	floatGroups  map[int32]bool
+	stringGroups map[int32]bool
 }
 
 func (rule *findPreparedDecimalGroupDomainsRule) MatchNode(_ *Node) bool { return false }
@@ -735,8 +753,14 @@ func (rule *findPreparedDecimalGroupDomainsRule) ApplyExpr(expr *plan.Expr) (*pl
 	if expr == nil {
 		return nil, nil
 	}
-	if group := expr.ExactDecimalGroup; group != 0 && preparedDecimalGroupHasRealParam(expr, rule.params) {
-		rule.realGroups[group] = true
+	if group := expr.ExactDecimalGroup; group != 0 {
+		hasFloat, hasString := preparedDecimalGroupParamKinds(expr, rule.params)
+		rule.floatGroups[group] = rule.floatGroups[group] || hasFloat
+		rule.stringGroups[group] = rule.stringGroups[group] || hasString
+		if preparedDecimalGroupHasRealParam(expr, rule.params) ||
+			rule.floatGroups[group] && rule.stringGroups[group] {
+			rule.realGroups[group] = true
+		}
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
@@ -752,6 +776,31 @@ func (rule *findPreparedDecimalGroupDomainsRule) ApplyExpr(expr *plan.Expr) (*pl
 		}
 	}
 	return expr, nil
+}
+
+func preparedDecimalGroupParamKinds(expr *plan.Expr, params []*Expr) (hasFloat, hasString bool) {
+	if cast, ok := preparedDecimalComparisonCast(expr); ok {
+		pos := int(cast.Args[0].GetP().Pos)
+		if pos >= 0 && pos < len(params) {
+			typ := types.T(params[pos].Typ.Id)
+			return typ == types.T_float32 || typ == types.T_float64, typ.IsMySQLString()
+		}
+	}
+	visit := func(arg *plan.Expr) {
+		argFloat, argString := preparedDecimalGroupParamKinds(arg, params)
+		hasFloat = hasFloat || argFloat
+		hasString = hasString || argString
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			visit(arg)
+		}
+	} else if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			visit(item)
+		}
+	}
+	return hasFloat, hasString
 }
 
 func preparedDecimalGroupHasRealParam(expr *plan.Expr, params []*Expr) bool {
@@ -782,9 +831,6 @@ func preparedDecimalParamRequiresReal(param *Expr) bool {
 		return false
 	}
 	typ := types.T(param.Typ.Id)
-	if typ == types.T_float32 || typ == types.T_float64 {
-		return true
-	}
 	if literal := param.GetLit(); literal != nil && literal.IsBin {
 		return true
 	}

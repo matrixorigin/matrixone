@@ -434,7 +434,7 @@ func TestFillExactDecimalComparisonLeavesOtherParamsForRuntimeTyping(t *testing.
 		findPreparedDecimalComparisonInPlan(prepared, "=")))
 }
 
-func TestFillExactDecimalComparisonPreservesFloatProtocolDomain(t *testing.T) {
+func TestFillExactDecimalComparisonPromotesFloatToExactDecimalDomain(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
@@ -456,7 +456,7 @@ func TestFillExactDecimalComparisonPreservesFloatProtocolDomain(t *testing.T) {
 	rewritten := findPreparedDecimalComparisonInPlan(filled, "=")
 	require.NotNil(t, rewritten)
 	for _, arg := range rewritten.GetF().Args {
-		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), arg.String())
 	}
 	require.False(t, planExprContainsPreparedDecimalParam(rewritten))
 }

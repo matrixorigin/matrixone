@@ -950,18 +950,25 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 	hasDecimal := false
 	hasRuntime := false
 	useReal := false
+	hasRuntimeFloat := false
+	hasRuntimeNonFloat := false
 	for _, operand := range operands {
 		typ := types.T(operand.Typ.Id)
 		hasDecimal = hasDecimal || typ.IsDecimal()
 		if operand.ExactDecimalParam {
 			hasRuntime = true
-			useReal = useReal || typ == types.T_float32 || typ == types.T_float64
+			if typ == types.T_float32 || typ == types.T_float64 {
+				hasRuntimeFloat = true
+			} else {
+				hasRuntimeNonFloat = true
+			}
 		} else if typ.IsMySQLString() {
 			// A static string peer and a runtime parameter select one shared REAL
 			// domain for the three-operand BETWEEN operation.
 			useReal = true
 		}
 	}
+	useReal = useReal || hasRuntimeFloat && hasRuntimeNonFloat
 	if !hasDecimal || !hasRuntime {
 		return false, nil
 	}
@@ -5347,18 +5354,6 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 
 	for paramPos, peerPos := range []int{1, 0} {
 		if args[paramPos].ExactDecimalParam && types.T(args[peerPos].Typ.Id).IsDecimal() {
-			paramType := types.T(args[paramPos].Typ.Id)
-			if paramType == types.T_float32 || paramType == types.T_float64 {
-				floatType := types.T_float64.ToType()
-				target := makePlan2Type(&floatType)
-				var err error
-				args[paramPos], err = appendCastBeforeExpr(ctx, args[paramPos], target)
-				if err != nil {
-					return err
-				}
-				args[peerPos], err = appendCastBeforeExpr(ctx, args[peerPos], target)
-				return err
-			}
 			normalized, err := normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
 			if err != nil {
 				return err
