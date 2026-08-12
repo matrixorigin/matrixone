@@ -155,6 +155,24 @@ func TestDedupUpdateIsFilterPushdownBoundary(t *testing.T) {
 		"non-mutating DEDUP actions must retain their existing one-side pushdown")
 }
 
+func TestAsofConstantFilterPushesOnlyToProbeSide(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	leftTag := builder.GenNewBindTag()
+	rightTag := builder.GenNewBindTag()
+	filter := MakePlan2BoolConstExprWithType(false)
+	builder.qry.Nodes = []*plan.Node{
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{leftTag}},
+		{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{rightTag}},
+		{NodeType: plan.Node_JOIN, JoinType: plan.Node_ASOF_LEFT, Children: []int32{0, 1}},
+	}
+
+	_, cantPushdown := builder.pushdownFilters(2, []*plan.Expr{filter}, false)
+	require.Empty(t, cantPushdown)
+	require.Len(t, builder.qry.Nodes[0].FilterList, 1)
+	require.Empty(t, builder.qry.Nodes[1].FilterList)
+}
+
 func setupLeftJoinBase(t *testing.T) (*MockCompilerContext, *QueryBuilder, *plan.Expr, *plan.Expr, *plan.Expr) {
 	t.Helper()
 

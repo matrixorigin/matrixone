@@ -165,6 +165,36 @@ func TestString(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
+
+	for _, test := range []struct {
+		joinType plan.Node_JoinType
+		want     string
+	}{
+		{joinType: plan.Node_ASOF, want: ": asof join "},
+		{joinType: plan.Node_ASOF_LEFT, want: ": asof left join "},
+	} {
+		buf.Reset()
+		arg := NewArgument()
+		arg.JoinType = test.joinType
+		arg.String(buf)
+		require.Contains(t, buf.String(), test.want)
+		arg.Release()
+	}
+}
+
+func TestAsofPhysicalContractValidation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	arg := NewArgument()
+	arg.JoinType = plan.Node_ASOF
+	require.ErrorContains(t, arg.Prepare(proc), "invalid ASOF join physical contract")
+	arg.Release()
+
+	for _, typ := range []types.T{types.T_date, types.T_datetime, types.T_timestamp, types.T_time} {
+		require.True(t, isAsofTemporalType(typ))
+	}
+	require.False(t, isAsofTemporalType(types.T_int64))
 }
 
 func TestJoin(t *testing.T) {
@@ -1417,6 +1447,14 @@ func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch)
 func TestHashJoinTypeName(t *testing.T) {
 	arg := NewArgument()
 	require.Equal(t, "hash_join", arg.TypeName())
+	arg.Release()
+}
+
+func TestAsofNeedsBuildBatches(t *testing.T) {
+	arg := NewArgument()
+	arg.JoinType = plan.Node_ASOF
+	require.True(t, arg.NeedBuildBatches())
+	require.True(t, arg.IsAsof())
 	arg.Release()
 }
 

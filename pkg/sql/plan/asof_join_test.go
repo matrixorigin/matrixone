@@ -41,6 +41,14 @@ func TestBuildAsofJoin(t *testing.T) {
 	require.Equal(t, int32(1), join.AsofRightCol)
 	// equality key, temporal predecessor predicate, and tolerance lower bound
 	require.Len(t, join.OnList, 3)
+
+	commuted, err := runOneStmt(NewMockOptimizer(false), t,
+		"select * from "+
+			"(select 1 k, cast('2026-01-01' as timestamp) ts) l "+
+			"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r "+
+			"on r.k = l.k and r.ts <= l.ts")
+	require.NoError(t, err)
+	require.NotNil(t, commuted)
 }
 
 func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
@@ -69,6 +77,45 @@ func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
 				"on l.k = r.k and l.ts >= r.ts and l.ts > r.ts",
 			want: "exactly one temporal inequality",
 		},
+		{
+			name: "missing temporal predicate",
+			sql: "select * from (select 1 k) l asof join (select 1 k) r " +
+				"on l.k = r.k",
+			want: "exactly one temporal inequality",
+		},
+		{
+			name: "predicate stays on left input",
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
+				"on l.k = r.k and l.ts >= l.ts",
+			want: "must compare the left and right inputs",
+		},
+		{
+			name: "temporal operand is not a column",
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
+				"on l.k = r.k and date_add(l.ts, interval 1 second) >= r.ts",
+			want: "temporal operands must be columns",
+		},
+		{
+			name: "temporal type coercion is not a column",
+			sql: "select * from (select 1 k, cast('2026-01-01' as date) ts) l " +
+				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
+				"on l.k = r.k and l.ts >= r.ts",
+			want: "temporal operands must be columns",
+		},
+		{
+			name: "nonconstant tolerance",
+			sql: "select * from (select 1 k, cast('2026-01-01' as timestamp) ts) l " +
+				"asof join (select 1 k, cast('2026-01-01' as timestamp) ts) r " +
+				"on l.k = r.k and l.ts >= r.ts tolerance interval l.k minute",
+			want: "TOLERANCE must be a constant interval",
+		},
+		{
+			name: "using clause",
+			sql:  "select * from (select 1 k) l asof join (select 1 k) r using (k)",
+			want: "requires an ON clause",
+		},
 	}
 
 	for _, test := range tests {
@@ -77,4 +124,30 @@ func TestBuildAsofJoinRejectsInvalidContracts(t *testing.T) {
 			require.ErrorContains(t, err, test.want)
 		})
 	}
+}
+
+func TestRefreshAsofRightColAfterRemap(t *testing.T) {
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rel, ColPos: pos}}}
+	}
+	condition := func(op string, left, right *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: op}, Args: []*planpb.Expr{left, right},
+		}}}
+	}
+
+	node := &planpb.Node{OnList: []*planpb.Expr{
+		{},
+		condition("=", col(0, 0), col(1, 0)),
+		condition(">=", col(0, 1), col(1, 7)),
+	}}
+	require.NoError(t, refreshAsofRightColAfterRemap(node))
+	require.Equal(t, int32(7), node.AsofRightCol)
+
+	node.OnList = []*planpb.Expr{condition("<=", col(1, 4), col(0, 1))}
+	require.NoError(t, refreshAsofRightColAfterRemap(node))
+	require.Equal(t, int32(4), node.AsofRightCol)
+
+	node.OnList = []*planpb.Expr{condition("=", col(0, 0), col(1, 0))}
+	require.ErrorContains(t, refreshAsofRightColAfterRemap(node), "was lost")
 }
