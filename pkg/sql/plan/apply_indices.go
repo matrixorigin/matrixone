@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
@@ -510,7 +512,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
-			if indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -2462,9 +2464,9 @@ const (
 )
 
 type encodedIndexFilterFact struct {
-	refs         []int32
-	directCol    int32
-	dynamicRange bool
+	refs               []int32
+	directCol          int32
+	unknownRangeBounds bool
 }
 
 type encodedRegularIndexCostContext struct {
@@ -2482,6 +2484,7 @@ type encodedRegularIndexCostContext struct {
 	outputWidth   float64
 	outputCols    int
 	baseWork      float64
+	baseUpperWork float64
 
 	columnWidths []float64
 	serialWidths []float64
@@ -2495,6 +2498,8 @@ type encodedRegularIndexCostContext struct {
 	lowerFilters []int32
 	upperFilters []int32
 	requiredCols []int32
+
+	unknownRangeLowerSelectivities map[int32]float64
 
 	leadingFilters []bool
 	coveredCols    []bool
@@ -2677,9 +2682,10 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	ctx.relPos = node.BindingTags[0]
 	ctx.force = builder.scanHintsForceIndexes(node)
 	ctx.statsTableCnt = node.Stats.TableCnt
+	var statsInfo *statspb.StatsInfo
 	var sizeMap map[string]uint64
 	if wrapper := builder.getStatsInfoByTableID(node.TableDef.TblId); wrapper != nil && wrapper.GetStats() != nil {
-		statsInfo := wrapper.GetStats()
+		statsInfo = wrapper.GetStats()
 		if finitePositive(statsInfo.TableCnt) {
 			ctx.statsTableCnt = statsInfo.TableCnt
 			sizeMap = statsInfo.SizeMap
@@ -2717,7 +2723,16 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	for filterIdx, filter := range node.FilterList {
 		fact := &ctx.filterFacts[filterIdx]
 		fact.directCol = directEncodedIndexFilterCol(filter, ctx.relPos, numCols)
-		fact.dynamicRange = encodedRegularIndexHasDynamicRange(filter)
+		if containsDynamicParam(filter) {
+			lowerSelectivity, hasUnknownBounds := encodedRegularIndexRangeLowerSelectivity(filter, builder, statsInfo)
+			fact.unknownRangeBounds = hasUnknownBounds
+			if hasUnknownBounds {
+				if ctx.unknownRangeLowerSelectivities == nil {
+					ctx.unknownRangeLowerSelectivities = make(map[int32]float64)
+				}
+				ctx.unknownRangeLowerSelectivities[int32(filterIdx)] = lowerSelectivity
+			}
+		}
 		collectEncodedIndexFilterFact(filter, ctx.relPos, fact, ctx.filterRefs)
 		filterType, col := checkIndexFilter(filter.GetF())
 		if col != nil && col.ColPos >= 0 && int(col.ColPos) < numCols {
@@ -2757,6 +2772,17 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		}
 	}
 	ctx.baseRows = max(node.Stats.Outcnt, node.Stats.Cost)
+	if node.Stats.BlockNum > 0 {
+		// Cost is TableCnt * estimated block selectivity, while BlockNum is the
+		// block-granular scan estimate. Charge selected blocks at the same
+		// BlockMaxRows granularity used by scan pagination and runtime-filter stats,
+		// without exceeding the table cardinality.
+		selectedBlockRows := min(
+			node.Stats.TableCnt,
+			float64(node.Stats.BlockNum)*float64(objectio.BlockMaxRows),
+		)
+		ctx.baseRows = max(ctx.baseRows, selectedBlockRows)
+	}
 	ctx.outputRows = max(0, node.Stats.Outcnt)
 	ctx.valid = finitePositive(node.Stats.TableCnt) && finitePositive(node.Stats.Cost) &&
 		!math.IsNaN(node.Stats.Outcnt) && !math.IsInf(node.Stats.Outcnt, 0) && node.Stats.Outcnt >= 0 &&
@@ -2765,8 +2791,10 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		// The control is the column-pruned storage read already represented by
 		// Stats.Cost. Candidate-only stages below are additive work that the
 		// control does not perform.
-		ctx.baseWork = ctx.baseRows * (ctx.baseWidth + float64(len(node.FilterList))*regularIndexPredicateRowWork)
-		ctx.valid = finitePositive(ctx.baseWork)
+		baseRowWork := ctx.baseWidth + float64(len(node.FilterList))*regularIndexPredicateRowWork
+		ctx.baseWork = ctx.baseRows * baseRowWork
+		ctx.baseUpperWork = max(ctx.baseWork, node.Stats.TableCnt*baseRowWork)
+		ctx.valid = finitePositive(ctx.baseWork) && finitePositive(ctx.baseUpperWork)
 	}
 	return ctx
 }
@@ -2902,20 +2930,48 @@ func (ctx *encodedRegularIndexCostContext) addExtractRef(colPos int32, compound 
 	}
 }
 
-func encodedRegularIndexHasDynamicRange(filter *plan.Expr) bool {
+func encodedRegularIndexRangeLowerSelectivity(
+	filter *plan.Expr,
+	builder *QueryBuilder,
+	statsInfo *statspb.StatsInfo,
+) (lower float64, hasUnknownBounds bool) {
 	if filter == nil {
-		return false
+		return 1, false
+	}
+	if !containsDynamicParam(filter) {
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	}
 	fn := filter.GetF()
-	if fn == nil || fn.Func == nil || !containsDynamicParam(filter) {
-		return false
+	if fn == nil || fn.Func == nil {
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	}
+
 	switch fn.Func.ObjName {
-	case ">", ">=", "<", "<=", "between", "in_range", "or":
-		return true
+	case ">", ">=", "<", "<=", "between", "in_range":
+		return 0, true
+	case "or":
+		for _, arg := range fn.Args {
+			argLower, argUnknown := encodedRegularIndexRangeLowerSelectivity(arg, builder, statsInfo)
+			lower = max(lower, argLower)
+			hasUnknownBounds = hasUnknownBounds || argUnknown
+		}
+		if hasUnknownBounds {
+			// Every OR result contains each stable child result. The largest child
+			// estimate is therefore conservative without assuming that known
+			// branches are disjoint. Cap it at the parent estimate so stale child
+			// statistics cannot make the lower estimate exceed the ranking point.
+			return min(lower, estimateExprSelectivity(filter, builder, statsInfo)), true
+		}
+		return estimateExprSelectivity(filter, builder, statsInfo), false
 	default:
-		return false
+		for _, arg := range fn.Args {
+			if _, argUnknown := encodedRegularIndexRangeLowerSelectivity(arg, builder, statsInfo); argUnknown {
+				// No non-OR parent guarantees that an unknown range preserves rows.
+				return 0, true
+			}
+		}
 	}
+	return estimateExprSelectivity(filter, builder, statsInfo), false
 }
 
 func (ctx *encodedRegularIndexCostContext) score(
@@ -2962,6 +3018,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	}
 
 	candidateSelectivity := 1.0
+	lowerCandidateSelectivity := 1.0
 	for _, pos := range leadingPos {
 		if pos < 0 || int(pos) >= len(ctx.node.FilterList) {
 			ctx.resetScratch()
@@ -2971,22 +3028,31 @@ func (ctx *encodedRegularIndexCostContext) score(
 			continue
 		}
 		selectivity := ctx.node.FilterList[pos].Selectivity
-		if ctx.filterFacts[pos].dynamicRange {
+		lowerSelectivity := selectivity
+		if ctx.filterFacts[pos].unknownRangeBounds {
 			// PREPARE has no range-bound values. The stats layer's optimistic dynamic
 			// estimate keeps parameterized ranges usable, but it is too speculative to
 			// rank one physical index ahead of a sibling with an NDV-backed equality.
 			// Use the same neutral fallback as an otherwise unknown range estimate.
 			selectivity = max(selectivity, regularIndexUnknownRangeSel)
+			// Without the bound values there is no comparable absolute cardinality
+			// estimate for this access path. Keep the estimate for relative index
+			// ranking, but do not use it to eliminate every index candidate.
+			lowerSelectivity = ctx.unknownRangeLowerSelectivities[pos]
 		}
-		if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+		if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 ||
+			math.IsNaN(lowerSelectivity) || math.IsInf(lowerSelectivity, 0) || lowerSelectivity < 0 || lowerSelectivity > 1 {
 			ctx.resetScratch()
 			return 0, false, false
 		}
 		ctx.leadingFilters[pos] = true
 		ctx.touchedLeading = append(ctx.touchedLeading, pos)
 		candidateSelectivity *= selectivity
+		lowerCandidateSelectivity *= lowerSelectivity
 	}
-	candidateRows := max(ctx.outputRows, ctx.node.Stats.TableCnt*candidateSelectivity)
+	leadingCandidateRows := ctx.node.Stats.TableCnt * candidateSelectivity
+	lowerCandidateRows := ctx.node.Stats.TableCnt * lowerCandidateSelectivity
+	candidateRows := max(ctx.outputRows, leadingCandidateRows)
 	if !finitePositive(candidateRows) {
 		ctx.resetScratch()
 		return 0, false, false
@@ -3010,6 +3076,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	}
 
 	hiddenRows := ctx.outputRows
+	lowerHiddenRows := 0.0
 	hiddenFilterCount := 1
 	if shape == encodedRegularIndexCostIndexOnly {
 		for filterIdx, fact := range ctx.filterFacts {
@@ -3025,9 +3092,28 @@ func (ctx *encodedRegularIndexCostContext) score(
 				ctx.addExtractRef(colPos, false)
 			}
 		}
+		if len(ctx.unknownRangeLowerSelectivities) > 0 {
+			lowerHiddenSelectivity := lowerCandidateSelectivity
+			for filterIdx, fact := range ctx.filterFacts {
+				if ctx.leadingFilters[filterIdx] {
+					continue
+				}
+				selectivity := ctx.node.FilterList[filterIdx].Selectivity
+				if fact.unknownRangeBounds {
+					selectivity = ctx.unknownRangeLowerSelectivities[int32(filterIdx)]
+				}
+				if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+					ctx.resetScratch()
+					return 0, false, false
+				}
+				lowerHiddenSelectivity *= selectivity
+			}
+			lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
+		}
 	} else {
 		prefixLengths, prefixErr := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		hiddenSelectivity := candidateSelectivity
+		lowerHiddenSelectivity := lowerCandidateSelectivity
 		for filterIdx, fact := range ctx.filterFacts {
 			if ctx.leadingFilters[filterIdx] || fact.directCol < 0 {
 				continue
@@ -3054,14 +3140,21 @@ func (ctx *encodedRegularIndexCostContext) score(
 				continue
 			}
 			selectivity := ctx.node.FilterList[filterIdx].Selectivity
-			if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 {
+			lowerSelectivity := selectivity
+			if fact.unknownRangeBounds {
+				lowerSelectivity = ctx.unknownRangeLowerSelectivities[int32(filterIdx)]
+			}
+			if math.IsNaN(selectivity) || math.IsInf(selectivity, 0) || selectivity < 0 || selectivity > 1 ||
+				math.IsNaN(lowerSelectivity) || math.IsInf(lowerSelectivity, 0) || lowerSelectivity < 0 || lowerSelectivity > 1 {
 				ctx.resetScratch()
 				return 0, false, false
 			}
 			hiddenSelectivity *= selectivity
+			lowerHiddenSelectivity *= lowerSelectivity
 			hiddenFilterCount++
 		}
 		hiddenRows = max(ctx.outputRows, ctx.node.Stats.TableCnt*hiddenSelectivity)
+		lowerHiddenRows = ctx.node.Stats.TableCnt * lowerHiddenSelectivity
 	}
 	if math.IsNaN(hiddenRows) || math.IsInf(hiddenRows, 0) || hiddenRows < 0 {
 		ctx.resetScratch()
@@ -3087,63 +3180,80 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if shape == encodedRegularIndexCostBackfill || needsPhysicalPK {
 		hiddenInputWidth += pkWidth
 	}
-	hiddenScanInput := candidateRows * hiddenInputWidth
 	hiddenOutputWidth := ctx.baseWidth
 	if shape == encodedRegularIndexCostBackfill {
 		hiddenOutputWidth = pkWidth
 	}
-	hiddenScanOutput := hiddenRows * hiddenOutputWidth
-	hiddenPredicates := candidateRows * float64(hiddenFilterCount) * regularIndexPredicateRowWork
-	indexWork := hiddenScanInput + hiddenScanOutput + hiddenPredicates
+	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, bool) {
+		hiddenScanInput := candidateRows * hiddenInputWidth
+		hiddenScanOutput := hiddenRows * hiddenOutputWidth
+		hiddenPredicates := candidateRows * float64(hiddenFilterCount) * regularIndexPredicateRowWork
+		indexWork := hiddenScanInput + hiddenScanOutput + hiddenPredicates
 
-	prefixWidth := 0.0
-	for partPos, part := range idxDef.Parts {
-		prefixWidth += ctx.partWidths[partPos]
-		colPos := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
-		if ctx.partPositions[colPos] != partPos {
-			continue
-		}
-		if shape == encodedRegularIndexCostIndexOnly {
-			totalRefs := max(ctx.colRefCnt[[2]int32{ctx.relPos, colPos}], ctx.filterRefs[colPos])
-			downstreamRefs := max(0, totalRefs-ctx.filterRefs[colPos])
-			if len(idxDef.Parts) > 1 && colPos != pkIdx {
+		prefixWidth := 0.0
+		for partPos, part := range idxDef.Parts {
+			prefixWidth += ctx.partWidths[partPos]
+			colPos := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+			if ctx.partPositions[colPos] != partPos {
+				continue
+			}
+			if shape == encodedRegularIndexCostIndexOnly {
+				totalRefs := max(ctx.colRefCnt[[2]int32{ctx.relPos, colPos}], ctx.filterRefs[colPos])
+				downstreamRefs := max(0, totalRefs-ctx.filterRefs[colPos])
+				if len(idxDef.Parts) > 1 && colPos != pkIdx {
+					extractWork := prefixWidth + ctx.columnWidths[colPos]
+					indexWork += candidateRows * float64(ctx.extractRefs[colPos]) * extractWork
+					indexWork += outputRows * float64(downstreamRefs) * extractWork
+				}
+			} else if refs := ctx.extractRefs[colPos]; refs > 0 {
 				extractWork := prefixWidth + ctx.columnWidths[colPos]
-				indexWork += candidateRows * float64(ctx.extractRefs[colPos]) * extractWork
-				indexWork += ctx.outputRows * float64(downstreamRefs) * extractWork
-			}
-		} else if refs := ctx.extractRefs[colPos]; refs > 0 {
-			extractWork := prefixWidth + ctx.columnWidths[colPos]
-			indexWork += candidateRows * float64(refs) * extractWork
-		}
-	}
-
-	if shape == encodedRegularIndexCostBackfill {
-		compoundPrefixWidth := 0.0
-		for _, name := range ctx.node.TableDef.Pkey.Names {
-			componentIdx, ok := ctx.node.TableDef.Name2ColIndex[name]
-			if !ok || componentIdx < 0 || int(componentIdx) >= len(ctx.columnWidths) {
-				ctx.resetScratch()
-				return 0, false, false
-			}
-			compoundPrefixWidth += ctx.serialWidths[componentIdx]
-			if refs := ctx.compoundRefs[componentIdx]; refs > 0 {
-				extractWork := compoundPrefixWidth + ctx.columnWidths[componentIdx]
 				indexWork += candidateRows * float64(refs) * extractWork
 			}
 		}
 
-		// The hidden output already accounts for transferring each physical PK.
-		// Charge the targeted base lookup once more as a per-key operation.
-		pkBackfill := hiddenRows * regularIndexPredicateRowWork
-		baseChildInput := hiddenRows * ctx.baseWidth
-		baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
-		joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
-		joinRows := ctx.outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
-		indexWork += pkBackfill + baseChildInput + baseChildPredicates + joinFixed + joinRows
+		if shape == encodedRegularIndexCostBackfill {
+			compoundPrefixWidth := 0.0
+			for _, name := range ctx.node.TableDef.Pkey.Names {
+				componentIdx, ok := ctx.node.TableDef.Name2ColIndex[name]
+				if !ok || componentIdx < 0 || int(componentIdx) >= len(ctx.columnWidths) {
+					return 0, false
+				}
+				compoundPrefixWidth += ctx.serialWidths[componentIdx]
+				if refs := ctx.compoundRefs[componentIdx]; refs > 0 {
+					extractWork := compoundPrefixWidth + ctx.columnWidths[componentIdx]
+					indexWork += candidateRows * float64(refs) * extractWork
+				}
+			}
+
+			// The hidden output already accounts for transferring each physical PK.
+			// Charge the targeted base lookup once more as a per-key operation.
+			pkBackfill := hiddenRows * regularIndexPredicateRowWork
+			baseChildInput := hiddenRows * ctx.baseWidth
+			baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
+			joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
+			joinRows := outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
+			indexWork += pkBackfill + baseChildInput + baseChildPredicates + joinFixed + joinRows
+		}
+
+		valid := !math.IsNaN(indexWork) && !math.IsInf(indexWork, 0) && indexWork >= 0
+		return indexWork, valid
 	}
 
-	validWork := !math.IsNaN(indexWork) && !math.IsInf(indexWork, 0) && indexWork >= 0
-	shouldReject = len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000 && !ctx.force && validWork && indexWork >= ctx.baseWork
+	indexWork, validWork := calculateWork(candidateRows, hiddenRows, ctx.outputRows)
+	rejectionWork := indexWork
+	baseComparisonWork := ctx.baseWork
+	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
+		// Compare uncertainty intervals instead of the ranking point estimate. An
+		// unbound leading range may be empty, while an unbound residual can reduce
+		// hidden rows only when this candidate can evaluate it before backfill.
+		// Retain every stage whose work is independent of the unknown values. The
+		// base upper bound is a complete column-pruned table scan. Rejection is safe
+		// only when the index lower bound still dominates that upper bound.
+		rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, 0)
+		baseComparisonWork = ctx.baseUpperWork
+	}
+	shouldReject = len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000 && !ctx.force &&
+		validWork && rejectionWork >= baseComparisonWork
 	ctx.resetScratch()
 	if !validWork {
 		return 0, false, false
@@ -4080,7 +4190,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	indexes := builder.filterRegularIndexesByJoinHints(leftChild, leftChild.TableDef.Indexes)
 	condIdx := make([]indexJoinCondition, 0, len(col2Cond))
 	for _, idxDef := range indexes {
-		if !idxDef.TableExist ||
+		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
 			isSpatialIndexDef(idxDef) ||
 			!regularIndexPrefixMetadataUsable(idxDef) ||

@@ -460,7 +460,7 @@ func tableScanHasSingleRowFilter(node *plan.Node) bool {
 		}
 	}
 	for _, idx := range node.TableDef.Indexes {
-		if idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
+		if idx != nil && idx.Unique && filterListHasConstEqualityOnCols(node.FilterList, node.TableDef, tag, idx.Parts) {
 			return true
 		}
 	}

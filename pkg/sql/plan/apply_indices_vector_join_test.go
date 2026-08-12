@@ -673,7 +673,7 @@ func TestSingleRowVectorProviderProofBranches(t *testing.T) {
 
 	tableDef := newVectorJoinTableDef(false, false)
 	tableDef.Pkey = nil
-	tableDef.Indexes = []*plan.IndexDef{{Unique: true, Parts: []string{"id", "v"}}}
+	tableDef.Indexes = []*plan.IndexDef{nil, {Unique: true, Parts: []string{"id", "v"}}}
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		TableDef:    tableDef,
