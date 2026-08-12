@@ -876,6 +876,19 @@ func TestGroupConcatOrderConfigValidationAndReturnType(t *testing.T) {
 	})
 }
 
+func TestHasGroupConcatOrder(t *testing.T) {
+	ordered := testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|").Data
+	unordered := testGroupConcatOrderConfig(1, nil, "|").Data
+	malformed := []byte{groupConcatOrderConfigVersion}
+
+	require.True(t, HasGroupConcatOrder(ordered))
+	require.True(t, HasGroupConcatOrder(EncodeGroupConcatOrderedConfig(ordered, 10)))
+	require.False(t, HasGroupConcatOrder(unordered))
+	require.False(t, HasGroupConcatOrder(EncodeGroupConcatOrderedConfig(unordered, 10)))
+	require.False(t, HasGroupConcatOrder(malformed))
+	require.False(t, HasGroupConcatOrder(EncodeGroupConcatConfig("|", 10)))
+}
+
 func TestGroupConcatOrderedMaxLen(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{

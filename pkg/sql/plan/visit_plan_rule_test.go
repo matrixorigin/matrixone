@@ -852,7 +852,7 @@ func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 					DbId:    1,
 					TblId:   2,
 					Version: 3,
-					Indexes: []*planpb.IndexDef{{
+					Indexes: []*planpb.IndexDef{nil, {
 						IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
 						IndexTableName: hiddenTable,
 					}},
@@ -896,7 +896,7 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 		},
 		TableDef: &planpb.TableDef{
 			Name: "src", DbId: 1, TblId: 2, Version: 3,
-			Indexes: []*planpb.IndexDef{{
+			Indexes: []*planpb.IndexDef{nil, {
 				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
 				IndexTableName: hiddenTable,
 			}},
@@ -949,6 +949,30 @@ func TestRecordPreparedPluginDependenciesSurvivesScanRemoval(t *testing.T) {
 	cloned := DeepCopyQuery(builder.qry)
 	require.Equal(t, builder.qry.CatalogDependencies, cloned.CatalogDependencies)
 	require.NotSame(t, builder.qry.CatalogDependencies[0], cloned.CatalogDependencies[0])
+}
+
+func TestPrepareSkipsNilIndexMetadata(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	require.NotNil(t, tableDef)
+	require.NotEmpty(t, tableDef.Indexes)
+	tableDef.Indexes = append([]*planpb.IndexDef{nil}, tableDef.Indexes...)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"prepare sparse_index_stmt from 'select val from single_idx_t where val = ?'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+	require.NotEmpty(t, prepare.Schemas)
+	foundBaseSchema := false
+	for _, schema := range prepare.Schemas {
+		if schema.GetObjName() == "single_idx_t" {
+			foundBaseSchema = true
+			break
+		}
+	}
+	require.True(t, foundBaseSchema)
 }
 
 func TestResetPreparedSetMergesTransientCatalogDependencies(t *testing.T) {
