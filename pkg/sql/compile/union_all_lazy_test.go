@@ -23,16 +23,14 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,25 +51,56 @@ func newLazyUnionAllLeaf(c *Compile, op vm.Operator) *Scope {
 	}
 }
 
+type preparingLazyUnionAllOperator struct {
+	*colexec.MockOperator
+	prepareCalls *atomic.Int32
+}
+
+func (op *preparingLazyUnionAllOperator) Prepare(proc *process.Process) error {
+	op.prepareCalls.Add(1)
+	return op.MockOperator.Prepare(proc)
+}
+
+func newPreparingLazyUnionAllLeaf(
+	c *Compile,
+	bat *batch.Batch,
+	prepareCalls *atomic.Int32,
+) *Scope {
+	mock := colexec.NewMockOperator()
+	if bat != nil {
+		mock.WithBatchs([]*batch.Batch{bat})
+	}
+	return newLazyUnionAllLeaf(c, &preparingLazyUnionAllOperator{
+		MockOperator: mock,
+		prepareCalls: prepareCalls,
+	})
+}
+
+func newLazyUnionAllInt8Batch(c *Compile, values ...int8) *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt8Vector(values, nil, c.proc.Mp())
+	bat.SetRowCount(len(values))
+	return bat
+}
+
 func freeLazyUnionAllTestScope(c *Compile, scope *Scope) {
 	scope.FreeOperator(c)
 	scope.release()
 	c.proc.Free()
 }
 
-func TestCompileUnionAllBuildsLazyBranchScopes(t *testing.T) {
+func TestCompileUnionAllKeepsConcurrentTopologyWithoutDemand(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	left := newLazyUnionAllLeaf(c, colexec.NewMockOperator())
 	right := newLazyUnionAllLeaf(c, colexec.NewMockOperator())
 
-	result := c.compileUnionAll(&planpb.Node{}, []*Scope{left}, []*Scope{right})
+	result := c.compileUnionAll(&planpb.Node{}, []*Scope{left}, []*Scope{right}, false)
 	require.Len(t, result, 1)
 	root := result[0]
-	require.True(t, root.UnionAllBranches)
 	require.False(t, root.LazyPreScopes)
 	require.Len(t, root.PreScopes, 2)
-	require.IsType(t, &merge.Merge{}, root.PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
-	require.IsType(t, &merge.Merge{}, root.PreScopes[1].RootOp.GetOperatorBase().GetChildren(0))
+	require.Same(t, left, root.PreScopes[0])
+	require.Same(t, right, root.PreScopes[1])
 
 	unionOp, ok := root.RootOp.(*unionall.UnionAll)
 	require.True(t, ok)
@@ -80,13 +109,25 @@ func TestCompileUnionAllBuildsLazyBranchScopes(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, mergeOp.Partial)
 
-	limited := c.compileLimit(&planpb.Node{
-		Limit: plan2.MakePlan2Uint64ConstExprWithType(1),
-	}, result)
-	require.Len(t, limited, 1)
-	require.Same(t, root, limited[0])
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestCompileUnionAllBuildsLazyBranchScopesWithDemand(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	left := newLazyUnionAllLeaf(c, colexec.NewMockOperator())
+	right := newLazyUnionAllLeaf(c, colexec.NewMockOperator())
+
+	root := c.compileUnionAll(
+		&planpb.Node{}, []*Scope{left}, []*Scope{right}, true,
+	)[0]
 	require.True(t, root.LazyPreScopes)
+	require.Len(t, root.PreScopes, 2)
+	require.IsType(t, &merge.Merge{}, root.PreScopes[0].RootOp.GetOperatorBase().GetChildren(0))
+	require.IsType(t, &merge.Merge{}, root.PreScopes[1].RootOp.GetOperatorBase().GetChildren(0))
+
+	unionOp := root.RootOp.(*unionall.UnionAll)
 	require.Equal(t, 2, unionOp.SequentialBranches)
+	mergeOp := unionOp.GetChildren(0).(*merge.Merge)
 	require.True(t, mergeOp.Partial)
 	require.Equal(t, int32(0), mergeOp.StartIDX)
 	require.Equal(t, int32(1), mergeOp.EndIDX)
@@ -94,69 +135,209 @@ func TestCompileUnionAllBuildsLazyBranchScopes(t *testing.T) {
 	freeLazyUnionAllTestScope(c, root)
 }
 
-func TestCompileLimitKeepsUnionConcurrentBelowBlockingOperator(t *testing.T) {
-	c := newLazyUnionAllTestCompile(t)
-	root := c.compileUnionAll(
-		&planpb.Node{},
-		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
-		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
-	)[0]
-	unionOp := root.RootOp.(*unionall.UnionAll)
-	mergeOp := unionOp.GetChildren(0).(*merge.Merge)
-	root.setRootOperator(order.NewArgument())
-
-	result := c.compileLimit(&planpb.Node{
-		Limit: plan2.MakePlan2Uint64ConstExprWithType(1),
-	}, []*Scope{root})
-	require.Len(t, result, 1)
-	require.False(t, root.LazyPreScopes)
-	require.Zero(t, unionOp.SequentialBranches)
-	require.False(t, mergeOp.Partial)
-
-	freeLazyUnionAllTestScope(c, root)
-}
-
-func TestCompileLimitEnablesLazyUnionThroughUnaryStreamingOperators(t *testing.T) {
-	streamingOperators := []struct {
-		name string
-		new  func() vm.Operator
+func TestStreamingUnionAllDemandStopsAtBlockingOperators(t *testing.T) {
+	limit := plan2.MakePlan2Uint64ConstExprWithType(1)
+	tests := []struct {
+		name        string
+		node        *planpb.Node
+		outerDemand bool
+		want        bool
 	}{
-		{name: "projection", new: func() vm.Operator { return projection.NewArgument() }},
-		{name: "filter", new: func() vm.Operator { return filter.NewArgument() }},
-		{name: "offset", new: func() vm.Operator { return offset.NewArgument() }},
+		{name: "project limit", node: &planpb.Node{NodeType: planpb.Node_PROJECT, Limit: limit}, want: true},
+		{name: "filter from parent", node: &planpb.Node{NodeType: planpb.Node_FILTER}, outerDemand: true, want: true},
+		{name: "offset carrier from parent", node: &planpb.Node{NodeType: planpb.Node_SORT, Offset: limit}, outerDemand: true, want: true},
+		{name: "union limit", node: &planpb.Node{NodeType: planpb.Node_UNION_ALL, Limit: limit}, want: true},
+		{name: "ordered union", node: &planpb.Node{NodeType: planpb.Node_UNION_ALL, Limit: limit, OrderBy: []*planpb.OrderBySpec{{}}}},
+		{name: "assertion", node: &planpb.Node{NodeType: planpb.Node_ASSERT}, outerDemand: true},
+		{name: "barrier filter", node: &planpb.Node{NodeType: planpb.Node_FILTER, FilterIsBarrier: true}, outerDemand: true},
+		{name: "window", node: &planpb.Node{NodeType: planpb.Node_WINDOW}, outerDemand: true},
 	}
 
-	for _, test := range streamingOperators {
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			c := newLazyUnionAllTestCompile(t)
-			root := c.compileUnionAll(
-				&planpb.Node{},
-				[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
-				[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
-			)[0]
-			root.setRootOperator(test.new())
-
-			enableLazyUnionAllForLimit([]*Scope{root})
-			require.True(t, root.LazyPreScopes)
-
-			freeLazyUnionAllTestScope(c, root)
+			require.Equal(t, test.want, streamingUnionAllDemand(test.node, test.outerDemand))
 		})
 	}
 }
 
-func TestCompileLimitKeepsUnionConcurrentBelowNonUnaryStreamingOperator(t *testing.T) {
+func nestedUnionAllPlanNodes(withLimit bool) []*planpb.Node {
+	nodes := []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_UNION_ALL, Children: []int32{0, 1}},
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_UNION_ALL, Children: []int32{2, 3}},
+	}
+	if withLimit {
+		nodes = append(nodes, &planpb.Node{
+			NodeType: planpb.Node_PROJECT,
+			Children: []int32{4},
+			Limit:    plan2.MakePlan2Uint64ConstExprWithType(1),
+		})
+	}
+	return nodes
+}
+
+func TestCompilePlanScopePropagatesLimitToNestedUnionAll(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
-	root := c.compileUnionAll(
+	nodes := nestedUnionAllPlanNodes(true)
+
+	scopes, err := c.compilePlanScope(0, int32(len(nodes)-1), nodes)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	outer := scopes[0]
+	require.True(t, outer.LazyPreScopes)
+	require.Len(t, outer.PreScopes, 3)
+
+	var outerUnion *unionall.UnionAll
+	require.NoError(t, vm.HandleAllOp(outer.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if candidate, ok := op.(*unionall.UnionAll); ok {
+			outerUnion = candidate
+		}
+		return nil
+	}))
+	require.NotNil(t, outerUnion)
+	require.Equal(t, 3, outerUnion.SequentialBranches)
+
+	for i, branch := range outer.PreScopes {
+		branchConnector, ok := branch.RootOp.(*connector.Connector)
+		require.True(t, ok)
+		child := branchConnector.GetOperatorBase().GetChildren(0)
+		if i < 2 {
+			marker, ok := child.(*unionall.UnionAll)
+			require.True(t, ok)
+			require.Equal(t, 2, marker.GetOperatorBase().Idx)
+			require.Zero(t, marker.SequentialBranches)
+			child = marker.GetOperatorBase().GetChildren(0)
+		}
+		require.IsType(t, &merge.Merge{}, child)
+	}
+
+	freeLazyUnionAllTestScope(c, outer)
+}
+
+func TestLazyUnionAllDoesNotAbsorbNestedLimit(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	inner := c.compileUnionAll(
 		&planpb.Node{},
 		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
 		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+		true,
 	)[0]
-	wrapper := projection.NewArgument()
-	root.setRootOperator(wrapper)
-	wrapper.AppendChild(colexec.NewMockOperator())
+	inner = c.compileLimit(&planpb.Node{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}, []*Scope{inner})[0]
+	outer := c.compileUnionAll(
+		&planpb.Node{},
+		[]*Scope{inner},
+		[]*Scope{newLazyUnionAllLeaf(c, colexec.NewMockOperator())},
+		true,
+	)[0]
 
-	enableLazyUnionAllForLimit([]*Scope{root})
-	require.False(t, root.LazyPreScopes)
+	require.True(t, outer.LazyPreScopes)
+	require.Len(t, outer.PreScopes, 2)
+	require.Len(t, outer.PreScopes[0].PreScopes, 1)
+	require.Same(t, inner, outer.PreScopes[0].PreScopes[0])
+	require.True(t, inner.LazyPreScopes)
+
+	freeLazyUnionAllTestScope(c, outer)
+}
+
+func TestCompilePlanScopeKeepsNestedUnionAllConcurrentWithoutLimit(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	nodes := nestedUnionAllPlanNodes(false)
+
+	scopes, err := c.compilePlanScope(0, int32(len(nodes)-1), nodes)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	outer := scopes[0]
+	require.False(t, outer.LazyPreScopes)
+	require.Len(t, outer.PreScopes, 2)
+	inner := outer.PreScopes[0]
+	require.False(t, inner.LazyPreScopes)
+	require.Len(t, inner.PreScopes, 2)
+
+	freeLazyUnionAllTestScope(c, outer)
+}
+
+func compileNestedLazyUnionAllTestScope(
+	c *Compile,
+	first *Scope,
+	second *Scope,
+	third *Scope,
+	limit *planpb.Expr,
+) *Scope {
+	inner := c.compileUnionAll(
+		&planpb.Node{}, []*Scope{first}, []*Scope{second}, true,
+	)[0]
+	outer := c.compileUnionAll(
+		&planpb.Node{}, []*Scope{inner}, []*Scope{third}, true,
+	)[0]
+	if limit != nil {
+		outer = c.compileLimit(&planpb.Node{Limit: limit}, []*Scope{outer})[0]
+	}
+	return outer
+}
+
+func TestLazyNestedUnionAllLimitStartsOnlyFirstLeaf(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	var firstPrepares, secondPrepares, thirdPrepares atomic.Int32
+	root := compileNestedLazyUnionAllTestScope(
+		c,
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 1, 1), &firstPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 2), &secondPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 3), &thirdPrepares),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+	)
+	c.scopes = []*Scope{root}
+	c.InitPipelineContextToExecuteQuery()
+
+	require.NoError(t, root.MergeRun(c))
+	require.Equal(t, int32(1), firstPrepares.Load())
+	require.Zero(t, secondPrepares.Load())
+	require.Zero(t, thirdPrepares.Load())
+
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestLazyNestedUnionAllEmptyFirstLeafAdvancesOnce(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	var firstPrepares, secondPrepares, thirdPrepares atomic.Int32
+	root := compileNestedLazyUnionAllTestScope(
+		c,
+		newPreparingLazyUnionAllLeaf(c, nil, &firstPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 2, 2), &secondPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 3), &thirdPrepares),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+	)
+	c.scopes = []*Scope{root}
+	c.InitPipelineContextToExecuteQuery()
+
+	require.NoError(t, root.MergeRun(c))
+	require.Equal(t, int32(1), firstPrepares.Load())
+	require.Equal(t, int32(1), secondPrepares.Load())
+	require.Zero(t, thirdPrepares.Load())
+
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestLazyNestedUnionAllExhaustionStartsEveryLeafOnce(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	var firstPrepares, secondPrepares, thirdPrepares atomic.Int32
+	root := compileNestedLazyUnionAllTestScope(
+		c,
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 1), &firstPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 2), &secondPrepares),
+		newPreparingLazyUnionAllLeaf(c, newLazyUnionAllInt8Batch(c, 3), &thirdPrepares),
+		nil,
+	)
+	c.scopes = []*Scope{root}
+	c.InitPipelineContextToExecuteQuery()
+
+	require.NoError(t, root.MergeRun(c))
+	require.Equal(t, int32(1), firstPrepares.Load())
+	require.Equal(t, int32(1), secondPrepares.Load())
+	require.Equal(t, int32(1), thirdPrepares.Load())
 
 	freeLazyUnionAllTestScope(c, root)
 }
@@ -180,6 +361,7 @@ func TestLazyUnionAllLimitLeavesSecondBranchUnstarted(t *testing.T) {
 		&planpb.Node{},
 		[]*Scope{newLazyUnionAllLeaf(c, leftOp)},
 		[]*Scope{newLazyUnionAllLeaf(c, rightOp)},
+		true,
 	)[0]
 	root = c.compileLimit(&planpb.Node{
 		Limit: plan2.MakePlan2Uint64ConstExprWithType(1),
@@ -208,8 +390,8 @@ func TestLazyUnionAllStartsSecondBranchAfterFirstExhausts(t *testing.T) {
 		&planpb.Node{},
 		[]*Scope{newLazyUnionAllLeaf(c, leftOp)},
 		[]*Scope{newLazyUnionAllLeaf(c, rightOp)},
+		true,
 	)[0]
-	enableLazyUnionAllForLimit([]*Scope{root})
 	c.scopes = []*Scope{root}
 	c.InitPipelineContextToExecuteQuery()
 
@@ -241,8 +423,8 @@ func TestLazyUnionAllCancellationLeavesSecondBranchUnstarted(t *testing.T) {
 		&planpb.Node{},
 		[]*Scope{newLazyUnionAllLeaf(c, leftOp)},
 		[]*Scope{newLazyUnionAllLeaf(c, rightOp)},
+		true,
 	)[0]
-	enableLazyUnionAllForLimit([]*Scope{root})
 	c.scopes = []*Scope{root}
 	c.InitPipelineContextToExecuteQuery()
 

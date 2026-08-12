@@ -16,6 +16,7 @@ package unionall
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -56,6 +57,9 @@ func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		next := unionall.currentBranch + 1
+		if cause := context.Cause(proc.Ctx); cause != nil {
+			return vm.CancelResult, cause
+		}
 		if unionall.startBranch == nil {
 			return vm.CancelResult, moerr.NewInternalErrorNoCtx(
 				"sequential union all branch starter is not installed")

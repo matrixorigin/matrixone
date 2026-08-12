@@ -511,11 +511,17 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		if i < 0 || i >= len(s.PreScopes) || startedPreScopes[i] {
 			return moerr.NewInternalErrorNoCtx("invalid lazy union all branch activation")
 		}
+		scope := s.PreScopes[i]
+		if cause := context.Cause(s.Proc.Ctx); cause != nil {
+			// The union installs this branch's receiver before invoking us. Complete
+			// the unsubmitted scope through the ordinary start-failure cleanup so
+			// that receiver has a terminal signal to drain.
+			cleanPipelineWitchStartFail(scope, cause, c.isPrepare)
+			return cause
+		}
 		startedPreScopes[i] = true
 		startedPreScopeCount++
 		wg.Add(1)
-
-		scope := s.PreScopes[i]
 
 		submitPreScope := ants.Submit(
 			func() {

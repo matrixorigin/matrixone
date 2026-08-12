@@ -16,6 +16,8 @@ package unionall
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,33 @@ type testCase struct {
 	types []types.Type
 	proc  *process.Process
 }
+
+type cancelOnNthDoneContext struct {
+	done  chan struct{}
+	nth   int32
+	calls atomic.Int32
+	once  sync.Once
+}
+
+func (c *cancelOnNthDoneContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+func (c *cancelOnNthDoneContext) Done() <-chan struct{} {
+	if c.calls.Add(1) == c.nth {
+		c.once.Do(func() { close(c.done) })
+	}
+	return c.done
+}
+
+func (c *cancelOnNthDoneContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *cancelOnNthDoneContext) Value(any) any { return nil }
 
 func newSequentialUnionAllTest(t *testing.T) (*UnionAll, *merge.Merge, *process.Process) {
 	t.Helper()
@@ -175,6 +204,35 @@ func TestSequentialUnionAllMissingStarterDoesNotActivateNextReceiver(t *testing.
 	require.ErrorContains(t, err, "branch starter is not installed")
 	// The missing callback is detected before the merge switches to the
 	// unstarted receiver, so cleanup has no absent producer to wait for.
+	mergeOp.Reset(proc, true, err)
+
+	arg.Reset(proc, true, err)
+	mergeOp.Free(proc, true, err)
+	arg.Free(proc, true, err)
+	mergeOp.Release()
+	arg.Release()
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSequentialUnionAllCancellationDoesNotActivateNextReceiver(t *testing.T) {
+	arg, mergeOp, proc := newSequentialUnionAllTest(t)
+	cancelCtx := &cancelOnNthDoneContext{done: make(chan struct{}), nth: 2}
+	proc.Ctx = cancelCtx
+	require.NoError(t, vm.Prepare(arg, proc))
+	starts := 0
+	arg.SetBranchStarter(func(int) error {
+		starts++
+		return nil
+	})
+
+	result, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Equal(t, int32(2), cancelCtx.calls.Load())
+	require.Zero(t, starts)
+	require.Zero(t, len(proc.Reg.MergeReceivers[1].Ch2))
+	mergeOp.DisableReceiverWaitForStartFailure(proc)
 	mergeOp.Reset(proc, true, err)
 
 	arg.Reset(proc, true, err)

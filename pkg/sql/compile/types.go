@@ -191,11 +191,6 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
-	// UnionAllBranches records that PreScopes are one local merge scope per
-	// logical UNION ALL branch. compileLimit uses this boundary to opt into
-	// sequential activation only through a streaming operator chain that can
-	// actually short-circuit.
-	UnionAllBranches bool
 	// LazyPreScopes makes a UNION ALL merge scope start its branch scopes in
 	// order. The union operator activates the next branch only after the current
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches

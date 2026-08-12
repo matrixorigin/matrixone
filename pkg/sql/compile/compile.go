@@ -1221,7 +1221,33 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 }
 
+func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
+	if node == nil || len(node.OrderBy) > 0 || node.FilterIsBarrier ||
+		nodeHasUserLevelLockFunction(node) {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_UNION_ALL:
+	default:
+		return false
+	}
+	return outerDemand || node.Limit != nil
+}
+
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
+	return c.compilePlanScopeWithUnionAllDemand(step, curNodeIdx, nodes, false)
+}
+
+// compilePlanScopeWithUnionAllDemand carries an outer streaming LIMIT demand
+// down to UNION ALL before its physical scopes are built. This lets eligible
+// unions choose their lazy topology during construction while leaving ordinary
+// UNION ALL plans on their original concurrent topology.
+func (c *Compile) compilePlanScopeWithUnionAllDemand(
+	step int32,
+	curNodeIdx int32,
+	nodes []*plan.Node,
+	outerUnionAllDemand bool,
+) ([]*Scope, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
@@ -1301,7 +1327,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
+		ss, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, childDemand)
 		if err != nil {
 			return nil, err
 		}
@@ -1404,7 +1431,12 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		ss, err = c.compilePlanScopeWithUnionAllDemand(
+			step,
+			node.Children[0],
+			nodes,
+			streamingUnionAllDemand(node, outerUnionAllDemand),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1456,18 +1488,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
+		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, node.Children[1], nodes)
+		right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileUnionAll(node, left, right)
+		ss = c.compileUnionAll(node, left, right, lazy)
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
@@ -4087,18 +4120,43 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	return rs
 }
 
-func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	// Keep each logical branch behind one local merge scope. A later streaming
-	// LIMIT consumer can then activate one branch at a time without changing the
-	// parallelism inside either branch. Without such a LIMIT both branches keep
-	// the ordinary concurrent MergeRun behavior.
-	left := c.newMergeScope(ss)
-	right := c.newMergeScope(children)
-	rs := c.newMergeScope([]*Scope{left, right})
-	rs.UnionAllBranches = true
+func (c *Compile) compileUnionAll(
+	node *plan.Node,
+	leftScopes []*Scope,
+	rightScopes []*Scope,
+	lazy bool,
+) []*Scope {
+	var rs *Scope
+	if lazy {
+		// Preserve each logical branch's internal parallelism behind one local
+		// receiver so MergeRun can admit the branches in SQL order. Absorb a
+		// directly nested lazy UNION ALL into the same scheduler; leaving it
+		// behind a connector would let its producer advance before an outer LIMIT
+		// can stop consumption.
+		branches := c.lazyUnionAllBranches(leftScopes)
+		branches = append(branches, c.lazyUnionAllBranches(rightScopes)...)
+		rs = c.newMergeScope(branches)
+		rs.LazyPreScopes = true
+	} else {
+		// Keep the original concurrent UNION ALL topology when no streaming
+		// LIMIT can stop consumption. This avoids adding another connector,
+		// spool, channel, merge, and goroutine hop to every batch.
+		inputs := make([]*Scope, 0, len(leftScopes)+len(rightScopes))
+		inputs = append(inputs, leftScopes...)
+		inputs = append(inputs, rightScopes...)
+		rs = c.newMergeScope(inputs)
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructUnionAll(node)
+	if lazy {
+		mergeOp, ok := rs.RootOp.(*merge.Merge)
+		if !ok {
+			panic("lazy UNION ALL scope has no merge input")
+		}
+		mergeOp.WithPartial(0, 1)
+		op.WithSequentialBranches(len(rs.PreScopes))
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
@@ -4106,49 +4164,59 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 	return []*Scope{rs}
 }
 
-func shortCircuitableUnionAll(root vm.Operator) *unionall.UnionAll {
-	for root != nil {
-		switch root.OpType() {
-		case vm.UnionAll:
-			unionOp, ok := root.(*unionall.UnionAll)
-			if ok {
-				return unionOp
-			}
-			return nil
-		case vm.Projection, vm.Filter, vm.Offset:
-			// These operators request input incrementally, so LIMIT can stop the
-			// UNION ALL branch scheduler through them.
-		default:
-			return nil
-		}
-		if root.GetOperatorBase().NumChildren() != 1 {
-			return nil
-		}
-		root = root.GetOperatorBase().GetChildren(0)
+// lazyUnionAllBranches transfers a directly nested lazy UNION ALL's branch
+// scopes to its parent scheduler. Each transferred branch receives a
+// pass-through marker for the absorbed logical union node so ANALYZE still
+// attributes that node's rows only to its own descendants.
+func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
+	if len(scopes) != 1 || scopes[0] == nil || !scopes[0].LazyPreScopes {
+		return []*Scope{c.newMergeScope(scopes)}
 	}
-	return nil
-}
 
-func enableLazyUnionAllForLimit(scopes []*Scope) {
-	for _, scope := range scopes {
-		if scope == nil || !scope.UnionAllBranches || scope.LazyPreScopes {
-			continue
-		}
-		unionOp := shortCircuitableUnionAll(scope.RootOp)
-		if unionOp == nil {
-			continue
-		}
-		if len(scope.PreScopes) < 2 {
-			panic("invalid UNION ALL branch scope")
-		}
-		mergeOp, ok := unionOp.GetChildren(0).(*merge.Merge)
-		if !ok {
-			panic("UNION ALL branch scope has no merge child")
-		}
-		mergeOp.WithPartial(0, 1)
-		unionOp.WithSequentialBranches(len(scope.PreScopes))
-		scope.LazyPreScopes = true
+	nested := scopes[0]
+	nestedUnion, ok := nested.RootOp.(*unionall.UnionAll)
+	if !ok || nestedUnion.GetOperatorBase().NumChildren() != 1 {
+		return []*Scope{c.newMergeScope(scopes)}
 	}
+	nestedMerge, ok := nestedUnion.GetOperatorBase().GetChildren(0).(*merge.Merge)
+	if !ok || len(nested.PreScopes) < 2 {
+		return []*Scope{c.newMergeScope(scopes)}
+	}
+
+	connectors := make([]*connector.Connector, len(nested.PreScopes))
+	for i, branch := range nested.PreScopes {
+		if branch == nil || branch.RootOp == nil {
+			return []*Scope{c.newMergeScope(scopes)}
+		}
+		branchConnector, ok := branch.RootOp.(*connector.Connector)
+		if !ok || branchConnector.GetOperatorBase().NumChildren() != 1 {
+			return []*Scope{c.newMergeScope(scopes)}
+		}
+		connectors[i] = branchConnector
+	}
+
+	branches := nested.PreScopes
+	unionInfo := nestedUnion.GetOperatorBase().OperatorInfo
+	for i, branch := range branches {
+		branchConnector := connectors[i]
+		branch.RootOp = branchConnector.GetOperatorBase().GetChildren(0)
+		branchConnector.GetOperatorBase().SetChild(nil, 0)
+		branchConnector.GetOperatorBase().ResetChildren()
+		branchConnector.Release()
+
+		marker := unionall.NewArgument()
+		marker.SetInfo(&unionInfo)
+		branch.setRootOperator(marker)
+	}
+
+	nestedUnion.GetOperatorBase().SetChild(nil, 0)
+	nestedUnion.GetOperatorBase().ResetChildren()
+	nestedUnion.Release()
+	nestedMerge.Release()
+	nested.RootOp = nil
+	nested.PreScopes = nil
+	nested.release()
+	return branches
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
@@ -4959,7 +5027,6 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
-	enableLazyUnionAllForLimit(ss)
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(node)
