@@ -42,41 +42,38 @@ func TestCreateServerWithOptions(t *testing.T) {
 		WithServerSessionBufferSize(200))
 }
 
-type connectionTrackingApplication struct {
-	tracker       *serverConnectionTracker
-	stopReturned  chan struct{}
-	releaseClosed chan struct{}
+type connectionJoiningApplication struct {
+	stopAndWaitCalled chan struct{}
+	releaseHandlers   chan struct{}
 }
 
-func (a *connectionTrackingApplication) Start() error {
+func (a *connectionJoiningApplication) Start() error {
 	return nil
 }
 
-func (a *connectionTrackingApplication) Stop() error {
-	go func() {
-		close(a.stopReturned)
-		<-a.releaseClosed
-		a.tracker.finish()
-	}()
+func (a *connectionJoiningApplication) Stop() error {
 	return nil
 }
 
-func (a *connectionTrackingApplication) GetSession(uint64) (goetty.IOSession, error) {
+func (a *connectionJoiningApplication) StopAndWait() error {
+	close(a.stopAndWaitCalled)
+	<-a.releaseHandlers
+	return nil
+}
+
+func (a *connectionJoiningApplication) GetSession(uint64) (goetty.IOSession, error) {
 	return nil, nil
 }
 
 func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
-	tracker := &serverConnectionTracker{}
-	application := &connectionTrackingApplication{
-		tracker:       tracker,
-		stopReturned:  make(chan struct{}),
-		releaseClosed: make(chan struct{}),
+	application := &connectionJoiningApplication{
+		stopAndWaitCalled: make(chan struct{}),
+		releaseHandlers:   make(chan struct{}),
 	}
-	require.True(t, tracker.begin())
 	var releaseOnce sync.Once
 	releaseConnection := func() {
 		releaseOnce.Do(func() {
-			close(application.releaseClosed)
+			close(application.releaseHandlers)
 		})
 	}
 	t.Cleanup(releaseConnection)
@@ -84,7 +81,6 @@ func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
 		logger:      logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
 		application: application,
 		stopper:     stopper.NewStopper("test-server-close-connections"),
-		connections: tracker,
 	}
 	closeDone := make(chan error, 1)
 	go func() {
@@ -92,9 +88,9 @@ func TestServerCloseWaitsForAcceptedConnections(t *testing.T) {
 	}()
 
 	select {
-	case <-application.stopReturned:
+	case <-application.stopAndWaitCalled:
 	case <-time.After(time.Second):
-		t.Fatal("application Stop did not return")
+		t.Fatal("application StopAndWait was not called")
 	}
 	select {
 	case err := <-closeDone:
@@ -157,7 +153,6 @@ func TestServerPreservesCallerSessionAware(t *testing.T) {
 			t.Fatal("caller IOSessionAware did not receive Created")
 		}
 
-		require.NoError(t, client.Close())
 		require.NoError(t, rs.Close())
 		select {
 		case <-aware.closed:
