@@ -43,3 +43,17 @@ func TestAsofJoinSyntaxRoundTrip(t *testing.T) {
 		roundTrip.Free()
 	}
 }
+
+func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
+	for _, sql := range []string{
+		"select asof from t",
+		"select t.asof from t",
+		"select * from asof",
+		"select * from t as asof",
+		"create table asof (asof int)",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
+	}
+}

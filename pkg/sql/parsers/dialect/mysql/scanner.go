@@ -851,6 +851,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
+		if lower == "asof" {
+			if s.asofJoinPhraseAhead(s.Pos) {
+				return keywordID, keywordName
+			}
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos
@@ -885,6 +891,30 @@ func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
 	pos += len("group")
 	pos = s.skipBlankAndCommentsFrom(pos)
 	return pos < len(s.buf) && s.buf[pos] == '('
+}
+
+// asofJoinPhraseAhead keeps ASOF contextual: it is a keyword only when the
+// following tokens begin one of the supported ASOF JOIN forms. In every other
+// position ASOF remains an ordinary identifier for compatibility.
+func (s *Scanner) asofJoinPhraseAhead(pos int) bool {
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if hasKeywordAt(s.buf, pos, "join") {
+		return true
+	}
+	if !hasKeywordAt(s.buf, pos, "left") {
+		return false
+	}
+	pos += len("left")
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if hasKeywordAt(s.buf, pos, "join") {
+		return true
+	}
+	if !hasKeywordAt(s.buf, pos, "outer") {
+		return false
+	}
+	pos += len("outer")
+	pos = s.skipBlankAndCommentsFrom(pos)
+	return hasKeywordAt(s.buf, pos, "join")
 }
 
 func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {

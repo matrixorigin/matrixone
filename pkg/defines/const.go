@@ -53,7 +53,8 @@ const (
 	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
 	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
-	MORPCLatestVersion       = MORPCVersion17
+	MORPCVersion18     int64 = 18 // native ASOF join pipeline payload
+	MORPCLatestVersion       = MORPCVersion18
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

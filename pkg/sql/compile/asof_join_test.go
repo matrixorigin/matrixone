@@ -17,9 +17,12 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -56,4 +59,23 @@ func TestCompileBroadcastAsofJoin(t *testing.T) {
 	require.Equal(t, int32(1), op.AsofRightCol)
 	require.NotNil(t, op.NonEqCond)
 	require.Len(t, op.EqConds[0], 1)
+}
+
+func TestRemoteAsofJoinProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	arg := hashjoin.NewArgument()
+	arg.JoinType = plan.Node_ASOF
+	arg.EqConds = [][]*plan.Expr{{}, {}}
+	defer arg.Release()
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "protocol version 18")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion18)
+	arg.JoinType = plan.Node_ASOF_LEFT
+	_, _, err = convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_ASOF_LEFT))
+	require.NoError(t, validateRemoteJoinProtocol(proc, plan.Node_INNER))
 }

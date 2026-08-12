@@ -32,7 +32,6 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	// without first deciding whether the keyword should be non-reserved instead.
 	"_binary":           "legacy parser behavior before incremental keyword policy",
 	"apply":             "legacy parser behavior before incremental keyword policy",
-	"asof":              "contextual join keyword; reserving it avoids ambiguity with subquery aliases",
 	"auto_update":       "legacy parser behavior before incremental keyword policy",
 	"cdc":               "legacy parser behavior before incremental keyword policy",
 	"centroidx":         "legacy parser behavior before incremental keyword policy",
@@ -66,6 +65,10 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"within":            "contextual keyword: scanner returns WITHIN only for WITHIN GROUP, otherwise ID",
 }
 
+var contextualKeywordPolicy = map[string]string{
+	"asof": "scanner returns ASOF only in the ASOF JOIN phrase",
+}
+
 func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 	identTokens := mysqlIdentifierTokens(t)
 	mysqlReserved := mysqlKeywordReservedStatus(t)
@@ -93,6 +96,9 @@ func TestNewKeywordsHaveExplicitIdentifierPolicy(t *testing.T) {
 		}
 		if _, ok := legacyKeywordPolicyExceptions[word]; ok {
 			delete(remainingLegacy, word)
+			continue
+		}
+		if _, ok := contextualKeywordPolicy[word]; ok {
 			continue
 		}
 		violations = append(violations, fmt.Sprintf("%s -> %s", word, tokenName))

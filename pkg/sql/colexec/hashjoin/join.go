@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"bytes"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -442,6 +443,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
+	ctr.asofIndexes = nil
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
@@ -503,6 +505,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 					if res == spillutil.BucketReady {
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
+						ctr.asofIndexes = nil
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
@@ -641,7 +644,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				if !ctr.probeHashOnPK {
 					candidates = ctr.mp.GetSels(uint64(idx))
 				}
-				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, candidates)
+				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, uint64(idx), candidates)
 				if findErr != nil {
 					return findErr
 				}
@@ -861,36 +864,91 @@ func (ctr *container) findAsofPredecessor(
 	hashJoin *HashJoin,
 	proc *process.Process,
 	leftRow int64,
+	groupKey uint64,
 	candidates []int32,
 ) (best int32, found bool, err error) {
-	best = -1
-	for _, candidate := range candidates {
+	if len(candidates) == 0 {
+		return -1, false, nil
+	}
+	if ctr.asofIndexes == nil {
+		ctr.asofIndexes = make(map[uint64][]int32)
+	}
+	ordered, ok := ctr.asofIndexes[groupKey]
+	if !ok {
+		ordered = append([]int32(nil), candidates...)
+		// Equal timestamps are arbitrary by the ASOF contract; choosing the
+		// lowest materialized row ordinal makes the result repeatable for one
+		// materialized build map without promising producer-arrival ordering.
+		sort.Slice(ordered, func(i, j int) bool {
+			left := ordered[i]
+			right := ordered[j]
+			lb, lr := int64(left/colexec.DefaultBatchSize), int64(left%colexec.DefaultBatchSize)
+			rb, rr := int64(right/colexec.DefaultBatchSize), int64(right%colexec.DefaultBatchSize)
+			lv := ctr.rightBats[lb].Vecs[hashJoin.AsofRightCol]
+			rv := ctr.rightBats[rb].Vecs[hashJoin.AsofRightCol]
+			ctr.asofCompare.Set(0, lv)
+			ctr.asofCompare.Set(1, rv)
+			cmp := ctr.asofCompare.Compare(0, 1, lr, rr)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return left > right
+		})
+		ctr.asofIndexes[groupKey] = ordered
+	}
+
+	leftCol := asofLeftTimeCol(hashJoin.NonEqCond)
+	if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
+		return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
+	}
+	leftVec := ctr.leftBat.Vecs[leftCol]
+	ctr.asofCompare.Set(1, leftVec)
+	strict := asofTemporalIsStrict(hashJoin.NonEqCond)
+	pos := sort.Search(len(ordered), func(i int) bool {
+		candidate := ordered[i]
 		batchIdx := int64(candidate / colexec.DefaultBatchSize)
 		rowIdx := int64(candidate % colexec.DefaultBatchSize)
-		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
-		if evalErr != nil {
-			return -1, false, evalErr
+		ctr.asofCompare.Set(0, ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol])
+		cmp := ctr.asofCompare.Compare(0, 1, rowIdx, leftRow)
+		if strict {
+			return cmp >= 0
 		}
-		if !qualified {
-			continue
-		}
-		if best < 0 {
-			best = candidate
-			continue
-		}
+		return cmp > 0
+	})
+	if pos == 0 {
+		return -1, false, nil
+	}
+	candidate := ordered[pos-1]
+	batchIdx := int64(candidate / colexec.DefaultBatchSize)
+	rowIdx := int64(candidate % colexec.DefaultBatchSize)
+	qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+	if evalErr != nil {
+		return -1, false, evalErr
+	}
+	return candidate, qualified, nil
+}
 
-		bestBatch := int64(best / colexec.DefaultBatchSize)
-		bestRow := int64(best % colexec.DefaultBatchSize)
-		bestVec := ctr.rightBats[bestBatch].Vecs[hashJoin.AsofRightCol]
-		candidateVec := ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol]
-		ctr.asofCompare.Set(0, bestVec)
-		ctr.asofCompare.Set(1, candidateVec)
-		switch comparison := ctr.asofCompare.Compare(0, 1, bestRow, rowIdx); {
-		case comparison < 0:
-			best = candidate
+func asofTemporalIsStrict(expr *plan.Expr) bool {
+	if expr != nil {
+		if fn := expr.GetF(); fn != nil {
+			return fn.Func.ObjName == ">"
 		}
 	}
-	return best, best >= 0, nil
+	return false
+}
+
+func asofLeftTimeCol(expr *plan.Expr) int {
+	if expr != nil {
+		if fn := expr.GetF(); fn != nil && len(fn.Args) == 2 {
+			if col := fn.Args[0].GetCol(); col != nil && col.RelPos == 0 {
+				return int(col.ColPos)
+			}
+			if col := fn.Args[1].GetCol(); col != nil && col.RelPos == 0 {
+				return int(col.ColPos)
+			}
+		}
+	}
+	return -1
 }
 
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

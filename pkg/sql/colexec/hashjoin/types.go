@@ -95,6 +95,7 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofCompare            compare.Compare
+	asofIndexes            map[uint64][]int32
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -284,6 +285,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
 	ctr.asofCompare = nil
+	ctr.asofIndexes = nil
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch

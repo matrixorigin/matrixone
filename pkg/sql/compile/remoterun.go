@@ -618,6 +618,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *limit.Limit:
 		in.Limit = t.LimitExpr
 	case *hashjoin.HashJoin:
+		if err := validateRemoteJoinProtocol(proc, t.JoinType); err != nil {
+			return ctxId, nil, err
+		}
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
 			JoinType:               t.JoinType,
@@ -1513,6 +1516,18 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+	}
+	return nil
+}
+
+func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinType) error {
+	if joinType != plan.Node_ASOF && joinType != plan.Node_ASOF_LEFT {
+		return nil
+	}
+	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"native ASOF join remote execution requires MORPC protocol version 18",
+		)
 	}
 	return nil
 }

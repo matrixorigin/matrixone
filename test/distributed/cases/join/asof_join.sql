@@ -116,7 +116,8 @@ select l.id, r.dt, r.label from temporal_left l asof join temporal_right r
 select l.id, r.tm, r.label from temporal_left l asof join temporal_right r
   on l.k = r.k and l.tm > r.tm;
 
--- DuckDB keeps the first right row when the best timestamp is duplicated.
+-- Equal-timestamp ties are arbitrary across distributed producer order; this
+-- single-source case follows the materialized build order.
 create table duplicate_config (k int, ts timestamp(6), value varchar(8));
 insert into duplicate_config values
     (1, '2026-01-01 10:00:00.000000', 'first'),
