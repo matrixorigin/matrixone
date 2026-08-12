@@ -34,7 +34,7 @@ import (
 type windowFuncExprBinder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
 	bindFuncExprImplByAstExpr(string, []tree.Expr, int32) (*plan.Expr, error)
-	bindPreparedNumericAggregateFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
+	bindPreparedNumericFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedRowsFrameBound(tree.Expr) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
@@ -254,7 +254,7 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	}
 
 	// window function
-	windowFunc, err := b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
+	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
 	if err != nil {
 		return nil, err
 	}
