@@ -15,9 +15,7 @@
 package blockio
 
 import (
-	"container/heap"
 	"context"
-	"fmt"
 	"slices"
 	"time"
 
@@ -31,29 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
-
-const maxVectorIndexTopLimit = uint64(^uint(0) >> 1)
-
-func vectorIndexTopLimit(ctx context.Context, limit uint64) (int, error) {
-	if limit == 0 {
-		return 0, moerr.NewInternalError(ctx, "vector index top limit must be positive")
-	}
-	if limit > maxVectorIndexTopLimit {
-		return 0, moerr.NewInternalError(ctx, fmt.Sprintf("vector index top limit %d overflows int", limit))
-	}
-	return int(limit), nil
-}
 
 func removeIf[T any](data []T, pred func(t T) bool) []T {
 	// from plan.RemoveIf
@@ -594,123 +577,13 @@ func BlockDataReadBackup(
 	return
 }
 
-// topnDistOf builds a per-row distance closure for the topn order-by-limit scan:
-// it decodes the query and each row's raw column bytes as element type T and
-// returns the float64 distance via the merged ResolveDistanceFn (R=float64).
-func topnDistOf[T types.ArrayElement](numVec []byte, m metric.MetricType) (func([]byte) (float64, error), error) {
-	distFunc, err := metric.ResolveDistanceFn[T, float64](m)
-	if err != nil {
-		return nil, err
-	}
-	rhs := types.BytesToArray[T](numVec)
-	return func(b []byte) (float64, error) {
-		return distFunc(types.BytesToArray[T](b), rhs)
-	}, nil
-}
-
 func HandleOrderByLimitOnIVFFlatIndex(
 	ctx context.Context,
 	selectRows []int64,
 	vecCol *vector.Vector,
 	orderByLimit *objectio.IndexReaderTopOp,
 ) ([]int64, []float64, error) {
-	if selectRows == nil {
-		selectRows = make([]int64, vecCol.Length())
-		for i := range selectRows {
-			selectRows[i] = int64(i)
-		}
-	}
-
-	nullsBm := vecCol.GetNulls()
-	selectRows = slices.DeleteFunc(selectRows, func(row int64) bool {
-		return nullsBm.Contains(uint64(row))
-	})
-
-	searchResults := make([]vectorindex.SearchResult, 0, len(selectRows))
-	topLimit, err := vectorIndexTopLimit(ctx, orderByLimit.Limit)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Per-type distance closure: returns the float64 distance between a row's raw
-	// column bytes and the query vector. The single merged ResolveDistanceFn[T,
-	// float64] handles f32/f64 and the narrow quantizations uniformly; the bounds
-	// + top-k heap loop below is shared.
-	var distOf func(colBytes []byte) (float64, error)
-	switch orderByLimit.Typ {
-	case types.T_array_float32:
-		distOf, err = topnDistOf[float32](orderByLimit.NumVec, orderByLimit.MetricType)
-	case types.T_array_float64:
-		distOf, err = topnDistOf[float64](orderByLimit.NumVec, orderByLimit.MetricType)
-	case types.T_array_bf16:
-		distOf, err = topnDistOf[types.BF16](orderByLimit.NumVec, orderByLimit.MetricType)
-	case types.T_array_float16:
-		distOf, err = topnDistOf[types.Float16](orderByLimit.NumVec, orderByLimit.MetricType)
-	case types.T_array_int8:
-		distOf, err = topnDistOf[int8](orderByLimit.NumVec, orderByLimit.MetricType)
-	case types.T_array_uint8:
-		distOf, err = topnDistOf[uint8](orderByLimit.NumVec, orderByLimit.MetricType)
-	default:
-		return nil, nil, moerr.NewInternalError(ctx, fmt.Sprintf("only support float32/float64/bf16/float16/int8/uint8 type for topn: %s", orderByLimit.Typ))
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for _, row := range selectRows {
-		dist64, err := distOf(vecCol.GetBytesAt(int(row)))
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if orderByLimit.LowerBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 < orderByLimit.LowerBound {
-				continue
-			}
-		} else if orderByLimit.LowerBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 <= orderByLimit.LowerBound {
-				continue
-			}
-		}
-		if orderByLimit.UpperBoundType == plan.BoundType_INCLUSIVE {
-			if dist64 > orderByLimit.UpperBound {
-				continue
-			}
-		} else if orderByLimit.UpperBoundType == plan.BoundType_EXCLUSIVE {
-			if dist64 >= orderByLimit.UpperBound {
-				continue
-			}
-		}
-
-		if len(orderByLimit.DistHeap) >= topLimit {
-			if dist64 < orderByLimit.DistHeap[0] {
-				orderByLimit.DistHeap[0] = dist64
-				heap.Fix(&orderByLimit.DistHeap, 0)
-			} else {
-				continue
-			}
-		} else {
-			heap.Push(&orderByLimit.DistHeap, dist64)
-		}
-
-		searchResults = append(searchResults, vectorindex.SearchResult{
-			Id:       row,
-			Distance: dist64,
-		})
-	}
-
-	searchResults = slices.DeleteFunc(searchResults, func(res vectorindex.SearchResult) bool {
-		return res.Distance > orderByLimit.DistHeap[0]
-	})
-
-	sels := make([]int64, len(searchResults))
-	dists := make([]float64, len(searchResults))
-	for i, res := range searchResults {
-		sels[i] = res.Id
-		dists[i] = res.Distance
-	}
-
-	return sels, dists, nil
+	return objectio.TopNVector(ctx, selectRows, vecCol, orderByLimit)
 }
 
 func fillOutputBatchBySelectedRows(
@@ -1335,6 +1208,65 @@ func BlockDataReadInner(
 		return nil
 	}
 
+	// Persisted vector TopN only needs read access to the complete embedding
+	// column. Compute distances while that one cache entry is pinned, then copy
+	// only the selected rows from the remaining output columns. Appendable
+	// blocks keep the legacy path because their visibility columns participate
+	// in the same read lifetime.
+	if !orderByLimit.OrderedLimit && !info.IsAppendable() {
+		if ds == nil {
+			return moerr.NewInvalidInputNoCtx("nil data source for vector topn read")
+		}
+		topColPos := int(orderByLimit.ColPos)
+		if topColPos < 0 || topColPos >= len(columns) || topColPos == phyAddrColumnPos {
+			return moerr.NewInvalidInputNoCtxf(
+				"vector topn column position %d is invalid for %d block columns",
+				topColPos,
+				len(columns),
+			)
+		}
+
+		inputRows := selectRows
+		if inputRows == nil {
+			tombstones, tombstoneErr := ds.GetTombstones(ctx, &info.BlockID)
+			if tombstoneErr != nil {
+				return tombstoneErr
+			}
+			defer tombstones.Release()
+			inputRows = buildTopInputRows(int(info.MetaLocation().Rows()), tombstones)
+		}
+
+		var dists []float64
+		selectRows, dists, _, err = ioutil.LoadColumnDataByTopN(
+			ctx,
+			columns[topColPos],
+			colTypes[topColPos],
+			fs,
+			info.MetaLocation(),
+			inputRows,
+			orderByLimit,
+			mp,
+			policy,
+		)
+		if err != nil {
+			return err
+		}
+		return materializeVectorTopNRows(
+			ctx,
+			info,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			topColPos,
+			selectRows,
+			dists,
+			policy,
+			outputBat,
+			mp,
+			fs,
+		)
+	}
+
 	// read block data from storage specified by meta location
 	if deleteMask, release, err = readBlockData(
 		ctx,
@@ -1461,6 +1393,72 @@ func BlockDataReadInner(
 		}
 	}
 	return
+}
+
+func materializeVectorTopNRows(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	topColPos int,
+	selectRows []int64,
+	dists []float64,
+	policy fileservice.Policy,
+	outputBat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) error {
+	loadColumns := make([]uint16, 0, len(columns)-1)
+	loadTypes := make([]types.Type, 0, len(columns)-1)
+	destinations := make([]*vector.Vector, 0, len(columns)-1)
+	for pos := range columns {
+		if pos == phyAddrColumnPos || pos == topColPos {
+			continue
+		}
+		loadColumns = append(loadColumns, columns[pos])
+		loadTypes = append(loadTypes, colTypes[pos])
+		destinations = append(destinations, outputBat.Vecs[pos])
+	}
+	if len(loadColumns) > 0 {
+		if _, _, err := ioutil.LoadColumnsDataInto(
+			ctx,
+			loadColumns,
+			loadTypes,
+			fs,
+			info.MetaLocation(),
+			destinations,
+			selectRows,
+			nil,
+			mp,
+			policy,
+		); err != nil {
+			return err
+		}
+	}
+
+	outputBat.Vecs[topColPos].CleanOnlyData()
+	if phyAddrColumnPos >= 0 {
+		if len(selectRows) == 0 {
+			outputBat.Vecs[phyAddrColumnPos].CleanOnlyData()
+		} else if err := buildRowidColumn(
+			info,
+			outputBat.Vecs[phyAddrColumnPos],
+			selectRows,
+			mp,
+		); err != nil {
+			return err
+		}
+	}
+
+	var distVec *vector.Vector
+	if len(outputBat.Vecs) == len(columns) {
+		distVec = vector.NewVec(types.T_float64.ToType())
+		outputBat.Vecs = append(outputBat.Vecs, distVec)
+	} else {
+		distVec = outputBat.Vecs[len(columns)]
+	}
+	return vector.AppendFixedList(distVec, dists, nil, mp)
 }
 
 // buildTopInputRows constructs a slice of live row indices by excluding rows

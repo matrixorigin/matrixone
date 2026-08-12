@@ -200,3 +200,34 @@ select now(6) as value_now, current_timestamp(6) as value_current_timestamp
 value_now    value_current_timestamp    dot_pos_now    dot_pos_current_timestamp    decimal_digits_now    decimal_digits_current_timestamp    last_3_digits_now    last_3_digits_current_timestamp
 2025-11-22 18:07:17.321246000    2025-11-22 18:07:17.321246000    20    20    6    6        
 set time_zone = '+00:00';
+drop table if exists t_time_timestamp_timezone;
+create table t_time_timestamp_timezone (
+id int,
+ts timestamp(6),
+dt datetime(6)
+);
+set time_zone = '+00:00';
+insert into t_time_timestamp_timezone values
+(1, '2024-01-02 04:30:45.654321', '2024-01-02 04:30:45.654321');
+set time_zone = '+08:00';
+select time(ts) as ts_time_plus8,
+time(dt) as dt_time_plus8,
+hour(ts) as ts_hour_plus8,
+minute(ts) as ts_minute_plus8,
+second(ts) as ts_second_plus8,
+microsecond(time(ts)) as ts_micro_plus8
+from t_time_timestamp_timezone;
+ts_time_plus8    dt_time_plus8    ts_hour_plus8    ts_minute_plus8    ts_second_plus8    ts_micro_plus8
+12:30:45.654321000    04:30:45.654321000    12    30    45    654321
+set time_zone = '-05:00';
+select time(ts) as ts_time_minus5,
+time(dt) as dt_time_minus5,
+hour(ts) as ts_hour_minus5,
+minute(ts) as ts_minute_minus5,
+second(ts) as ts_second_minus5,
+microsecond(time(ts)) as ts_micro_minus5
+from t_time_timestamp_timezone;
+ts_time_minus5    dt_time_minus5    ts_hour_minus5    ts_minute_minus5    ts_second_minus5    ts_micro_minus5
+23:30:45.654321000    04:30:45.654321000    23    30    45    654321
+set time_zone = '+00:00';
+drop table if exists t_time_timestamp_timezone;
