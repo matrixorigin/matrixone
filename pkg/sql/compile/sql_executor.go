@@ -465,6 +465,10 @@ func (exec *txnExecutor) Exec(
 		if err != nil {
 			return executor.Result{}, err
 		}
+		pn, err = materializeInternalExactDecimalComparisonParams(exec.ctx, pn, proc)
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
 	c := NewCompile(
@@ -504,7 +508,7 @@ func (exec *txnExecutor) Exec(
 			if err != nil {
 				return pn, err
 			}
-			return pn, nil
+			return materializeInternalExactDecimalComparisonParams(ctx, pn, proc)
 		})
 	} else {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
@@ -599,6 +603,32 @@ func (exec *txnExecutor) Exec(
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()
 	return result, nil
+}
+
+func materializeInternalExactDecimalComparisonParams(
+	ctx context.Context,
+	pn *plan.Plan,
+	proc *process.Process,
+) (*plan.Plan, error) {
+	hasExact, err := plan.PlanHasExactDecimalComparisonParam(ctx, pn)
+	if err != nil || !hasExact {
+		return pn, err
+	}
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return pn, nil
+	}
+	values := make([]any, params.Length())
+	for i := range values {
+		if params.IsNull(uint64(i)) {
+			continue
+		}
+		values[i] = plan.ParamValue{
+			Value: string(params.GetRawBytesAt(i)),
+			IsBin: proc.GetPrepareParamIsBin(i),
+		}
+	}
+	return plan.FillExactDecimalComparisonParamsInPlan(ctx, pn, values)
 }
 
 func cloneInternalExecutorResultBatch(

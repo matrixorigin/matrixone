@@ -79,6 +79,18 @@ func TestPrepareRulesTraverseEveryWindowSpecParameter(t *testing.T) {
 	})
 }
 
+func TestPrepareRuntimeParamOrderPreservesProtocolSlots(t *testing.T) {
+	rule := NewGetParamRule()
+	rule.params = map[int]int{1: 0, 3: 0}
+	rule.mapTypes = map[int]int32{1: int32(types.T_varchar), 3: int32(types.T_int64)}
+	rule.SetParamOrder(true)
+
+	require.Equal(t, map[int]int{1: 0, 3: 2}, rule.params)
+	require.Len(t, rule.paramTypes, 3)
+	require.Equal(t, int32(types.T_varchar), rule.paramTypes[0])
+	require.Equal(t, int32(types.T_int64), rule.paramTypes[2])
+}
+
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
 	newWindow := func() *planpb.WindowSpec {
 		param := func() *planpb.Expr {

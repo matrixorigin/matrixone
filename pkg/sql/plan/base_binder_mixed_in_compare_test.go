@@ -38,7 +38,7 @@ func mixedStringNumericInList(t *testing.T, ctx context.Context) *planpb.Expr {
 	}
 }
 
-func TestMixedStringNumericInBindsNumericComparisonsAsFloat64(t *testing.T) {
+func TestMixedStringNumericMultiInKeepsRealFallback(t *testing.T) {
 	ctx := context.Background()
 	expr, err := BindFuncExprImplByPlanExpr(ctx, "in", []*planpb.Expr{
 		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx),
@@ -126,29 +126,100 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 	require.False(t, result.Bval)
 }
 
+func TestDecimalStringLiteralLeftInKeepsExactComparison(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, operator := range []struct {
+		name       string
+		comparison string
+	}{
+		{name: "in", comparison: "="},
+		{name: "not_in", comparison: "!="},
+	} {
+		t.Run(operator.name, func(t *testing.T) {
+			column := &planpb.Expr{
+				Typ:  makePlan2Type(&decimalType),
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			list := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{column}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), operator.name, []*planpb.Expr{
+				makePlan2StringConstExprWithType("9007199254740992.0001"),
+				list,
+			})
+			require.NoError(t, err)
+			comparison := expr.GetF()
+			require.NotNil(t, comparison)
+			require.Equal(t, operator.comparison, comparison.Func.GetObjName())
+			for _, arg := range comparison.Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+		})
+	}
+}
+
+func TestDecimalTextParameterLeftInDefersExactDomainToExecution(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, operator := range []struct {
+		name       string
+		comparison string
+	}{
+		{name: "in", comparison: "="},
+		{name: "not_in", comparison: "!="},
+	} {
+		t.Run(operator.name, func(t *testing.T) {
+			column := makePreparedDecimalComparisonColumn(decimalType)
+			list := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{column}}},
+			}
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), operator.name, []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				list,
+			})
+			require.NoError(t, err)
+			comparison := expr.GetF()
+			require.NotNil(t, comparison)
+			require.Equal(t, operator.comparison, comparison.Func.GetObjName())
+			require.Len(t, comparison.Args, 2)
+			for _, arg := range comparison.Args {
+				require.True(t, types.T(arg.Typ.Id).IsDecimal(), "type id %d", arg.Typ.Id)
+			}
+			_, ok := preparedDecimalComparisonCast(comparison.Args[0])
+			require.True(t, ok)
+		})
+	}
+}
+
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		column   types.T
+		column   types.Type
 		value    string
 		expected types.T
 	}{
 		{
 			name:     "int64",
-			column:   types.T_int64,
+			column:   types.T_int64.ToType(),
 			value:    "9223372036854775806",
 			expected: types.T_int64,
 		},
 		{
+			name:     "decimal128",
+			column:   types.New(types.T_decimal128, 20, 4),
+			value:    "9007199254740992.0001",
+			expected: types.T_decimal128,
+		},
+		{
 			name:     "decimal256",
-			column:   types.T_decimal256,
+			column:   types.New(types.T_decimal256, 40, 0),
 			value:    "9999999999999999999999999999999999999998",
 			expected: types.T_decimal256,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			left := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(tc.column)},
+				Typ:  makePlan2Type(&tc.column),
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
 			}
 			rightList := &planpb.Expr{
@@ -165,6 +236,71 @@ func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 			require.Len(t, comparison.Args, 2)
 			require.Equal(t, int32(tc.expected), comparison.Args[0].Typ.Id)
 			require.Equal(t, int32(tc.expected), comparison.Args[1].Typ.Id)
+		})
+	}
+}
+
+func TestDecimalMultiElementInKeepsRealFallback(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	left := makePreparedDecimalComparisonColumn(decimalType)
+	right := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		makePlan2StringConstExprWithType("9007199254740992.0001"),
+		makePlan2StringConstExprWithType("9007199254740992.9999"),
+	}}}}
+
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in", []*planpb.Expr{left, right})
+	require.NoError(t, err)
+
+	comparisons := 0
+	var visit func(*planpb.Expr)
+	visit = func(current *planpb.Expr) {
+		if fn := current.GetF(); fn != nil {
+			if fn.Func.GetObjName() == "=" {
+				comparisons++
+				require.Len(t, fn.Args, 2)
+				for _, arg := range fn.Args {
+					require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+				}
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+	}
+	visit(expr)
+	require.Equal(t, 2, comparisons)
+}
+
+func TestDecimalMultiElementPreparedInUsesExactComparisons(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	for _, name := range []string{"in", "not_in"} {
+		t.Run(name, func(t *testing.T) {
+			left := makePreparedDecimalComparisonColumn(decimalType)
+			right := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+				makePreparedDecimalComparisonParam(0),
+				makePreparedDecimalComparisonParam(1),
+			}}}}
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{left, right})
+			require.NoError(t, err)
+
+			comparisons := 0
+			var visit func(*planpb.Expr)
+			visit = func(current *planpb.Expr) {
+				if fn := current.GetF(); fn != nil {
+					if fn.Func.GetObjName() == "=" || fn.Func.GetObjName() == "!=" {
+						comparisons++
+						require.Len(t, fn.Args, 2)
+						for _, arg := range fn.Args {
+							require.True(t, types.T(arg.Typ.Id).IsDecimal())
+						}
+					}
+					for _, arg := range fn.Args {
+						visit(arg)
+					}
+				}
+			}
+			visit(expr)
+			require.Equal(t, 2, comparisons)
 		})
 	}
 }

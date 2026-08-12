@@ -302,13 +302,16 @@ type PrepareStmt struct {
 	OnlyFullGroupBy bool
 	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
 	// minimal in-memory fixtures that predate this plan dependency.
-	onlyFullGroupBySet bool
-	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	onlyFullGroupBySet              bool
+	ParamTypes                      []byte
+	ColDefData                      [][]byte
+	IsCloudNonuser                  bool
+	proc                            *process.Process
+	remapDb                         map[string]string
+	defaultDatabase                 string
+	exactDecimalComparisonParams    bool
+	exactDecimalComparisonParamsSet bool
+	exactDecimalParamPositions      []int32
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}

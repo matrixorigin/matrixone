@@ -83,4 +83,228 @@ DEALLOCATE PREPARE p_lt;
 DEALLOCATE PREPARE p_le;
 DEALLOCATE PREPARE p_gt;
 DEALLOCATE PREPARE p_ge;
+PREPARE p_reverse_in FROM
+'SELECT id FROM t WHERE ''9007199254740992.0001'' IN (d128) ORDER BY id';
+EXECUTE p_reverse_in;
+➤ id[4,32,0]  𝄀
+4
+DEALLOCATE PREPARE p_reverse_in;
+PREPARE p_reverse_not_in FROM
+'SELECT id FROM t WHERE ''9007199254740992.0001'' NOT IN (d128) ORDER BY id';
+EXECUTE p_reverse_not_in;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+5  𝄀
+6
+DEALLOCATE PREPARE p_reverse_not_in;
+CREATE TABLE prefix_values (id INT PRIMARY KEY, d DECIMAL(10,0));
+INSERT INTO prefix_values VALUES (1, 0), (2, 1), (3, 16), (4, 100);
+PREPARE p_prefix FROM 'SELECT id FROM prefix_values WHERE d = ? ORDER BY id';
+SET @p = '0x10';
+EXECUTE p_prefix USING @p;
+➤ id[4,32,0]  𝄀
+1
+SET @p = '1+2';
+EXECUTE p_prefix USING @p;
+➤ id[4,32,0]  𝄀
+2
+SET @p = '1 2';
+EXECUTE p_prefix USING @p;
+➤ id[4,32,0]  𝄀
+2
+DEALLOCATE PREPARE p_prefix;
+PREPARE p_extra_scale FROM 'SELECT id FROM t WHERE d128 = ? ORDER BY id';
+SET @p = '9007199254740992.00014';
+EXECUTE p_extra_scale USING @p;
+➤ id[4,32,0]
+DEALLOCATE PREPARE p_extra_scale;
+PREPARE p_dynamic_reverse_in FROM 'SELECT id FROM t WHERE ? IN (d128) ORDER BY id';
+SET @p = '9007199254740992.0001';
+EXECUTE p_dynamic_reverse_in USING @p;
+➤ id[4,32,0]  𝄀
+4
+DEALLOCATE PREPARE p_dynamic_reverse_in;
+PREPARE p_dynamic_reverse_not_in FROM 'SELECT id FROM t WHERE ? NOT IN (d128) ORDER BY id';
+SET @p = '9007199254740992.0001';
+EXECUTE p_dynamic_reverse_not_in USING @p;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3  𝄀
+5  𝄀
+6
+DEALLOCATE PREPARE p_dynamic_reverse_not_in;
+PREPARE p_nested_or FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 = ? OR id = -1';
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_or USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+SET @p = '9007199254740992.0001';
+EXECUTE p_nested_or USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+4
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_or USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+DEALLOCATE PREPARE p_nested_or;
+PREPARE p_nested_not FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE NOT(d128 <> ?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_nested_not USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+DEALLOCATE PREPARE p_nested_not;
+PREPARE p_projection_case FROM
+'SELECT GROUP_CONCAT(CASE WHEN d128 = ? THEN id END ORDER BY id) FROM t';
+SET @p = '9007199254740992.00014';
+EXECUTE p_projection_case USING @p;
+➤ GROUP_CONCAT(case when d128 = ? then id end order by id separator ,)[12,0,0]  𝄀
+null
+DEALLOCATE PREPARE p_projection_case;
+PREPARE p_join_or FROM
+'SELECT GROUP_CONCAT(a.id ORDER BY a.id) FROM t a JOIN t b ON a.id=b.id AND (a.d128=? OR a.id=-1)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_join_or USING @p;
+➤ GROUP_CONCAT(a.id order by a.id separator ,)[12,0,0]  𝄀
+null
+DEALLOCATE PREPARE p_join_or;
+PREPARE p_having FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t GROUP BY id,d128 HAVING d128=? ORDER BY id';
+SET @p = '9007199254740992.00014';
+EXECUTE p_having USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]
+DEALLOCATE PREPARE p_having;
+DROP TABLE IF EXISTS ctas_decimal_param;
+PREPARE p_ctas FROM
+'CREATE TABLE ctas_decimal_param AS SELECT id,d128 FROM t WHERE d128=?';
+SET @p = '9007199254740992.00014';
+EXECUTE p_ctas USING @p;
+SELECT COUNT(*) FROM ctas_decimal_param;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_ctas;
+DROP TABLE IF EXISTS ctas_decimal_exact;
+PREPARE p_ctas_exact FROM
+'CREATE TABLE ctas_decimal_exact AS SELECT id,d128 FROM t WHERE d128=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_ctas_exact USING @p;
+SELECT id FROM ctas_decimal_exact ORDER BY id;
+➤ id[4,32,0]  𝄀
+4
+DEALLOCATE PREPARE p_ctas_exact;
+CREATE TABLE apply_source (id INT, d DECIMAL(20,4), start_v INT, stop_v INT);
+INSERT INTO apply_source VALUES (1, 9007199254740992.0001, 1, 0);
+PREPARE p_outer_apply FROM
+'SELECT s.id,g.result FROM apply_source s OUTER APPLY generate_series(s.start_v,s.stop_v,1) g WHERE s.d=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_outer_apply USING @p;
+➤ id[4,32,0]  ¦  result[-5,64,0]  𝄀
+1  ¦  null
+DEALLOCATE PREPARE p_outer_apply;
+DROP SNAPSHOT IF EXISTS prepare_decimal_snapshot;
+CREATE TABLE snapshot_source (id INT, d DECIMAL(20,4));
+INSERT INTO snapshot_source VALUES (1, 9007199254740992.0001);
+CREATE SNAPSHOT prepare_decimal_snapshot FOR TABLE prepare_decimal_comparison snapshot_source;
+DELETE FROM snapshot_source;
+PREPARE p_snapshot FROM
+'SELECT id FROM snapshot_source{snapshot="prepare_decimal_snapshot"} WHERE d=?';
+SET @p = '9007199254740992.0001';
+EXECUTE p_snapshot USING @p;
+➤ id[4,32,0]  𝄀
+1
+DEALLOCATE PREPARE p_snapshot;
+DROP SNAPSHOT prepare_decimal_snapshot;
+CREATE TABLE odku_source (id INT, d DECIMAL(20,4), u INT, v INT);
+CREATE TABLE odku_target (id INT PRIMARY KEY, u INT UNIQUE, v INT);
+INSERT INTO odku_source VALUES (2, 9007199254740992.0001, 10, 200);
+INSERT INTO odku_target VALUES (1, 10, 100);
+PREPARE p_odku FROM
+'INSERT INTO odku_target SELECT id,u,v FROM odku_source WHERE d=? ON DUPLICATE KEY UPDATE v=VALUES(v)';
+SET @p = '9007199254740992.0001';
+EXECUTE p_odku USING @p;
+SELECT id,u,v FROM odku_target;
+➤ id[4,32,0]  ¦  u[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  ¦  200
+DEALLOCATE PREPARE p_odku;
+CREATE TABLE typed_param_target (id INT PRIMARY KEY, b BIT(8));
+INSERT INTO typed_param_target VALUES (1, 0);
+PREPARE p_bit_kind FROM
+'UPDATE typed_param_target SET b=? WHERE EXISTS(SELECT 1 FROM t WHERE d128=?)';
+SET @value = 5, @p = '9007199254740992.0001';
+EXECUTE p_bit_kind USING @value,@p;
+SELECT HEX(b) FROM typed_param_target;
+➤ HEX(b)[12,49151,0]  𝄀
+5
+DEALLOCATE PREPARE p_bit_kind;
+PREPARE p_json_kind FROM 'SELECT JSON_ARRAY(?) FROM t WHERE d128=?';
+SET @value = 5, @p = '9007199254740992.0001';
+EXECUTE p_json_kind USING @value,@p;
+➤ JSON_ARRAY(?)[-1,2147483647,0]  𝄀
+[5]
+DEALLOCATE PREPARE p_json_kind;
+PREPARE p_multi_in FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 IN (?,?)';
+PREPARE p_multi_not_in FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 NOT IN (?,?)';
+SET @lo = '9007199254740992.00014', @hi = '9007199254740992.99994';
+EXECUTE p_multi_in USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+EXECUTE p_multi_not_in USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+2,3,4,5,6
+DEALLOCATE PREPARE p_multi_in;
+DEALLOCATE PREPARE p_multi_not_in;
+PREPARE p_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 BETWEEN ? AND ?';
+PREPARE p_not_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 NOT BETWEEN ? AND ?';
+SET @lo = '9007199254740992.00005', @hi = '9007199254740992.99995';
+EXECUTE p_between USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+4
+EXECUTE p_not_between USING @lo,@hi;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+2,3,5,6
+DEALLOCATE PREPARE p_between;
+DEALLOCATE PREPARE p_not_between;
+PREPARE p_mixed_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 BETWEEN ? AND ''9007199254740992.99995''';
+PREPARE p_mixed_not_between FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128 NOT BETWEEN ? AND ''9007199254740992.99995''';
+SET @lo = '9007199254740992.00005';
+EXECUTE p_mixed_between USING @lo;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+2,3,4,5
+EXECUTE p_mixed_not_between USING @lo;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+6
+DEALLOCATE PREPARE p_mixed_between;
+DEALLOCATE PREPARE p_mixed_not_between;
+PREPARE p_scalar FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) FROM t WHERE d128=(SELECT ?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_scalar USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+null
+SET @p = '9007199254740992.0001';
+EXECUTE p_scalar USING @p;
+➤ GROUP_CONCAT(id order by id separator ,)[12,0,0]  𝄀
+4
+DEALLOCATE PREPARE p_scalar;
+PREPARE p_set FROM
+'SET @answer=(SELECT COUNT(*) FROM t WHERE d128=?)';
+SET @p = '9007199254740992.00014';
+EXECUTE p_set USING @p;
+SELECT @answer;
+➤ @answer[12,0,0]  𝄀
+0
+SET @p = '9007199254740992.0001';
+EXECUTE p_set USING @p;
+SELECT @answer;
+➤ @answer[12,0,0]  𝄀
+1
+DEALLOCATE PREPARE p_set;
 DROP DATABASE prepare_decimal_comparison;

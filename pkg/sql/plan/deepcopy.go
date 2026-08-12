@@ -228,126 +228,13 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 	}
 }
 
+// DeepCopyNode uses protobuf's generated field traversal so newly added plan
+// fields cannot silently disappear from execution-time copies.
 func DeepCopyNode(node *plan.Node) *plan.Node {
-	newNode := &Node{
-		NodeType:        node.NodeType,
-		NodeId:          node.NodeId,
-		ExtraOptions:    node.ExtraOptions,
-		Children:        slices.Clone(node.Children),
-		JoinType:        node.JoinType,
-		IsRightJoin:     node.IsRightJoin,
-		BindingTags:     slices.Clone(node.BindingTags),
-		Limit:           DeepCopyExpr(node.Limit),
-		Offset:          DeepCopyExpr(node.Offset),
-		ProjectList:     DeepCopyExprList(node.ProjectList),
-		OnList:          DeepCopyExprList(node.OnList),
-		FilterList:      DeepCopyExprList(node.FilterList),
-		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
-		GroupBy:         DeepCopyExprList(node.GroupBy),
-		GroupingFlag:    slices.Clone(node.GroupingFlag),
-		GroupByHashKey:  slices.Clone(node.GroupByHashKey),
-		AggList:         DeepCopyExprList(node.AggList),
-		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
-		Interval:        DeepCopyExpr(node.Interval),
-		Sliding:         DeepCopyExpr(node.Sliding),
-		Timestamp:       DeepCopyExpr(node.Timestamp),
-		WEnd:            DeepCopyExpr(node.WEnd),
-		FillType:        node.FillType,
-		FillVal:         DeepCopyExprList(node.FillVal),
-		GapFillMode:     node.GapFillMode,
-
-		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
-		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
-		FuzzyBuildSide:            node.FuzzyBuildSide,
-
-		DeleteCtx:              DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList:        DeepCopyExprList(node.TblFuncExprList),
-		ClusterTable:           DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:              DeepCopyInsertCtx(node.InsertCtx),
-		NotCacheable:           node.NotCacheable,
-		SourceStep:             node.SourceStep,
-		PreInsertCtx:           DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:         DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		LockTargets:            make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:            DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:                  node.IsEnd,
-		ExternScan:             deepCopyExternScan(node.ExternScan),
-		SampleFunc:             DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:          DeepCopyExprList(node.OnUpdateExprs),
-		DedupColName:           node.DedupColName,
-		DedupColTypes:          slices.Clone(node.DedupColTypes),
-		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
-		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
-		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
-		OriginViews:            slices.Clone(node.OriginViews),
-		DirectView:             node.DirectView,
-		RankOption:             DeepCopyRankOption(node.RankOption),
-		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
-		FilterIsBarrier:        node.FilterIsBarrier,
-		SpillMem:               node.SpillMem,
-		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
-			node.RuntimeFilterProbeList),
-		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
-			node.RuntimeFilterBuildList),
-		IfInsertFromUnique: node.IfInsertFromUnique,
-	}
-	if node.Fuzzymessage != nil {
-		newNode.Fuzzymessage = &plan.OriginTableMessageForFuzzy{
-			ParentTableName: node.Fuzzymessage.ParentTableName,
-			ParentUniqueCols: DeepCopyColDefList(
-				node.Fuzzymessage.ParentUniqueCols),
-		}
-	}
-	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
-
-	for idx, target := range node.LockTargets {
-		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
-	}
-
-	newNode.Stats = DeepCopyStats(node.Stats)
-
-	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
-	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
-
-	newNode.IndexScanInfo = plan.IndexScanInfo{
-		IsIndexScan:    node.IndexScanInfo.IsIndexScan,
-		IndexName:      node.IndexScanInfo.IndexName,
-		BelongToTable:  node.IndexScanInfo.BelongToTable,
-		Parts:          slices.Clone(node.IndexScanInfo.Parts),
-		IsUnique:       node.IndexScanInfo.IsUnique,
-		IndexTableName: node.IndexScanInfo.IndexTableName,
-	}
-
-	if node.WinSpecList != nil {
-		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))
-		for i, w := range node.WinSpecList {
-			newNode.WinSpecList[i] = DeepCopyExpr(w)
-		}
-	}
-
-	if node.TableDef != nil {
-		newNode.TableDef = DeepCopyTableDef(node.TableDef, true)
-	}
-
-	if node.RowsetData != nil {
-		newNode.RowsetData = &plan.RowsetData{
-			Cols:     make([]*plan.ColData, len(node.RowsetData.Cols)),
-			RowCount: node.RowsetData.RowCount,
-		}
-
-		for idx, col := range node.RowsetData.Cols {
-			newNode.RowsetData.Cols[idx] = DeepCopyColData(col)
-		}
-	}
-
-	return newNode
-}
-
-func deepCopyExternScan(scan *plan.ExternScan) *plan.ExternScan {
-	if scan == nil {
+	if node == nil {
 		return nil
 	}
-	return proto.Clone(scan).(*plan.ExternScan)
+	return proto.Clone(node).(*plan.Node)
 }
 
 func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {
@@ -680,243 +567,24 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 }
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
-	newQry := &plan.Query{
-		StmtType:            qry.StmtType,
-		Steps:               qry.Steps,
-		Nodes:               make([]*plan.Node, len(qry.Nodes)),
-		Params:              DeepCopyExprList(qry.Params),
-		Headings:            qry.Headings,
-		HasForeignKeyAction: qry.HasForeignKeyAction,
-		HasReturning:        qry.HasReturning,
-		ReturningStep:       qry.ReturningStep,
-		DetectSqls:          slices.Clone(qry.DetectSqls),
-		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+	if qry == nil {
+		return nil
 	}
-	for idx, node := range qry.Nodes {
-		newQry.Nodes[idx] = DeepCopyNode(node)
-	}
-	for idx, dependency := range qry.CatalogDependencies {
-		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
-	}
-	return newQry
+	return proto.Clone(qry).(*plan.Query)
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
-	switch p := pl.Plan.(type) {
-	case *Plan_Query:
-		return &Plan{
-			Plan: &plan.Plan_Query{
-				Query: DeepCopyQuery(p.Query),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	case *plan.Plan_Ddl:
-		return &Plan{
-			Plan: &plan.Plan_Ddl{
-				Ddl: DeepCopyDataDefinition(p.Ddl),
-			},
-			IsPrepare:   pl.IsPrepare,
-			TryRunTimes: pl.TryRunTimes,
-		}
-
-	default:
-		// only support query/insert plan now
+	if pl == nil {
 		return nil
 	}
+	return proto.Clone(pl).(*plan.Plan)
 }
 
 func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
-	newDf := &plan.DataDefinition{
-		DdlType: old.DdlType,
+	if old == nil {
+		return nil
 	}
-	if old.Query != nil {
-		newDf.Query = DeepCopyQuery(old.Query)
-	}
-
-	switch df := old.Definition.(type) {
-	case *plan.DataDefinition_CreateDatabase:
-		newDf.Definition = &plan.DataDefinition_CreateDatabase{
-			CreateDatabase: &plan.CreateDatabase{
-				IfNotExists: df.CreateDatabase.IfNotExists,
-				Database:    df.CreateDatabase.Database,
-			},
-		}
-
-	case *plan.DataDefinition_AlterDatabase:
-		newDf.Definition = &plan.DataDefinition_AlterDatabase{
-			AlterDatabase: &plan.AlterDatabase{
-				IfExists: df.AlterDatabase.IfExists,
-				Database: df.AlterDatabase.Database,
-			},
-		}
-
-	case *plan.DataDefinition_DropDatabase:
-		newDf.Definition = &plan.DataDefinition_DropDatabase{
-			DropDatabase: &plan.DropDatabase{
-				IfExists:   df.DropDatabase.IfExists,
-				Database:   df.DropDatabase.Database,
-				DatabaseId: df.DropDatabase.DatabaseId,
-			},
-		}
-
-	case *plan.DataDefinition_CreateTable:
-		CreateTable := &plan.CreateTable{
-			Replace:     df.CreateTable.Replace,
-			IfNotExists: df.CreateTable.IfNotExists,
-			Temporary:   df.CreateTable.Temporary,
-			Database:    df.CreateTable.Database,
-			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
-			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
-			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
-			FkTables:    slices.Clone(df.CreateTable.FkTables),
-			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
-		}
-		for i, val := range df.CreateTable.FkCols {
-			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
-		}
-		newDf.Definition = &plan.DataDefinition_CreateTable{
-			CreateTable: CreateTable,
-		}
-
-	case *plan.DataDefinition_AlterTable:
-		AlterTable := &plan.AlterTable{
-			Database:          df.AlterTable.Database,
-			TableDef:          DeepCopyTableDef(df.AlterTable.TableDef, true),
-			CopyTableDef:      DeepCopyTableDef(df.AlterTable.CopyTableDef, true),
-			IsClusterTable:    df.AlterTable.IsClusterTable,
-			AlgorithmType:     df.AlterTable.AlgorithmType,
-			CreateTmpTableSql: df.AlterTable.CreateTmpTableSql,
-			InsertTmpDataSql:  df.AlterTable.InsertTmpDataSql,
-			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
-		}
-		for i, action := range df.AlterTable.Actions {
-			if action == nil {
-				continue
-			}
-			switch act := action.Action.(type) {
-			case *plan.AlterTable_Action_Drop:
-				AlterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: &plan.AlterTable_Action_Drop{
-						Drop: &plan.AlterTableDrop{
-							Typ:  act.Drop.Typ,
-							Name: act.Drop.Name,
-						},
-					},
-				}
-			case *plan.AlterTable_Action_AddFk:
-				AddFk := &plan.AlterTable_Action_AddFk{
-					AddFk: &plan.AlterTableAddFk{
-						DbName:    act.AddFk.DbName,
-						TableName: act.AddFk.TableName,
-						Cols:      slices.Clone(act.AddFk.Cols),
-						Fkey:      DeepCopyFkey(act.AddFk.Fkey),
-					},
-				}
-				AlterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: AddFk,
-				}
-			case *plan.AlterTable_Action_AlterAutoIncrement:
-				AlterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: &plan.AlterTable_Action_AlterAutoIncrement{
-						AlterAutoIncrement: &plan.AlterTableAutoIncrement{
-							NewOffset: act.AlterAutoIncrement.NewOffset,
-						},
-					},
-				}
-			}
-		}
-
-		newDf.Definition = &plan.DataDefinition_AlterTable{
-			AlterTable: AlterTable,
-		}
-
-	case *plan.DataDefinition_DropTable:
-		newDf.Definition = &plan.DataDefinition_DropTable{
-			DropTable: DeepCopyDropTable(df.DropTable),
-		}
-
-	case *plan.DataDefinition_CreateIndex:
-		newDf.Definition = &plan.DataDefinition_CreateIndex{
-			CreateIndex: &plan.CreateIndex{
-				Database: df.CreateIndex.Database,
-				Table:    df.CreateIndex.Table,
-				TableDef: DeepCopyTableDef(df.CreateIndex.TableDef, true),
-				Index: &plan.CreateTable{
-					IfNotExists: df.CreateIndex.Index.IfNotExists,
-					Temporary:   df.CreateIndex.Index.Temporary,
-					Database:    df.CreateIndex.Index.Database,
-					Replace:     df.CreateIndex.Index.Replace,
-					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
-					IndexTables: DeepCopyTableDefList(df.CreateIndex.Index.GetIndexTables()),
-				},
-				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
-				TableExist:            df.CreateIndex.TableExist,
-			},
-		}
-
-	case *plan.DataDefinition_AlterIndex:
-		newDf.Definition = &plan.DataDefinition_AlterIndex{
-			AlterIndex: &plan.AlterIndex{
-				Index: df.AlterIndex.Index,
-			},
-		}
-
-	case *plan.DataDefinition_DropIndex:
-		newDf.Definition = &plan.DataDefinition_DropIndex{
-			DropIndex: &plan.DropIndex{
-				Database:  df.DropIndex.Database,
-				Table:     df.DropIndex.Table,
-				IndexName: df.DropIndex.IndexName,
-			},
-		}
-
-	case *plan.DataDefinition_TruncateTable:
-		truncateTable := &plan.TruncateTable{
-			Database:        df.TruncateTable.Database,
-			Table:           df.TruncateTable.Table,
-			ClusterTable:    DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
-			IndexTableNames: slices.Clone(df.TruncateTable.IndexTableNames),
-		}
-		newDf.Definition = &plan.DataDefinition_TruncateTable{
-			TruncateTable: truncateTable,
-		}
-
-	case *plan.DataDefinition_ShowVariables:
-		showVariables := &plan.ShowVariables{
-			Global: df.ShowVariables.Global,
-			Where:  DeepCopyExprList(df.ShowVariables.Where),
-		}
-
-		newDf.Definition = &plan.DataDefinition_ShowVariables{
-			ShowVariables: showVariables,
-		}
-
-	case *plan.DataDefinition_LockTables:
-		newDf.Definition = &plan.DataDefinition_LockTables{
-			LockTables: &plan.LockTables{
-				TableLocks: df.LockTables.TableLocks,
-			},
-		}
-
-	case *plan.DataDefinition_UnlockTables:
-		newDf.Definition = &plan.DataDefinition_UnlockTables{
-			UnlockTables: &plan.UnLockTables{},
-		}
-
-	case *plan.DataDefinition_AlterSequence:
-		newDf.Definition = &plan.DataDefinition_AlterSequence{
-			AlterSequence: &plan.AlterSequence{
-				IfExists: df.AlterSequence.IfExists,
-				Database: df.AlterSequence.Database,
-				TableDef: df.AlterSequence.TableDef,
-			},
-		}
-
-	}
-
-	return newDf
+	return proto.Clone(old).(*plan.DataDefinition)
 }
 
 func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
@@ -972,9 +640,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:         expr.Typ,
-		Ndv:         expr.Ndv,
-		Selectivity: expr.Selectivity,
+		Typ:               expr.Typ,
+		Ndv:               expr.Ndv,
+		Selectivity:       expr.Selectivity,
+		ExactDecimalParam: expr.ExactDecimalParam,
+		ExactDecimalGroup: expr.ExactDecimalGroup,
 	}
 
 	switch item := expr.Expr.(type) {

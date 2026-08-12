@@ -245,25 +245,54 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 func (vq *VisitPlan) Visit(ctx context.Context) error {
 	switch pl := vq.plan.Plan.(type) {
 	case *Plan_Query:
-		qry := pl.Query
-		vq.isUpdatePlan = (pl.Query.StmtType == plan.Query_UPDATE)
+		return vq.visitQuery(ctx, pl.Query)
+	case *plan.Plan_Ddl:
+		return vq.visitQuery(ctx, pl.Ddl.GetQuery())
+	case *plan.Plan_Dcl:
+		return vq.visitDataControl(ctx, pl.Dcl)
+	}
+	return nil
+}
 
-		if len(qry.Steps) == 0 {
-			return nil
+func (vq *VisitPlan) visitDataControl(ctx context.Context, dcl *plan.DataControl) error {
+	if dcl == nil || dcl.GetDclType() != plan.DataControl_SET_VARIABLES {
+		return nil
+	}
+	setVars := dcl.GetSetVariables()
+	if setVars == nil {
+		return nil
+	}
+	for _, rule := range vq.rules {
+		if !rule.IsApplyExpr() {
+			continue
 		}
-
-		for _, step := range qry.Steps {
-			err := vq.visitNode(ctx, qry, qry.Nodes[step], step)
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = rule.ApplyExpr(item.Value)
 			if err != nil {
 				return err
 			}
+			if item.Reserved != nil {
+				item.Reserved, err = rule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return err
+				}
+			}
 		}
-
-	default:
-		// do nothing
-
 	}
+	return vq.visitQuery(ctx, setVars.GetQuery())
+}
 
+func (vq *VisitPlan) visitQuery(ctx context.Context, qry *Query) error {
+	if qry == nil {
+		return nil
+	}
+	vq.isUpdatePlan = qry.StmtType == plan.Query_UPDATE
+	for _, step := range qry.Steps {
+		if err := vq.visitNode(ctx, qry, qry.Nodes[step], step); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
