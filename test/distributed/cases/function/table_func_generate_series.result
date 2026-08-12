@@ -174,9 +174,10 @@ result
 5
 create table t(a int, b text);
 insert into t select result, repeat('foobarzoo', 500) t from generate_series(1, 200000) t;
-select count(*) as ttl from t;
-ttl
-200000
+select count(*) as ttl, min(a) as min_value, max(a) as max_value,
+       count(distinct a) as unique_values from t;
+ttl    min_value    max_value    unique_values
+200000    1    200000    200000
 drop table t;
 create table t(a int, b int);
 explain select t.*, tf.* from t cross apply generate_series(t.a, t.b) tf;
