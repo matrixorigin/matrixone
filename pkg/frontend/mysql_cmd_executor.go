@@ -5595,9 +5595,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varbinary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:

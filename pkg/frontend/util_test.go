@@ -1862,7 +1862,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "varbinary length stays in bytes",
 			typ:       types.New(types.T_varbinary, 128, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    128,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1870,7 +1870,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "binary length stays in bytes",
 			typ:       types.New(types.T_binary, 128, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_STRING,
 			charset:   charsetBinary,
 			length:    128,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1899,7 +1899,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "unknown varbinary width stays unbounded",
 			typ:       types.New(types.T_varbinary, -1, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    math.MaxUint32,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1907,7 +1907,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "zero varbinary width stays zero",
 			typ:       types.New(types.T_varbinary, 0, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    0,
 			flags:     uint16(defines.BINARY_FLAG),
