@@ -241,6 +241,109 @@ func BlockDataRead(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) error {
+	return blockDataRead(
+		ctx,
+		info,
+		ds,
+		columns,
+		colTypes,
+		phyAddrColumnPos,
+		ts,
+		filterSeqnums,
+		filterColTypes,
+		filter,
+		orderByLimit,
+		policy,
+		tableName,
+		bat,
+		cacheVectors,
+		mp,
+		fs,
+		nil,
+		nil,
+		nil,
+	)
+}
+
+// BlockDataReadWithFilter applies a residual filter after materializing only
+// earlyColumns, then reads the other columns for the surviving rows. It is
+// intentionally limited to scans without storage TopN; callers must use the
+// eager BlockDataRead path when orderByLimit is active. preFilterRows is the
+// live row count after storage visibility and tombstones but before the
+// residual filter.
+func BlockDataReadWithFilter(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	ts timestamp.Timestamp,
+	filterSeqnums []uint16,
+	filterColTypes []types.Type,
+	filter objectio.BlockReadFilter,
+	policy fileservice.Policy,
+	tableName string,
+	bat *batch.Batch,
+	cacheVectors containers.Vectors,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	earlyColumns []int,
+	applyFilter engine.ReaderFilter,
+) (preFilterRows int, err error) {
+	if applyFilter == nil {
+		return 0, moerr.NewInvalidInputNoCtx("nil residual block filter")
+	}
+	if err := validateEarlyColumns(earlyColumns, len(columns)); err != nil {
+		return 0, err
+	}
+	err = blockDataRead(
+		ctx,
+		info,
+		ds,
+		columns,
+		colTypes,
+		phyAddrColumnPos,
+		ts,
+		filterSeqnums,
+		filterColTypes,
+		filter,
+		nil,
+		policy,
+		tableName,
+		bat,
+		cacheVectors,
+		mp,
+		fs,
+		earlyColumns,
+		applyFilter,
+		&preFilterRows,
+	)
+	return preFilterRows, err
+}
+
+func blockDataRead(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	ts timestamp.Timestamp,
+	filterSeqnums []uint16,
+	filterColTypes []types.Type,
+	filter objectio.BlockReadFilter,
+	orderByLimit *objectio.IndexReaderTopOp,
+	policy fileservice.Policy,
+	tableName string,
+	bat *batch.Batch,
+	cacheVectors containers.Vectors,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	earlyColumns []int,
+	applyFilter engine.ReaderFilter,
+	preFilterRows *int,
+) error {
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		logutil.Debugf("read block %s, columns %v, types %v", info.BlockID.String(), columns, colTypes)
 	}
@@ -280,27 +383,50 @@ func BlockDataRead(
 		}
 	}
 
-	err = BlockDataReadInner(
-		ctx,
-		info,
-		ds,
-		columns,
-		colTypes,
-		phyAddrColumnPos,
-		snapshotTS,
-		sels,
-		orderByLimit,
-		policy,
-		bat,
-		cacheVectors,
-		mp,
-		fs,
-	)
+	if applyFilter == nil {
+		err = BlockDataReadInner(
+			ctx,
+			info,
+			ds,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			snapshotTS,
+			sels,
+			orderByLimit,
+			policy,
+			bat,
+			cacheVectors,
+			mp,
+			fs,
+		)
+	} else {
+		err = blockDataReadWithFilter(
+			ctx,
+			info,
+			ds,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			snapshotTS,
+			sels,
+			policy,
+			bat,
+			cacheVectors,
+			mp,
+			fs,
+			earlyColumns,
+			applyFilter,
+			preFilterRows,
+		)
+	}
 	if err != nil {
 		return err
 	}
 
-	bat.SetRowCount(bat.Vecs[0].Length())
+	if applyFilter == nil {
+		bat.SetRowCount(bat.Vecs[0].Length())
+	}
 	return nil
 }
 
@@ -605,6 +731,368 @@ func materializeBlockData(
 		}
 	}
 	return
+}
+
+func validateEarlyColumns(earlyColumns []int, columnCount int) error {
+	if len(earlyColumns) == 0 || len(earlyColumns) >= columnCount {
+		return moerr.NewInvalidInputNoCtxf(
+			"early column count %d must be in [1, %d)",
+			len(earlyColumns),
+			columnCount,
+		)
+	}
+	previous := -1
+	for _, pos := range earlyColumns {
+		if pos < 0 || pos >= columnCount {
+			return moerr.NewInvalidInputNoCtxf(
+				"early column position %d out of range [0, %d)",
+				pos,
+				columnCount,
+			)
+		}
+		if pos <= previous {
+			return moerr.NewInvalidInputNoCtx("early column positions must be sorted and unique")
+		}
+		previous = pos
+	}
+	return nil
+}
+
+func columnPositionsComplement(earlyColumns []int, columnCount int) []int {
+	lateColumns := make([]int, 0, columnCount-len(earlyColumns))
+	earlyIdx := 0
+	for pos := 0; pos < columnCount; pos++ {
+		if earlyIdx < len(earlyColumns) && earlyColumns[earlyIdx] == pos {
+			earlyIdx++
+			continue
+		}
+		lateColumns = append(lateColumns, pos)
+	}
+	return lateColumns
+}
+
+func validateLateMaterializationOutput(
+	columns []uint16,
+	colTypes []types.Type,
+	outputBat *batch.Batch,
+) error {
+	if len(columns) != len(colTypes) {
+		return moerr.NewInvalidInputNoCtxf(
+			"block column count %d does not match type count %d",
+			len(columns),
+			len(colTypes),
+		)
+	}
+	if outputBat == nil {
+		return moerr.NewInvalidInputNoCtx("nil output batch for late block read")
+	}
+	if len(outputBat.Vecs) < len(columns) {
+		return moerr.NewInvalidInputNoCtxf(
+			"block output vector count %d is smaller than column count %d",
+			len(outputBat.Vecs),
+			len(columns),
+		)
+	}
+	for pos := range columns {
+		if outputBat.Vecs[pos] == nil {
+			return moerr.NewInvalidInputNoCtxf("nil output vector for block column %d", columns[pos])
+		}
+	}
+	return nil
+}
+
+// materializeBlockColumnsAtPositions builds a non-owning batch view over the
+// caller's destination vectors. The view never releases those vectors.
+func materializeBlockColumnsAtPositions(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	positions []int,
+	selectRows []int64,
+	visibilityTS *types.TS,
+	policy fileservice.Policy,
+	outputBat *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (objectio.Bitmap, error) {
+	if outputBat == nil {
+		return objectio.NullBitmap, moerr.NewInvalidInputNoCtx("nil output batch for block columns")
+	}
+	selectedColumns := make([]uint16, len(positions))
+	selectedTypes := make([]types.Type, len(positions))
+	selectedOutput := batch.NewWithSize(len(positions))
+	selectedPhyAddrPos := -1
+	for i, pos := range positions {
+		if pos < 0 || pos >= len(columns) || pos >= len(colTypes) || pos >= len(outputBat.Vecs) {
+			return objectio.NullBitmap, moerr.NewInvalidInputNoCtxf(
+				"block column position %d is out of range",
+				pos,
+			)
+		}
+		selectedColumns[i] = columns[pos]
+		selectedTypes[i] = colTypes[pos]
+		selectedOutput.Vecs[i] = outputBat.Vecs[pos]
+		if pos == phyAddrColumnPos {
+			selectedPhyAddrPos = i
+		}
+	}
+	return materializeBlockData(
+		ctx,
+		info,
+		selectedColumns,
+		selectedTypes,
+		selectedPhyAddrPos,
+		selectRows,
+		visibilityTS,
+		policy,
+		selectedOutput,
+		mp,
+		fs,
+	)
+}
+
+func validateReaderFilterResult(
+	result engine.ReaderFilterResult,
+	inputRows int,
+	outputRows int,
+) error {
+	if result.All {
+		if outputRows != inputRows {
+			return moerr.NewInvalidInputNoCtxf(
+				"residual filter marked all rows selected but changed row count from %d to %d",
+				inputRows,
+				outputRows,
+			)
+		}
+		return nil
+	}
+	if len(result.Sels) != outputRows {
+		return moerr.NewInvalidInputNoCtxf(
+			"residual filter returned %d selections for %d output rows",
+			len(result.Sels),
+			outputRows,
+		)
+	}
+	previous := int64(-1)
+	for _, row := range result.Sels {
+		if row < 0 || row >= int64(inputRows) {
+			return moerr.NewInvalidInputNoCtxf(
+				"residual filter row %d out of range [0, %d)",
+				row,
+				inputRows,
+			)
+		}
+		if row <= previous {
+			return moerr.NewInvalidInputNoCtx("residual filter rows must be sorted and unique")
+		}
+		previous = row
+	}
+	return nil
+}
+
+func blockDataReadWithFilter(
+	ctx context.Context,
+	info *objectio.BlockInfo,
+	ds engine.DataSource,
+	columns []uint16,
+	colTypes []types.Type,
+	phyAddrColumnPos int,
+	ts types.TS,
+	storageSelectRows []int64,
+	policy fileservice.Policy,
+	outputBat *batch.Batch,
+	cacheVectors containers.Vectors,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	earlyColumns []int,
+	applyFilter engine.ReaderFilter,
+	preFilterRows *int,
+) (err error) {
+	if err = validateLateMaterializationOutput(columns, colTypes, outputBat); err != nil {
+		return err
+	}
+	cacheVectors.Free(mp)
+
+	var (
+		deleteMask       objectio.Bitmap
+		physicalRows     []int64
+		physicalRowCount int
+	)
+	if storageSelectRows != nil {
+		ignoredMask, readErr := materializeBlockColumnsAtPositions(
+			ctx,
+			info,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			earlyColumns,
+			storageSelectRows,
+			nil,
+			policy,
+			outputBat,
+			mp,
+			fs,
+		)
+		ignoredMask.Release()
+		if readErr != nil {
+			return readErr
+		}
+		physicalRows = storageSelectRows
+	} else {
+		if ds == nil {
+			return moerr.NewInvalidInputNoCtx("nil data source for late block read")
+		}
+		tombstones, tombstoneErr := ds.GetTombstones(ctx, &info.BlockID)
+		if tombstoneErr != nil {
+			tombstones.Release()
+			return tombstoneErr
+		}
+		var visibilityTS *types.TS
+		if info.IsAppendable() {
+			visibilityTS = &ts
+		}
+		if deleteMask, err = materializeBlockColumnsAtPositions(
+			ctx,
+			info,
+			columns,
+			colTypes,
+			phyAddrColumnPos,
+			earlyColumns,
+			nil,
+			visibilityTS,
+			policy,
+			outputBat,
+			mp,
+			fs,
+		); err != nil {
+			tombstones.Release()
+			return err
+		}
+		if !deleteMask.IsValid() {
+			deleteMask = tombstones
+		} else {
+			deleteMask.Or(tombstones)
+			tombstones.Release()
+		}
+		defer deleteMask.Release()
+
+		physicalRowCount = outputBat.Vecs[earlyColumns[0]].Length()
+		if !deleteMask.IsEmpty() {
+			deleted := vector.GetSels()
+			defer func() { vector.PutSels(deleted) }()
+			deleted = deleteMask.ToI64Array(&deleted)
+			for _, pos := range earlyColumns {
+				outputBat.Vecs[pos].Shrink(deleted, true)
+			}
+		}
+	}
+
+	liveRows := outputBat.Vecs[earlyColumns[0]].Length()
+	outputBat.SetRowCount(liveRows)
+	for _, pos := range earlyColumns {
+		if outputBat.Vecs[pos].Length() != liveRows {
+			return moerr.NewInvalidInputNoCtxf(
+				"early column %d has %d rows before filtering, expected %d",
+				pos,
+				outputBat.Vecs[pos].Length(),
+				liveRows,
+			)
+		}
+	}
+	if preFilterRows != nil {
+		*preFilterRows = liveRows
+	}
+	if liveRows == 0 {
+		return nil
+	}
+
+	filterResult, err := applyFilter(outputBat, earlyColumns)
+	if err != nil {
+		return err
+	}
+	if err = validateReaderFilterResult(filterResult, liveRows, outputBat.RowCount()); err != nil {
+		return err
+	}
+	for _, pos := range earlyColumns {
+		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
+			return moerr.NewInvalidInputNoCtxf(
+				"residual filter left early column %d with %d rows for batch row count %d",
+				pos,
+				outputBat.Vecs[pos].Length(),
+				outputBat.RowCount(),
+			)
+		}
+	}
+	if outputBat.RowCount() == 0 {
+		return nil
+	}
+
+	selectedPhysicalRows := physicalRows
+	if physicalRows == nil && !deleteMask.IsEmpty() {
+		// Map only the surviving logical rows back to block offsets. In
+		// particular, a zero-result filter returns above without building an
+		// O(block rows) live-row slice.
+		selectedPhysicalRows = vector.GetSels()
+		defer func() { vector.PutSels(selectedPhysicalRows) }()
+		nextSelected := 0
+		liveRow := int64(0)
+		for physicalRow := 0; physicalRow < physicalRowCount; physicalRow++ {
+			if deleteMask.Contains(uint64(physicalRow)) {
+				continue
+			}
+			if filterResult.All ||
+				(nextSelected < len(filterResult.Sels) && filterResult.Sels[nextSelected] == liveRow) {
+				selectedPhysicalRows = append(selectedPhysicalRows, int64(physicalRow))
+				if !filterResult.All {
+					nextSelected++
+				}
+			}
+			liveRow++
+		}
+	} else if !filterResult.All {
+		if physicalRows == nil {
+			selectedPhysicalRows = filterResult.Sels
+		} else {
+			selectedPhysicalRows = vector.GetSels()
+			defer func() { vector.PutSels(selectedPhysicalRows) }()
+			for _, row := range filterResult.Sels {
+				selectedPhysicalRows = append(selectedPhysicalRows, physicalRows[row])
+			}
+		}
+	}
+
+	lateColumns := columnPositionsComplement(earlyColumns, len(columns))
+	ignoredMask, readErr := materializeBlockColumnsAtPositions(
+		ctx,
+		info,
+		columns,
+		colTypes,
+		phyAddrColumnPos,
+		lateColumns,
+		selectedPhysicalRows,
+		nil,
+		policy,
+		outputBat,
+		mp,
+		fs,
+	)
+	ignoredMask.Release()
+	if readErr != nil {
+		return readErr
+	}
+	for _, pos := range lateColumns {
+		if outputBat.Vecs[pos].Length() != outputBat.RowCount() {
+			return moerr.NewInvalidInputNoCtxf(
+				"late column %d has %d rows for batch row count %d",
+				pos,
+				outputBat.Vecs[pos].Length(),
+				outputBat.RowCount(),
+			)
+		}
+	}
+	return nil
 }
 
 // BlockDataReadInner only read data,don't apply deletes.

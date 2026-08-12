@@ -15,6 +15,8 @@
 package table_scan
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,6 +39,14 @@ type container struct {
 	runtimeFilterExecutors []colexec.ExpressionExecutor
 	allFilterExecutors     []colexec.ExpressionExecutor // runtime + static; elements owned by above slices
 	filterBs               vector.FunctionParameterWrapper[bool]
+	earlyColumns           []int
+	lateColumns            []int
+	filterRows             []int64
+	filterReadMetrics      bool
+	filterLateMaterialized bool
+	filterActiveDuration   time.Duration
+	readerFilter           engine.ReaderFilter
+	metricView             *batch.Batch
 }
 
 type TableScan struct {
@@ -110,6 +120,13 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	tableScan.ctr.runtimeFilterExecutors = nil
 	tableScan.ctr.allFilterExecutors = nil
+	tableScan.ctr.earlyColumns = tableScan.ctr.earlyColumns[:0]
+	tableScan.ctr.lateColumns = tableScan.ctr.lateColumns[:0]
+	tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
+	tableScan.ctr.filterReadMetrics = false
+	tableScan.ctr.filterLateMaterialized = false
+	tableScan.ctr.filterActiveDuration = 0
+	tableScan.ctr.readerFilter = nil
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
 	if tableScan.OpAnalyzer != nil {
@@ -142,6 +159,17 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	}
 	tableScan.ctr.runtimeFilterExecutors = nil
 	tableScan.ctr.allFilterExecutors = nil
+	tableScan.ctr.earlyColumns = nil
+	tableScan.ctr.lateColumns = nil
+	tableScan.ctr.filterRows = nil
+	tableScan.ctr.filterReadMetrics = false
+	tableScan.ctr.filterLateMaterialized = false
+	tableScan.ctr.filterActiveDuration = 0
+	tableScan.ctr.readerFilter = nil
+	if tableScan.ctr.metricView != nil {
+		tableScan.ctr.metricView.Vecs = nil
+		tableScan.ctr.metricView = nil
+	}
 }
 
 func (tableScan *TableScan) closeReader() {
