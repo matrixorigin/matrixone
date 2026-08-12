@@ -63,6 +63,11 @@ type failingCreateFactory struct {
 	attempts atomic.Int32
 }
 
+type partialFailCreateFactory struct {
+	first *testBackend
+	calls atomic.Int32
+}
+
 type newStreamErrorBackend struct {
 	*testBackend
 	err error
@@ -229,6 +234,14 @@ func TestClientRetriesDrainAdmissionRaceWithoutClosingOldBackend(t *testing.T) {
 func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
 	f.attempts.Add(1)
 	return nil, fmt.Errorf("create failed")
+}
+
+func (f *partialFailCreateFactory) Create(string, ...BackendOption) (Backend, error) {
+	if f.calls.Add(1) > 1 {
+		return nil, fmt.Errorf("create failed")
+	}
+	f.first = &testBackend{activeTime: time.Now()}
+	return f.first, nil
 }
 
 func (f *blockingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
@@ -1562,6 +1575,91 @@ func TestInitBackendsAndMaxBackendsPerHostNotMatch(t *testing.T) {
 	}()
 
 	assert.Equal(t, 3, c.options.maxBackendsPerHost)
+}
+
+func TestInitialBackendPoolMetricAggregatesAcrossClients(t *testing.T) {
+	name := t.Name()
+	gauge := v2.NewRPCBackendPoolSizeGaugeByName(name)
+	before := testutil.ToFloat64(gauge)
+
+	rc1, err := NewClient(
+		name,
+		newTestBackendFactory(),
+		WithClientInitBackends([]string{"remote-1"}, []int{2}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rc1.Close()) })
+	require.Equal(t, before+2, testutil.ToFloat64(gauge))
+
+	rc2, err := NewClient(
+		name,
+		newTestBackendFactory(),
+		WithClientInitBackends([]string{"remote-2", "remote-3"}, []int{2, 1}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rc2.Close()) })
+	require.Equal(t, before+5, testutil.ToFloat64(gauge))
+
+	require.NoError(t, rc1.Close())
+	require.Equal(t, before+3, testutil.ToFloat64(gauge))
+	require.NoError(t, rc2.Close())
+	require.Equal(t, before, testutil.ToFloat64(gauge))
+}
+
+func TestBackendPoolMetricTracksMutationBoundaries(t *testing.T) {
+	name := t.Name()
+	gauge := v2.NewRPCBackendPoolSizeGaugeByName(name)
+	before := testutil.ToFloat64(gauge)
+
+	rc, err := NewClient(
+		name,
+		newTestBackendFactory(),
+		WithClientDisableAutoCreateBackend(),
+		WithClientInitBackends([]string{"remote"}, []int{1}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rc.Close()) })
+	require.Equal(t, before+1, testutil.ToFloat64(gauge))
+
+	c := rc.(*client)
+	c.mu.Lock()
+	backend := c.mu.backends["remote"][0]
+	c.mu.Unlock()
+	backend.Close()
+
+	selected, _, err := c.getBackendForOperation("remote", false)
+	require.Error(t, err)
+	require.Nil(t, selected)
+	require.Equal(t, before, testutil.ToFloat64(gauge))
+
+	created, err := c.createBackendWithBookkeeping("remote", false)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	require.Equal(t, before+1, testutil.ToFloat64(gauge))
+
+	require.NoError(t, rc.Close())
+	require.Equal(t, before, testutil.ToFloat64(gauge))
+}
+
+func TestFailedClientInitializationDoesNotPublishBackendPoolGauge(t *testing.T) {
+	name := t.Name()
+	gauge := v2.NewRPCBackendPoolSizeGaugeByName(name)
+	before := testutil.ToFloat64(gauge)
+	factory := &partialFailCreateFactory{}
+
+	rc, err := NewClient(
+		name,
+		factory,
+		WithClientInitBackends([]string{"remote"}, []int{2}),
+	)
+	require.Error(t, err)
+	require.Nil(t, rc)
+	require.Equal(t, before, testutil.ToFloat64(gauge))
+	require.NotNil(t, factory.first)
+	factory.first.RLock()
+	closed := factory.first.closed
+	factory.first.RUnlock()
+	require.True(t, closed)
 }
 
 func TestFailedClientInitializationDoesNotDecrementActiveGauge(t *testing.T) {
