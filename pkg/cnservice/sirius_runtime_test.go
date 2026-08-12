@@ -172,6 +172,10 @@ func TestSiriusTLSLoadersAndStartupCleanup(t *testing.T) {
 	require.NoError(t, s.closeSiriusRuntime())
 
 	config.FlightAddress = startSiriusTestFlightServer(t, certPath, keyPath)
+	// The success path performs a TLS handshake and capability RPC. Give it a
+	// scheduler-independent budget; the 20 ms value above only bounds the
+	// deliberately unreachable startup case.
+	config.RequestTimeout.Duration = 5 * time.Second
 	serviceID := "sirius-startup-success-test"
 	moruntime.SetupServiceBasedRuntime(serviceID, moruntime.NewRuntime(metadata.ServiceType_CN, serviceID, nil))
 	s = &service{cfg: &Config{UUID: serviceID, Sirius: config}}
