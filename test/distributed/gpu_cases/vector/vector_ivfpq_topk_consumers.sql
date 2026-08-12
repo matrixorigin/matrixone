@@ -135,4 +135,18 @@ with knn as (
     order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k left join meta m on k.id = m.id order by k.d desc;
 
+-- ---------------- projection without the pk (column pruning) ----------------
+-- The search table function declares pkid/score (plus INCLUDE columns) but the planner
+-- projects only what the query reads. A score-only SELECT prunes pkid, and the runtime
+-- used to write its int64 pk into whatever vector sat at position 0 -- the float64 score
+-- -- panicking the CN with "interface conversion: interface {} is int64, not float64".
+-- Pre-existing on main and reachable from plain SQL, so keep a case on it.
+-- @separator:table
+-- @regex("Table Function on ivfpq_search", true)
+explain select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3;
+
+select count(*) as n from (
+    select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3
+) x;
+
 drop database ivfpq_topk_consumers;

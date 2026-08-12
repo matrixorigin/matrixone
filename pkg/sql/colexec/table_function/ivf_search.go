@@ -159,16 +159,27 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 			}
 		}
 
-		vector.AppendAny(u.batch.Vecs[0], u.keys[u.offset], false, proc.Mp())
-		vector.AppendFixed(u.batch.Vecs[1], u.distances[u.offset], false, proc.Mp())
-		for i, col := range u.includeColumns {
+		// Positions resolved by name: the planner projects only the columns the query
+		// reads, so pkid, score or an INCLUDE column may be absent (see
+		// vector_search_layout.go).
+		if pkPos := vectorSearchAttrPos(u.batch.Attrs, "pkid"); pkPos >= 0 {
+			vector.AppendAny(u.batch.Vecs[pkPos], u.keys[u.offset], false, proc.Mp())
+		}
+		if scorePos := vectorSearchAttrPos(u.batch.Attrs, "score"); scorePos >= 0 {
+			vector.AppendFixed(u.batch.Vecs[scorePos], u.distances[u.offset], false, proc.Mp())
+		}
+		for _, col := range u.includeColumns {
+			pos := vectorSearchAttrPos(u.batch.Attrs, catalog.SystemSI_IVFFLAT_IncludeColPrefix+col)
+			if pos < 0 {
+				continue
+			}
 			isNull := false
 			if u.includeNulls != nil {
 				if nulls, ok := u.includeNulls[col]; ok && u.offset < len(nulls) {
 					isNull = nulls[u.offset]
 				}
 			}
-			vector.AppendAny(u.batch.Vecs[2+i], u.includeData[col][u.offset], isNull, proc.Mp())
+			vector.AppendAny(u.batch.Vecs[pos], u.includeData[col][u.offset], isNull, proc.Mp())
 		}
 		u.offset++
 		u.emittedCandidates++
@@ -470,15 +481,16 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 }
 
 func requestedIvfIncludeColumns(attrs []string) []string {
-	if len(attrs) <= 2 {
-		return nil
-	}
-
-	cols := make([]string, 0, len(attrs)-2)
-	for _, attr := range attrs[2:] {
+	// Scan every attribute: the INCLUDE columns do not necessarily start at index 2,
+	// because the planner can prune pkid or score ahead of them.
+	cols := make([]string, 0, len(attrs))
+	for _, attr := range attrs {
 		if strings.HasPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix) {
 			cols = append(cols, strings.TrimPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix))
 		}
+	}
+	if len(cols) == 0 {
+		return nil
 	}
 	return cols
 }

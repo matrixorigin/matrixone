@@ -197,4 +197,29 @@ order by l2_distance(v,'[1,1,1,1]') limit 3
 3  ¦  c  𝄀
 2  ¦  b  𝄀
 1  ¦  a
+explain select l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @regex("Table Function on cagra_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_cagra_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cagra.id = mo_cagra_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on cagra_topk_consumers.t_cagra  𝄀
+                    Runtime Filter Probe: t_cagra.id  𝄀
+              ->  Table Function on cagra_search  𝄀
+                    Limit: 3
+select l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3;
+➤ d[8,9,0]  𝄀
+0.0  𝄀
+4.0  𝄀
+8.0
+select count(*) as n from (
+select l2_distance(v,'[1,1,1,1]') as d from t_cagra order by l2_distance(v,'[1,1,1,1]') limit 3
+) x;
+➤ n[-5,64,0]  𝄀
+3
 drop database cagra_topk_consumers;
