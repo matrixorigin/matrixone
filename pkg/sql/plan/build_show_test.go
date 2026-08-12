@@ -266,6 +266,23 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
+	control, err := runOneStmt(NewMockOptimizer(false), t, "show columns from single_idx_t")
+	require.NoError(t, err)
+
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	require.NotNil(t, tableDef)
+	require.NotEmpty(t, tableDef.Indexes)
+	tableDef.Indexes = append([]*plan.IndexDef{nil}, tableDef.Indexes...)
+
+	got, err := runOneStmt(mock, t, "show columns from single_idx_t")
+	require.NoError(t, err)
+	require.Equal(t, control.GetQuery().GetHeadings(), got.GetQuery().GetHeadings())
+	require.True(t, queryContainsStringLiteral(control.GetQuery(), "MUL"))
+	require.True(t, queryContainsStringLiteral(got.GetQuery(), "MUL"))
+}
+
 func TestCoverage_buildShowTableStatus(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

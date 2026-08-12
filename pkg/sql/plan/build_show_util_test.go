@@ -184,7 +184,9 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	)`)
 	require.NoError(t, err)
 
-	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+	// A sparse metadata slice must not prevent SHOW CREATE from rendering
+	// the valid index entries that follow it.
+	tableDef.Indexes = append(tableDef.Indexes, nil, &plan.IndexDef{
 		IndexName: "idx_g",
 		Parts:     []string{"g"},
 		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),

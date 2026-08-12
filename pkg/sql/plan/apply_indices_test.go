@@ -1298,6 +1298,20 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	}
 }
 
+func TestApplyIndicesForJoinsSkipsNilIndexMetadata(t *testing.T) {
+	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
+	leftDef.Indexes = append([]*planpb.IndexDef{nil}, leftDef.Indexes...)
+
+	newID, err := builder.applyIndicesForJoins(
+		joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, joinID, newID)
+	join := builder.qry.Nodes[joinID]
+	require.NotEqual(t, leftScanID, join.Children[0])
+	require.Equal(t, planpb.Node_INDEX, builder.qry.Nodes[join.Children[0]].JoinType)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+}
+
 func TestIndexJoinSkipsLossyPrefixIndex(t *testing.T) {
 	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 	leftDef.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:1"}`
@@ -7594,7 +7608,7 @@ func TestApplyIndicesForFiltersUsesIndexJoinForPrefixIndex(t *testing.T) {
 	}
 	scanID := builder.appendNode(node, ctx)
 
-	resultID := builder.applyIndicesForFiltersRegularIndex(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
+	resultID := builder.applyIndicesForFilters(scanID, builder.qry.Nodes[scanID], map[[2]int32]int{{bindTag, 1}: 1}, map[[2]int32]*planpb.Expr{})
 	require.NotEqual(t, scanID, resultID)
 
 	indexJoin := builder.qry.Nodes[resultID]
