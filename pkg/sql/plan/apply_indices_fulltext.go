@@ -1175,7 +1175,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !catalog.IsIndexOptimizerEligible(idx) || !idx.TableExist {
+		if idx == nil || !idx.TableExist {
 			continue
 		}
 		// A fulltext2 index has two hidden-table defs (storage + metadata) sharing the

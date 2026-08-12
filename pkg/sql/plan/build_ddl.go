@@ -1043,6 +1043,9 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
@@ -2531,7 +2534,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 				}
 			}
 		}
-		setIndexDefsVisibility(idxDefs, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
 	}
@@ -2682,7 +2684,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
-		setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
@@ -2765,23 +2766,11 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
-		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
-}
-
-func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption) {
-	for _, indexDef := range indexDefs {
-		setIndexDefVisibility(indexDef, option)
-	}
-}
-
-func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
-	visible := option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
-	catalog.SetIndexVisibility(indexDef, visible)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -3251,7 +3240,6 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
-	setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
@@ -3345,6 +3333,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
 		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
 		// not supported for temporary tables. Reject the visible temporary table
 		// here so execution can never fall through to the hidden permanent table.
@@ -3521,6 +3512,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
 	}
 
 	if obj.PubInfo != nil {
@@ -3760,6 +3754,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
 	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
@@ -4004,6 +4001,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
@@ -4144,6 +4144,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
 		}
 
 		if tableDef.IsTemporary {
@@ -5194,6 +5197,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 		return nil, err
 	}
 	if parentTableDef == nil {

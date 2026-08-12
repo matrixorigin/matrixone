@@ -1099,6 +1099,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					return err
 				}
 			}
+			if err := validateTableIndexDefinitions(childTableDef); err != nil {
+				return err
+			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
 			childId2name := make(map[uint64]string)

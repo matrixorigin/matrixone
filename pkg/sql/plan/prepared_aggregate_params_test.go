@@ -308,6 +308,38 @@ func TestPreparedNumericAggregateParameterIdentity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPreparedNtileParameter(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select n_nationkey, ntile(?) over (partition by n_regionkey order by n_nationkey) from nation")
+	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+
+	originalTypes := preparedEffectiveParamTypes(t, prepare)
+	require.Equal(t, int32(types.T_int64), originalTypes[0].Id)
+
+	first, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(2)})
+	require.NoError(t, err)
+	second, err := FillValuesOfParamsInPlan(context.Background(), prepare.Plan, []any{int64(5)})
+	require.NoError(t, err)
+	require.NotSame(t, first, second)
+	require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+	require.Equal(t, originalTypes, preparedEffectiveParamTypes(t, prepare))
+}
+
+func TestNtileRequiresIntegerArgument(t *testing.T) {
+	for _, sql := range []string{
+		"select ntile(n_name) over (order by n_nationkey) from nation",
+		"select ntile(2.5) over (order by n_nationkey) from nation",
+		"select ntile(cast(? as char)) over (order by n_nationkey) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			_, err := runOneStmt(mock, t, fmt.Sprintf("prepare stmt1 from '%s'", sql))
+			require.ErrorContains(t, err, "invalid argument function ntile")
+		})
+	}
+}
+
 func TestPreparedNumericAggregateDoesNotCoerceStrings(t *testing.T) {
 	tests := []string{
 		"select sum(n_name) from nation",

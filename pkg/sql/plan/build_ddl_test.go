@@ -2829,54 +2829,6 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
-func TestBuildIndexPersistsExplicitVisibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	tests := []struct {
-		name    string
-		sql     string
-		visible bool
-	}{
-		{
-			name:    "default regular index is visible",
-			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
-			visible: true,
-		},
-		{
-			name:    "explicit visible regular index",
-			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
-			visible: true,
-		},
-		{
-			name:    "invisible regular index",
-			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
-			visible: false,
-		},
-		{
-			name:    "invisible unique index",
-			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
-			visible: false,
-		},
-		{
-			name:    "invisible fulltext index",
-			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
-			visible: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(mock, t, tc.sql)
-			require.NoError(t, err)
-			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
-			require.NotEmpty(t, indexes)
-			for _, indexDef := range indexes {
-				require.True(t, indexDef.VisibilitySet)
-				require.Equal(t, tc.visible, indexDef.Visible)
-			}
-		})
-	}
-}
-
 func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := mock.CurrentContext().GetProcess()
