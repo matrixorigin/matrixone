@@ -1960,6 +1960,60 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	}
 }
 
+func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		col  *plan2.ColDef
+		want uint16
+	}{
+		{
+			name: "primary and auto increment",
+			col: &plan2.ColDef{
+				Name: "id",
+				Typ: plan2.Type{
+					Id:          int32(types.T_int32),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+				NotNull: true,
+				Primary: true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.PRI_KEY_FLAG | defines.AUTO_INCREMENT_FLAG),
+		},
+		{
+			name: "unique",
+			col: &plan2.ColDef{
+				Name:    "uk",
+				Typ:     plan2.Type{Id: int32(types.T_int32), NotNullable: true},
+				NotNull: true,
+				Unique:  true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.UNIQUE_KEY_FLAG),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), tc.col)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, col.Flag())
+
+			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+			pos := HeaderOffset
+			for range 6 {
+				_, next, ok := proto.readStringLenEnc(packet, pos)
+				require.True(t, ok)
+				pos = next
+			}
+			_, pos, ok := proto.io.ReadUint8(packet, pos)
+			require.True(t, ok)
+			flagsPos := pos + 2 + 4 + 1
+			flags, _, ok := proto.io.ReadUint16(packet, flagsPos)
+			require.True(t, ok)
+			require.Equal(t, tc.want, flags)
+		})
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string

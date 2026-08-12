@@ -2146,6 +2146,18 @@ func (txn *Transaction) ForEachTableMutation(
 	return nil
 }
 
+func (txn *Transaction) hasTableWrite(databaseID, tableID uint64, offset int, match func(Entry) bool) bool {
+	txn.Lock()
+	defer txn.Unlock()
+	for i := 0; i < offset && i < len(txn.writes); i++ {
+		entry := txn.writes[i]
+		if entry.databaseId == databaseID && entry.tableId == tableID && match(entry) {
+			return true
+		}
+	}
+	return false
+}
+
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.

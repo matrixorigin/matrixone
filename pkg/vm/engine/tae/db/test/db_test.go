@@ -99,6 +99,33 @@ func snapshotFileService(t testing.TB, fs fileservice.FileService) []string {
 	return files
 }
 
+func snapshotObjectFiles(t testing.TB, fs fileservice.FileService) []string {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(context.Background(), ""))
+	require.NoError(t, err)
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir {
+			files = append(files, fmt.Sprintf("%s:%d", entry.Name, entry.Size))
+		}
+	}
+	return files
+}
+
+func requireNoUnpublishedCleanupMarkers(
+	t testing.TB,
+	fs fileservice.FileService,
+) {
+	t.Helper()
+	entries, err := fileservice.SortedList(fs.List(
+		context.Background(), "gc/unpublished/"))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.Truef(t, entry.IsDir,
+			"unreleased cleanup marker %s", entry.Name)
+	}
+}
+
 func TestCancelableJob(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -3855,6 +3882,20 @@ type txnEntryLogger interface {
 	LogTxnEntry(txnif.TxnEntry, []*common.ID, []*common.ID) error
 }
 
+type rejectingWriteFileService struct {
+	fileservice.FileService
+	err    error
+	writes atomic.Int64
+}
+
+func (fs *rejectingWriteFileService) Write(
+	context.Context,
+	fileservice.IOVector,
+) error {
+	fs.writes.Add(1)
+	return fs.err
+}
+
 func newFlushTransferScenario(
 	t *testing.T, ctx context.Context, beforeFlush txnif.TxnEntry,
 ) (*testutil.TestEngine, txnif.AsyncTxn, map[types.Objectid]struct{}) {
@@ -4051,6 +4092,154 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 	tae.Restart(ctx)
 	tae.CheckRowsByScan(0, true)
+}
+
+func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	rows := 100
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, rows)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	filter := handle.NewEQFilter(pk)
+	id, offset, err := deleteRel.GetByFilter(ctx, filter)
+	require.NoError(t, err)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+	stats := func() objectio.ObjectStats {
+		pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+		defer pkVec.Close()
+		pkVec.Append(pk, false)
+		rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+		defer rowIDVec.Close()
+		rowIDVec.Append(rowID, false)
+		stats, writeErr := testutil.MockCNDeleteInS3(
+			tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+		)
+		require.NoError(t, writeErr)
+		require.False(t, stats.IsZero())
+		return stats
+	}()
+	require.Zero(t, common.DebugAllocator.CurrNB())
+
+	// Moving the data object after the delete transaction has materialized a
+	// persisted tombstone forces TransferDeletes to rewrite that tombstone to
+	// the new object generation during commit.
+	tae.MergeBlocks(true)
+	ok, err := deleteRel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	baseFS := tae.Runtime.Fs
+	filesBeforeCommit := snapshotObjectFiles(t, baseFS)
+	injectedErr := moerr.NewFileNotFoundNoCtx("injected transferred tombstone object")
+	rejectingFS := &rejectingWriteFileService{
+		FileService: baseFS,
+		err:         injectedErr,
+	}
+
+	// Reads of the persisted source tombstones still use the real file
+	// service. Reject only the rewritten tombstone object's Sync write so the
+	// test crosses the real remap and sink lifecycle before failing.
+	func() {
+		tae.Runtime.Fs = rejectingFS
+		defer func() { tae.Runtime.Fs = baseFS }()
+		err = deleteTxn.Commit(ctx)
+	}()
+
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+		"cleanup must preserve the object-store error class")
+	require.Positive(t, rejectingFS.writes.Load(),
+		"the test must reach the transferred tombstone object write")
+	require.Equal(t, filesBeforeCommit, snapshotObjectFiles(t, baseFS),
+		"a failed Sync must not leave an unreachable object")
+	requireNoUnpublishedCleanupMarkers(t, tae.Runtime.LocalFs)
+	require.Empty(t, collectNewTombstones(t, ctx, tae, nil),
+		"failed transferred tombstones must not enter the transaction workspace")
+	tae.CheckRowsByScan(rows, true)
+
+	// Restart closes the catalog/replay boundary. Retrying the same persisted
+	// delete afterwards verifies that rollback did not leave stale dedup,
+	// object, or tombstone state behind.
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(rows, true)
+	ok, err = tae.TryDeleteByDeltaloc([]any{pk})
+	require.NoError(t, err)
+	require.True(t, ok)
+	tae.CheckRowsByScan(rows-1, true)
+}
+
+func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 10
+	tae.BindSchema(schema)
+	base := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 100, 0)
+	defer base.Close()
+	candidate := containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 100)
+	defer candidate.Close()
+	tae.CreateRelAndAppend(base, true)
+	tae.CompactBlocks(true)
+
+	// This transaction must transfer a persisted tombstone after the source
+	// object is merged. Its appended row is made duplicate by a later commit,
+	// so the transfer publishes first and incremental dedup then aborts it.
+	txn, rel := tae.GetRelation()
+	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, rel.Append(ctx, candidate))
+
+	pk := base.Vecs[schema.GetSingleSortKeyIdx()].Get(1)
+	id, offset, err := rel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	require.NoError(t, err)
+	rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+		*id.ObjectID(), id.BlockID.Sequence(), offset,
+	)
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	pkVec.Append(pk, false)
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	rowIDVec.Append(rowID, false)
+	stats, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, rowIDVec, pkVec, schema, txn)
+	require.NoError(t, err)
+	pkVec.Close()
+	rowIDVec.Close()
+	require.False(t, stats.IsZero())
+
+	tae.MergeBlocks(true)
+	ok, err := rel.AddPersistedTombstoneFile(id, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	tae.DoAppend(candidate)
+	filesBeforeFailedCommit := snapshotObjectFiles(t, tae.Runtime.Fs)
+
+	err = txn.Commit(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	require.Equal(t, filesBeforeFailedCommit, snapshotObjectFiles(t, tae.Runtime.Fs),
+		"rollback must remove the transferred TN tombstone object")
+	requireNoUnpublishedCleanupMarkers(t, tae.Runtime.LocalFs)
+	require.Zero(t, common.DebugAllocator.CurrNB())
+	tae.CheckRowsByScan(101, true)
+
+	tae.Restart(ctx)
+	tae.CheckRowsByScan(101, true)
 }
 
 func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {

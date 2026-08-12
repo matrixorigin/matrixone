@@ -55,6 +55,17 @@ func validateMultiTableUpdateClauses(ctx CompilerContext, stmt *tree.Update) err
 	return nil
 }
 
+// validateSingleTableDMLLimitOffset enforces the MySQL single-table UPDATE and
+// DELETE grammar at the shared planner boundary. The parser intentionally uses
+// the generic LIMIT production, so reject offset-bearing forms before any
+// modern, legacy, or specialized mutation plan can be selected.
+func validateSingleTableDMLLimitOffset(ctx CompilerContext, verb string, limit *tree.Limit) error {
+	if limit == nil || limit.Offset == nil {
+		return nil
+	}
+	return moerr.NewParseErrorf(ctx.GetContext(), "%s does not support LIMIT with OFFSET", verb)
+}
+
 func validateUpdateWindowFunctions(ctx CompilerContext, stmt *tree.Update) error {
 	for _, updateExpr := range stmt.Exprs {
 		if err := rejectWindowFunctionUnlessMatrixOneNative(ctx, updateExpr.Expr); err != nil {

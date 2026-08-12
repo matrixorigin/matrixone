@@ -303,11 +303,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_params))
 
 					// 9. index visible
-					visible := 0
-					if catalog.IsIndexVisible(indexDef) {
-						visible = INDEX_VISIBLE_YES
-					}
-					fmt.Fprintf(buffer, "%d, ", visible)
+					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
 
 					// 10. index vec_hidden
 					fmt.Fprintf(buffer, "%d, ", INDEX_HIDDEN_NO)
