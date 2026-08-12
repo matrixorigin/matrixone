@@ -573,19 +573,28 @@ func getOpAndToAccountId(
 		return 0, 0, nil, err
 	}
 
-	if opAccountId, err = defines.GetAccountId(reqCtx); err != nil {
-		return 0, 0, nil, err
-	}
-
-	if toAccountOpt == nil {
-		return opAccountId, opAccountId, snapshot, nil
-	}
-
-	if toAccountId, err = getAccountId(reqCtx, bh, toAccountOpt.AccountName.String()); err != nil {
+	if opAccountId, toAccountId, err = getCloneTargetAccountIds(reqCtx, bh, toAccountOpt); err != nil {
 		return 0, 0, nil, err
 	}
 
 	return opAccountId, toAccountId, snapshot, nil
+}
+
+func getCloneTargetAccountIds(
+	ctx context.Context,
+	bh BackgroundExec,
+	toAccountOpt *tree.ToAccountOpt,
+) (opAccountId, toAccountId uint32, err error) {
+	if opAccountId, err = defines.GetAccountId(ctx); err != nil {
+		return 0, 0, err
+	}
+	if toAccountOpt == nil {
+		return opAccountId, opAccountId, nil
+	}
+	if toAccountId, err = getAccountId(ctx, bh, toAccountOpt.AccountName.String()); err != nil {
+		return 0, 0, err
+	}
+	return opAccountId, toAccountId, nil
 }
 
 type cloneAccountResolution struct {
@@ -873,6 +882,22 @@ func handleCloneDatabaseWithSource(
 				err = deferred(err)
 			}
 		}()
+	}
+	if stmt.IfNotExists {
+		var toAccountId uint32
+		if _, toAccountId, err = getCloneTargetAccountIds(reqCtx, bh, stmt.ToAccountOpt); err != nil {
+			return
+		}
+
+		var exists bool
+		if exists, err = checkDatabaseExists(
+			defines.AttachAccountId(reqCtx, toAccountId), bh, stmt.DstDatabase.String(),
+		); err != nil {
+			return
+		}
+		if exists {
+			return
+		}
 	}
 
 	if resolvedSource != nil {

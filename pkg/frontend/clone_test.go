@@ -26,11 +26,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -493,6 +495,43 @@ func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
 	require.Nil(t, returned)
 	require.Nil(t, cleanup)
 	require.Equal(t, 1, backExec.closeCalls)
+}
+
+func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	er := mock_frontend.NewMockExecResult(ctrl)
+	er.EXPECT().GetRowCount().Return(uint64(1))
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(
+		gomock.Any(),
+		"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' LIMIT 1",
+	).DoAndReturn(func(gotCtx context.Context, _ string) error {
+		accountID, err := defines.GetAccountId(gotCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(sysAccountID), accountID)
+		return nil
+	})
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+	receipts, err := handleCloneDatabaseWithSource(
+		execCtx,
+		ses,
+		bh,
+		&tree.CloneDatabase{
+			IfNotExists: true,
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("missing_source"),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Empty(t, receipts)
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {

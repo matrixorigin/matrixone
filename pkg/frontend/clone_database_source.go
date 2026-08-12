@@ -86,6 +86,14 @@ func collectCloneDatabaseSource(
 		}
 	}
 
+	sourceExists, err := checkDatabaseExistsAtSnapshot(ctx, bh, snapshot, srcDBName)
+	if err != nil {
+		return source, err
+	}
+	if !sourceExists {
+		return source, moerr.NewBadDB(ctx, srcDBName)
+	}
+
 	srcTblInfos, err := getTableInfos(ctx, ses.GetService(), bh, snapshot, srcDBName, "")
 	if err != nil {
 		return source, err
