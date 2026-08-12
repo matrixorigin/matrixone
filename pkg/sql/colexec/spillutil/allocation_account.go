@@ -23,7 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// Spill allocation sites occupy a dedicated range within the HashBuild owner.
+// Spill allocation sites occupy a dedicated range within each operator owner
+// supplied to NewSpillAllocationAccount.
 const (
 	SpillAllocationSiteDecodedData mpool.AllocationSite = iota + 32
 	SpillAllocationSiteDecodedArea
@@ -109,6 +110,18 @@ func newSpillBatch(
 		return nil, err
 	}
 	return bat, nil
+}
+
+// ConfigureDecodedBatch assigns the spill engine's decoded-data provenance to
+// an empty off-heap destination before its first physical allocation.
+func (a *SpillAllocationAccount) ConfigureDecodedBatch(bat *batch.Batch) error {
+	if err := a.validate(); err != nil {
+		return err
+	}
+	if bat == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return bat.SetAllocationAccount(a.decoded)
 }
 
 func newSpillVector(

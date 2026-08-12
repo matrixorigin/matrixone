@@ -83,7 +83,7 @@ func checkSpillCanceled(proc *process.Process) error {
 // instead of an untracked Go-heap buffer.
 type BucketReader struct {
 	fd            *os.File
-	reader        *accountedFileReader
+	reader        *AccountedFileReader
 	header        [16]byte
 	headerPending bool
 	spillFile     *message.SpillFile
@@ -119,7 +119,7 @@ func (r *BucketReader) ReadBatch(
 	}
 	if r.reader == nil {
 		var err error
-		r.reader, err = newAccountedFileReader(
+		r.reader, err = NewAccountedFileReader(
 			proc.Mp(),
 			r.allocation,
 			r.fd,

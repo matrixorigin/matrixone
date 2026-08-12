@@ -58,6 +58,12 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		var streamed bytes.Buffer
 		require.NoError(t, tc.bat.MarshalBinaryTo(&streamed))
 		require.Equal(t, data, streamed.Bytes())
+		transportSize, err := tc.bat.MarshalBinaryWithPrepareParamKindsSize()
+		require.NoError(t, err)
+		require.Equal(t, len(data), transportSize)
+		streamed.Reset()
+		require.NoError(t, tc.bat.MarshalBinaryWithPrepareParamKindsTo(&streamed))
+		require.Equal(t, data, streamed.Bytes())
 		require.ErrorIs(
 			t,
 			tc.bat.MarshalBinaryTo(shortBatchMarshalWriter{}),
@@ -771,6 +777,16 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.Equal(t, wire.Bytes(), encoded)
 	require.Greater(t, len(encoded), len(legacy))
 	require.Equal(t, legacy, encoded[:len(legacy)])
+	streamSize, err := source.MarshalBinaryWithPrepareParamKindsSize()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), streamSize)
+	var streamed bytes.Buffer
+	require.NoError(t, source.MarshalBinaryWithPrepareParamKindsTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.ErrorIs(t,
+		source.MarshalBinaryWithPrepareParamKindsTo(shortBatchMarshalWriter{}),
+		io.ErrShortWrite,
+	)
 
 	decoded := NewOffHeapEmpty()
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))

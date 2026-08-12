@@ -270,7 +270,7 @@ func TestSpillReadBufferReleasesWhenRewindFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("spill"), 0o600))
 	file, err := os.Open(path)
 	require.NoError(t, err)
-	reader, err := newAccountedFileReader(proc.Mp(), state.allocation, file)
+	reader, err := NewAccountedFileReader(proc.Mp(), state.allocation, file)
 	require.NoError(t, err)
 	require.NoError(t, reader.ensureBuffer())
 	require.NotNil(t, reader.buffer)
