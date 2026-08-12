@@ -490,3 +490,60 @@ func TestInlineFilter(t *testing.T) {
 		require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 	})
 }
+
+// TestShrinkPopulatedVecs_SkipsUnmaterializedColumn reproduces the batch the vector-TopN
+// pushdown hands the reader filter: blockio.materializeVectorTopNRows loads only the
+// selected rows and then CleanOnlyData()s the ORDER BY vector column itself, so that one
+// column sits at 0 rows among siblings that hold the block's rows. batch.Shrink assumes
+// every vector holds RowCount() rows and panicked with "index out of range [N] with
+// length 0", killing the query. Every populated vector must still be shrunk.
+func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(3)
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(pk, []int64{10, 11, 12, 13, 14}, nil, mp))
+	// The ORDER BY vector column: values already consumed to compute distances, then
+	// cleared by the reader — deliberately 0 rows while its siblings hold 5.
+	emptied := vector.NewVec(types.T_int64.ToType())
+	dist := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(dist, []float64{0.5, 0.4, 0.3, 0.2, 0.1}, nil, mp))
+
+	bat.Vecs[0], bat.Vecs[1], bat.Vecs[2] = pk, emptied, dist
+	bat.SetRowCount(5)
+	defer bat.Clean(mp)
+
+	require.NotPanics(t, func() {
+		shrinkPopulatedVecs(bat, []int64{1, 3})
+	})
+
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, []int64{11, 13}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+	require.Equal(t, []float64{0.4, 0.2}, vector.MustFixedColWithTypeCheck[float64](bat.Vecs[2]))
+	require.Equal(t, 0, bat.Vecs[1].Length(), "the unmaterialized column is left alone")
+}
+
+// TestShrinkPopulatedVecs_NoOpAndEmptyBatch: selecting every row is a no-op (batch.Shrink
+// has the same short-circuit), and a batch with no rows must not be walked at all.
+func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	bat := batch.NewWithSize(1)
+	v := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(v, []int64{1, 2, 3}, nil, mp))
+	bat.Vecs[0] = v
+	bat.SetRowCount(3)
+	defer bat.Clean(mp)
+
+	shrinkPopulatedVecs(bat, []int64{0, 1, 2})
+	require.Equal(t, 3, bat.RowCount())
+	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
+
+	// RowCount 0 with all-empty vectors: nothing to shrink, must not panic.
+	empty := batch.NewWithSize(1)
+	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	empty.SetRowCount(0)
+	defer empty.Clean(mp)
+	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
+	require.Equal(t, 0, empty.RowCount())
+}
