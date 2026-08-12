@@ -235,6 +235,83 @@ func TestProcessLinearDecimal128(t *testing.T) {
 	require.Equal(t, types.Decimal128FromInt64(200), vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 1))
 }
 
+func TestLinearExactValueUsesEveryPositionAndAvoidsEndpointOverflow(t *testing.T) {
+	tests := []struct {
+		name        string
+		left, right types.Decimal128
+		step, total uint64
+		want        types.Decimal128
+	}{
+		{
+			name: "increasing first third", left: types.Decimal128FromInt64(100),
+			right: types.Decimal128FromInt64(130), step: 1, total: 3,
+			want: types.Decimal128FromInt64(110),
+		},
+		{
+			name: "decreasing first third", left: types.Decimal128FromInt64(130),
+			right: types.Decimal128FromInt64(100), step: 1, total: 3,
+			want: types.Decimal128FromInt64(120),
+		},
+		{
+			name: "negative half rounds away from zero", left: types.Decimal128FromInt64(-3),
+			right: types.Decimal128FromInt64(2), step: 1, total: 2,
+			want: types.Decimal128FromInt64(-1),
+		},
+		{
+			name: "opposite decimal128 limits", left: types.Decimal128{B64_127: uint64(1) << 63},
+			right: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			step:  1, total: 2, want: types.Decimal128FromInt64(-1),
+		},
+		{
+			name: "equal decimal128 maxima", left: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			right: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+			step:  1, total: 3,
+			want: types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := linearExactValue(test.left, test.right, test.step, test.total)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestSetLinearInterpolatedValueNumericRepresentations(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	t.Run("int64", func(t *testing.T) {
+		left := testutil.MakeInt64Vector([]int64{-30}, nil, proc.Mp())
+		right := testutil.MakeInt64Vector([]int64{30}, nil, proc.Mp())
+		dst := testutil.MakeInt64Vector([]int64{0}, []uint64{0}, proc.Mp())
+		defer left.Free(proc.Mp())
+		defer right.Free(proc.Mp())
+		defer dst.Free(proc.Mp())
+
+		require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 3))
+		require.False(t, dst.IsNull(0))
+		require.Equal(t, int64(-10), vector.GetFixedAtNoTypeCheck[int64](dst, 0))
+	})
+
+	t.Run("float64 opposite limits", func(t *testing.T) {
+		left := vector.NewVec(types.T_float64.ToType())
+		right := vector.NewVec(types.T_float64.ToType())
+		dst := vector.NewVec(types.T_float64.ToType())
+		defer left.Free(proc.Mp())
+		defer right.Free(proc.Mp())
+		defer dst.Free(proc.Mp())
+		require.NoError(t, vector.AppendFixed(left, -1.7e308, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(right, 1.7e308, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(dst, float64(0), true, proc.Mp()))
+
+		require.NoError(t, setLinearInterpolatedValue(dst, 0, left, 0, right, 0, 1, 2))
+		require.False(t, dst.IsNull(0))
+		require.Zero(t, vector.GetFixedAtNoTypeCheck[float64](dst, 0))
+	})
+}
+
 func resetChildren(arg *Fill, m *mpool.MPool) {
 	bat1 := colexec.MakeMockBatchsWithNullVec1(m)
 	bat := colexec.MakeMockBatchsWithNullVec(m)

@@ -483,7 +483,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 
 // consumeLinear folds one freshly pulled batch into the LINEAR state. A NULL
 // with a known previous value of the same partition joins that column's run; a
-// non-NULL interpolates the pending run against the midpoint of linPre and
+// non-NULL interpolates every position in the pending run between linPre and
 // itself, then becomes the new linPre. A run whose neighbour lies across a
 // partition boundary stays NULL, because there is nothing to interpolate
 // between.
@@ -529,8 +529,10 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 	return nil
 }
 
-// interpolateRun writes the midpoint of the pre and cur values into every row
-// of column col's pending run.
+// interpolateRun divides the interval between pre and cur into len(run)+1
+// equal steps. A single missing row keeps using the bound SQL expression so
+// its historical cast semantics stay unchanged; longer runs use the same
+// numeric contract at each distinct position.
 func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int, proc *process.Process) error {
 	var preBatch *batch.Batch
 	preRow := pre.row
@@ -542,20 +544,29 @@ func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int,
 		preBatch.SetRowCount(1)
 		preRow = 0
 	}
-	valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, ctr.batAt(curSeq), curRow)
-	if err != nil {
-		return err
-	}
-	for _, cd := range ctr.linRun[col] {
-		if err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc); err != nil {
-			if owned {
-				valVec.Free(proc.Mp())
-			}
+	curBatch := ctr.batAt(curSeq)
+	if len(ctr.linRun[col]) == 1 {
+		valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, curBatch, curRow)
+		if err != nil {
 			return err
 		}
+		cd := ctr.linRun[col][0]
+		err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc)
+		if owned {
+			valVec.Free(proc.Mp())
+		}
+		return err
 	}
-	if owned {
-		valVec.Free(proc.Mp())
+
+	total := uint64(len(ctr.linRun[col]) + 1)
+	for position, cd := range ctr.linRun[col] {
+		if err := setLinearInterpolatedValue(
+			ctr.batAt(cd.seq).Vecs[col], cd.row,
+			preBatch.Vecs[col], preRow, curBatch.Vecs[col], curRow,
+			uint64(position+1), total,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -583,7 +594,7 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 		result := vector.NewVec(*preVec.GetType())
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
-		value, err := decimal128LinearMidpoint(left, right, preVec.GetType().Scale)
+		value, err := linearExactValue(left, right, 1, 2)
 		if err != nil {
 			result.Free(proc.Mp())
 			return nil, false, err
@@ -612,16 +623,220 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	return result, false, err
 }
 
-func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.Decimal128, error) {
-	sum, err := left.Add128(right)
+// setLinearInterpolatedValue writes the value at step/total between the two
+// endpoints. Exact numeric types use a 256-bit weighted sum, which both avoids
+// endpoint arithmetic overflow and rounds once at the destination scale.
+// Floating-point types use a stable convex form when the endpoints have
+// opposite signs, avoiding overflow in right-left.
+func setLinearInterpolatedValue(
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step uint64,
+	total uint64,
+) error {
+	if step == 0 || step >= total {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid linear interpolation position %d/%d", step, total)
+	}
+	if dst.GetType().Oid != leftVec.GetType().Oid || dst.GetType().Oid != rightVec.GetType().Oid {
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation type mismatch: dst=%s, left=%s, right=%s",
+			dst.GetType(), leftVec.GetType(), rightVec.GetType())
+	}
+
+	var err error
+	switch dst.GetType().Oid {
+	case types.T_bit:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int8:
+		err = setLinearSignedValue[int8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int16:
+		err = setLinearSignedValue[int16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int32:
+		err = setLinearSignedValue[int32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int64:
+		err = setLinearSignedValue[int64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint8:
+		err = setLinearUnsignedValue[uint8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint16:
+		err = setLinearUnsignedValue[uint16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint32:
+		err = setLinearUnsignedValue[uint32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint64:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float32:
+		err = setLinearFloatValue[float32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float64:
+		err = setLinearFloatValue[float64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_decimal64:
+		value, calcErr := linearExactValue(
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](leftVec, leftRow))),
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](rightVec, rightRow))),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, types.Decimal64(value.B0_63))
+	case types.T_decimal128:
+		value, calcErr := linearExactValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation does not support result type %s", dst.GetType())
+	}
+	if err == nil && dst.HasNull() {
+		dst.GetNulls().Del(uint64(dstRow))
+	}
+	return err
+}
+
+type linearSignedNumber interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+func setLinearSignedValue[T linearSignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearUnsignedNumber interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+func setLinearUnsignedValue[T linearUnsignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearFloatNumber interface {
+	~float32 | ~float64
+}
+
+func setLinearFloatValue[T linearFloatNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value := linearFloat64(
+		float64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow)),
+		float64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow)),
+		step, total)
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value))
+}
+
+func unsignedDecimal128(value uint64) types.Decimal128 {
+	return types.Decimal128{B0_63: value}
+}
+
+func linearFloat64(left, right float64, step, total uint64) float64 {
+	if left == right {
+		return left
+	}
+	ratio := float64(step) / float64(total)
+	if (left < 0) != (right < 0) {
+		return left*(1-ratio) + right*ratio
+	}
+	return left + (right-left)*ratio
+}
+
+func linearExactValue(left, right types.Decimal128, step, total uint64) (types.Decimal128, error) {
+	if step == 0 || step >= total {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+	leftTerm, err := multiplyDecimal128ByUint64(left, total-step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	value, valueScale, err := sum.Div(types.Decimal128FromInt64(2), scale, 0)
+	rightTerm, err := multiplyDecimal128ByUint64(right, step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	return value.Scale(scale - valueScale)
+	numerator, _, err := leftTerm.Add(rightTerm, 0, 0)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	negative := numerator.Sign()
+	if negative {
+		numerator = numerator.Minus()
+	}
+	value, err := numerator.Div256(types.Decimal256{B0_63: total})
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if negative {
+		value = value.Minus()
+	}
+	return decimal256ToDecimal128(value)
+}
+
+func multiplyDecimal128ByUint64(value types.Decimal128, factor uint64) (types.Decimal256, error) {
+	widened := types.Decimal256FromDecimal128(value)
+	negative := widened.Sign()
+	if negative {
+		widened = widened.Minus()
+	}
+	result, err := widened.Mul256(types.Decimal256{B0_63: factor})
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func decimal256ToDecimal128(value types.Decimal256) (types.Decimal128, error) {
+	if value.Sign() {
+		if value.B192_255 != ^uint64(0) || value.B128_191 != ^uint64(0) || value.B64_127>>63 == 0 {
+			return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+		}
+	} else if value.B192_255 != 0 || value.B128_191 != 0 || value.B64_127>>63 != 0 {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+	}
+	return types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, nil
 }
 
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {

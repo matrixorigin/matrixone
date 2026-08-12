@@ -40,6 +40,21 @@ from readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(linear)
 order by pump, _wstart;
 
+# A maximal run of k missing buckets is divided into k+1 equal steps. All rows
+# use one logical series key; no table-partition capability is involved.
+create table linear_readings(series_id int, ts datetime, value int);
+insert into linear_readings values
+    (1, '2026-03-01 00:00:00', 100),
+    (1, '2026-03-01 00:03:00', 130),
+    (1, '2026-03-01 00:04:00', 140);
+
+select _wstart, sum(value) as value_sum
+from linear_readings
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+
+drop table linear_readings;
+
 # Existing FILL(NULL) must not generate absent buckets.
 select pump, _wstart, sum(value) as value_sum
 from readings

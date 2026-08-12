@@ -132,7 +132,7 @@ func TestFillLinearStreamsBounded(t *testing.T) {
 	}
 
 	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
-	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
 
@@ -596,8 +596,9 @@ func TestFillSpillWatermarkSplitsBatch(t *testing.T) {
 	}
 }
 
-// LINEAR interpolates across a batch boundary: the midpoint uses the non-NULL
-// values that bracket the gap even when they land in different batches.
+// LINEAR interpolates every position across a batch boundary. Two missing rows
+// divide the interval between 10 and 40 into thirds, even when the run spans
+// several child batches.
 func TestFillLinearCrossBatchGap(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
@@ -605,8 +606,7 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 	set := func(vec *vector.Vector, v int64, isNull bool) {
 		require.NoError(t, vector.AppendFixed(vec, types.Decimal128FromInt64(v), isNull, proc.Mp()))
 	}
-	// batch 1: [10, NULL]; batch 2: [NULL, 40]; one partition, so the midpoint
-	// of 10 and 40 (=25) fills both gaps.
+	// batch 1: [10, NULL]; batch 2: [NULL, 40]; one partition.
 	v1 := vector.NewVec(typ)
 	set(v1, 10, false)
 	set(v1, 0, true)
@@ -625,7 +625,7 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 
 	bats := []*batch.Batch{b1, b2}
 	child := colexec.NewMockOperator().WithBatchs(bats)
-	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR, PartitionColIdx: []int32{1}}
+	arg := &Fill{ColLen: 1, FillType: plan.Node_LINEAR}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
 
@@ -644,8 +644,8 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 		}
 	}
 	require.Equal(t, []bool{false, false, false, false}, isNull)
-	require.Equal(t, types.Decimal128FromInt64(25), got[1], "midpoint of 10 and 40")
-	require.Equal(t, types.Decimal128FromInt64(25), got[2])
+	require.Equal(t, types.Decimal128FromInt64(20), got[1], "first third between 10 and 40")
+	require.Equal(t, types.Decimal128FromInt64(30), got[2], "second third between 10 and 40")
 
 	arg.Free(proc, false, nil)
 	for _, b := range bats {
@@ -670,18 +670,17 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 		return bat
 	}
 	bats := make([]*batch.Batch, 0, nullBatches+2)
-	bats = append(bats, makeBatch(10, false))
+	bats = append(bats, makeBatch(0, false))
 	for i := 0; i < nullBatches; i++ {
 		bats = append(bats, makeBatch(0, true))
 	}
-	bats = append(bats, makeBatch(90, false))
+	bats = append(bats, makeBatch(nullBatches+1, false))
 
 	child := &countingChild{MockOperator: colexec.NewMockOperator().WithBatchs(bats)}
 	arg := &Fill{
-		ColLen:          1,
-		FillType:        plan.Node_LINEAR,
-		PartitionColIdx: []int32{1},
-		SpillThreshold:  2,
+		ColLen:         1,
+		FillType:       plan.Node_LINEAR,
+		SpillThreshold: 2,
 	}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
@@ -707,11 +706,10 @@ func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
 		all = append(all, readDecimal(res.Batch)...)
 	}
 	require.Len(t, all, nullBatches+2)
-	require.Equal(t, types.Decimal128FromInt64(10), all[0])
-	for _, value := range all[1 : len(all)-1] {
-		require.Equal(t, types.Decimal128FromInt64(50), value)
+	for row, value := range all {
+		require.Equal(t, types.Decimal128FromInt64(int64(row)), value,
+			"spill replay must preserve every interpolation position")
 	}
-	require.Equal(t, types.Decimal128FromInt64(90), all[len(all)-1])
 
 	arg.Free(proc, false, nil)
 	for _, bat := range bats {
@@ -837,9 +835,6 @@ func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 	}
 	arg.AppendChild(child)
 	require.NoError(t, arg.Prepare(proc))
-	midpoint := vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(midpoint, int64(25), false, proc.Mp()))
-	arg.ctr.exes = []colexec.ExpressionExecutor{&fillStubExpressionExecutor{result: midpoint}}
 
 	first, err := arg.Call(proc)
 	require.NoError(t, err)
@@ -847,10 +842,9 @@ func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 	require.Equal(t, 2, child.calls, "safe left endpoint must replay before the right endpoint or EOF")
 
 	all := append(readCol(first.Batch, 0), drainCol(t, arg, proc, 0)...)
-	require.Equal(t, []cell{{val: 10}, {val: 25}, {val: 25}, {val: 40}, {val: 50}, {val: 60}}, all)
+	require.Equal(t, []cell{{val: 10}, {val: 20}, {val: 30}, {val: 40}, {val: 50}, {val: 60}}, all)
 
 	arg.Free(proc, false, nil)
-	midpoint.Free(proc.Mp())
 	for _, bat := range bats {
 		bat.Clean(proc.Mp())
 	}
