@@ -16,12 +16,20 @@ package sidecarflight
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,6 +45,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -52,6 +61,9 @@ type testFlightServer struct {
 	hash                []byte
 	cancels             atomic.Int32
 	badInfo             bool
+	locations           []*flightLocation
+	capabilities        []byte
+	streamMessages      []*flightData
 	cancelErr           error
 	cancelByIdempotency atomic.Int32
 	prepareStarted      chan struct{}
@@ -70,6 +82,9 @@ func TestInternalErrorfUsesMoerrAndPreservesCause(t *testing.T) {
 	wrapped := internalErrorf("prepare: %w", cause)
 	require.ErrorIs(t, wrapped, cause)
 	require.ErrorContains(t, wrapped, "prepare: transport failure")
+	unknown := &quiescenceUnknownError{err: cause}
+	require.Equal(t, cause.Error(), unknown.Error())
+	require.ErrorIs(t, unknown, cause)
 }
 
 func TestExecutionIdempotencyKeyMatchesProtocolVector(t *testing.T) {
@@ -88,6 +103,111 @@ func TestRuntimeRejectsTLSVerificationBypass(t *testing.T) {
 		MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second,
 	}, "contract")
 	require.ErrorContains(t, err, "server CA")
+}
+
+func TestNewRuntimeNegotiatesCapabilitiesOverTLS(t *testing.T) {
+	server := &testFlightServer{capabilities: []byte("contract")}
+	address, clientTLS := testTLSFlightServer(t, server)
+	clientTLS.MinVersion = tls.VersionTLS10
+	runtime, err := NewRuntime(context.Background(), Config{
+		Address: address, TLSConfig: clientTLS, MaxBatchBytes: 1 << 20,
+		RequestTimeout: time.Second, CleanupTimeout: time.Second,
+	}, "contract")
+	require.NoError(t, err)
+	require.Equal(t, uint16(tls.VersionTLS10), clientTLS.MinVersion)
+	require.NoError(t, runtime.Close(context.Background()))
+	require.NoError(t, runtime.Close(context.Background()))
+
+	server.capabilities = []byte("different")
+	_, err = NewRuntime(context.Background(), Config{
+		Address: address, TLSConfig: clientTLS, MaxBatchBytes: 1 << 20,
+		RequestTimeout: time.Second, CleanupTimeout: time.Second,
+	}, "contract")
+	require.ErrorContains(t, err, "capability document mismatch")
+}
+
+func TestRuntimeAndExecutionRejectInvalidStates(t *testing.T) {
+	validTLS := &tls.Config{
+		Certificates: []tls.Certificate{{}}, RootCAs: x509.NewCertPool(),
+	}
+	for _, tc := range []struct {
+		name   string
+		config Config
+		doc    string
+		want   string
+	}{
+		{name: "missing identity", config: Config{}, doc: "contract", want: "server CA"},
+		{name: "invalid limits", config: Config{Address: "unused", TLSConfig: validTLS}, doc: "contract", want: "invalid transport limits"},
+		{name: "missing capability", config: Config{Address: "unused", TLSConfig: validTLS, MaxBatchBytes: 1, RequestTimeout: time.Second, CleanupTimeout: time.Second}, want: "invalid transport limits"},
+		{name: "message overflow", config: Config{Address: "unused", TLSConfig: validTLS, MaxBatchBytes: ^uint64(0), RequestTimeout: time.Second, CleanupTimeout: time.Second}, doc: "contract", want: "overflows"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewRuntime(context.Background(), tc.config, tc.doc)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+
+	var nilRuntime *Runtime
+	_, err := nilRuntime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil)
+	require.ErrorContains(t, err, "nil runtime")
+	runtime := &Runtime{config: Config{RequestTimeout: time.Second}, stopped: true}
+	_, err = runtime.Prepare(context.Background(), 0, nil, nil, nil, nil)
+	require.ErrorContains(t, err, "query identity")
+	_, err = runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), nil, nil)
+	require.ErrorContains(t, err, "runtime is stopping")
+
+	var nilExecution *Execution
+	require.ErrorContains(t, nilExecution.Run(nil, nil, nil, nil), "invalid execution")
+	require.NoError(t, nilExecution.CancelAndJoin(nil))
+	require.NoError(t, nilExecution.CleanupAfterRun(nil, nil))
+}
+
+func TestPrepareRejectsUnsafeFlightInfo(t *testing.T) {
+	typesOut, headings := fixtureOutputShape()
+	for _, tc := range []struct {
+		name      string
+		configure func(*testFlightServer)
+		want      string
+	}{
+		{name: "redirect", configure: func(s *testFlightServer) { s.locations = []*flightLocation{{URI: "grpc://other"}} }, want: "redirection"},
+		{name: "capability hash", configure: func(s *testFlightServer) { s.hash[0] = 1 }, want: "capability hash mismatch"},
+		{name: "schema", configure: func(s *testFlightServer) { s.schema = []byte("bad") }, want: "validate schema"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &testFlightServer{
+				schema: mustHex(t, fixtureSchemaHex), ticket: make([]byte, ticketBytes), hash: make([]byte, sha256.Size),
+			}
+			tc.configure(server)
+			runtime := &Runtime{
+				config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: time.Second, CleanupTimeout: time.Second},
+				conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+			}
+			_, err := runtime.Prepare(context.Background(), 1, make([]byte, 16), []byte("plan"), typesOut, headings)
+			require.ErrorContains(t, err, tc.want)
+			require.Equal(t, int32(1), server.cancels.Load())
+		})
+	}
+}
+
+func TestFlightFallbackClassificationAndWireMessages(t *testing.T) {
+	require.False(t, IsPreVisibilityFallback(nil))
+	require.True(t, IsPreVisibilityFallback(status.Error(codes.Unavailable, "down")))
+	require.True(t, IsPreVisibilityFallback(status.Error(codes.ResourceExhausted, "busy")))
+	require.True(t, IsPreVisibilityFallback(errors.New("UNSUPPORTED_PLAN")))
+	require.True(t, IsPreVisibilityFallback(errors.New("UNSUPPORTED_VERSION")))
+	require.True(t, IsPreVisibilityFallback(errors.New("CAPABILITY_MISMATCH")))
+	require.False(t, IsPreVisibilityFallback(errors.New("permission denied")))
+
+	require.Contains(t, (&flightAction{Type: "x", Body: []byte{1}}).String(), "x")
+	require.Contains(t, (&flightResult{Body: []byte{1}}).String(), "1 bytes")
+	require.Contains(t, (&flightDescriptor{Type: 2, Cmd: []byte{1}}).String(), "1 bytes")
+	require.Contains(t, (&flightTicket{Ticket: []byte{1}}).String(), "1 bytes")
+	require.Contains(t, (&flightLocation{URI: "grpc://sidecar"}).String(), "sidecar")
+	require.Equal(t, "FlightEndpoint", (&flightEndpoint{}).String())
+	require.Contains(t, (&flightInfo{Endpoint: []*flightEndpoint{{}}}).String(), "1 endpoints")
+	require.Contains(t, (&flightData{DataHeader: []byte{1}, DataBody: []byte{2}}).String(), "1,1 bytes")
+	require.Contains(t, (&executeSubstraitRequest{Plan: []byte{1}}).String(), "1 bytes")
+	require.Contains(t, (&cancelExecutionRequest{Ticket: []byte{1}}).String(), "1,0 bytes")
 }
 
 func TestExecutionStreamsOneOwnedBatchAndCancelsOnWriterFailure(t *testing.T) {
@@ -240,6 +360,59 @@ func TestContextCancellationReachesSidecarWhileWriterIsBlocked(t *testing.T) {
 	require.Error(t, <-runDone)
 }
 
+func TestExecutionRejectsMalformedStreamsAndDuplicateClaims(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	typesOut, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, typesOut, headings)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name     string
+		messages []*flightData
+		maximum  uint64
+		want     string
+	}{
+		{name: "missing schema", messages: []*flightData{}, maximum: 1 << 20, want: "before its schema"},
+		{name: "empty header", messages: []*flightData{{}}, maximum: 1 << 20, want: "malformed or oversized"},
+		{name: "schema body", messages: []*flightData{{DataHeader: schemaWire, DataBody: []byte{1}}}, maximum: 1 << 20, want: "schema message contains a body"},
+		{name: "schema mismatch", messages: []*flightData{{DataHeader: append([]byte(nil), schemaWire[:len(schemaWire)-1]...)}}, maximum: 1 << 20, want: "stream schema"},
+		{name: "oversized body", messages: []*flightData{{DataHeader: schemaWire}, {DataHeader: []byte{1}, DataBody: []byte{1, 2}}}, maximum: 1, want: "malformed or oversized"},
+		{name: "invalid batch", messages: []*flightData{{DataHeader: schemaWire}, {DataHeader: []byte{1}}}, maximum: 1 << 20, want: "decode record batch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &testFlightServer{
+				ticket: make([]byte, ticketBytes), streamMessages: tc.messages,
+			}
+			runtime := &Runtime{
+				config: Config{MaxBatchBytes: tc.maximum, CleanupTimeout: time.Second},
+				conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
+			}
+			execution := &Execution{
+				runtime: runtime, ticket: server.ticket, schema: schema, cleanupDone: make(chan struct{}),
+			}
+			runtime.executions[execution] = struct{}{}
+			runErr := execution.Run(context.Background(), mpool.MustNewZero(), nil, func(*batch.Batch, *perfcounter.CounterSet) error { return nil })
+			require.ErrorContains(t, runErr, tc.want)
+			require.ErrorContains(t, execution.Run(context.Background(), mpool.MustNewZero(), nil, func(*batch.Batch, *perfcounter.CounterSet) error { return nil }), "already claimed")
+			require.ErrorIs(t, execution.CleanupAfterRun(context.Background(), runErr), runErr)
+			require.NoError(t, execution.CancelAndJoin(context.Background()))
+		})
+	}
+}
+
+func TestCancelAndJoinHonorsExistingCleanupAndContext(t *testing.T) {
+	runtime := &Runtime{executions: make(map[*Execution]struct{})}
+	terminal := &Execution{runtime: runtime, terminal: true, cleanupDone: make(chan struct{})}
+	require.NoError(t, terminal.CancelAndJoin(context.Background()))
+
+	done := make(chan struct{})
+	waiting := &Execution{runtime: runtime, cleanupRunning: true, cleanupDone: done}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, waiting.CancelAndJoin(ctx), context.Canceled)
+	close(done)
+	require.NoError(t, waiting.CancelAndJoin(context.Background()))
+}
+
 func fixtureOutputShape() ([]planpb.Type, []string) {
 	return []planpb.Type{
 		{Id: int32(types.T_bool)}, {Id: int32(types.T_int8)}, {Id: int32(types.T_int16)},
@@ -300,7 +473,9 @@ func testGetFlightInfo(service any, ctx context.Context, decode func(any) error,
 	if server.badInfo {
 		return &flightInfo{Schema: server.schema, AppMetadata: server.hash}, nil
 	}
-	return &flightInfo{Schema: server.schema, Endpoint: []*flightEndpoint{{Ticket: &flightTicket{Ticket: server.ticket}}}, AppMetadata: server.hash}, nil
+	return &flightInfo{Schema: server.schema, Endpoint: []*flightEndpoint{{
+		Ticket: &flightTicket{Ticket: server.ticket}, Locations: server.locations,
+	}}, AppMetadata: server.hash}, nil
 }
 
 func testDoGet(service any, stream grpc.ServerStream) error {
@@ -308,6 +483,14 @@ func testDoGet(service any, stream grpc.ServerStream) error {
 	ticket := new(flightTicket)
 	if err := stream.RecvMsg(ticket); err != nil {
 		return err
+	}
+	if server.streamMessages != nil {
+		for _, message := range server.streamMessages {
+			if err := stream.SendMsg(message); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if err := stream.SendMsg(&flightData{DataHeader: server.schema}); err != nil {
 		return err
@@ -320,6 +503,9 @@ func testDoAction(service any, stream grpc.ServerStream) error {
 	action := new(flightAction)
 	if err := stream.RecvMsg(action); err != nil {
 		return err
+	}
+	if action.Type == "GetCapabilities" {
+		return stream.SendMsg(&flightResult{Body: server.capabilities})
 	}
 	if server.cancelErr != nil {
 		return server.cancelErr
@@ -345,4 +531,50 @@ func testDoAction(service any, stream grpc.ServerStream) error {
 	}
 	server.cancels.Add(1)
 	return stream.SendMsg(&flightResult{Body: []byte("quiesced")})
+}
+
+func testTLSFlightServer(t *testing.T, implementation *testFlightServer) (string, *tls.Config) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		IsCA:        true, BasicConstraintsValid: true, DNSNames: []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	privateDER, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	require.NoError(t, os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600))
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), 0o600))
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	require.True(t, roots.AppendCertsFromPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate},
+	})))
+	server.RegisterService(&grpc.ServiceDesc{
+		ServiceName: "arrow.flight.protocol.FlightService", HandlerType: (*testFlightService)(nil),
+		Methods: []grpc.MethodDesc{{MethodName: "GetFlightInfo", Handler: testGetFlightInfo}},
+		Streams: []grpc.StreamDesc{
+			{StreamName: "DoGet", Handler: testDoGet, ServerStreams: true},
+			{StreamName: "DoAction", Handler: testDoAction, ServerStreams: true},
+		},
+	}, implementation)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	return listener.Addr().String(), &tls.Config{
+		MinVersion: tls.VersionTLS12, ServerName: "localhost",
+		Certificates: []tls.Certificate{certificate}, RootCAs: roots,
+	}
 }

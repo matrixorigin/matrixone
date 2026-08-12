@@ -15,6 +15,7 @@
 package sidecarflight
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"math"
 	"testing"
@@ -108,6 +109,202 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 	_, err = schema.decodeRecordBatch(mustHex(t, fixtureHeaderHex), body[:len(body)-1], 1<<20, mp)
 	require.ErrorContains(t, err, "body length mismatch")
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestArrowIPCLowLevelBoundsAndFraming(t *testing.T) {
+	_, err := ipcMetadata(nil)
+	require.ErrorContains(t, err, "truncated")
+	_, err = ipcMetadata([]byte{0xff, 0xff, 0xff, 0xff})
+	require.ErrorContains(t, err, "continuation header")
+	continuation := make([]byte, 9)
+	binary.LittleEndian.PutUint32(continuation, math.MaxUint32)
+	binary.LittleEndian.PutUint32(continuation[4:], 2)
+	_, err = ipcMetadata(continuation)
+	require.ErrorContains(t, err, "length is invalid")
+	binary.LittleEndian.PutUint32(continuation[4:], 1)
+	metadata, err := ipcMetadata(continuation)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0}, metadata)
+	legacy := []byte{1, 0, 0, 0, 7}
+	metadata, err = ipcMetadata(legacy)
+	require.NoError(t, err)
+	require.Equal(t, []byte{7}, metadata)
+	raw := []byte{0, 0, 0, 0, 9}
+	metadata, err = ipcMetadata(raw)
+	require.NoError(t, err)
+	require.Equal(t, raw, metadata)
+
+	_, err = rootTable(nil)
+	require.ErrorContains(t, err, "root is truncated")
+	_, err = rootTable(make([]byte, 4))
+	require.ErrorContains(t, err, "root offset")
+
+	data := validFlatTableData()
+	table, err := rootTable(data)
+	require.NoError(t, err)
+	_, ok, err := table.field(10, 1)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, byte(9), mustByteField(t, table, 10, 9))
+
+	invalidBoolean := append([]byte(nil), data...)
+	invalidBoolean[20] = 2
+	_, err = (flatTable{data: invalidBoolean, start: 16}).boolField(0, false)
+	require.ErrorContains(t, err, "boolean is invalid")
+
+	invalidField := append([]byte(nil), data...)
+	binary.LittleEndian.PutUint16(invalidField[8:], 2)
+	_, _, err = (flatTable{data: invalidField, start: 16}).field(0, 8)
+	require.ErrorContains(t, err, "outside its table")
+
+	_, err = (flatTable{data: data, start: 63}).indirect(63)
+	require.ErrorContains(t, err, "offset is truncated")
+	_, err = table.indirect(20)
+	require.ErrorContains(t, err, "offset is invalid")
+
+	vectorData := validFlatTableData()
+	binary.LittleEndian.PutUint32(vectorData[20:], 8)
+	binary.LittleEndian.PutUint32(vectorData[28:], 2)
+	binary.LittleEndian.PutUint16(vectorData[32:], 1)
+	vectorData[34] = 1
+	vectorTable := flatTable{data: vectorData, start: 16}
+	_, _, _, err = vectorTable.vector(0, 32)
+	require.ErrorContains(t, err, "invalid bounds")
+	_, _, err = vectorTable.structVector(0, 2)
+	require.NoError(t, err)
+	_, _, err = vectorTable.stringField(0)
+	require.ErrorContains(t, err, "not terminated")
+	_, err = vectorTable.tableVector(0)
+	require.Error(t, err)
+
+	truncatedVector := validFlatTableData()
+	binary.LittleEndian.PutUint32(truncatedVector[20:], uint32(len(truncatedVector)-20))
+	_, _, _, err = (flatTable{data: truncatedVector, start: 16}).vector(0, 1)
+	require.ErrorContains(t, err, "vector is truncated")
+
+	invalidVTable := validFlatTableData()
+	binary.LittleEndian.PutUint32(invalidVTable[16:], 32)
+	_, _, err = (flatTable{data: invalidVTable, start: 16}).vtable()
+	require.ErrorContains(t, err, "vtable offset")
+	invalidBounds := validFlatTableData()
+	binary.LittleEndian.PutUint16(invalidBounds[4:], math.MaxUint16)
+	_, _, err = (flatTable{data: invalidBounds, start: 16}).vtable()
+	require.ErrorContains(t, err, "invalid bounds")
+}
+
+func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	typesOut, headings := fixtureOutputShape()
+
+	_, err := ParseSchema(make([]byte, maxArrowMetadataBytes+1), typesOut, headings)
+	require.ErrorContains(t, err, "supported bound")
+	_, err = ParseSchema(schemaWire, nil, nil)
+	require.ErrorContains(t, err, "empty or inconsistent")
+	_, err = ParseSchema(schemaWire, typesOut, headings[:len(headings)-1])
+	require.ErrorContains(t, err, "empty or inconsistent")
+	_, err = ParseSchema([]byte{0xff, 0xff, 0xff, 0xff}, typesOut, headings)
+	require.ErrorContains(t, err, "continuation header")
+	_, err = ParseSchema([]byte{4, 0, 0, 0}, typesOut, headings)
+	require.ErrorContains(t, err, "schema message")
+
+	metadata, err := ipcMetadata(schemaWire)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	schemaTable, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	fieldTables, err := schemaTable.tableVector(1)
+	require.NoError(t, err)
+	require.Len(t, fieldTables, len(typesOut))
+	extraTypes := append(append([]planpb.Type(nil), typesOut...), planpb.Type{Id: int32(types.T_int64)})
+	extraHeadings := append(append([]string(nil), headings...), "extra")
+	_, err = ParseSchema(schemaWire, extraTypes, extraHeadings)
+	require.ErrorContains(t, err, "MatrixOne expects")
+	wrongHeadings := append([]string(nil), headings...)
+	wrongHeadings[0] = "wrong"
+	_, err = ParseSchema(schemaWire, typesOut, wrongHeadings)
+	require.ErrorContains(t, err, "is named")
+
+	_, err = parseArrowField(flatTable{}, typesOut[0])
+	require.ErrorContains(t, err, "missing name")
+	_, err = parseArrowField(fieldTables[0], planpb.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.ErrorContains(t, err, "nullability")
+	for _, tc := range []struct {
+		index    int
+		expected planpb.Type
+	}{
+		{index: 0, expected: planpb.Type{Id: int32(types.T_varchar)}},
+		{index: 1, expected: planpb.Type{Id: int32(types.T_int16)}},
+		{index: 5, expected: planpb.Type{Id: int32(types.T_float64)}},
+		{index: 7, expected: planpb.Type{Id: int32(types.T_int64)}},
+		{index: 8, expected: planpb.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 3}},
+		{index: 10, expected: planpb.Type{Id: int32(types.T_int32)}},
+	} {
+		_, err = parseArrowField(fieldTables[tc.index], tc.expected)
+		require.ErrorContains(t, err, "does not match")
+	}
+
+	mutated := append([]byte(nil), metadata...)
+	mutatedMessage, err := rootTable(mutated)
+	require.NoError(t, err)
+	mutatedSchema, ok, err := mutatedMessage.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	mutatedFields, err := mutatedSchema.tableVector(1)
+	require.NoError(t, err)
+	typePosition, ok, err := mutatedFields[0].field(2, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	mutated[typePosition] = 99
+	_, err = parseArrowField(mutatedFields[0], typesOut[0])
+	require.ErrorContains(t, err, "unsupported Arrow type id")
+
+	versionMutation := append([]byte(nil), metadata...)
+	versionMessage, err := rootTable(versionMutation)
+	require.NoError(t, err)
+	versionPosition, ok, err := versionMessage.field(0, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	versionMutation[versionPosition] = 3
+	_, err = ParseSchema(versionMutation, typesOut, headings)
+	require.ErrorContains(t, err, "metadata version")
+
+	headerMutation := append([]byte(nil), metadata...)
+	headerMessage, err := rootTable(headerMutation)
+	require.NoError(t, err)
+	headerPosition, ok, err := headerMessage.field(1, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	headerMutation[headerPosition] = 0
+	_, err = ParseSchema(headerMutation, typesOut, headings)
+	require.ErrorContains(t, err, "header type")
+
+	missingSchema := append([]byte(nil), metadata...)
+	missingMessage, err := rootTable(missingSchema)
+	require.NoError(t, err)
+	vtable, _, err := missingMessage.vtable()
+	require.NoError(t, err)
+	binary.LittleEndian.PutUint16(missingSchema[vtable+8:], 0)
+	_, err = ParseSchema(missingSchema, typesOut, headings)
+	require.ErrorContains(t, err, "missing its schema")
+}
+
+func validFlatTableData() []byte {
+	data := make([]byte, 64)
+	binary.LittleEndian.PutUint32(data, 16)
+	binary.LittleEndian.PutUint16(data[4:], 6)
+	binary.LittleEndian.PutUint16(data[6:], 16)
+	binary.LittleEndian.PutUint16(data[8:], 4)
+	binary.LittleEndian.PutUint32(data[16:], 12)
+	return data
+}
+
+func mustByteField(t *testing.T, table flatTable, index int, defaultValue byte) byte {
+	t.Helper()
+	value, err := table.byteField(index, defaultValue)
+	require.NoError(t, err)
+	return value
 }
 
 func mustHex(t *testing.T, value string) []byte {

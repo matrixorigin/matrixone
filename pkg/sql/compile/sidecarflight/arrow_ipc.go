@@ -764,15 +764,3 @@ func (t flatTable) structVector(index int, width uint64) ([]byte, int, error) {
 	}
 	return t.data[start : start+uint64(length)*width], length, nil
 }
-
-func (t flatTable) int64Vector(index int) ([]int64, error) {
-	data, length, err := t.structVector(index, 8)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]int64, length)
-	for i := range result {
-		result[i] = int64(binary.LittleEndian.Uint64(data[i*8:]))
-	}
-	return result, nil
-}
