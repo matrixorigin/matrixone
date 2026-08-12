@@ -364,7 +364,7 @@ type PipelineSignalReceiverState struct {
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
-	srcRegs := make([]*WaitRegister, len(regs))
+	srcRegs := slices.Clone(regs)
 	doneCh := make([]<-chan struct{}, len(regs))
 
 	for i, reg := range regs {
@@ -374,7 +374,6 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 		} else {
 			nbs[i] = reg.NilBatchCnt
 		}
-		srcRegs[i] = reg
 		doneCh[i] = reg.Done()
 	}
 
