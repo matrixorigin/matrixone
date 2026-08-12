@@ -742,6 +742,29 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[2], "source_account_id=0")
 }
 
+func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
+	testErr := moerr.NewInternalErrorNoCtx("catalog unavailable")
+
+	t.Run("required sentinel insert", func(t *testing.T) {
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: testErr}}
+		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
+		require.Len(t, exec.sqls, 1)
+	})
+
+	t.Run("required sentinel transition", func(t *testing.T) {
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{2: testErr}}
+		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
+		require.Len(t, exec.sqls, 2)
+	})
+
+	t.Run("start scan transition", func(t *testing.T) {
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: testErr}}
+		require.ErrorIs(t,
+			StartViewMetadataRevalidation(context.Background(), exec, "restarted-worker"), testErr)
+		require.Len(t, exec.sqls, 1)
+	})
+}
+
 func TestRecoveryContextMissingSnapshotAndDependencyIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	exec := &viewMetadataCleanupRecordingExecutor{}

@@ -29,12 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -101,6 +103,71 @@ func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
 			dbName: moCatalog, tblName: tableName, typ: clusterTable,
 		}))
 	}
+}
+
+func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	cluster := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
+		ViewMetadataRefreshSupported: true,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
+		require.Equal(t, []bool{false, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[0], catalog.ViewMetadataLifecycleGateSQL)
+		require.Contains(t, bh.executedSQLs[1], "d.source_account_id=42")
+	})
+
+	t.Run("gate failure", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("gate failed")
+		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = testErr
+		require.ErrorIs(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42), testErr)
+		require.Len(t, bh.executedSQLs, 1)
+	})
+
+	t.Run("closure failure", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("closure failed")
+		// The generation is time-derived, so fail the second statement after the gate.
+		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = nil
+		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
+		require.ErrorIs(t, invalidateAccountViewMetadata(context.Background(), ses, bhFailure, 42), testErr)
+	})
+}
+
+type failSecondBackgroundExec struct {
+	*backgroundExecTest
+	err error
+}
+
+func (e *failSecondBackgroundExec) Exec(ctx context.Context, sql string) error {
+	if err := e.backgroundExecTest.Exec(ctx, sql); err != nil {
+		return err
+	}
+	if len(e.executedSQLs) == 2 {
+		return e.err
+	}
+	return nil
 }
 
 func TestMergeFkDepsDeduplicatesSources(t *testing.T) {

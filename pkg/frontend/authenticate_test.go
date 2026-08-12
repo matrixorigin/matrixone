@@ -11635,6 +11635,8 @@ type backgroundExecTest struct {
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	dropDatabaseIgnoresForeignKeys bool
+	systemCTELimits                []bool
+	executionAccountIDs            []uint32
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -11671,6 +11673,9 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
+	accountID, _ := defines.GetAccountId(ctx)
+	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
