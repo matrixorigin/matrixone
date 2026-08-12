@@ -1,0 +1,31 @@
+# Runtime-only image assembled from a prebuilt mo-service build.
+#
+# The build context must be a staging directory containing the unpacked
+# shared-build artifact plus the repo config tree:
+#   mo-service    - prebuilt binary (linked with -Wl,-rpath,$ORIGIN/lib)
+#   lib/          - thirdparties shared libraries (*.so)
+#   prebuilt-cgo/ - cgo shared libraries (libmo.so)
+#   dict/         - jieba dictionary
+#   etc/          - launch configurations
+# CI assembles this context from the shared build artifact produced by
+# matrixorigin/CI .github/workflows/build-mo.yaml; the resulting image is
+# equivalent to the runtime stage of optools/images/Dockerfile.
+FROM matrixorigin/ubuntu:22.04
+
+COPY mo-service /mo-service
+COPY etc /etc
+COPY lib/*.so /usr/local/lib/
+COPY prebuilt-cgo/*.so /usr/local/lib/
+COPY dict /usr/local/share/jieba
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
+
+# ldconfig and run mo-service to check the shared libraries (and the host
+# glibc the binary was linked against) resolve inside this image. A
+# coverage-instrumented binary requires a writable GOCOVERDIR even for -h.
+RUN chmod +x /mo-service && mkdir -p /tmp/coverage && ldconfig && GOCOVERDIR=/tmp/coverage /mo-service -h
+
+WORKDIR /
+
+EXPOSE 6001
+
+ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
