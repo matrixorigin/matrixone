@@ -469,6 +469,7 @@ type BindContext struct {
 	isCorrelated              bool
 	hasSingleRow              bool
 	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
