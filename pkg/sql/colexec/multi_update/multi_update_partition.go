@@ -289,7 +289,10 @@ func (op *PartitionMultiUpdate) selectPartitionTargetRows(
 	target *partitionUpdateTarget,
 	input *batch.Batch,
 ) (*batch.Batch, bool, error) {
-	seenSizeBefore := op.raw.seenTargetRowsSize()
+	var seenSizeBefore int64
+	if op.raw.Action == UpdateWriteS3 {
+		seenSizeBefore = op.raw.seenTargetRowsSize()
+	}
 	filtered, owned, duplicateRows, err := filterTargetRows(
 		proc,
 		target.contexts[0],
