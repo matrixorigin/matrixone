@@ -455,7 +455,6 @@ func ReadDeletes(
 			&cacheVectors[commitIdx],
 		); ok {
 			release()
-			release = nil
 			cols[commitIdx] = physicalCommitTS
 			meta, release, err = LoadTombstoneColumns(
 				ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
