@@ -851,6 +851,9 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
+		if lower == "offset" && !s.offsetClauseAhead() {
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos
@@ -875,6 +878,38 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+// offsetClauseAhead distinguishes the query clause from OFFSET used as an
+// implicit alias. OFFSET is intentionally non-reserved, so a trailing OFFSET
+// or one followed by another clause must remain an identifier. If the next
+// token can start an expression, the parser receives the OFFSET keyword.
+func (s *Scanner) offsetClauseAhead() bool {
+	// Preserve OFFSET(...) as a non-reserved function name. OFFSET followed by
+	// a parenthesized clause expression remains available with whitespace, as
+	// in OFFSET (1).
+	if s.Pos < len(s.buf) && s.buf[s.Pos] == '(' {
+		return false
+	}
+
+	pos := s.skipBlankAndCommentsFrom(s.Pos)
+	if hasKeywordAt(s.buf, pos, "offset") {
+		return false
+	}
+
+	lookahead := *s
+	next, _ := lookahead.Scan()
+
+	switch next {
+	case 0, int(','), int(')'), int(';'),
+		FROM, INTO, WHERE, GROUP, HAVING, ORDER, LIMIT, OFFSET, FOR,
+		UNION, EXCEPT, INTERSECT, MINUS, LOCK, RETURNING,
+		JOIN, STRAIGHT_JOIN, LEFT, RIGHT, INNER, OUTER, CROSS, NATURAL,
+		APPLY, DEDUP, CENTROIDX, ON, USING, USE, FORCE, IGNORE:
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Scanner) withinGroupPhraseAhead(pos int) bool {

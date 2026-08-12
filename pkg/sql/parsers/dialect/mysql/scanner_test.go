@@ -116,6 +116,32 @@ func TestScannerSQLModePipeConcat(t *testing.T) {
 	}
 }
 
+func TestScannerContextualOffset(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{input: "offset", want: ID},
+		{input: "offset from t", want: ID},
+		{input: "offset /* comment */ from t", want: ID},
+		{input: "offset order by 1", want: ID},
+		{input: "offset(1)", want: ID},
+		{input: "offset (1)", want: OFFSET},
+		{input: "offset 1", want: OFFSET},
+		{input: "offset ?", want: OFFSET},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			token, _ := scanner.Scan()
+			if token != test.want {
+				t.Fatalf("Scan(%q) token = %d, want %d", test.input, token, test.want)
+			}
+		})
+	}
+}
+
 func tokenName(id int) string {
 	if id == STRING {
 		return "STRING"
