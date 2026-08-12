@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -362,10 +363,47 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
+	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found && b.decimalParamCommonTypeTarget {
+		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
+			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
+			return param, nil
+		}
+		if bindingType.Oid.IsMySQLString() {
+			param.Typ = makePlan2Type(&bindingType)
+			return param, nil
+		}
+		// Preserve which direct parameter consumed a runtime hint after the
+		// enclosing cast is materialized. Dependency extraction uses this marker
+		// to invalidate exactly that position on later executions.
+		param.Typ.Enumvalues = "mo_decimal_common_type_dependency"
+		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
+	}
+	if b.decimalParamCommonTypeTarget {
+		// Let COALESCE/GREATEST/LEAST see the unresolved parameter directly. In
+		// particular, an enclosing prepared SUM/AVG installs a generic numeric
+		// context; applying that cast here would hide the parameter before the
+		// DECIMAL common-type resolver can mark its runtime dependency.
+		return param, nil
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
 	return param, nil
+}
+
+func (b *baseBinder) preparedParamBindingType(pos int32) (types.Type, bool) {
+	if b.builder == nil {
+		return types.Type{}, false
+	}
+	resolver, ok := b.builder.compCtx.(interface {
+		ResolvePreparedParamBindingType(int32) (types.Type, bool)
+	})
+	if !ok {
+		return types.Type{}, false
+	}
+	// Parser offsets are one-based until NormalizePrepareParamRefs rewrites the
+	// finished plan to the zero-based protocol parameter positions.
+	return resolver.ResolvePreparedParamBindingType(pos - 1)
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -1042,7 +1080,16 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return numericAstTypeScan{hasParam: true}, nil
+		scan := numericAstTypeScan{hasParam: true}
+		if bindingType, found := b.preparedParamBindingType(int32(expr.Offset)); found && b.decimalParamCommonTypeTarget {
+			if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
+				return scan, nil
+			}
+			typed := numericAstTypedOperand(makePlan2Type(&bindingType))
+			typed.hasParam = true
+			return typed, nil
+		}
+		return scan, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -2727,6 +2774,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		decimalParamCommonTypeTarget := b.decimalParamCommonTypeTarget
+		switch name {
+		case "coalesce", "greatest", "least":
+			b.decimalParamCommonTypeTarget = true
+		default:
+			b.decimalParamCommonTypeTarget = false
+		}
+		defer func() { b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget }()
 		var functionContext numericFunctionContext
 		hasFunctionContext := false
 		if b.numericFunctionTarget {
@@ -3149,7 +3204,8 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	retExpr, err := bindFuncExprImplByPlanExpr(
+		ctx, name, args, preparedDecimalPrefixCastEnabled(proc))
 	if err != nil {
 		return nil, err
 	}
@@ -3429,6 +3485,12 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true)
+}
+
+func bindFuncExprImplByPlanExpr(
+	ctx context.Context, name string, args []*Expr, prefixCastEnabled bool,
+) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
@@ -3911,7 +3973,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType, prefixCastEnabled)
+	var fGet function.FuncGetResult
+	fGet, err = function.GetFunctionByName(ctx, name, resolutionTypes)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3933,7 +3997,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
-	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
+	adjustControlFlowMetadata(name, args, resolutionTypes, &returnType, argsCastType)
+	argsCastType = applyDecimalParamCommonTypeCasts(
+		args, argsType, resolutionTypes, returnType, argsCastType,
+	)
+	if err := normalizeDecimalParamCommonTypeCastSources(ctx, args, argsType, resolutionTypes, returnType); err != nil {
+		return nil, err
+	}
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -4698,6 +4768,280 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 		return nil
 	}
 	return nil
+}
+
+// A direct prepared parameter is represented as TEXT for transport, but MySQL
+// contributes DECIMAL(65,30) for it while aggregating DECIMAL-aware common
+// types. Keep argsType unchanged so cast insertion still converts the runtime
+// TEXT value to the selected numeric type.
+func decimalParamCommonTypeResolutionTypes(
+	name string, args []*Expr, argsType []types.Type, prefixCastEnabled bool,
+) []types.Type {
+	switch name {
+	case "coalesce", "greatest", "least":
+	default:
+		return argsType
+	}
+	if len(args) != len(argsType) {
+		return argsType
+	}
+
+	hasParam := false
+	hasDecimal := false
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) {
+			hasParam = true
+			continue
+		}
+		switch {
+		case typ.Oid == types.T_any:
+			continue
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+		case typ.IsNumeric():
+			continue
+		case typ.Oid == types.T_bool:
+			continue
+		case typ.Oid == types.T_year:
+			continue
+		default:
+			return argsType
+		}
+	}
+	if !hasDecimal {
+		return argsType
+	}
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) && args[i].Typ.Enumvalues == "" {
+			args[i].Typ.Enumvalues = "mo_decimal_common_type_dependency"
+		}
+	}
+	if !prefixCastEnabled {
+		return argsType
+	}
+
+	dynamicParamType, ok := types.Type{}, true
+	if hasParam {
+		hasUnclassifiedParam := false
+		for i, typ := range argsType {
+			if isUnresolvedPreparedNumericParam(args[i], typ) {
+				if _, _, found := runtimePreparedNumericType(args[i]); !found {
+					hasUnclassifiedParam = true
+					break
+				}
+			}
+		}
+		if hasUnclassifiedParam {
+			dynamicParamType, ok = dynamicParamDecimalCommonType(argsType)
+		}
+	}
+	if hasParam && decimalParamCommonTypeHasFloatingPeer(args, argsType) {
+		// FLOAT/DOUBLE determines the final common type, so its DOUBLE cast can
+		// preserve the native floating parameter domain without first forcing
+		// every DECIMAL contribution into one fixed representation.
+		dynamicParamType = types.New(types.T_decimal256, 65, 30)
+		ok = true
+	}
+	if hasParam && !ok {
+		// Validation reports the same physical-domain boundary before this
+		// helper is used by the normal binder. Keep the unresolved inputs here
+		// so direct white-box callers do not invent a lossy numeric type.
+		return argsType
+	}
+	resolutionTypes := append([]types.Type(nil), argsType...)
+	for i, typ := range argsType {
+		switch {
+		case isUnresolvedPreparedNumericParam(args[i], typ):
+			if runtimeType, _, found := runtimePreparedNumericType(args[i]); found {
+				resolutionTypes[i] = runtimeType
+			} else {
+				resolutionTypes[i] = dynamicParamType
+			}
+		case typ.Oid == types.T_bool:
+			// BOOL is MySQL's TINYINT(1) alias, but is not classified as
+			// numeric internally. Use its supported integer cast bridge.
+			resolutionTypes[i] = types.T_uint8.ToType()
+		case typ.Oid == types.T_bit:
+			// BIT can hold the full uint64 domain. Represent that contribution
+			// as DECIMAL(20,0) so it cannot win as an integer common type.
+			resolutionTypes[i] = types.New(types.T_decimal128, 20, 0)
+		case typ.Oid == types.T_year:
+			// YEAR contributes its four-digit numeric value. Normalizing only
+			// the resolution input avoids the temporal/string mixed-type path.
+			resolutionTypes[i] = types.New(types.T_decimal64, 4, 0)
+		}
+	}
+	maxIntegral, maxScale := int32(0), int32(0)
+	for _, typ := range resolutionTypes {
+		if typ.Oid.IsFloat() {
+			return resolutionTypes
+		}
+		if typ.Oid.IsDecimal() {
+			maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
+			maxScale = max(maxScale, typ.Scale)
+		}
+	}
+	if hasParam {
+		if maxIntegral+maxScale > 76 {
+			// No Decimal256 type can preserve both domains. Leave the direct
+			// parameter unresolved so the normal non-narrowing text path decides the
+			// common type instead of discarding high integral digits.
+			return argsType
+		}
+	}
+	return resolutionTypes
+}
+
+func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion18
+}
+
+func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {
+	for i, typ := range argsType {
+		if !isUnresolvedPreparedNumericParam(args[i], typ) && typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicParamDecimalCommonType(peerTypes []types.Type) (types.Type, bool) {
+	const (
+		maxDecimal256Width = int32(76)
+		paramIntegralWidth = int32(35)
+		paramScale         = int32(30)
+	)
+
+	maxPeerIntegralWidth := int32(0)
+	maxPeerScale := int32(0)
+	for _, typ := range peerTypes {
+		if !typ.Oid.IsDecimal() {
+			continue
+		}
+		if integralWidth := typ.Width - typ.Scale; integralWidth > maxPeerIntegralWidth {
+			maxPeerIntegralWidth = integralWidth
+		}
+		if typ.Scale > maxPeerScale {
+			maxPeerScale = typ.Scale
+		}
+	}
+
+	integralWidth := max(paramIntegralWidth, maxPeerIntegralWidth)
+	scale := max(paramScale, maxPeerScale)
+	if integralWidth+scale > maxDecimal256Width {
+		return types.Type{}, false
+	}
+	return types.New(types.T_decimal256, integralWidth+scale, scale), true
+}
+
+func normalizeDecimalParamCommonTypeCastSources(
+	ctx context.Context,
+	args []*Expr,
+	argsType []types.Type,
+	resolutionTypes []types.Type,
+	returnType types.Type,
+) error {
+	if len(args) != len(argsType) || len(args) != len(resolutionTypes) {
+		return nil
+	}
+	for i := range args {
+		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
+			// Mark only this internal cast for MySQL numeric-prefix conversion.
+			// Charset is otherwise unused for numeric types and does not require a
+			// new CAST overload ID that an old CN could fail to decode.
+			castType := returnType
+			castType.Charset = 255
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&castType))
+			if err != nil {
+				return err
+			}
+			args[i] = castExpr
+			argsType[i] = returnType
+			continue
+		}
+		needsBridge := false
+		switch argsType[i].Oid {
+		case types.T_bool:
+			needsBridge = resolutionTypes[i].Oid == types.T_uint8
+		case types.T_bit:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal128
+		case types.T_year:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal64
+		}
+		if !needsBridge {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&resolutionTypes[i]))
+		if err != nil {
+			return err
+		}
+		args[i] = castExpr
+		argsType[i] = resolutionTypes[i]
+	}
+	return nil
+}
+
+func applyDecimalParamCommonTypeCasts(
+	args []*Expr,
+	argsType []types.Type,
+	resolutionTypes []types.Type,
+	returnType types.Type,
+	argsCastType []types.Type,
+) []types.Type {
+	if !returnType.Oid.IsDecimal() || len(args) != len(argsType) || len(args) != len(resolutionTypes) {
+		return argsCastType
+	}
+
+	dynamicParamType, ok := dynamicParamDecimalCommonType(argsType)
+	if !ok {
+		return argsCastType
+	}
+	for i := range args {
+		if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
+			continue
+		}
+		if len(argsCastType) == 0 {
+			argsCastType = append([]types.Type(nil), argsType...)
+		}
+		argsCastType[i] = returnType
+	}
+	return argsCastType
+}
+
+func isUnresolvedPreparedNumericParam(expr *Expr, typ types.Type) bool {
+	return typ.Oid == types.T_text && isDirectDynamicParam(expr)
+}
+
+func runtimePreparedNumericType(expr *Expr) (types.Type, int32, bool) {
+	const prefix = "mo_runtime_numeric:"
+	if expr == nil || !strings.HasPrefix(expr.Typ.Enumvalues, prefix) {
+		return types.Type{}, 0, false
+	}
+	var mode, width, scale int32
+	if _, err := fmt.Sscanf(expr.Typ.Enumvalues, prefix+"%d:%d:%d", &mode, &width, &scale); err != nil {
+		return types.Type{}, 0, false
+	}
+	if mode == 3 {
+		return types.T_float64.ToType(), mode, true
+	}
+	if mode == 5 {
+		return types.T_text.ToType(), mode, true
+	}
+	var typ types.Type
+	switch {
+	case width <= 18:
+		typ = types.New(types.T_decimal64, max(width, 1), scale)
+	case width <= 38:
+		typ = types.New(types.T_decimal128, width, scale)
+	default:
+		typ = types.New(types.T_decimal256, width, scale)
+	}
+	return typ, mode, true
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a

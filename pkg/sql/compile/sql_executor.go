@@ -430,6 +430,7 @@ func (exec *txnExecutor) Exec(
 	}()
 
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
+	compileContext.preparedParamBindingTypes = statementOption.PreparedParamBindingTypes()
 	compileContext.SetRootSql(sql)
 
 	var pn *plan.Plan

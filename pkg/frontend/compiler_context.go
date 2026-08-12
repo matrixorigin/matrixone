@@ -65,6 +65,9 @@ type TxnCompilerContext struct {
 	// cached backExec for subscription meta queries, reused within the same transaction
 	cachedBackExec BackgroundExec
 	mu             sync.Mutex
+	// preparedParamBindingTypes is populated only while rebuilding a prepared
+	// plan for a new runtime parameter category. It never escapes planning.
+	preparedParamBindingTypes []types.Type
 }
 
 func (tcc *TxnCompilerContext) Close() {
@@ -77,6 +80,7 @@ func (tcc *TxnCompilerContext) Close() {
 	tcc.execCtx = nil
 	tcc.snapshot = nil
 	tcc.views = nil
+	tcc.preparedParamBindingTypes = nil
 }
 
 func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
@@ -94,6 +98,22 @@ func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	defer tcc.mu.Unlock()
 	tcc.execCtx = execCtx
 	tcc.views = nil
+}
+
+func (tcc *TxnCompilerContext) setPreparedParamBindingTypes(bindingTypes []types.Type) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	tcc.preparedParamBindingTypes = bindingTypes
+}
+
+func (tcc *TxnCompilerContext) ResolvePreparedParamBindingType(pos int32) (types.Type, bool) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	if pos < 0 || int(pos) >= len(tcc.preparedParamBindingTypes) {
+		return types.Type{}, false
+	}
+	typ := tcc.preparedParamBindingTypes[pos]
+	return typ, typ.Oid != types.T_any
 }
 
 func (tcc *TxnCompilerContext) GetViews() []string {

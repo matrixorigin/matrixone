@@ -4618,6 +4618,64 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
 }
 
+func TestMySQLDecimalPrefix(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "abc", want: "0"},
+		{input: "", want: "0"},
+		{input: " \t\v\f\r\n", want: "0"},
+		{input: "12.5tail", want: "12.5"},
+		{input: "2026-08-10", want: "2026"},
+		{input: "9007199254740993e0tail", want: "9007199254740993e0"},
+		{input: "1E2", want: "1e2"},
+		{input: "1E-2tail", want: "1e-2"},
+		{input: "1e+tail", want: "1"},
+		{input: "-.5x", want: "-.5"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			require.Equal(t, test.want, mysqlDecimalPrefix(test.input))
+		})
+	}
+
+	value, err := parseMySQLDecimal256Prefix("9007199254740993tail", 65, 30)
+	require.NoError(t, err)
+	want, err := types.ParseDecimal256("9007199254740993", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, want, value)
+
+	clamped, err := parseMySQLDecimal256Prefix("1e100tail", 65, 30)
+	require.NoError(t, err)
+	maximum, err := clampDecimal256Value(false, 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, maximum, clamped)
+
+	wideClamped, err := parseMySQLDecimal256Prefix("1e100tail", 75, 10)
+	require.NoError(t, err)
+	wideMaximum, err := types.ParseDecimal256(strings.Repeat("9", 65)+".0000000000", 75, 10)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+	wideClamped, err = parseMySQLDecimal256Prefix("1e100tail", 76, 30)
+	require.NoError(t, err)
+	wideMaximum, err = types.ParseDecimal256(strings.Repeat("9", 46)+"."+strings.Repeat("0", 30), 76, 30)
+	require.NoError(t, err)
+	require.Equal(t, wideMaximum, wideClamped)
+
+	uppercase, err := parseMySQLDecimal256Prefix("1E2tail", 65, 30)
+	require.NoError(t, err)
+	wantUppercase, err := types.ParseDecimal256("100", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, wantUppercase, uppercase)
+
+	underflow, err := parseMySQLDecimal256Prefix("1e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+	underflow, err = parseMySQLDecimal256Prefix("9999999999e-2147483648tail", 65, 30)
+	require.NoError(t, err)
+	require.Equal(t, types.Decimal256{}, underflow)
+}
+
 func TestParseStringToFloatWithBitSize(t *testing.T) {
 	t.Run("mysql_default_range_handling", func(t *testing.T) {
 		got32, err := parseStringToFloatWithBitSize("1e100", 32, SQLCompatibilityMySQL)

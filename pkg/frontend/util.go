@@ -260,6 +260,10 @@ func getExprValueWithPrepareMeta(
 	tempExecCtx := ExecCtx{
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
+		// Prepared SET expressions are rebound as an internal SELECT. Keep the
+		// outer execution wrapper so that dependency-scoped runtime parameter
+		// domains remain available during that second binding pass.
+		cw: execCtx.cw,
 	}
 	defer tempExecCtx.Close()
 	err = executeStmtInSameSession(
