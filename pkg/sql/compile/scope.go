@@ -280,7 +280,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	}
 
 	// The previous execution's cleanup delivered terminal signals into this
-	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// scope's pipeline edges and marked them done (doneClosed/endRecorded).
 	// A done edge silently rejects both data and End signals, so a reused
 	// pipeline would leave its receivers waiting forever. Clear the terminal
 	// state so the edges can carry the next execution's signals.
@@ -378,11 +378,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	select {
-	case <-s.Proc.Ctx.Done():
-		err = nil
-	default:
-	}
+	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	return err
 }
 
@@ -508,7 +504,7 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			scopeRunResult{err: err, ctx: s.Proc.Ctx},
+			newScopeRunResultForProcess(err, s.Proc),
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
@@ -573,7 +569,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, ctx: proc.Ctx})
+		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
