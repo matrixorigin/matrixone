@@ -311,6 +311,7 @@ type PrepareStmt struct {
 	defaultDatabase                 string
 	exactDecimalComparisonParams    bool
 	exactDecimalComparisonParamsSet bool
+	exactDecimalParamPositions      []int32
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}

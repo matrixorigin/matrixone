@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,9 @@ type TxnComputationWrapper struct {
 	// protocolVersion is captured when plan is built. The session plan cache
 	// uses it instead of the version observed later when execution completes.
 	protocolVersion int64
+	// runtimeDecimalParamPositions identifies the parameters materialized while
+	// rebuilding this execution's parameter-sensitive DECIMAL plan.
+	runtimeDecimalParamPositions []int32
 }
 
 func InitTxnComputationWrapper(
@@ -197,6 +201,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
 	cwft.schedulingTrace.Reset()
+	cwft.runtimeDecimalParamPositions = nil
 }
 
 func (cwft *TxnComputationWrapper) ParamVals() []any {
@@ -307,9 +312,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		compilerCtx := cwft.ses.GetTxnCompileCtx()
 		var restoreCompilerCtx context.Context
 		if execCtx.input.isPreparedExpr() {
-			buildCtx = plan2.WithPrepareRuntimeParams(buildCtx)
+			buildCtx = plan2.WithPrepareRuntimeParams(buildCtx, cwft.runtimeDecimalParamPositions...)
 			restoreCompilerCtx = compilerCtx.GetContext()
-			compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(restoreCompilerCtx))
+			compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(restoreCompilerCtx, cwft.runtimeDecimalParamPositions...))
 			defer compilerCtx.SetContext(restoreCompilerCtx)
 		}
 		cwft.plan, err = buildPlanWithPrepareMode(
@@ -450,6 +455,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				fill,
 				false,
 				&cwft.schedulingTrace,
+				cwft.runtimeDecimalParamPositions,
 			)
 			if err != nil {
 				return nil, err
@@ -493,6 +499,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			fill,
 			false,
 			&cwft.schedulingTrace,
+			nil,
 		)
 		if err != nil {
 			return nil, err
@@ -854,13 +861,14 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
-		prepareStmt.exactDecimalComparisonParams, err = plan2.PlanHasExactDecimalComparisonParam(
+		prepareStmt.exactDecimalParamPositions, err = plan2.ExactDecimalComparisonParamPositions(
 			reqCtx,
 			preparePlan.Plan,
 		)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
+		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
 		prepareStmt.exactDecimalComparisonParamsSet = true
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
@@ -901,7 +909,7 @@ func initExecuteStmtParamWithResolverInSession(
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -963,13 +971,14 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	executionPlan := preparePlan.Plan
 	if !prepareStmt.exactDecimalComparisonParamsSet {
-		prepareStmt.exactDecimalComparisonParams, err = plan2.PlanHasExactDecimalComparisonParam(
+		prepareStmt.exactDecimalParamPositions, err = plan2.ExactDecimalComparisonParamPositions(
 			reqCtx,
 			executionPlan,
 		)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
 		prepareStmt.exactDecimalComparisonParamsSet = true
 	}
 	if prepareStmt.exactDecimalComparisonParams {
@@ -985,15 +994,16 @@ func initExecuteStmtParamWithResolverInSession(
 			prepareStmt,
 			func(ctx context.Context, ses FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 				originalCtx := compilerCtx.GetContext()
-				compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(originalCtx))
+				compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(originalCtx, prepareStmt.exactDecimalParamPositions...))
 				defer compilerCtx.SetContext(originalCtx)
-				return buildPlan(plan2.WithPrepareRuntimeParams(ctx), ses, compilerCtx, stmt)
+				return buildPlan(plan2.WithPrepareRuntimeParams(ctx, prepareStmt.exactDecimalParamPositions...), ses, compilerCtx, stmt)
 			},
 		)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
 		executionPlan = rebuilt.GetDcl().GetPrepare().Plan
+		cwft.runtimeDecimalParamPositions = slices.Clone(prepareStmt.exactDecimalParamPositions)
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
@@ -1244,6 +1254,7 @@ func createCompile(
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
+	runtimeDecimalParamPositions []int32,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -1316,9 +1327,10 @@ func createCompile(
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	forcePrepare := execCtx.input.isPreparedExpr()
+	retryRuntimePositions := slices.Clone(runtimeDecimalParamPositions)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		return buildPlanForCompileRetry(
-			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, retryRuntimePositions)
 	})
 
 	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
@@ -1352,7 +1364,14 @@ func buildPlanForCompileRetry(
 	compilerContext plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
+	runtimeDecimalParamPositions []int32,
 ) (*plan2.Plan, error) {
+	if len(runtimeDecimalParamPositions) > 0 {
+		ctx = plan2.WithPrepareRuntimeParams(ctx, runtimeDecimalParamPositions...)
+		originalCtx := compilerContext.GetContext()
+		compilerContext.SetContext(plan2.WithPrepareRuntimeParams(originalCtx, runtimeDecimalParamPositions...))
+		defer compilerContext.SetContext(originalCtx)
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)

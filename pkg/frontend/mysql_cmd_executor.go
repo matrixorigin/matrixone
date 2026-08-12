@@ -2206,7 +2206,7 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
-	exactDecimalComparisonParams, err := plan2.PlanHasExactDecimalComparisonParam(
+	exactDecimalParamPositions, err := plan2.ExactDecimalComparisonParamPositions(
 		execCtx.reqCtx,
 		prepareControl.Plan,
 	)
@@ -2216,12 +2216,12 @@ func createPrepareStmtInSession(
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
-		!exactDecimalComparisonParams &&
+		len(exactDecimalParamPositions) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2246,8 +2246,9 @@ func createPrepareStmtInSession(
 		onlyFullGroupBySet:              true,
 		remapDb:                         maps.Clone(execCtx.remapDb),
 		defaultDatabase:                 executionSes.GetTxnCompileCtx().GetDatabase(),
-		exactDecimalComparisonParams:    exactDecimalComparisonParams,
+		exactDecimalComparisonParams:    len(exactDecimalParamPositions) > 0,
 		exactDecimalComparisonParamsSet: true,
+		exactDecimalParamPositions:      exactDecimalParamPositions,
 		tempTableVersion:                owner.GetTempTableVersion(),
 		ddlVersion:                      owner.getDDLVersion(),
 		cloneSQL:                        cloneSQL,

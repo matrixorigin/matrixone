@@ -60,10 +60,22 @@ var exactDecimalListGroupID atomic.Int32
 
 type prepareRuntimeParamsKey struct{}
 
+type prepareRuntimeParams struct {
+	all       bool
+	positions map[int32]struct{}
+}
+
 // WithPrepareRuntimeParams marks an execution-time prepared-plan rebuild. In
 // that rebuild ParamExpr nodes bind the values already installed on Process.
-func WithPrepareRuntimeParams(ctx context.Context) context.Context {
-	return context.WithValue(ctx, prepareRuntimeParamsKey{}, true)
+func WithPrepareRuntimeParams(ctx context.Context, positions ...int32) context.Context {
+	params := prepareRuntimeParams{all: len(positions) == 0}
+	if len(positions) > 0 {
+		params.positions = make(map[int32]struct{}, len(positions))
+		for _, pos := range positions {
+			params.positions[pos] = struct{}{}
+		}
+	}
+	return context.WithValue(ctx, prepareRuntimeParamsKey{}, params)
 }
 
 func nextExactDecimalListGroupID() int32 {
@@ -379,8 +391,12 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 	// observe the same runtime type domain. The initial PREPARE has no parameter
 	// vector and keeps the ParamRef below.
 	materialize := false
+	pos := int(astExpr.Offset) - 1
 	if ctx := b.GetContext(); ctx != nil {
-		materialize, _ = ctx.Value(prepareRuntimeParamsKey{}).(bool)
+		if params, ok := ctx.Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams); ok {
+			_, selected := params.positions[int32(pos)]
+			materialize = params.all || selected
+		}
 	}
 	if materialize && b.builder != nil && b.builder.compCtx != nil {
 		proc := b.builder.compCtx.GetProcess()
@@ -388,7 +404,6 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			params := proc.GetPrepareParams()
 			// Parser ordinals are one-based. Plan ParamRefs are normalized to
 			// zero-based positions only after binding.
-			pos := int(astExpr.Offset) - 1
 			if params != nil && pos >= 0 && pos < params.Length() {
 				var value any
 				if !params.IsNull(uint64(pos)) {
@@ -941,6 +956,10 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 		if operand.ExactDecimalParam {
 			hasRuntime = true
 			useReal = useReal || typ == types.T_float32 || typ == types.T_float64
+		} else if typ.IsMySQLString() {
+			// A static string peer and a runtime parameter select one shared REAL
+			// domain for the three-operand BETWEEN operation.
+			useReal = true
 		}
 	}
 	if !hasDecimal || !hasRuntime {
@@ -949,7 +968,7 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 
 	if !useReal {
 		for i, operand := range operands {
-			if !operand.ExactDecimalParam || !types.T(operand.Typ.Id).IsMySQLString() {
+			if !operand.ExactDecimalParam || types.T(operand.Typ.Id).IsDecimal() {
 				continue
 			}
 			literal := operand.GetLit()
@@ -957,7 +976,29 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 				useReal = true
 				break
 			}
-			decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, literal.GetSval())
+			value := ""
+			switch typed := literal.Value.(type) {
+			case *plan.Literal_Sval:
+				var ok bool
+				value, ok = function.GetNumericStringPrefix(typed.Sval)
+				if !ok {
+					useReal = true
+					continue
+				}
+			case *plan.Literal_I64Val:
+				value = strconv.FormatInt(typed.I64Val, 10)
+			case *plan.Literal_U64Val:
+				value = strconv.FormatUint(typed.U64Val, 10)
+			case *plan.Literal_Bval:
+				value = "0"
+				if typed.Bval {
+					value = "1"
+				}
+			default:
+				useReal = true
+				continue
+			}
+			decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, value)
 			if err != nil {
 				return false, err
 			}
@@ -4176,7 +4217,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				(leftTypeID == types.T_float32 || leftTypeID == types.T_float64)
 			if leftRuntimeNumeric && !useRuntimeLeftReal {
 				for _, item := range rightList.List {
-					if item.ExactDecimalParam && types.T(item.Typ.Id).IsMySQLString() {
+					if types.T(item.Typ.Id).IsMySQLString() {
 						useRuntimeLeftReal = true
 						break
 					}
@@ -5292,6 +5333,26 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	}
 
 	for paramPos, peerPos := range []int{1, 0} {
+		if args[paramPos].ExactDecimalParam && types.T(args[peerPos].Typ.Id).IsDecimal() {
+			paramType := types.T(args[paramPos].Typ.Id)
+			if paramType == types.T_float32 || paramType == types.T_float64 {
+				floatType := types.T_float64.ToType()
+				target := makePlan2Type(&floatType)
+				var err error
+				args[paramPos], err = appendCastBeforeExpr(ctx, args[paramPos], target)
+				if err != nil {
+					return err
+				}
+				args[peerPos], err = appendCastBeforeExpr(ctx, args[peerPos], target)
+				return err
+			}
+			normalized, err := normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
+			if err != nil {
+				return err
+			}
+			args[paramPos] = normalized
+			return nil
+		}
 		if !isDirectDynamicParam(args[paramPos]) || !types.T(args[peerPos].Typ.Id).IsDecimal() {
 			continue
 		}

@@ -815,7 +815,7 @@ func preparedDecimalComparisonCast(expr *plan.Expr) (*plan.Function, bool) {
 }
 
 type findDecimalComparisonParamRule struct {
-	found bool
+	positions map[int32]struct{}
 }
 
 func (rule *findDecimalComparisonParamRule) MatchNode(_ *Node) bool { return false }
@@ -825,12 +825,11 @@ func (rule *findDecimalComparisonParamRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
-	if rule.found || expr == nil {
+	if expr == nil {
 		return expr, nil
 	}
-	if expr.ExactDecimalParam {
-		rule.found = true
-		return expr, nil
+	if expr.ExactDecimalParam && types.T(expr.Typ.Id).IsDecimal() {
+		collectPlanExprParamPositions(expr, rule.positions)
 	}
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -839,23 +838,23 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 			return expr, nil
 		}
 		if fn.Func != nil && isDecimalComparisonOperator(fn.Func.GetObjName()) {
+			dependsOnRuntimeDomain := false
 			for _, arg := range fn.Args {
 				if _, ok := preparedDecimalComparisonCast(arg); ok {
-					rule.found = true
-					return expr, nil
+					dependsOnRuntimeDomain = true
+					break
 				}
 			}
 			if planExprHasParamRef(expr) && planExprHasDecimalType(expr) {
-				rule.found = true
-				return expr, nil
+				dependsOnRuntimeDomain = true
+			}
+			if dependsOnRuntimeDomain {
+				collectPlanExprParamPositions(expr, rule.positions)
 			}
 		}
 		for _, arg := range fn.Args {
 			if _, err := rule.ApplyExpr(arg); err != nil {
 				return nil, err
-			}
-			if rule.found {
-				break
 			}
 		}
 	case *plan.Expr_W:
@@ -867,12 +866,28 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 			if _, err := rule.ApplyExpr(item); err != nil {
 				return nil, err
 			}
-			if rule.found {
-				break
-			}
 		}
 	}
 	return expr, nil
+}
+
+func collectPlanExprParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectPlanExprParamPositions(arg, positions)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectPlanExprParamPositions(item, positions)
+		}
+	}
 }
 
 func planExprHasParamRef(expr *plan.Expr) bool {

@@ -260,6 +260,23 @@ func TestPlanDetectsRuntimeDecimalDomainsThatRequireFullRebuild(t *testing.T) {
 	}
 }
 
+func TestExactDecimalRuntimeDomainCollectsOnlyParticipatingParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	mock.ctxt.tables["part"].Cols[7].Typ = makePlan2Type(&decimalType)
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"prepare decimal_projection from 'select ? from part where p_retailprice = ? or p_partkey = ?'",
+	)
+	require.NoError(t, err)
+	positions, err := ExactDecimalComparisonParamPositions(
+		context.Background(), logicPlan.GetDcl().GetPrepare().Plan)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, positions)
+}
+
 func TestPreparedDecimalComparisonUsesActualStringValueDomain(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	decimalType := types.New(types.T_decimal128, 20, 4)

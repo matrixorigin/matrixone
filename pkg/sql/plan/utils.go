@@ -3219,15 +3219,27 @@ func FillExactDecimalComparisonParamsInPlan(ctx context.Context, preparePlan *Pl
 // PlanHasExactDecimalComparisonParam reports whether a prepared plan's
 // DECIMAL comparison domain depends on the actual text parameter.
 func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) (bool, error) {
+	positions, err := ExactDecimalComparisonParamPositions(ctx, preparePlan)
+	return len(positions) > 0, err
+}
+
+// ExactDecimalComparisonParamPositions returns the zero-based positions whose
+// runtime values participate in a DECIMAL comparison's common coercion domain.
+func ExactDecimalComparisonParamPositions(ctx context.Context, preparePlan *Plan) ([]int32, error) {
 	if preparePlan == nil {
-		return false, nil
+		return nil, nil
 	}
-	rule := &findDecimalComparisonParamRule{}
+	rule := &findDecimalComparisonParamRule{positions: make(map[int32]struct{})}
 	visitor := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
 	if err := visitor.Visit(ctx); err != nil {
-		return false, err
+		return nil, err
 	}
-	return rule.found, nil
+	positions := make([]int32, 0, len(rule.positions))
+	for pos := range rule.positions {
+		positions = append(positions, pos)
+	}
+	slices.Sort(positions)
+	return positions, nil
 }
 
 type ParamValue struct {

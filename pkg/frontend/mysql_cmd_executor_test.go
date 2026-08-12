@@ -4801,10 +4801,33 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset)
+}
+
+func TestCompileRetryKeepsRuntimeParamSelection(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("9007199254740992.0001"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+	compilerCtx := plan.NewMockCompilerContext(true)
+	compilerCtx.GetProcessFunc = func() *process.Process { return proc }
+
+	retryPlan, err := buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, true, []int32{1})
+	require.NoError(t, err)
+	project := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[0]].ProjectList
+	require.NotNil(t, project[0].GetP())
+	require.Equal(t, "9007199254740992.0001", project[1].GetLit().GetSval())
 }
 
 func queryParamPositions(query *plan0.Query) []int32 {

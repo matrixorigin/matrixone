@@ -53,6 +53,88 @@ func TestBaseBindParamMaterializesRuntimeProtocolKindOnlyWhenMarked(t *testing.T
 	require.NotNil(t, expr.GetP())
 }
 
+func TestBaseBindParamMaterializesOnlySelectedRuntimePositions(t *testing.T) {
+	proc := testutil.NewProc(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("9007199254740992.0001"), false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	})
+
+	compilerCtx := NewMockCompilerContext(true)
+	compilerCtx.GetProcessFunc = func() *process.Process { return proc }
+	binder := &baseBinder{
+		sysCtx:  WithPrepareRuntimeParams(context.Background(), 1),
+		builder: &QueryBuilder{compCtx: compilerCtx},
+	}
+	projection, err := binder.baseBindParam(&tree.ParamExpr{Offset: 1}, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, projection.GetP())
+
+	predicate, err := binder.baseBindParam(&tree.ParamExpr{Offset: 2}, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, "9007199254740992.0001", predicate.GetLit().GetSval())
+	require.True(t, predicate.ExactDecimalParam)
+}
+
+func TestRuntimeBooleanDecimalComparisonUsesExactIntegerDomain(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	column := &planpb.Expr{
+		Typ:  MakePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	boolean := makePlan2BoolConstExprWithType(true)
+	boolean.ExactDecimalParam = true
+
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{column, boolean})
+	require.NoError(t, err)
+	for _, arg := range expr.GetF().Args {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), arg.String())
+	}
+}
+
+func TestRuntimeRangeWithStaticStringUsesOneRealDomain(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	column := &planpb.Expr{
+		Typ:  MakePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	runtime := makePlan2StringConstExprWithType("9007199254740992.00005")
+	runtime.ExactDecimalParam = true
+	static := makePlan2StringConstExprWithType("9007199254740992.99995")
+	operands := []*planpb.Expr{column, runtime, static}
+
+	normalized, err := normalizePreparedDecimalRange(context.Background(), operands)
+	require.NoError(t, err)
+	require.True(t, normalized)
+	for _, operand := range operands {
+		require.Equal(t, int32(types.T_float64), operand.Typ.Id, operand.String())
+	}
+}
+
+func TestRuntimeNumericLeftINWithStaticStringUsesRealDomain(t *testing.T) {
+	left := makePlan2Int64ConstExprWithType(9007199254740993)
+	left.ExactDecimalParam = true
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	decimal := &planpb.Expr{
+		Typ:  MakePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	static := makePlan2StringConstExprWithType("9007199254740993.0")
+	list := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_tuple)},
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			decimal, static,
+		}}},
+	}
+
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in", []*planpb.Expr{left, list})
+	require.NoError(t, err)
+	require.True(t, expressionComparisonsUseType(expr, types.T_float64), expr.String())
+}
+
 func TestRuntimeParamRebuildBindsMixedINBeforeOptimization(t *testing.T) {
 	proc := testutil.NewProc(t)
 	params := vector.NewVec(types.T_text.ToType())
