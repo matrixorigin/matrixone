@@ -446,19 +446,24 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.logicalLen()) >= size {
 		return
 	}
-	newCap := (size + 63) / 64
+	requiredCap := (size + 63) / 64
 	n.setLogicalLen(int64(size))
-	if newCap > cap(n.data) {
+	if requiredCap > cap(n.data) {
 		if n.HasExternalStorage() {
 			panic("bitmap external storage capacity exceeded")
 		}
+		newCap := requiredCap
+		currentCap := cap(n.data)
+		if currentCap <= int(^uint(0)>>1)/2 {
+			newCap = max(requiredCap, max(1, currentCap*2))
+		}
 		data := make([]uint64, newCap)
 		copy(data, n.data)
-		n.data = data
+		n.data = data[:requiredCap]
 		return
 	}
-	if len(n.data) < newCap {
-		n.data = n.data[:newCap]
+	if len(n.data) < requiredCap {
+		n.data = n.data[:requiredCap]
 	}
 }
 

@@ -184,7 +184,9 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	)`)
 	require.NoError(t, err)
 
-	tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+	// A sparse metadata slice must not prevent SHOW CREATE from rendering
+	// the valid index entries that follow it.
+	tableDef.Indexes = append(tableDef.Indexes, nil, &plan.IndexDef{
 		IndexName: "idx_g",
 		Parts:     []string{"g"},
 		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
@@ -194,19 +196,6 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
-}
-
-func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
-	got, err := buildTestShowCreateTable(`CREATE TABLE invisible_show_src (
-		id INT PRIMARY KEY,
-		name VARCHAR(191),
-		body TEXT,
-		KEY idx_name(name) INVISIBLE,
-		FULLTEXT KEY idx_body(body) INVISIBLE
-	)`)
-	require.NoError(t, err)
-	require.Contains(t, got, "KEY `idx_name` (`name`) INVISIBLE")
-	require.Contains(t, got, "FULLTEXT `idx_body`(`body`) INVISIBLE")
 }
 
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {

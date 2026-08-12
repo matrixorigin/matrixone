@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -1460,6 +1461,50 @@ func TestAccountedMixedBinaryStringPreExtendCoversSetLength(t *testing.T) {
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedBinaryStringCreatedAfterPayloadGrowthCoversSetLength(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 4<<20, 16)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	require.NoError(t, vec.PreExtend(65536, mp))
+	vec.SetLength(2)
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+
+	require.NotPanics(t, func() { vec.SetLength(65536) })
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.GetIsBinaryStringAt(65535))
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compact=%t", compact), func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, 1<<20, 16)
+			mp := mpool.MustNewZero()
+			vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			require.NoError(t, vec.PreExtend(128, mp))
+			vec.SetLength(128)
+			rows := make([]bool, 128)
+			rows[0] = true
+			require.NoError(t, vec.SetBinaryStringRowsWithMP(rows, mp))
+
+			require.NotPanics(t, func() {
+				if compact {
+					vec.InplaceSortAndCompact()
+				} else {
+					vec.InplaceSort()
+				}
+			})
+
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestCombinedMetadataReaderSecondAllocationFailureIsAtomic(t *testing.T) {

@@ -273,12 +273,12 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 		},
 	}
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	compile, err := receiver.newCompile()
 	require.Error(t, err)
 	require.Nil(t, compile)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	compile, err = receiver.newCompile()
 	require.NoError(t, err)
 	require.NotNil(t, compile)
@@ -741,8 +741,8 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
 		maxMessageSize:  1 << 20,
 	}
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion17")
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion18")
 
 	var sent *pipeline.Message
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -750,7 +750,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()

@@ -374,6 +374,20 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
+	if rows < v.Capacity() {
+		rows = v.Capacity()
+	}
+	if v.allocationAccount != nil {
+		// InplaceSort has an infallible public API and reorders all row
+		// metadata together. Reserve its NULL and grouping sidecars while an
+		// MPool is available, before publishing binary row metadata.
+		if err := v.ensureNullCapacity(rows, mp); err != nil {
+			return err
+		}
+		if err := v.ensureGroupingCapacity(rows, mp); err != nil {
+			return err
+		}
+	}
 	if v.binaryStringRows == nil {
 		v.binaryStringRows = &bitmap.Bitmap{}
 		if v.allocationAccount != nil {

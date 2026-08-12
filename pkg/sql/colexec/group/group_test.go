@@ -26,6 +26,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -97,6 +98,30 @@ func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 		[]*plan.Expr{colExpr(1, types.T_varchar), colExpr(2, types.T_int64)},
 		config,
 		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+}
+
+func unorderedGroupConcatOrderAgg(distinct bool) aggexec.AggFuncExecExpression {
+	config := []byte{2}
+	config = binary.BigEndian.AppendUint32(config, 1) // concat args
+	config = binary.BigEndian.AppendUint32(config, 0) // no ORDER BY args
+	config = binary.BigEndian.AppendUint32(config, 1) // separator length
+	config = append(config, '|')
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		distinct,
+		[]*plan.Expr{colExpr(1, types.T_varchar)},
+		config,
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+}
+
+func orderedPercentileAgg(id int64, valueCol int32, percentile []byte, descending bool) aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		id,
+		false,
+		[]*plan.Expr{colExpr(valueCol, types.T_int64)},
+		aggexec.EncodeOrderedPercentileConfig(percentile, descending),
 	)
 }
 
@@ -449,7 +474,7 @@ func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 		proc.Free()
 	})
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion17)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
@@ -469,7 +494,7 @@ func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
 	require.True(t, output.Vecs[0].GetBinaryStringMetadataAt(0))
 }
 
-func TestGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
+func TestGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
 	tests := []struct {
 		name           string
 		version        int64
@@ -479,7 +504,8 @@ func TestGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
 		{name: "v11", version: defines.MORPCVersion11, wantErr: true},
 		{name: "v12", version: defines.MORPCVersion12, wantErr: true},
 		{name: "v16", version: defines.MORPCVersion16, wantErr: true},
-		{name: "v17", version: defines.MORPCVersion17},
+		{name: "v17", version: defines.MORPCVersion17, wantErr: true},
+		{name: "v18", version: defines.MORPCVersion18},
 		{name: "missing runtime", missingRuntime: true, wantErr: true},
 	}
 	for _, tc := range tests {
@@ -520,7 +546,7 @@ func TestGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
 			}
 			if tc.wantErr {
 				require.Nil(t, gotBatch)
-				require.ErrorContains(t, gotErr, "requires MORPCVersion17")
+				require.ErrorContains(t, gotErr, "requires MORPCVersion18")
 			} else {
 				require.NoError(t, gotErr)
 				require.NotNil(t, gotBatch)
@@ -533,13 +559,13 @@ func TestGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
 	}
 }
 
-func TestMergeGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
+func TestMergeGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() {
 		require.Zero(t, proc.Mp().CurrNB())
 		proc.Free()
 	})
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion17)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
 	partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
 		rows:   1,
 		binary: true,
@@ -552,7 +578,7 @@ func TestMergeGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
 	require.NotEqual(t, -1, trailerOffset)
 	// Exercise the aggregate-owned receiver gate directly. The ordinary batch
 	// metadata is intentionally absent, while the aggregate state still carries
-	// its v17-only binary-string trailer.
+	// its v18-only binary-string trailer.
 	partial.ExtraBuf = partial.ExtraBuf[:trailerOffset]
 	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion16)
 
@@ -564,7 +590,7 @@ func TestMergeGroupBinaryStringPartialRequiresMORPCVersion17(t *testing.T) {
 	require.NoError(t, merge.Prepare(proc))
 	result, err := vm.Exec(merge, proc)
 	require.Nil(t, result.Batch)
-	require.ErrorContains(t, err, "requires MORPCVersion17")
+	require.ErrorContains(t, err, "requires MORPCVersion18")
 }
 
 func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
@@ -1339,6 +1365,87 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestGroupedOrderedPercentileSpill(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const (
+		groupCount   = 8192
+		rowsPerGroup = 2
+	)
+	keys := make([]int32, groupCount*rowsPerGroup)
+	groupCopies := make([]int32, len(keys))
+	values := make([]int64, len(keys))
+	for group := 0; group < groupCount; group++ {
+		for row := 0; row < rowsPerGroup; row++ {
+			idx := group*rowsPerGroup + row
+			keys[idx] = int32(group)
+			groupCopies[idx] = 0
+			values[idx] = int64(row)
+		}
+	}
+
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt32Vector(groupCopies, nil, proc.Mp())
+	input.SetRowCount(len(keys))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(2, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{
+			orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 1, []byte("0.5"), false),
+		},
+	)
+	g.GroupByHashKey = []int32{0}
+	// Keep the threshold below the group/hash working set so the generic
+	// spill/reload path is exercised while retaining all percentile values.
+	g.SpillMem = 4096
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	defer func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+	}()
+
+	seen := make(map[int32]float64, groupCount)
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		output := result.Batch
+		if output.IsEmpty() {
+			continue
+		}
+		keysOut := vector.MustFixedColNoTypeCheck[int32](output.Vecs[0])
+		valuesOut := vector.MustFixedColNoTypeCheck[float64](output.Vecs[2])
+		for i, key := range keysOut {
+			seen[key] = valuesOut[i]
+		}
+	}
+	require.Len(t, seen, groupCount)
+	for key, value := range seen {
+		require.Equal(t, float64(rowsPerGroup-1)/2, value, "group %d", key)
+	}
+	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
+}
+
+func TestDistinctGroupConcatSpillRequiresOrderKey(t *testing.T) {
+	var ctr container
+	ctr.setSpillMem(123, []aggexec.AggFuncExecExpression{
+		unorderedGroupConcatOrderAgg(true),
+	})
+	require.Equal(t, int64(common.TiB), ctr.spillMem)
+
+	ctr.setSpillMem(123, []aggexec.AggFuncExecExpression{
+		orderedGroupConcatAgg(true),
+	})
+	require.Equal(t, int64(123), ctr.spillMem)
+}
+
 func TestGroupSpillPreservesPerGroupPrepareParamKind(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -1525,6 +1632,77 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	require.Equal(t, values[0], parts[rows-1])
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
+}
+
+func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 20001
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i - 1)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 0, []byte("0.5"), false),
+	})
+	g.SpillMem = 1
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[0], 0))
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
+}
+
+func TestSingleHotGroupOrderedPercentileSpillsAfterHashSpillLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	const rows = 20001
+	keys := make([]int32, rows)
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = int64(rows - i - 1)
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{
+			orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 1, []byte("0.5"), false),
+		},
+	)
+	g.SpillMem = 1
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, g.Prepare(proc))
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, int32(0), vector.GetFixedAtNoTypeCheck[int32](outputs[0].Vecs[0], 0))
+	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[1], 0))
+	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillMaxLevel"])
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
 }
 
 func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {

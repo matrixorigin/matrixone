@@ -73,7 +73,7 @@ func binaryStringWireEnabled(proc *process.Process) bool {
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion17
+	return ok && version >= defines.MORPCVersion18
 }
 
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
@@ -230,7 +230,7 @@ func readPrepareParamKindTrailer(
 	}
 	if version == prepareParamKindTrailerBinaryVersion && !allowBinaryString {
 		return nil, nil, nil, nil, moerr.NewInvalidStateNoCtx(
-			"aggregate binary-string metadata requires MORPCVersion17")
+			"aggregate binary-string metadata requires MORPCVersion18")
 	}
 	encodedAggs, err := types.ReadInt32(reader)
 	if err != nil {

@@ -647,7 +647,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok &&
 			accessor.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"aggregate binary-string metadata requires MORPCVersion17")
+				"aggregate binary-string metadata requires MORPCVersion18")
 		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
 			return vm.CancelResult, false, err

@@ -43,7 +43,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 
 	if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
 		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
+			Typ: b.ctx.groupOutputType(colPos),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.groupTag,

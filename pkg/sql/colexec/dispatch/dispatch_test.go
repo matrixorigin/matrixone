@@ -139,11 +139,12 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 		defines.MORPCVersion14,
 		defines.MORPCVersion15,
 		defines.MORPCVersion16,
+		defines.MORPCVersion17,
 	} {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		buf := bytes.NewBufferString("sentinel")
 		_, err := marshalRemoteBatch(proc, dynamic, buf)
-		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion17")
+		require.ErrorContains(t, err, "binary-string provenance requires MORPCVersion18")
 		require.Equal(t, "sentinel", buf.String())
 	}
 
@@ -168,7 +169,7 @@ func TestMarshalRemoteBatchBinaryStringProtocolGate(t *testing.T) {
 	require.Equal(t, vector.PrepareParamInteger, staticDecoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, staticDecoded.Vecs[0].GetPrepareParamKindAt(1))
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 	buf.Reset()
 	encoded, err := marshalRemoteBatch(proc, dynamic, buf)
 	require.NoError(t, err)

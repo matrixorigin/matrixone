@@ -5456,6 +5456,33 @@ func BenchmarkUnionOneBinaryStringProvenanceScale(b *testing.B) {
 	}
 }
 
+func TestUnionOneBinaryStringBitmapGrowthIsGeometric(t *testing.T) {
+	const rows = 512 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	values := make([][]byte, rows)
+	provenance := make([]bool, rows)
+	for row := range rows {
+		values[row] = []byte("v")
+		provenance[row] = row&1 == 0
+	}
+	require.NoError(t, AppendBytesList(source, values, nil, mp))
+	require.NoError(t, source.SetBinaryStringRowsWithMP(provenance, mp))
+	defer source.Free(mp)
+
+	allocations := testing.AllocsPerRun(1, func() {
+		destination := NewVec(types.T_text.ToType())
+		for row := range rows {
+			require.NoError(t, destination.UnionOne(source, int64(row), mp))
+		}
+		destination.Free(mp)
+	})
+	// Exact-per-word growth used more than 8,000 allocations at this size.
+	// Geometric payload and metadata growth should remain logarithmic.
+	require.Less(t, allocations, float64(128))
+	require.Zero(t, mp.CurrNB())
+}
+
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

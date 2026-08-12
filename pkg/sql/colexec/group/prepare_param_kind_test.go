@@ -265,5 +265,5 @@ func TestAggregateTrailerPreservesBinaryStringRows(t *testing.T) {
 
 	_, _, _, _, err = readPrepareParamKindTrailer(
 		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, false)
-	require.ErrorContains(t, err, "MORPCVersion17")
+	require.ErrorContains(t, err, "MORPCVersion18")
 }

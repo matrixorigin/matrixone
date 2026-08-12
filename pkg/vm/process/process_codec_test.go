@@ -284,11 +284,11 @@ func TestBinaryStringPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	}()
 
 	metadata := []bool{true, false}
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	_, err := BinaryStringPrepareParamMetadataForRemote("", 2, metadata)
 	require.Error(t, err)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	decoded, err := BinaryStringPrepareParamMetadataForRemote("", 2, metadata)
 	require.NoError(t, err)
 	require.Equal(t, metadata, decoded)
@@ -351,7 +351,7 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 	defer proc.Free()
 	params := proc.GetPrepareParams()
 	proc.SetPrepareParamsWithMetadata(params, []bool{false, false}, []bool{true, false})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	info, err := proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
 
@@ -359,11 +359,11 @@ func TestCodecServiceRejectsBinaryStringMetadataForOldProtocol(t *testing.T) {
 		fakeCodecTxnClient{op: fakeCodecTxnOperator{}},
 		nil, nil, nil, nil, nil, nil, nil,
 	).(*codecService)
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion16)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
 	_, err = svc.Decode(context.Background(), info)
 	require.Error(t, err)
 
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	decoded, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	defer decoded.Free()
@@ -461,6 +461,10 @@ func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T
 	require.Error(t, err)
 
 	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion17)
+	_, err = proc.BuildProcessInfo("select ?")
+	require.Error(t, err)
+
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
 	proc.SetPrepareParamsWithMetadata(proc.GetPrepareParams(), []bool{false, false}, []bool{false, true})
 	info, err = proc.BuildProcessInfo("select ?")
 	require.NoError(t, err)
