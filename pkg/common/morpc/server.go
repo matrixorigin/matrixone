@@ -140,12 +140,12 @@ func NewRPCServer(
 	codec Codec,
 	options ...ServerOption) (RPCServer, error) {
 	s := &server{
-		name:        name,
-		metrics:     newServerMetrics(name),
-		address:     address,
-		codec:       codec,
-		stopper:     stopper.NewStopper(name),
-		sessions:    &sync.Map{},
+		name:     name,
+		metrics:  newServerMetrics(name),
+		address:  address,
+		codec:    codec,
+		stopper:  stopper.NewStopper(name),
+		sessions: &sync.Map{},
 	}
 	for _, opt := range options {
 		opt(s)
