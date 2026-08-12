@@ -288,13 +288,15 @@ func PairwiseDistanceWait(handle PairwiseJobHandle, metric MetricType) ([]float3
 
 	dist := job.dist
 	if dist != nil {
+		// Only the squared->L2 root is applied here. Inner product must NOT be negated:
+		// gpu_pairwise_distance_wait already flipped the sign of this very buffer
+		// (cgo/cuvs/distance_c.cpp, matching the synchronous contract in distance.hpp),
+		// so negating again returned +a·b where MO's inner_product is -a·b. Batches below
+		// GPUThresholdSQL take the CPU kernel and were unaffected, so one query could
+		// report both signs for the same vectors.
 		if metric == Metric_L2Distance {
 			for i := range dist {
 				dist[i] = float32(math.Sqrt(float64(dist[i])))
-			}
-		} else if metric == Metric_InnerProduct {
-			for i := range dist {
-				dist[i] = -dist[i]
 			}
 		}
 		return dist, nil
