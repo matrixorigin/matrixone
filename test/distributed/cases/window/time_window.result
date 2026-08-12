@@ -866,6 +866,10 @@ select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 ➤ enable[4,32,0]  ¦  collation[4,32,0]
 drop table if exists tw_interval_bad_unit;
 create table tw_interval_bad_unit(ts timestamp(6), v int);
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 0, minute);
+invalid input: time window interval must be greater than zero
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 5, minute) sliding(0, minute);
+invalid input: time window sliding value must be greater than zero
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
 not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);

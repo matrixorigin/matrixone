@@ -1740,6 +1740,9 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	var num int64
+	if diff <= 0 {
+		return num, moerr.NewInvalidInput(proc.Ctx, "time window interval must be greater than zero")
+	}
 	iTyp := types.IntervalType(unit)
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
@@ -1784,12 +1787,18 @@ func getSecondNum(diff, unit int64, proc *process.Process) (int64, error) {
 
 func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	diff1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]).GetValue(0)
+	if diff1 <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "time window interval must be greater than zero")
+	}
 	unit1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
 	num1, err := getSecondNum(diff1, unit1, proc)
 	if err != nil {
 		return err
 	}
 	diff2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	if diff2 <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "time window sliding value must be greater than zero")
+	}
 	unit2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3]).GetValue(0)
 	num2, err := getSecondNum(diff2, unit2, proc)
 	if err != nil {
