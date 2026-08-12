@@ -13,6 +13,10 @@
 FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS warm
 
 ENV GOWORK=off
+# Keep the module cache world-writable: the default read-only directory
+# layout breaks extracting the cache onto CI runners (a read-only parent
+# directory is created before its children can be copied in).
+ENV GOFLAGS=-modcacherw
 
 # PR-time builds must mount the repo at this same path: cgo compile-cache
 # entries hash the -I include paths, so a different workspace path would miss
@@ -28,11 +32,39 @@ COPY . .
 # instrumentation changes the compiled objects.
 RUN make build GOBUILD_OPT=-cover
 
+# Warm the UT compile flavors without running any test: -exec /bin/true
+# replaces test-binary execution and -vet=off keeps vet findings out of the
+# nightly warm (PR CI runs vet itself). The CGO_* values mirror
+# optools/run_ut.sh; their absolute paths only key the few cgo packages,
+# which PR runners recompile anyway — everything else is content-addressed
+# and hits the cache from any workspace path. Soft-fail on purpose: a
+# partial warm still speeds PR CI up, and PR CI never depends on these
+# layers for correctness.
+#
+# Flavor 1: race + matrixone_test, as optools/run_ut.sh compiles for the UT
+# job in ci.yaml.
+RUN CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+    CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+    go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./... \
+    || echo "WARNING: race UT warm incomplete; PR CI will compile the misses"
+
+# Flavor 2: covermode=set with the full coverpkg list, exactly as
+# coverage-ut.yaml compiles (the coverpkg value is part of the compile key,
+# so the package-list filter must match that workflow verbatim).
+RUN cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
+    cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
+    CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+    CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+    go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
+      -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope} \
+    || echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"
+
 # Keep only the caches and prebuilt native artifacts; dropping the source
 # tree (and its .git) keeps the nightly image as small as the caches allow.
 FROM matrixorigin/golang:1.26.4-ubuntu22.04
 
 ENV GOWORK=off
+ENV GOFLAGS=-modcacherw
 
 ARG GOPROXY="https://proxy.golang.org,direct"
 RUN go env -w GOPROXY=${GOPROXY}
