@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,6 +81,19 @@ func TestDeleteUnpublishedObjectsUsesBoundedBatches(t *testing.T) {
 		canceledCtx, trackingFS, "canceled-cleanup")
 	require.Equal(t, 1, count)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDeleteUnpublishedObjectsIsIdempotent(t *testing.T) {
+	trackingFS := &trackingDeleteFileService{
+		err: moerr.NewFileNotFoundNoCtx("already-deleted-object"),
+	}
+
+	count, err := ioutil.DeleteUnpublishedObjects(
+		context.Background(), trackingFS, "already-deleted-object")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, []string{"already-deleted-object"}, trackingFS.deleted)
 }
 
 func TestConsumeCheckpointWithTableID(t *testing.T) {

@@ -123,6 +123,14 @@ func TestWindowInvalidUseMySQLError(t *testing.T) {
 	require.Equal(t, "You cannot use the window function 'row_number' in this context", err.Error())
 }
 
+func TestInvalidGroupFuncUseMySQLError(t *testing.T) {
+	err := NewInvalidGroupFuncUse(context.Background())
+	require.Equal(t, ErrInvalidGroupFuncUse, err.ErrorCode())
+	require.Equal(t, ER_INVALID_GROUP_FUNC_USE, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Invalid use of group function", err.Error())
+}
+
 func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	err := NewViewSelectTmpTable(context.Background(), "temp_for_view")
 	require.Equal(t, ErrViewSelectTmpTable, err.ErrorCode())

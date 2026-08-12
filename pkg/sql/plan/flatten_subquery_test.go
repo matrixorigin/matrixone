@@ -264,6 +264,126 @@ func TestScalarAggregatePlanSupportsDeepCorrelation(t *testing.T) {
 	}
 }
 
+func TestPushdownScalarAggregateKeysRejectsMalformedShapes(t *testing.T) {
+	t.Run("no aggregate", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_PROJECT,
+		}}}}
+		builder.pushdownScalarAggregateKeys(0, nil, nil)
+		require.Len(t, builder.qry.Nodes, 1)
+	})
+
+	for _, tc := range []struct {
+		name string
+		pred *plan.Expr
+	}{
+		{name: "predicate is not a function", pred: makePlan2BoolConstExprWithType(true)},
+		{
+			name: "istrue with non-function argument",
+			pred: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "istrue"},
+				Args: []*plan.Expr{makePlan2BoolConstExprWithType(true)},
+			}}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+				{
+					NodeId:      0,
+					NodeType:    plan.Node_AGG,
+					Children:    []int32{1},
+					BindingTags: []int32{10},
+					GroupBy:     []*plan.Expr{newFlattenSubqueryTestColExpr(30)},
+				},
+				{NodeId: 1, NodeType: plan.Node_TABLE_SCAN},
+			}}}
+			builder.pushdownScalarAggregateKeys(0, []*plan.Expr{tc.pred}, &BindContext{})
+			require.Len(t, builder.qry.Nodes, 2)
+			require.Equal(t, []int32{1}, builder.qry.Nodes[0].Children)
+		})
+	}
+}
+
+func TestScalarAggregateGroupPosRejectsInvalidTraversal(t *testing.T) {
+	const (
+		aggTag     int32 = 10
+		projectTag int32 = 20
+	)
+	agg := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_AGG,
+		BindingTags: []int32{aggTag},
+		GroupBy:     []*plan.Expr{newFlattenSubqueryTestColExpr(30)},
+	}
+
+	t.Run("nil column", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{agg}}}
+		_, ok := builder.scalarAggregateGroupPos(agg.NodeId, agg, nil)
+		require.False(t, ok)
+	})
+
+	t.Run("invalid node id", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{agg}}}
+		_, ok := builder.scalarAggregateGroupPos(-1, agg, newFlattenSubqueryTestColExpr(aggTag).GetCol())
+		require.False(t, ok)
+	})
+
+	for _, tc := range []struct {
+		name      string
+		wrapper   *plan.Node
+		columnPos int32
+	}{
+		{
+			name: "projection position out of range",
+			wrapper: &plan.Node{
+				NodeId:      1,
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{0},
+				BindingTags: []int32{projectTag},
+			},
+		},
+		{
+			name: "projection expression is not a column",
+			wrapper: &plan.Node{
+				NodeId:      1,
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{0},
+				BindingTags: []int32{projectTag},
+				ProjectList: []*plan.Expr{makePlan2Int64ConstExprWithType(1)},
+			},
+		},
+		{
+			name: "wrapper has multiple children",
+			wrapper: &plan.Node{
+				NodeId:   1,
+				NodeType: plan.Node_FILTER,
+				Children: []int32{0, 0},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{agg, tc.wrapper}}}
+			_, ok := builder.scalarAggregateGroupPos(
+				tc.wrapper.NodeId,
+				agg,
+				&plan.ColRef{RelPos: projectTag, ColPos: tc.columnPos},
+			)
+			require.False(t, ok)
+		})
+	}
+
+	t.Run("aggregate output is not a group key", func(t *testing.T) {
+		builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{agg}}}
+		_, ok := builder.scalarAggregateGroupPos(
+			agg.NodeId,
+			agg,
+			&plan.ColRef{RelPos: aggTag, ColPos: int32(len(agg.GroupBy))},
+		)
+		require.False(t, ok)
+	})
+}
+
 func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
 		SELECT n1.N_NATIONKEY,

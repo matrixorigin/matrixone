@@ -943,6 +943,63 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 		"legacy shuffle aggregates remain safe on protocol v5")
 }
 
+func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.False(t, c.supportsRemoteOrderedSetAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep ordered-set percentile aggregates local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.True(t, c.supportsRemoteOrderedSetAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.Stats.HashmapStats = nil
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	scope1 := newShuffleGroupInputScope(t, 1)
+	scope2 := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedSetPercentile(aggNode))
+	result := c.compileOrderedAggregateSingleStage(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 2)
+	require.Contains(t, result[0].PreScopes, scope1)
+	require.Contains(t, result[0].PreScopes, scope2)
+}
+
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
