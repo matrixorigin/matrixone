@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -116,6 +117,39 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 		}
 	}
 	return bat
+}
+
+func TestCanSaveQueryResultBySQLSource(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	ctx := context.Background()
+	assert.NoError(t, ses.SetSessionSysVar(ctx, "save_query_result", int8(1)))
+	ses.ast = &tree.ShowColumns{}
+
+	tests := []struct {
+		name       string
+		stmtType   string
+		sourceType string
+		want       bool
+	}{
+		{name: "cloud user show", stmtType: "Show Columns", sourceType: constant.CloudUserSql, want: true},
+		{name: "cloud user select", stmtType: "Select", sourceType: constant.CloudUserSql, want: true},
+		{name: "cloud non-user show", stmtType: "Show Columns", sourceType: constant.CloudNoUserSql, want: false},
+		{name: "cloud non-user select", stmtType: "Select", sourceType: constant.CloudNoUserSql, want: false},
+		{name: "internal show", stmtType: "Show Columns", sourceType: constant.InternalSql, want: false},
+		{name: "external show", stmtType: "Show Columns", sourceType: constant.ExternSql, want: true},
+		{name: "external select", stmtType: "Select", sourceType: constant.ExternSql, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses.SetStmtType(test.stmtType)
+			ses.SetSqlSourceType(test.sourceType)
+			assert.Equal(t, test.want, canSaveQueryResult(ctx, ses))
+		})
+	}
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {
