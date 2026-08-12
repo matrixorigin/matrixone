@@ -2011,6 +2011,46 @@ func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
 	}
 }
 
+func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
+	col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:          "display_name",
+		OriginName:    "source_name",
+		TblName:       "table_alias",
+		OriginTblName: "source_table",
+		DbName:        "source_db",
+		Typ:           plan2.Type{Id: int32(types.T_int32)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "source_db", col.Schema())
+	require.Equal(t, "table_alias", col.Table())
+	require.Equal(t, "source_table", col.OrgTable())
+	require.Equal(t, "display_name", col.Name())
+	require.Equal(t, "source_name", col.OrgName())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+	pos := HeaderOffset
+	fields := make([]string, 0, 6)
+	for range 6 {
+		field, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		fields = append(fields, string(field))
+		pos = next
+	}
+	require.Equal(t, []string{
+		"def", "source_db", "table_alias", "source_table", "display_name", "source_name",
+	}, fields)
+
+	legacy, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:    "name",
+		TblName: "table",
+		Typ:     plan2.Type{Id: int32(types.T_int32)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "table", legacy.Table())
+	require.Equal(t, "table", legacy.OrgTable())
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string

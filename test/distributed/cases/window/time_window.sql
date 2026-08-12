@@ -2,6 +2,16 @@ drop database if exists time_window;
 create database time_window;
 use time_window;
 
+-- Time Window ignores rows whose time key is NULL and keeps valid buckets.
+drop table if exists time_window_null_ts;
+create table time_window_null_ts (event_ts timestamp(6), device varchar(20), value double);
+insert into time_window_null_ts values
+  ('2026-01-01 00:01:00', 'd1', 10),
+  ('2026-01-01 00:02:00', 'd1', 20),
+  (null, 'd1', 999);
+select _wstart, _wend, count(*) as n from time_window_null_ts interval(event_ts, 1, minute) order by _wstart;
+drop table time_window_null_ts;
+
 -- abnormal test: the time column is not primary key column
 drop table if exists time_window01;
 create table time_window01 (ts timestamp, col2 int);
