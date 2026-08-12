@@ -4615,6 +4615,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
+		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
 		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
 		// GAPFILL uses the same second-stage aggregate state machine as an
 		// explicit sliding window even when its external SQL is a tumbling
@@ -7559,6 +7562,10 @@ func (builder *QueryBuilder) bindTimeWindow(
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
+	if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+		return
+	}
+
 	h := projectionBinder.havingBinder
 	col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
 	if err != nil {
@@ -8893,6 +8900,61 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 	}
 	return h, nil
+}
+
+const (
+	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+	timeWindowIntervalMustBePositive  = "time window interval must be greater than zero"
+	timeWindowSlidingMustBePositive   = "time window sliding value must be greater than zero"
+)
+
+func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
+	if astTimeWindow == nil {
+		return nil
+	}
+	if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Interval.Unit); err != nil {
+		return err
+	}
+	if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Interval.Val, timeWindowIntervalMustBePositive); err != nil {
+		return err
+	}
+	if astTimeWindow.Sliding != nil {
+		if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Sliding.Unit); err != nil {
+			return err
+		}
+		if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Sliding.Val, timeWindowSlidingMustBePositive); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalValue(ctx context.Context, expr tree.Expr, message string) error {
+	val, ok := expr.(*tree.NumVal)
+	if !ok {
+		return nil
+	}
+	n, ok := val.Int64()
+	if !ok {
+		return nil
+	}
+	if n <= 0 {
+		return moerr.NewInvalidInput(ctx, message)
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
+	typ, err := types.IntervalTypeOf(unit)
+	if err != nil {
+		return err
+	}
+	switch typ {
+	case types.Second, types.Minute, types.Hour, types.Day:
+		return nil
+	default:
+		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)
+	}
 }
 
 func appendSelectList(
