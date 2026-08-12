@@ -540,6 +540,61 @@ func TestTxnWorkspaceObjectDeletesUseExactTableReadView(t *testing.T) {
 	}
 }
 
+func TestTxnWorkspaceTableTombstonesUseExactLogicalReadView(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	beforeDelete := workspace.currentReadView()
+
+	workspace.append(Entry{
+		typ:        DELETE,
+		accountId:  1,
+		databaseId: 2,
+		tableId:    3,
+		bat:        newDeleteBatchForTest(t, proc, []int64{11}),
+	})
+	targetDelete := workspace.currentReadView()
+	workspace.append(Entry{
+		typ:        DELETE,
+		accountId:  1,
+		databaseId: 2,
+		tableId:    4,
+		bat:        newDeleteBatchForTest(t, proc, []int64{22}),
+	})
+
+	has, err := workspace.hasTableTombstones(beforeDelete, 1, 2, 3)
+	require.NoError(t, err)
+	require.False(t, has)
+
+	has, err = workspace.hasTableTombstones(targetDelete, 1, 2, 3)
+	require.NoError(t, err)
+	require.True(t, has)
+
+	// A delete for another table must not reject this table's snapshot.
+	has, err = workspace.hasTableTombstones(
+		workspace.currentReadView(), 1, 2, 5)
+	require.NoError(t, err)
+	require.False(t, has)
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceTableTombstonesIncludePendingObjectDeletes(t *testing.T) {
+	workspace := newTxnWorkspace()
+	beforeDelete := workspace.currentReadView()
+	workspace.appendObjectDelete(
+		1, 2, 3, types.Blockid{1}, []int64{4})
+	afterDelete := workspace.currentReadView()
+
+	has, err := workspace.hasTableTombstones(beforeDelete, 1, 2, 3)
+	require.NoError(t, err)
+	require.False(t, has)
+	has, err = workspace.hasTableTombstones(afterDelete, 1, 2, 3)
+	require.NoError(t, err)
+	require.True(t, has)
+	has, err = workspace.hasTableTombstones(afterDelete, 1, 2, 4)
+	require.NoError(t, err)
+	require.False(t, has)
+}
+
 func TestTxnWorkspaceRollbackObjectDeletesPreservesReadViews(t *testing.T) {
 	workspace := newTxnWorkspace()
 	blockID := types.Blockid{1}

@@ -178,7 +178,7 @@ func (tbl *txnTableDelegate) VisitSnapshotObjects(
 // relation used by VisitSnapshotObjects. Delegated shard reads fail closed.
 func (tbl *txnTableDelegate) HasSnapshotTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	snapshot types.TS,
 ) (bool, error) {
 	local, err := tbl.CanVisitSnapshotLocally()
@@ -188,7 +188,7 @@ func (tbl *txnTableDelegate) HasSnapshotTombstones(
 	if !local {
 		return false, moerr.NewInternalErrorNoCtx("delegated snapshot tombstone probing is unsupported")
 	}
-	return tbl.origin.hasSnapshotTombstones(ctx, txnOffset, snapshot)
+	return tbl.origin.hasSnapshotTombstones(ctx, readView, snapshot)
 }
 
 func (tbl *txnTableDelegate) Stats(

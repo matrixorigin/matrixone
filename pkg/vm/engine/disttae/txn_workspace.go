@@ -2143,6 +2143,39 @@ func (w *txnWorkspace) tableObjectDeletes(
 	return result, nil
 }
 
+// hasTableTombstones reports whether one exact table has any transaction-local
+// delete visible through view. Both ordinary DELETE mutations (in-memory
+// rowids and persisted tombstone objects) and pending deletes against
+// transaction-local CN objects participate in the same logical visibility
+// boundary. Callers must not infer this state from transaction-wide physical
+// containers because that both crosses table identities and bypasses ReadView
+// generation pinning.
+func (w *txnWorkspace) hasTableTombstones(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+) (bool, error) {
+	entries, err := w.tableEntries(view, accountID, databaseID, tableID)
+	if err != nil {
+		return false, err
+	}
+	defer entries.Close()
+	for idx := range entries.entries {
+		entry := &entries.entries[idx]
+		if entry.typ == DELETE && entry.visibleRowCount() != 0 {
+			return true, nil
+		}
+	}
+
+	objectDeletes, err := w.tableObjectDeletes(
+		view, accountID, databaseID, tableID)
+	if err != nil {
+		return false, err
+	}
+	return len(objectDeletes) != 0, nil
+}
+
 func (w *txnWorkspace) snapshotObjectDeletes() workspaceObjectDeleteSnapshot {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
