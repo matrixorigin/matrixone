@@ -1731,6 +1731,16 @@ select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
 from t_desc order by k desc, id;
 
+-- Regression for issue #23107: a very large finite PRECEDING bound covers the
+-- partition and must use the cumulative window path.
+create table t_window_23107(id int);
+insert into t_window_23107 values (1), (2), (3), (4), (5), (6),
+  (7), (8), (9), (10), (11), (12);
+select id,
+       sum(id) over (order by id rows between 2147483647 preceding and current row) as running_sum
+from t_window_23107 limit 10;
+drop table t_window_23107;
+
 drop table t_desc;
 drop database test_range_desc;
 

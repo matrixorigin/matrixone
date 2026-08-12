@@ -251,6 +251,8 @@ func collectRequiredColumns(
 	projNode, childNode, scanNode *plan.Node,
 	orderExpr *plan.Expr,
 	partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
 ) map[string]struct{} {
 	required := make(map[string]struct{})
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
@@ -263,17 +265,17 @@ func collectRequiredColumns(
 	if projNode != nil {
 		for _, expr := range projNode.ProjectList {
 			resolved := replaceColumnsForExpr(DeepCopyExpr(expr), childMap)
-			collectScanColumnsFromExpr(resolved, scanTag, partPos, scanNode.TableDef, required)
+			collectScanColumnsFromExpr(resolved, scanTag, partPos, origFuncName, vecLitArg, scanNode.TableDef, required)
 		}
 	}
 
 	if orderExpr != nil {
 		resolved := replaceColumnsForExpr(DeepCopyExpr(orderExpr), childMap)
-		collectScanColumnsFromExpr(resolved, scanTag, partPos, scanNode.TableDef, required)
+		collectScanColumnsFromExpr(resolved, scanTag, partPos, origFuncName, vecLitArg, scanNode.TableDef, required)
 	}
 
 	for _, expr := range scanNode.FilterList {
-		collectScanColumnsFromExpr(DeepCopyExpr(expr), scanTag, partPos, scanNode.TableDef, required)
+		collectScanColumnsFromExpr(DeepCopyExpr(expr), scanTag, partPos, origFuncName, vecLitArg, scanNode.TableDef, required)
 	}
 
 	return required
@@ -282,6 +284,8 @@ func collectRequiredColumns(
 func collectProjectedColumns(
 	projNode, childNode, scanNode *plan.Node,
 	partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
 ) map[string]struct{} {
 	projected := make(map[string]struct{})
 	if projNode == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
@@ -292,12 +296,12 @@ func collectProjectedColumns(
 	childMap := buildIvfChildProjectionMap(childNode)
 	for _, expr := range projNode.ProjectList {
 		resolved := replaceColumnsForExpr(DeepCopyExpr(expr), childMap)
-		collectScanColumnsFromExpr(resolved, scanTag, partPos, scanNode.TableDef, projected)
+		collectScanColumnsFromExpr(resolved, scanTag, partPos, origFuncName, vecLitArg, scanNode.TableDef, projected)
 	}
 	return projected
 }
 
-func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, tableDef *plan.TableDef, out map[string]struct{}) {
+func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, origFuncName string, vecLitArg *plan.Expr, tableDef *plan.TableDef, out map[string]struct{}) {
 	if expr == nil || tableDef == nil {
 		return
 	}
@@ -308,15 +312,21 @@ func collectScanColumnsFromExpr(expr *plan.Expr, scanTag, partPos int32, tableDe
 			out[colName] = struct{}{}
 		}
 	case *plan.Expr_F:
-		if isVectorDistanceExpr(expr, scanTag, partPos) {
+		// Only a distance that will actually be rewritten to the table function's score column
+		// (same metric func + same query vector as the index/ORDER BY key) can be served without the
+		// base scan's vector column. A distance on a DIFFERENT vector or a different metric still needs
+		// the base column, so recurse to collect it — otherwise the base scan is wrongly dropped and
+		// column remap fails ("Missing Column: t.v"). Mirrors replaceDistFnInExpr's match. (#26961)
+		if isVectorDistanceExpr(expr, scanTag, partPos) && impl.F.Func.ObjName == origFuncName &&
+			sameQueryVector(impl.F, scanTag, partPos, vecLitArg) {
 			return
 		}
 		for _, arg := range impl.F.Args {
-			collectScanColumnsFromExpr(arg, scanTag, partPos, tableDef, out)
+			collectScanColumnsFromExpr(arg, scanTag, partPos, origFuncName, vecLitArg, tableDef, out)
 		}
 	case *plan.Expr_List:
 		for _, sub := range impl.List.List {
-			collectScanColumnsFromExpr(sub, scanTag, partPos, tableDef, out)
+			collectScanColumnsFromExpr(sub, scanTag, partPos, origFuncName, vecLitArg, tableDef, out)
 		}
 	}
 }
@@ -1281,8 +1291,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			includeAwareColumns = nil
 		}
 	}
-	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos)
-	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos)
+	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
+	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
 	timeZone := time.UTC
 	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -1736,6 +1746,23 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// Keep residual filters on scanNode so they are applied during table scan.
 		scanNode.Limit = nil
 		scanNode.Offset = nil
+	}
+
+	// Rewrite SELECT-side distance sub-expressions on the base scan's vector column to reference the
+	// table function's score column. Without this, a distance WRAPPED by a scalar (CAST/ROUND/
+	// arithmetic) or bound to an alias keeps an orphaned ColRef to the base scan's vector column,
+	// which the base-scan removal then cannot remap ("cannot find column reference"): issue #26961.
+	// It also avoids re-running the distance kernel per scanned row. Shared with cagra/ivfpq (the
+	// helper's query-vec literal match is robust to the SELECT-side unfolded cast('[...]')).
+	{
+		scanTag := scanNode.BindingTags[0]
+		scoreColType := tableFuncNode.TableDef.Cols[1].Typ // table function's score column
+		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+			ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		if childNode != nil {
+			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
+				ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg, tableFuncTag, scoreColType)
+		}
 	}
 
 	// Create SortBy, still sort directly by table function's score, let remap map ColRef to corresponding output column
