@@ -202,6 +202,16 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 		return moerr.NewInternalErrorNoCtx("GAPFILL interval and sliding values must be positive")
 	}
 
+	// An equal half-open range is empty regardless of bucket alignment. Check
+	// it before flooring start, otherwise an unaligned [t, t) would appear to
+	// contain the bucket that begins before t.
+	if start == finish {
+		ctr.gapFillStart = start
+		ctr.gapFillEnd = finish
+		ctr.status = end
+		return nil
+	}
+
 	ctr.gapFillStart = start - start%timeWin.Interval
 	ctr.gapFillEnd = finish
 	if ctr.gapFillStart < finish {

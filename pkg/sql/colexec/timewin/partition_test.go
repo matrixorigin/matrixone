@@ -769,7 +769,8 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 		wantError    string
 		wantRowCount int
 	}{
-		{name: "empty", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:00"},
+		{name: "aligned empty", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:00"},
+		{name: "unaligned empty", start: "2023-08-01 00:00:02", finish: "2023-08-01 00:00:02"},
 		{name: "reversed", start: "2023-08-01 00:00:05", finish: "2023-08-01 00:00:00", wantError: "after finish"},
 		{name: "unpaired", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:05", dropFinish: true, wantError: "both start and finish"},
 	} {
