@@ -108,7 +108,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
-				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
+				if indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
 					rule.indexDependencies = append(rule.indexDependencies, prepareIndexDependency{
 						baseRef:   node.ObjRef,
 						snapshot:  node.ScanSnapshot,
@@ -138,7 +138,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 		prepareSchemaRefWithSnapshot(scanNode.ObjRef, scanNode.TableDef, scanNode.ScanSnapshot),
 	}
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
+		if indexDef == nil || !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(

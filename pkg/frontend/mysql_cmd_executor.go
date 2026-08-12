@@ -3338,21 +3338,33 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
-		if ref == nil || def == nil {
+	checkCatalogObject := func(
+		ref *plan.ObjectRef,
+		name string,
+		snapshot *plan2.Snapshot,
+		version int64,
+		tableID int64,
+	) (bool, error) {
+		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
 			return true, nil
 		}
 		return false, nil
+	}
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -3380,6 +3392,18 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				if err != nil || flag {
 					return true, err
 				}
+			}
+		}
+		for _, dependency := range p.Query.GetCatalogDependencies() {
+			flag, err := checkCatalogObject(
+				dependency,
+				dependency.GetObjName(),
+				dependency.GetSnapshot(),
+				dependency.GetServer(),
+				dependency.GetObj(),
+			)
+			if err != nil || flag {
+				return true, err
 			}
 		}
 	default:
@@ -3440,6 +3464,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
+			// The cache owns its ASTs until eviction. Wrappers only borrow them;
+			// otherwise normal cleanup or stale-plan reset can return the same AST
+			// to the parser pool while the cache still owns or already freed it.
+			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
@@ -4462,6 +4490,44 @@ func executeStmtWithIncrStmt(ses FeSession,
 	return
 }
 
+func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
+	// Evict this stale entry before rebuilding so a successful replan replaces
+	// it instead of paying the validation/rebuild cost forever.
+	if session, ok := ses.(*Session); ok {
+		session.removeCachedPlan(execCtx.input.getHash())
+	}
+
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	defer freeStmts(stmts)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != len(execCtx.cws) {
+		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
+	}
+	if execCtx.rewriteEnabled {
+		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+			return err
+		}
+		remaps := make([]map[string]string, len(execCtx.cws))
+		for i, cw := range execCtx.cws {
+			if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+				remaps[i] = carrier.GetRemapDb()
+			}
+		}
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+			return err
+		}
+	}
+	for i, cw := range execCtx.cws {
+		cw.ResetPlanAndStmt(stmts[i])
+		// ResetPlanAndStmt now owns the replacement AST. Keep the deferred
+		// cleanup responsible only for statements that were not transferred.
+		stmts[i] = nil
+	}
+	return nil
+}
+
 func dispatchStmt(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx) (err error) {
@@ -4474,32 +4540,8 @@ func dispatchStmt(ses FeSession,
 			return err
 		}
 		if flag {
-			//plan changed
-			//clear all cached plan and parse sql again
-			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
-			if err != nil {
+			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
-			}
-			if len(stmts) != len(execCtx.cws) {
-				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
-			}
-			if execCtx.rewriteEnabled {
-				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
-					return err
-				}
-				remaps := make([]map[string]string, len(execCtx.cws))
-				for i, cw := range execCtx.cws {
-					if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
-						remaps[i] = carrier.GetRemapDb()
-					}
-				}
-				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
-					return err
-				}
-			}
-			for i, cw := range execCtx.cws {
-				cw.ResetPlanAndStmt(stmts[i])
 			}
 		}
 	}
