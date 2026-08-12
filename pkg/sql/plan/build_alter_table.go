@@ -534,6 +534,9 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 	if err != nil {
 		return nil, err

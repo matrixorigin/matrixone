@@ -317,6 +317,18 @@ func makeSpecialAggExec(
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
 		return exec, true, err
+	case AggIdOfPercentileCont:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_cont requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileContinuous)
+		return exec, true, err
+	case AggIdOfPercentileDisc:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_disc requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
+		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 		return exec, true, err

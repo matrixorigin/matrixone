@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -39,6 +40,56 @@ func (tbl *txnTable) CollectObjectList(
 		return collectObjectListFromSnapshot(ctx, tbl, to, bat, mp)
 	}
 	return collectObjectListFromPartition(ctx, tbl, from, to, bat, mp)
+}
+
+func (tbl *txnTable) visitSnapshotObjects(
+	ctx context.Context,
+	snapshotTS types.TS,
+	visit func(objectio.ObjectStats, bool) error,
+) error {
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return err
+	}
+	return logtailreplay.VisitSnapshotObjects(ctx, state, snapshotTS, visit)
+}
+
+func (tbl *txnTable) hasSnapshotTombstones(
+	ctx context.Context,
+	txnOffset int,
+	snapshotTS types.TS,
+) (bool, error) {
+	txn := tbl.getTxn()
+	offset := txnOffset
+	if tbl.db.op.IsSnapOp() {
+		offset = txn.GetSnapshotWriteOffset()
+	}
+	if txn.hasTableWrite(tbl.db.databaseId, tbl.tableId, offset, func(entry Entry) bool {
+		if entry.typ != DELETE || entry.bat == nil || entry.bat.RowCount() == 0 || len(entry.bat.Vecs) == 0 || entry.bat.Vecs[0] == nil {
+			return false
+		}
+		return entry.bat.Vecs[0].GetType().Oid == types.T_Rowid
+	}) {
+		return true, nil
+	}
+	if txn.deletedBlocks.size() != 0 {
+		return true, nil
+	}
+	if txn.cn_flushed_s3_tombstone_object_stats_list != nil {
+		hasFlushedTombstone := false
+		txn.cn_flushed_s3_tombstone_object_stats_list.Range(func(_, _ any) bool {
+			hasFlushedTombstone = true
+			return false
+		})
+		if hasFlushedTombstone {
+			return true, nil
+		}
+	}
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return false, err
+	}
+	return state.HasSnapshotTombstones(ctx, snapshotTS)
 }
 
 func collectObjectListFromSnapshot(

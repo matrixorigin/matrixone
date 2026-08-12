@@ -1614,7 +1614,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -1670,7 +1670,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.GroupBy[0].Typ,
+					Typ: groupingFlagOutputType(node.GroupBy[0].Typ, node.GroupingFlag, 0),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -2481,7 +2481,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		var newProjList []*plan.Expr
 		if _, preserve := builder.preserveScanProjection[nodeID]; preserve {
 			for i := range node.ProjectList {
-				colRefCnt[[2]int32{tag, int32(i)}] = 1
+				ref := [2]int32{tag, int32(i)}
+				if colRefCnt[ref] == 0 {
+					colRefCnt[ref] = 1
+				}
 			}
 		}
 
@@ -4128,6 +4131,8 @@ func (builder *QueryBuilder) numericSetProjectionTypes(ctx *BindContext, stmts [
 const NameGroupConcat = "group_concat"
 const NameClusterCenters = "cluster_centers"
 const NameApproxPercentile = "approx_percentile"
+const NamePercentileCont = "percentile_cont"
+const NamePercentileDisc = "percentile_disc"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -7319,6 +7324,11 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
+	// Scalar-subquery decorrelation may need a safe outer-key domain while it
+	// is flattening one conjunct. Publish the complete bound WHERE list before
+	// walking it so the optimization is independent of SQL predicate order.
+	// The list is replaced with the flattened predicates below.
+	ctx.whereFilters = whereList
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {

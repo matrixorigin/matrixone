@@ -1521,6 +1521,14 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
+			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
+			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered-set percentile remote execution requires MORPC protocol version 17",
+				)
+			}
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
@@ -1544,7 +1552,7 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 	}
 	if proc == nil || !supportsRemoteTargetAwareUpdate(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 17",
+			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 18",
 		)
 	}
 	return nil

@@ -1208,6 +1208,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
 			if !partsEqual(pkeyNames, referencedNames) {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
@@ -1289,6 +1292,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					}
 				}
 			} else {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
