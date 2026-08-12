@@ -1714,7 +1714,7 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		exec.Free()
 	})
 
-	t.Run("null_bucket_defaults_to_1", func(t *testing.T) {
+	t.Run("null_bucket_count", func(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
 
@@ -1728,16 +1728,15 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 		require.NoError(t, err)
 		defer bucketVec.Free(mp)
 
-		err = exec.GroupGrow(3)
+		err = exec.GroupGrow(1)
 		require.NoError(t, err)
 
-		for o := 0; o <= 3; o++ {
-			err = exec.Fill(0, o, []*vector.Vector{osVec, bucketVec})
-			require.NoError(t, err)
-		}
+		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
+		require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
 
 		ntileExec := exec.(*ntileWindowExec)
-		require.Equal(t, int64(1), ntileExec.bucketCounts[0])
+		require.Empty(t, ntileExec.groups[0])
+		require.Zero(t, ntileExec.bucketCounts[0])
 
 		exec.Free()
 	})
