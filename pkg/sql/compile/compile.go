@@ -74,6 +74,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -4087,7 +4088,14 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 }
 
 func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	rs := c.newMergeScope(append(ss, children...))
+	// Keep each logical branch behind one local merge scope. A later streaming
+	// LIMIT consumer can then activate one branch at a time without changing the
+	// parallelism inside either branch. Without such a LIMIT both branches keep
+	// the ordinary concurrent MergeRun behavior.
+	left := c.newMergeScope(ss)
+	right := c.newMergeScope(children)
+	rs := c.newMergeScope([]*Scope{left, right})
+	rs.UnionAllBranches = true
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructUnionAll(node)
@@ -4096,6 +4104,51 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
+}
+
+func shortCircuitableUnionAll(root vm.Operator) *unionall.UnionAll {
+	for root != nil {
+		switch root.OpType() {
+		case vm.UnionAll:
+			unionOp, ok := root.(*unionall.UnionAll)
+			if ok {
+				return unionOp
+			}
+			return nil
+		case vm.Projection, vm.Filter, vm.Offset:
+			// These operators request input incrementally, so LIMIT can stop the
+			// UNION ALL branch scheduler through them.
+		default:
+			return nil
+		}
+		if root.GetOperatorBase().NumChildren() != 1 {
+			return nil
+		}
+		root = root.GetOperatorBase().GetChildren(0)
+	}
+	return nil
+}
+
+func enableLazyUnionAllForLimit(scopes []*Scope) {
+	for _, scope := range scopes {
+		if scope == nil || !scope.UnionAllBranches || scope.LazyPreScopes {
+			continue
+		}
+		unionOp := shortCircuitableUnionAll(scope.RootOp)
+		if unionOp == nil {
+			continue
+		}
+		if len(scope.PreScopes) < 2 {
+			panic("invalid UNION ALL branch scope")
+		}
+		mergeOp, ok := unionOp.GetChildren(0).(*merge.Merge)
+		if !ok {
+			panic("UNION ALL branch scope has no merge child")
+		}
+		mergeOp.WithPartial(0, 1)
+		unionOp.WithSequentialBranches(len(scope.PreScopes))
+		scope.LazyPreScopes = true
+	}
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
@@ -4906,6 +4959,7 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
+	enableLazyUnionAllForLimit(ss)
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(node)
