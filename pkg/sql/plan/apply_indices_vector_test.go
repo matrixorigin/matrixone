@@ -161,9 +161,10 @@ func TestReplaceDistFnInExpr_Substitutes(t *testing.T) {
 	const tfTag int32 = 22
 	const partPos int32 = 1
 
+	// A constant-folded vector literal carries the RAW element bytes in VecVal (constant_fold.go).
 	vecLit := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_array_float32)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2, 3}))}}},
 	}
 	// Build l2_distance(col[scanTag, partPos], vecLit).
 	distFn := &plan.Expr{
@@ -191,16 +192,219 @@ func TestReplaceDistFnInExpr_Substitutes(t *testing.T) {
 	require.Equal(t, "score", col.Name)
 }
 
+// TestReplaceDistFnInExpr_DifferentVector_NoSubstitute pins the precision guard: a distance on the
+// right column and metric but a DIFFERENT query vector than the index/ORDER BY key must NOT be
+// rewritten to this index's score (that would silently report the wrong distance — 1 != 2).
+func TestReplaceDistFnInExpr_DifferentVector_NoSubstitute(t *testing.T) {
+	const scanTag int32 = 11
+	const tfTag int32 = 22
+	const partPos int32 = 1
+
+	vecA := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2, 3}))}}},
+	}
+	vecB := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{9, 9, 9}))}}},
+	}
+	// distFn = l2_distance(col[scanTag,partPos], vecA).
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}},
+				},
+				vecA,
+			},
+		}},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	// The index / ORDER BY query vector is vecB — DIFFERENT from vecA: must be left as a distance.
+	out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecB, tfTag, scoreType)
+	require.NotNil(t, out.GetF(), "distance on a different query vector must stay a distance, not the index score")
+	require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
+}
+
+// TestReplaceDistFnInExpr_UnfoldedCastMatches reproduces the #26961 shape: the ORDER BY key's vector
+// is already constant-folded (a VecVal), while the SELECT-side copy is still an unfolded
+// cast('[...]' as vecf32) with differently formatted but numerically identical text. vecFloatKey must
+// parse both to the same float32 array and match, so the wrapped SELECT distance is rewritten to score.
+func TestReplaceDistFnInExpr_UnfoldedCastMatches(t *testing.T) {
+	const scanTag int32 = 11
+	const tfTag int32 = 22
+	const partPos int32 = 1
+
+	// ORDER BY (folded) vector: raw element bytes in VecVal, as ConstantFold produces.
+	vecLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{0.15, 0.25, 0.35}))}}},
+	}
+	// SELECT-side (unfolded) vector: cast('0.150,0.250,0.350...' as vecf32) — same values, different text.
+	castArg := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "[0.150000,0.250000,0.350000]"}}},
+			}},
+		}},
+	}
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}},
+				},
+				castArg,
+			},
+		}},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, scoreType)
+	col := out.GetCol()
+	require.NotNil(t, col, "unfolded cast() of the same vector must still be rewritten to the index score")
+	require.Equal(t, tfTag, col.RelPos)
+	require.Equal(t, int32(1), col.ColPos)
+}
+
+// foldedVecExpr builds a constant-folded vector literal (raw element bytes in VecVal) of the type.
+func foldedVecExpr(typ types.T, raw []byte) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(raw)}}},
+	}
+}
+
+// castTextVecExpr builds an unfolded cast('<text>' as vec<typ>) expression.
+func castTextVecExpr(typ types.T, text string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: text}}},
+			}},
+		}},
+	}
+}
+
+// TestVecFloatKey_QuantizingVecCastNotPeeled: a vector-to-vector cast changes the value, so the inner
+// literal must NOT be peeled and parsed at the outer element type. cast(cast('[1.001]' as vecbf16) as
+// vecf16) is 0x3c00 (bf16 truncates 1.001 to 1.0), while a direct vecf16 of the same text is 0x3c01 —
+// treating them as the same query vector would rewrite a SELECT distance to a score computed for a
+// different vector. The nested cast yields no key (fail-safe); the direct textual cast still does.
+func TestVecFloatKey_QuantizingVecCastNotPeeled(t *testing.T) {
+	// Sanity: the two encodings really do differ, so this is a genuine counterexample.
+	direct, err := types.StringToArray[types.Float16]("[1.001]")
+	require.NoError(t, err)
+	viaBf16 := []types.Float16{types.Float16FromFloat32(types.BF16FromFloat32(1.001).ToFloat32())}
+	require.NotEqual(t, direct, viaBf16, "sanity: vecf16(1.001) and vecbf16(1.001)->vecf16 must differ")
+
+	nested := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float16)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{castTextVecExpr(types.T_array_bf16, "[1.001]")},
+		}},
+	}
+	_, ok := vecFloatKey(nested, types.T_array_float16)
+	require.False(t, ok, "a quantizing vector-to-vector cast must not be peeled to the inner literal")
+
+	// Control: the plain textual cast('[...]' as vecf16) is still parsed and keyed.
+	k, ok := vecFloatKey(castTextVecExpr(types.T_array_float16, "[1.001]"), types.T_array_float16)
+	require.True(t, ok, "a direct textual cast must still yield a key")
+	require.Equal(t, string(types.ArrayToBytes(direct)), k)
+}
+
+// TestVecFloatKey_Uint8ByteExactNoNaNCollision: two distinct folded vecuint8 vectors whose 4 raw bytes
+// happen to be distinct float32 NaN payloads must produce distinct keys. Decoding as float32 (the old
+// behavior) canonicalized both to "[NaN]" and made a distance to one silently rewrite to the other.
+func TestVecFloatKey_Uint8ByteExactNoNaNCollision(t *testing.T) {
+	a := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127}))
+	b := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))
+	ka, oka := vecFloatKey(a, types.T_array_uint8)
+	kb, okb := vecFloatKey(b, types.T_array_uint8)
+	require.True(t, oka)
+	require.True(t, okb)
+	require.NotEqual(t, ka, kb, "distinct uint8 vectors must not collide (byte-exact key, not float32 NaN)")
+	// Documents the old collision: interpreted as float32 both canonicalize to the same NaN string.
+	na := types.ArrayToString(types.BytesToArray[float32](types.ArrayToBytes([]uint8{0, 0, 192, 127})))
+	nb := types.ArrayToString(types.BytesToArray[float32](types.ArrayToBytes([]uint8{1, 0, 192, 127})))
+	require.Equal(t, na, nb, "sanity: as float32 both were [NaN] — the bug the byte-exact key fixes")
+}
+
+// TestVecFloatKey_NarrowTextVsFoldedMatch: a folded vecuint8 vector and an unfolded
+// cast('[...]' as vecuint8) of the same values must yield the same key (so the rewrite still fires).
+func TestVecFloatKey_NarrowTextVsFoldedMatch(t *testing.T) {
+	folded := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2, 3}))
+	unfolded := castTextVecExpr(types.T_array_uint8, "[1, 2, 3]")
+	kf, okf := vecFloatKey(folded, types.T_array_uint8)
+	ku, oku := vecFloatKey(unfolded, types.T_array_uint8)
+	require.True(t, okf)
+	require.True(t, oku)
+	require.Equal(t, kf, ku, "unfolded uint8 text must match the folded uint8 vector")
+}
+
+// TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten: the end-to-end #P1 repro — a SELECT-side
+// distance to a DIFFERENT vecuint8 vector than the ORDER BY key must stay a distance, not become score.
+func TestReplaceDistFnInExpr_Uint8DifferentVectorNotRewritten(t *testing.T) {
+	const scanTag, tfTag, partPos int32 = 11, 22, 1
+	vecLit := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{0, 0, 192, 127})) // ORDER BY key
+	other := foldedVecExpr(types.T_array_uint8, types.ArrayToBytes([]uint8{1, 0, 192, 127}))  // SELECT vector
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_array_uint8)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}}},
+				other,
+			},
+		}},
+	}
+	out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, plan.Type{Id: int32(types.T_float64)})
+	require.NotNil(t, out.GetF(), "distance to a DIFFERENT uint8 vector must stay a distance, not the index score")
+	require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
+}
+
+// TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic: the #P2 repro — an unfolded cast(” as vecf32)
+// SELECT distance must not panic the planner; it is unparseable, so it stays a distance (fail-safe).
+func TestReplaceDistFnInExpr_EmptyCastFailSafeNoPanic(t *testing.T) {
+	const scanTag, tfTag, partPos int32 = 11, 22, 1
+	vecLit := foldedVecExpr(types.T_array_float32, types.ArrayToBytes([]float32{0.1, 0.2, 0.3}))
+	for _, bad := range []string{"", "   ", "\t"} {
+		distFn := &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &ObjectRef{ObjName: "l2_distance"},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_array_float32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: partPos, Name: "vec"}}},
+					castTextVecExpr(types.T_array_float32, bad),
+				},
+			}},
+		}
+		require.NotPanics(t, func() {
+			out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, plan.Type{Id: int32(types.T_float64)})
+			require.NotNil(t, out.GetF(), "empty/whitespace cast is unparseable -> stays a distance")
+			require.Equal(t, "l2_distance", out.GetF().Func.ObjName)
+		}, "malformed textual literal %q must fail safe, not panic", bad)
+	}
+}
+
 func TestReplaceDistFnInExpr_NoMatch(t *testing.T) {
 	const scanTag int32 = 11
 	const tfTag int32 = 22
 
-	vecLit := &plan.Expr{
-		Typ:  plan.Type{Id: int32(types.T_array_float32)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "[1,2]"}}},
-	}
 	// nil expression — short circuit
-	out := replaceDistFnInExpr(nil, scanTag, 0, "l2_distance", vecLit, tfTag, plan.Type{})
+	out := replaceDistFnInExpr(nil, scanTag, 0, "l2_distance", nil, tfTag, plan.Type{})
 	require.Nil(t, out)
 
 	// Wrong fn name → tree should walk into args but leave them unchanged here.
@@ -211,7 +415,7 @@ func TestReplaceDistFnInExpr_NoMatch(t *testing.T) {
 			Args: []*plan.Expr{i64Lit(1), i64Lit(2)},
 		}},
 	}
-	out = replaceDistFnInExpr(other, scanTag, 0, "l2_distance", vecLit, tfTag, plan.Type{})
+	out = replaceDistFnInExpr(other, scanTag, 0, "l2_distance", nil, tfTag, plan.Type{})
 	require.NotNil(t, out)
 	// Outer is still the same "=" function.
 	require.Equal(t, "=", out.GetF().Func.ObjName)
@@ -461,7 +665,7 @@ func TestReplaceDistFnExprsWithScoreCol(t *testing.T) {
 
 	vecLit := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_array_float32)},
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2, 3}))}}},
 	}
 	distFn := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_float64)},
