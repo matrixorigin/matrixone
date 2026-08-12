@@ -131,10 +131,24 @@ func TestIsPositiveIntegerLiteral(t *testing.T) {
 	}
 }
 
-func TestValidateNthValueArgsRequiresProcessAndTwoArgs(t *testing.T) {
+func TestValidateNthValueArgsRejectsInvalidShape(t *testing.T) {
 	err := validateNthValueArgs(context.Background(), nil, nil)
 	require.Error(t, err)
 	require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+}
+
+func TestValidateNthValueArgsAllowsParamWithoutProcess(t *testing.T) {
+	args := []*plan.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}},
+		},
+	}
+
+	require.NoError(t, validateNthValueArgs(context.Background(), nil, args))
+	require.Equal(t, int32(types.T_text), args[1].Typ.Id)
+	require.Equal(t, int32(1), args[1].GetP().Pos)
 }
 
 func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
