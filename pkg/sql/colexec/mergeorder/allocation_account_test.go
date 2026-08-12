@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -360,7 +361,10 @@ func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), state.generation.SpillFDUsed())
 
-	writer := spillDiskWriter{run: run, target: shortMergeOrderDiskWriter{}}
+	writer := spillutil.NewDiskReservationWriter(
+		shortMergeOrderDiskWriter{},
+		run.diskToken,
+	)
 	written, err := writer.Write([]byte{1, 2, 3, 4})
 	require.ErrorIs(t, err, io.ErrShortWrite)
 	require.Equal(t, 3, written)

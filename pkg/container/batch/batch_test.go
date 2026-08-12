@@ -1053,6 +1053,50 @@ func TestPrepareParamKindStreamingRoundTrip(t *testing.T) {
 	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 2))
 	require.False(t, target.Vecs[1].HasPrepareParamKind())
 	target.Clean(mp)
+
+	spillTarget := NewOffHeapEmpty()
+	require.NoError(t, spillTarget.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, spillTarget.Vecs[0].GetPrepareParamKinds())
+	spillTarget.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindSpillStreamingRejectsBatchMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, test := range []struct {
+		name  string
+		attrs []string
+		extra []byte
+	}{
+		{name: "attributes", attrs: []string{"value"}},
+		{name: "extra buffer", extra: []byte("unaccounted payload")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := NewWithSize(1)
+			source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
+			source.Attrs = test.attrs
+			source.ExtraBuf = test.extra
+			source.SetRowCount(1)
+			var wire bytes.Buffer
+			require.NoError(t, source.MarshalBinaryWithPrepareParamKindsTo(&wire))
+
+			target := NewOffHeapEmpty()
+			err := target.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+				bytes.NewReader(wire.Bytes()),
+				int64(wire.Len()),
+				mp,
+			)
+			require.Error(t, err)
+			target.Clean(mp)
+			source.Clean(mp)
+		})
+	}
 	require.Zero(t, mp.CurrNB())
 }
 

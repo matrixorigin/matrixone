@@ -134,14 +134,17 @@ func newSpillVector(
 	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
 }
 
-func growSpillSlice[T any](
+// GrowAccountedSlice grows an off-heap typed slice under the spill engine's
+// allocation owner. Growth admits the replacement while the old backing is
+// still live, then releases the old backing after the copy.
+func GrowAccountedSlice[T any](
 	values []T,
 	length int,
 	mp *mpool.MPool,
 	allocation *SpillAllocationAccount,
 	site mpool.AllocationSite,
 ) ([]T, error) {
-	if length < 0 {
+	if length < 0 || mp == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	if length <= cap(values) {
@@ -178,7 +181,8 @@ func growSpillSlice[T any](
 	return next[:length], nil
 }
 
-func freeSpillSlice[T any](
+// FreeAccountedSlice releases a slice returned by GrowAccountedSlice.
+func FreeAccountedSlice[T any](
 	values []T,
 	mp *mpool.MPool,
 ) {

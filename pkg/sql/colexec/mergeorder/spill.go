@@ -34,51 +34,6 @@ import (
 
 const spillWriteBufferSize = 64 << 10
 
-type spillDiskWriter struct {
-	run    *spillRun
-	target io.Writer
-}
-
-func (w *spillDiskWriter) Write(value []byte) (int, error) {
-	if w == nil || w.run == nil {
-		return 0, io.ErrClosedPipe
-	}
-	target := w.target
-	if target == nil {
-		target = w.run.file
-	}
-	if target == nil {
-		return 0, io.ErrClosedPipe
-	}
-	oldSize := uint64(0)
-	if w.run.diskToken != nil {
-		oldSize = w.run.diskToken.Size()
-		if err := w.run.diskToken.Grow(uint64(len(value))); err != nil {
-			return 0, err
-		}
-	}
-	written, err := target.Write(value)
-	if written < 0 {
-		written = 0
-		if err == nil {
-			err = io.ErrShortWrite
-		}
-	}
-	if written > len(value) {
-		written = len(value)
-		if err == nil {
-			err = io.ErrShortWrite
-		}
-	}
-	if written < len(value) && w.run.diskToken != nil {
-		_, _ = w.run.diskToken.ReconcileDown(oldSize + uint64(written))
-	}
-	if err == nil && written != len(value) {
-		err = io.ErrShortWrite
-	}
-	return written, err
-}
-
 func newMergeOrderSpillWriter(
 	proc *process.Process,
 	ctr *container,
@@ -93,7 +48,7 @@ func newMergeOrderSpillWriter(
 		ctr.allocationAccount,
 		mpool.AllocationOwnerOrder,
 		mergeOrderAllocationSiteSpillWriteBuffer,
-		&spillDiskWriter{run: run},
+		spillutil.NewDiskReservationWriter(run.file, run.diskToken),
 		spillWriteBufferSize,
 	)
 }

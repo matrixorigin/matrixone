@@ -720,7 +720,7 @@ func (e *SpillEngine) scatterBatchBounded(
 	}
 	e.allocationMP = proc.Mp()
 	var err error
-	e.scatterHashValues, err = growSpillSlice(
+	e.scatterHashValues, err = GrowAccountedSlice(
 		e.scatterHashValues,
 		rows,
 		proc.Mp(),
@@ -743,7 +743,7 @@ func (e *SpillEngine) scatterBatchBounded(
 	if shift >= 64 {
 		return process.ErrExecutionResourceInvalid
 	}
-	e.scatterBucketRowIds, err = growSpillSlice(
+	e.scatterBucketRowIds, err = GrowAccountedSlice(
 		e.scatterBucketRowIds,
 		rows,
 		proc.Mp(),
@@ -904,8 +904,8 @@ func (e *SpillEngine) releaseScatterComputeScratch() {
 	if e.allocationMP == nil {
 		return
 	}
-	freeSpillSlice(e.scatterHashValues, e.allocationMP)
-	freeSpillSlice(e.scatterBucketRowIds, e.allocationMP)
+	FreeAccountedSlice(e.scatterHashValues, e.allocationMP)
+	FreeAccountedSlice(e.scatterBucketRowIds, e.allocationMP)
 	e.scatterHashValues = nil
 	e.scatterBucketRowIds = nil
 }
@@ -1347,11 +1347,11 @@ func (e *SpillEngine) discardScatterBuffers() {
 // charged while the next child hashmap is rebuilt. Cleanup calls this method
 // as an idempotent fallback for cancellation paths.
 func (e *SpillEngine) releaseScatterScratch() {
-	freeSpillSlice(
+	FreeAccountedSlice(
 		e.scatterHashValues,
 		e.allocationMP,
 	)
-	freeSpillSlice(
+	FreeAccountedSlice(
 		e.scatterBucketRowIds,
 		e.allocationMP,
 	)
