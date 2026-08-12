@@ -661,7 +661,10 @@ func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool 
 
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
-	if joinNode == nil || joinNode.JoinType != plan.Node_INNER {
+	// IN subqueries are flattened into SEMI joins. Filters on either input of
+	// an INNER or SEMI join can be replaced by an equivalent fulltext index
+	// scan without changing the join's row-preservation semantics.
+	if joinNode == nil || (joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_SEMI) {
 		return false, nil
 	}
 
@@ -804,7 +807,7 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !catalog.IsIndexOptimizerEligible(idx) || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

@@ -26,12 +26,16 @@ import (
 )
 
 func buildMySQLDMLCompatibilityPlan(t *testing.T, sql string) (*Plan, error) {
+	return buildMySQLDMLCompatibilityPlanWithPrepare(t, sql, false)
+}
+
+func buildMySQLDMLCompatibilityPlanWithPrepare(t *testing.T, sql string, isPrepareStmt bool) (*Plan, error) {
 	t.Helper()
 	ctx := NewMockCompilerContext(true)
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	return BuildPlan(ctx, stmt, false)
+	return BuildPlan(ctx, stmt, isPrepareStmt)
 }
 
 func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string) (*Plan, error) {
@@ -45,13 +49,104 @@ func buildMySQLDMLCompatibilityPlanWithSQLMode(t *testing.T, sql, sqlMode string
 }
 
 func requireMySQLDMLCompatibilityError(t *testing.T, sql string, code uint16, message string) {
+	requireMySQLDMLCompatibilityErrorWithPrepare(t, sql, false, code, message)
+}
+
+func requireMySQLDMLCompatibilityErrorWithPrepare(t *testing.T, sql string, isPrepareStmt bool, code uint16, message string) {
 	t.Helper()
-	_, err := buildMySQLDMLCompatibilityPlan(t, sql)
+	_, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, sql, isPrepareStmt)
 	require.Error(t, err)
 	moErr, ok := err.(*moerr.Error)
 	require.True(t, ok, "unexpected error type %T: %v", err, err)
 	require.Equal(t, code, moErr.MySQLCode())
 	require.Equal(t, message, moErr.Error())
+}
+
+func TestSingleTableDMLRejectsLimitOffsetBeforePlanning(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		isPrepareStmt bool
+		verb          string
+	}{
+		{
+			name: "update offset keyword",
+			sql:  "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1 OFFSET 1",
+			verb: "UPDATE",
+		},
+		{
+			name: "update comma offset",
+			sql:  "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1, 1",
+			verb: "UPDATE",
+		},
+		{
+			name: "delete offset keyword",
+			sql:  "DELETE FROM nation ORDER BY n_nationkey LIMIT 1 OFFSET 1",
+			verb: "DELETE",
+		},
+		{
+			name: "delete comma offset",
+			sql:  "DELETE FROM nation ORDER BY n_nationkey LIMIT 1, 1",
+			verb: "DELETE",
+		},
+		{
+			name:          "prepared update offset",
+			sql:           "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT ? OFFSET ?",
+			isPrepareStmt: true,
+			verb:          "UPDATE",
+		},
+		{
+			name:          "prepared delete comma offset",
+			sql:           "DELETE FROM nation ORDER BY n_nationkey LIMIT ?, ?",
+			isPrepareStmt: true,
+			verb:          "DELETE",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireMySQLDMLCompatibilityErrorWithPrepare(
+				t,
+				tc.sql,
+				tc.isPrepareStmt,
+				moerr.ER_PARSE_ERROR,
+				"SQL parser error: "+tc.verb+" does not support LIMIT with OFFSET",
+			)
+		})
+	}
+}
+
+func TestSingleTableDMLAcceptsCountOnlyLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		isPrepareStmt bool
+	}{
+		{name: "update literal", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 1"},
+		{name: "delete literal", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT 1"},
+		{name: "update zero", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT 0"},
+		{name: "delete zero", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT 0"},
+		{name: "prepared update", sql: "UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT ?", isPrepareStmt: true},
+		{name: "prepared delete", sql: "DELETE FROM nation ORDER BY n_nationkey LIMIT ?", isPrepareStmt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, tc.sql, tc.isPrepareStmt)
+			require.NoError(t, err)
+			require.NotNil(t, plan)
+		})
+	}
+}
+
+func TestSingleTableDMLLimitControlsKeepExistingErrors(t *testing.T) {
+	_, err := buildMySQLDMLCompatibilityPlan(
+		t,
+		"UPDATE nation SET n_name = 'x' ORDER BY n_nationkey LIMIT -1",
+	)
+	require.EqualError(t, err, "SQL syntax error: LIMIT must be a non-negative integer")
+
+	_, err = buildMySQLDMLCompatibilityPlan(
+		t,
+		"DELETE FROM nation ORDER BY missing_col LIMIT 1",
+	)
+	require.EqualError(t, err, "invalid input: column missing_col does not exist")
 }
 
 func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {

@@ -1280,6 +1280,11 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	}
 	tableDef := baseNode.TableDef
 	objRef := baseNode.ObjRef
+	if builder.isForUpdate && query.StmtType == plan.Query_SELECT {
+		if err = validateTableIndexDefinitions(tableDef); err != nil {
+			return
+		}
+	}
 	tableIDs := make(map[uint64]bool)
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {

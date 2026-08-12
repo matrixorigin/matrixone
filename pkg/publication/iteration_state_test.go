@@ -17,6 +17,7 @@ package publication
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
@@ -400,6 +401,33 @@ func TestUpdateIterationState_WithAObjectMap(t *testing.T) {
 	_ = ts
 	err := UpdateIterationState(context.Background(), mock, "t1", IterationStateCompleted, 1, iterCtx, "", false, SubscriptionStateRunning, true)
 	assert.NoError(t, err)
+}
+
+func TestRestoreAObjectMapPreservesLegacyStats(t *testing.T) {
+	downstreamID := objectio.NewObjectid()
+	downstreamStats := objectio.NewObjectStatsWithObjectID(
+		&downstreamID, true, true, true)
+
+	restored, err := restoreAObjectMap(context.Background(), map[string]AObjectMappingJSON{
+		"upstream": {
+			DownstreamStats: base64.StdEncoding.EncodeToString(downstreamStats.Marshal()),
+			IsTombstone:     true,
+			DBName:          "db",
+			TableName:       "table",
+		},
+	})
+	require.NoError(t, err)
+	mapping, ok := restored.Get("upstream")
+	require.True(t, ok)
+	require.Equal(t, *downstreamStats, mapping.DownstreamStats)
+	require.Nil(t, mapping.DownstreamObjectIDs)
+}
+
+func TestRestoreAObjectMapRejectsMalformedDownstreamObjectID(t *testing.T) {
+	_, err := restoreAObjectMap(context.Background(), map[string]AObjectMappingJSON{
+		"upstream": {DownstreamObjectIDs: &[]string{"not-base64"}},
+	})
+	require.ErrorContains(t, err, "failed to decode downstream object id 0")
 }
 
 // ---- CheckIterationStatus multiple rows ----

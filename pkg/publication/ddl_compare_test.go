@@ -19,9 +19,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -121,21 +118,6 @@ func TestBuildIndexMap_Fulltext(t *testing.T) {
 	assert.Equal(t, "FULLTEXT", idx.indexType)
 }
 
-func TestBuildIndexMap_VisibilityDefaultsAndExplicitInvisible(t *testing.T) {
-	ctx := context.Background()
-	sql := "CREATE TABLE `t1` (`id` INT, `name` VARCHAR(100), `body` TEXT, " +
-		"INDEX `idx_default` (`name`) COMMENT 'keeps default visibility', " +
-		"UNIQUE INDEX `idx_invisible` (`name`) INVISIBLE, " +
-		"FULLTEXT INDEX `ft_invisible` (`body`) INVISIBLE)"
-	stmt, err := parseCreateTableSQL(ctx, sql)
-	require.NoError(t, err)
-
-	indexes := buildIndexMap(stmt)
-	require.True(t, indexes["idx_default"].visible)
-	require.False(t, indexes["idx_invisible"].visible)
-	require.False(t, indexes["ft_invisible"].visible)
-}
-
 func TestBuildForeignKeyMap_Empty(t *testing.T) {
 	ctx := context.Background()
 	sql := "CREATE TABLE `t1` (`id` INT, `name` VARCHAR(100))"
@@ -220,7 +202,7 @@ func TestCanDoColumnChangesInplace_SameNameDifferentPosition(t *testing.T) {
 }
 
 func TestGenerateAddIndexStatement_Regular(t *testing.T) {
-	idx := &indexInfo{name: "idx1", columns: []string{"col1", "col2"}, visible: true}
+	idx := &indexInfo{name: "idx1", columns: []string{"col1", "col2"}}
 	stmt := generateAddIndexStatement("`db`.`t1`", "idx1", idx)
 	assert.Contains(t, stmt, "ADD INDEX")
 	assert.Contains(t, stmt, "`col1`")
@@ -228,13 +210,13 @@ func TestGenerateAddIndexStatement_Regular(t *testing.T) {
 }
 
 func TestGenerateAddIndexStatement_Unique(t *testing.T) {
-	idx := &indexInfo{name: "idx1", unique: true, columns: []string{"col1"}, visible: true}
+	idx := &indexInfo{name: "idx1", unique: true, columns: []string{"col1"}}
 	stmt := generateAddIndexStatement("`db`.`t1`", "idx1", idx)
 	assert.Contains(t, stmt, "ADD UNIQUE INDEX")
 }
 
 func TestGenerateAddIndexStatement_Fulltext(t *testing.T) {
-	idx := &indexInfo{name: "ft1", columns: []string{"content"}, indexType: "FULLTEXT", visible: true}
+	idx := &indexInfo{name: "ft1", columns: []string{"content"}, indexType: "FULLTEXT"}
 	stmt := generateAddIndexStatement("`db`.`t1`", "ft1", idx)
 	assert.Contains(t, stmt, "ADD FULLTEXT INDEX")
 }
@@ -244,7 +226,6 @@ func TestGenerateAddIndexStatement_IVFFlat(t *testing.T) {
 		name:                  "vec_idx",
 		columns:               []string{"embedding"},
 		indexType:             "ivfflat",
-		visible:               true,
 		algoParamList:         100,
 		algoParamVectorOpType: "vector_l2_ops",
 	}
@@ -259,7 +240,6 @@ func TestGenerateAddIndexStatement_HNSW(t *testing.T) {
 		name:                  "hnsw_idx",
 		columns:               []string{"embedding"},
 		indexType:             "hnsw",
-		visible:               true,
 		hnswM:                 16,
 		hnswEfConstruction:    200,
 		algoParamVectorOpType: "vector_l2_ops",
@@ -330,111 +310,6 @@ func TestCompareTableDefsAndGenerateAlterStatements_AddIndex(t *testing.T) {
 	assert.True(t, ok)
 	require.Len(t, stmts, 1)
 	assert.Contains(t, stmts[0], "ADD INDEX `idx_name`")
-	assert.NotContains(t, stmts[0], "INVISIBLE")
-}
-
-func TestCompareTableDefsAndGenerateAlterStatements_AddInvisibleIndexes(t *testing.T) {
-	testCases := []struct {
-		name         string
-		oldSQL       string
-		newSQL       string
-		wantContains []string
-	}{
-		{
-			name:   "regular",
-			oldSQL: "CREATE TABLE t1 (id INT, name VARCHAR(100))",
-			newSQL: "CREATE TABLE t1 (id INT, name VARCHAR(100), INDEX idx_name (name) INVISIBLE)",
-			wantContains: []string{
-				"ADD INDEX `idx_name` (`name`)",
-			},
-		},
-		{
-			name:   "unique",
-			oldSQL: "CREATE TABLE t1 (id INT, email VARCHAR(100))",
-			newSQL: "CREATE TABLE t1 (id INT, email VARCHAR(100), UNIQUE INDEX idx_email (email) INVISIBLE)",
-			wantContains: []string{
-				"ADD UNIQUE INDEX `idx_email` (`email`)",
-			},
-		},
-		{
-			name:   "fulltext",
-			oldSQL: "CREATE TABLE t1 (id INT, body TEXT)",
-			newSQL: "CREATE TABLE t1 (id INT, body TEXT, FULLTEXT INDEX idx_body (body) INVISIBLE)",
-			wantContains: []string{
-				"ADD FULLTEXT INDEX `idx_body` (`body`)",
-			},
-		},
-		{
-			name:   "ivfflat",
-			oldSQL: "CREATE TABLE t1 (id INT, embedding VECF32(3))",
-			newSQL: "CREATE TABLE t1 (id INT, embedding VECF32(3), INDEX idx_embedding USING ivfflat (embedding) LISTS = 10 OP_TYPE 'vector_l2_ops' INVISIBLE)",
-			wantContains: []string{
-				"ADD INDEX `idx_embedding` USING ivfflat (`embedding`)",
-				"LISTS = 10",
-				"OP_TYPE 'vector_l2_ops'",
-			},
-		},
-		{
-			name:   "hnsw",
-			oldSQL: "CREATE TABLE t1 (id INT, embedding VECF32(3))",
-			newSQL: "CREATE TABLE t1 (id INT, embedding VECF32(3), INDEX idx_embedding USING hnsw (embedding) M = 16 EF_CONSTRUCTION = 200 OP_TYPE 'vector_l2_ops' INVISIBLE)",
-			wantContains: []string{
-				"ADD INDEX `idx_embedding` USING hnsw (`embedding`)",
-				"M = 16",
-				"EF_CONSTRUCTION = 200",
-				"OP_TYPE 'vector_l2_ops'",
-			},
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx := context.Background()
-			stmts, ok, err := compareTableDefsAndGenerateAlterStatements(
-				ctx, "db", "t1", testCase.oldSQL, testCase.newSQL,
-			)
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.Len(t, stmts, 1)
-
-			for _, want := range testCase.wantContains {
-				require.Contains(t, stmts[0], want)
-			}
-			require.True(t, strings.HasSuffix(stmts[0], " INVISIBLE"), stmts[0])
-			requireAddedIndexVisibility(t, ctx, stmts[0], tree.VISIBLE_TYPE_INVISIBLE)
-		})
-	}
-}
-
-func requireAddedIndexVisibility(
-	t *testing.T,
-	ctx context.Context,
-	alterSQL string,
-	want tree.VisibleType,
-) {
-	t.Helper()
-
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, alterSQL, 1)
-	require.NoError(t, err)
-	alter, ok := stmt.(*tree.AlterTable)
-	require.True(t, ok, "expected ALTER TABLE, got %T", stmt)
-	require.Len(t, alter.Options, 1)
-	add, ok := alter.Options[0].(*tree.AlterOptionAdd)
-	require.True(t, ok, "expected ADD option, got %T", alter.Options[0])
-
-	var indexOption *tree.IndexOption
-	switch index := add.Def.(type) {
-	case *tree.Index:
-		indexOption = index.IndexOption
-	case *tree.UniqueIndex:
-		indexOption = index.IndexOption
-	case *tree.FullTextIndex:
-		indexOption = index.IndexOption
-	default:
-		require.Failf(t, "unexpected ADD definition", "got %T", add.Def)
-	}
-	require.NotNil(t, indexOption)
-	require.Equal(t, want, indexOption.Visible)
 }
 
 func TestCompareTableDefsAndGenerateAlterStatements_DropIndex(t *testing.T) {
@@ -509,7 +384,6 @@ func TestGenerateAddIndexStatement_IVFFlatWithParams(t *testing.T) {
 	idx := &indexInfo{
 		columns:               []string{"embedding"},
 		indexType:             "ivfflat",
-		visible:               true,
 		algoParamList:         100,
 		algoParamVectorOpType: "vector_l2_ops",
 	}
@@ -523,7 +397,6 @@ func TestGenerateAddIndexStatement_HNSWWithParams(t *testing.T) {
 	idx := &indexInfo{
 		columns:               []string{"embedding"},
 		indexType:             "hnsw",
-		visible:               true,
 		hnswM:                 16,
 		hnswEfConstruction:    200,
 		algoParamVectorOpType: "vector_l2_ops",

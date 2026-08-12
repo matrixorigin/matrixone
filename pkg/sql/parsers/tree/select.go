@@ -407,6 +407,14 @@ type SelectClause struct {
 	GroupBy  *GroupByClause
 	Having   *Where
 	Option   uint64
+	// OrderByOriginalExprs is planner-internal metadata for a generated
+	// projection whose derived-table columns must retain the original output
+	// expression categories for ORDER BY duplicate-name resolution.
+	OrderByOriginalExprs []Expr
+	// OrderBySourceProbes is shared with generated grouping-set branches. Once
+	// their real FROM scope is bound, it tells the outer ORDER BY whether a
+	// potentially shadowed name denotes a source column or an output alias.
+	OrderBySourceProbes map[string]*GroupingSetOrderSourceProbe
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -516,9 +524,24 @@ type GroupByClause struct {
 	GroupByExprsList []Exprs
 	GroupingSet      Exprs
 	Apart            bool
-	Cube             bool
-	GroupingSets     bool
-	Rollup           bool
+	// The next four fields are planner-internal metadata for generated
+	// grouping-set branches. They keep hidden ORDER BY expressions and bound
+	// output identity in the original FROM scope.
+	GroupingSetOrderHiddenCount  int
+	GroupingSetOrderAliases      map[string][]Expr
+	GroupingSetOrderSourceProbes map[string]*GroupingSetOrderSourceProbe
+	PreserveOrderSemanticKeys    bool
+	Cube                         bool
+	GroupingSets                 bool
+	Rollup                       bool
+}
+
+// GroupingSetOrderSourceProbe defers an otherwise unknowable name-resolution
+// choice until a generated branch has bound its real FROM scope.
+type GroupingSetOrderSourceProbe struct {
+	FallbackName string
+	Resolved     bool
+	SourceFound  bool
 }
 
 func (node *GroupByClause) Format(ctx *FmtCtx) {

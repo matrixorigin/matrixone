@@ -1432,7 +1432,7 @@ func buildIndexMap(stmt *tree.CreateTable) map[string]*indexInfo {
 			// Extract index type from KeyType (ivfflat, hnsw, etc.)
 			info.indexType = idx.KeyType.ToString()
 			if idx.IndexOption != nil {
-				info.visible = idx.IndexOption.Visible != tree.VISIBLE_TYPE_INVISIBLE
+				info.visible = idx.IndexOption.Visible == tree.VISIBLE_TYPE_VISIBLE
 				// Extract vector index parameters from IndexOption
 				info.algoParamList = idx.IndexOption.AlgoParamList
 				info.algoParamVectorOpType = idx.IndexOption.AlgoParamVectorOpType
@@ -1451,7 +1451,7 @@ func buildIndexMap(stmt *tree.CreateTable) map[string]*indexInfo {
 				}
 			}
 			if idx.IndexOption != nil {
-				info.visible = idx.IndexOption.Visible != tree.VISIBLE_TYPE_INVISIBLE
+				info.visible = idx.IndexOption.Visible == tree.VISIBLE_TYPE_VISIBLE
 			}
 		case *tree.FullTextIndex:
 			info = &indexInfo{
@@ -1464,9 +1464,6 @@ func buildIndexMap(stmt *tree.CreateTable) map[string]*indexInfo {
 				if col.ColName != nil {
 					info.columns = append(info.columns, string(col.ColName.ColName()))
 				}
-			}
-			if idx.IndexOption != nil {
-				info.visible = idx.IndexOption.Visible != tree.VISIBLE_TYPE_INVISIBLE
 			}
 		}
 		if info != nil && info.name != "" {
@@ -1664,9 +1661,6 @@ func generateAddIndexStatement(fullTableName string, idxName string, idx *indexI
 				escapeSQLIdentifierForDDL(idxName),
 				strings.Join(cols, ", "))
 		}
-	}
-	if !idx.visible {
-		stmt += " INVISIBLE"
 	}
 	return stmt
 }

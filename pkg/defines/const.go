@@ -52,7 +52,8 @@ const (
 	MORPCVersion14     int64 = 14 // utf8mb4 text MIN/MAX collation semantics
 	MORPCVersion15     int64 = 15 // CHECK metadata in rename-column alter requests
 	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
-	MORPCLatestVersion       = MORPCVersion16
+	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
+	MORPCLatestVersion       = MORPCVersion17
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
