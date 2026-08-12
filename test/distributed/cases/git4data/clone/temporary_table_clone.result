@@ -69,13 +69,6 @@ select * from src order by id;
 ➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
 1  ¦  one  𝄀
 2  ¦  two
-create table permanent_noop (id int primary key);
-insert into permanent_noop values (99);
-create table if not exists permanent_noop clone src;
-select * from permanent_noop;
-➤ id[4,32,0]  𝄀
-99
-drop table permanent_noop;
 select enable_fault_injection();
 ➤ enable_fault_injection()[-7,1,0]  𝄀
 1

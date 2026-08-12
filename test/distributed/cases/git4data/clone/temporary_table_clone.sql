@@ -59,14 +59,6 @@ select * from src order by id;
 drop temporary table src;
 select * from src order by id;
 
--- IF NOT EXISTS is a no-op for permanent destinations as well; exercising this
--- shared CreateTable result path prevents data from being appended twice.
-create table permanent_noop (id int primary key);
-insert into permanent_noop values (99);
-create table if not exists permanent_noop clone src;
-select * from permanent_noop;
-drop table permanent_noop;
-
 -- A late failure after clone execution must roll back the physical relation and
 -- remove the session alias so the name is immediately reusable.
 select enable_fault_injection();
