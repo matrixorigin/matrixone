@@ -175,8 +175,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				continue
 			}
 			timeWin.observePrepareParamKinds()
 
@@ -196,8 +200,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				continue
 			}
 			timeWin.observePrepareParamKinds()
 
@@ -276,8 +284,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				break
 			}
 
 			ctr.curVecIdx++
@@ -879,18 +891,43 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 	return nil
 }
 
-func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) (bool, error) {
 	if err := ctr.evalTsVector(bat, proc); err != nil {
-		return err
+		return false, err
+	}
+	ok, err := ctr.filterNullTimeRows(bat)
+	if err != nil || !ok {
+		return ok, err
 	}
 	if err := ctr.evalAggVector(bat, proc); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctr.evalPartVector(bat, proc); err != nil {
-		return err
+		return false, err
 	}
 	ctr.i++
-	return nil
+	return true, nil
+}
+
+func (ctr *container) filterNullTimeRows(bat *batch.Batch) (bool, error) {
+	ts := ctr.tsVec[ctr.i]
+	if !ts.HasNull() {
+		return true, nil
+	}
+	if ts.AllNull() {
+		ts.CleanOnlyData()
+		return false, nil
+	}
+
+	sels := make([]int64, 0, ts.Length()-ts.GetNulls().Count())
+	for i := 0; i < ts.Length(); i++ {
+		if !ts.IsNull(uint64(i)) {
+			sels = append(sels, int64(i))
+		}
+	}
+	ts.Shrink(sels, false)
+	bat.Shrink(sels, false)
+	return len(sels) > 0, nil
 }
 
 func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) error {

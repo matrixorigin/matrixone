@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -280,7 +279,7 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	}
 
 	// The previous execution's cleanup delivered terminal signals into this
-	// scope's pipeline edges and marked them done (doneClosed/endDelivered).
+	// scope's pipeline edges and marked them done (doneClosed/endRecorded).
 	// A done edge silently rejects both data and End signals, so a reused
 	// pipeline would leave its receivers waiting forever. Clear the terminal
 	// state so the edges can carry the next execution's signals.
@@ -379,11 +378,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
-	select {
-	case <-s.Proc.Ctx.Done():
-		err = nil
-	default:
-	}
+	err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	return err
 }
 
@@ -439,6 +434,50 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	2. send notify message to remote node for its data producer.
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
+type sequentialBranchStarter interface {
+	SetBranchStarter(func(int) error)
+	ClearBranchStarter()
+}
+
+type receiverWaitStartFailureDisabler interface {
+	DisableReceiverWaitForStartFailure(*process.Process)
+}
+
+func cleanLazyScopeStartFailure(s *Scope, c *Compile, err error) {
+	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if disabler, ok := op.(receiverWaitStartFailureDisabler); ok {
+			disabler.DisableReceiverWaitForStartFailure(s.Proc)
+		}
+		return nil
+	})
+	cleanPipelineWitchStartFail(s, err, c.isPrepare)
+}
+
+func installSequentialBranchStarter(root vm.Operator, start func(int) error) (func(), error) {
+	var target sequentialBranchStarter
+	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		candidate, ok := op.(sequentialBranchStarter)
+		if !ok {
+			return nil
+		}
+		if target != nil {
+			return moerr.NewInternalErrorNoCtx(
+				"lazy union all scope contains multiple branch starters")
+		}
+		target = candidate
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"lazy union all scope has no branch starter")
+	}
+	target.SetBranchStarter(start)
+	return target.ClearBranchStarter, nil
+}
+
 func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -460,12 +499,24 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	// Merge Run normally.
 	var wg sync.WaitGroup
 	preScopeResultReceiveChan := make(chan scopeRunResult, len(s.PreScopes))
+	startedPreScopeCount := 0
+	startedPreScopes := make([]bool, len(s.PreScopes))
 
-	// step 1.
-	for i := range s.PreScopes {
-		wg.Add(1)
-
+	startPreScope := func(i int) error {
+		if i < 0 || i >= len(s.PreScopes) || startedPreScopes[i] {
+			return moerr.NewInternalErrorNoCtx("invalid lazy union all branch activation")
+		}
 		scope := s.PreScopes[i]
+		if cause := context.Cause(s.Proc.Ctx); cause != nil {
+			// The union installs this branch's receiver before invoking us. Complete
+			// the unsubmitted scope through the ordinary start-failure cleanup so
+			// that receiver has a terminal signal to drain.
+			cleanPipelineWitchStartFail(scope, cause, c.isPrepare)
+			return cause
+		}
+		startedPreScopes[i] = true
+		startedPreScopeCount++
+		wg.Add(1)
 
 		submitPreScope := ants.Submit(
 			func() {
@@ -494,6 +545,29 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			s.cancelMergeSiblingsOnError(submitPreScope)
 			preScopeResultReceiveChan <- newScopeRunResult(submitPreScope, scope)
 		}
+		return submitPreScope
+	}
+
+	// step 1.
+	if s.LazyPreScopes {
+		if len(s.PreScopes) < 2 || len(s.RemoteReceivRegInfos) != 0 {
+			err = moerr.NewInternalErrorNoCtx("invalid lazy union all scope topology")
+			cleanLazyScopeStartFailure(s, c, err)
+			return err
+		}
+		clearStarter, installErr := installSequentialBranchStarter(s.RootOp, startPreScope)
+		if installErr != nil {
+			cleanLazyScopeStartFailure(s, c, installErr)
+			return installErr
+		}
+		defer clearStarter()
+		// Submission failures are delivered through the first branch receiver,
+		// matching the ordinary MergeRun start-failure protocol.
+		_ = startPreScope(0)
+	} else {
+		for i := range s.PreScopes {
+			_ = startPreScope(i)
+		}
 	}
 
 	// step 2.
@@ -509,19 +583,21 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		wg.Wait()
 		err = collectMergeRunResults(
 			s.Proc,
-			scopeRunResult{err: err, ctx: s.Proc.Ctx},
+			newScopeRunResultForProcess(err, s.Proc),
 			preScopeResultReceiveChan,
 			notifyMessageResultReceiveChan)
 	}()
 
-	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
-	//after parallelRun, prescope count may change. we need to save this before parallelRun
 
 	err = s.ParallelRun(c)
 	if err != nil {
 		return s.cancelMergeSiblingsOnError(err)
 	}
+	// Lazy UNION ALL may activate more branches while ParallelRun consumes its
+	// input. Count only scopes actually submitted in this execution generation;
+	// later branches intentionally remain absent after an early LIMIT stop.
+	preScopeCount := startedPreScopeCount
 
 	// receive and check error from pre-scopes and remote scopes.
 	if remoteScopeCount == 0 {
@@ -574,7 +650,7 @@ func collectMergeRunResults(
 	}
 	for len(notifyResults) > 0 {
 		result := <-notifyResults
-		current = preferPrimaryScopeResult(current, scopeRunResult{err: result.err, ctx: proc.Ctx})
+		current = preferPrimaryScopeResult(current, newScopeRunResultForProcess(result.err, proc))
 		result.clean(proc)
 	}
 	current, _ = current.resolveCancelCause()
@@ -988,17 +1064,34 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(pkFilters)
 	}
 
-	for _, e := range s.DataSource.BlockFilterList {
+	blockFilterList := s.DataSource.BlockFilterList
+	if s.IsRemote {
+		// Keep the decoded scope as a reusable raw-expression template. Fold IDs
+		// belong to this Compile generation and must not be stored back in it.
+		blockFilterList = plan2.DeepCopyExprList(blockFilterList)
+	}
+	for _, e := range blockFilterList {
+		// RemoteRun carries the original block-filter expressions so this Compile
+		// owns the Fold executors used to expand ranges. A Fold already present on
+		// the wire contains a sender-owned executor ID and is therefore invalid.
+		if s.IsRemote {
+			if plan2.HasFoldValExpr(e) {
+				return nil, moerr.NewInternalErrorNoCtx("remote block filter contains a sender-owned Fold value")
+			}
+			if _, err := plan2.ReplaceFoldExpr(s.Proc, e, &c.filterExprExes); err != nil {
+				return nil, err
+			}
+		}
 		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if len(runtimeInExprList) == 0 && len(s.DataSource.BlockFilterList) == 0 {
+	if len(runtimeInExprList) == 0 && len(blockFilterList) == 0 {
 		return nil, nil
 	}
-	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
+	return append(runtimeInExprList, blockFilterList...), nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -1297,7 +1390,7 @@ func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
 		return nil
 	}
 	if procCtx != nil && procCtx.Err() != nil &&
-		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		isScopeCancellationFrom(err, context.Canceled) {
 		return nil
 	}
 	return err

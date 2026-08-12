@@ -2198,7 +2198,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetName(col.Name)
 	c.SetOrgName(col.GetOriginCaseName())
 	c.SetTable(col.TblName)
-	c.SetOrgTable(col.TblName)
+	orgTable := col.OriginTblName
+	if orgTable == "" {
+		orgTable = col.TblName
+	}
+	c.SetOrgTable(orgTable)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
 	typ := types.NewWithCharset(

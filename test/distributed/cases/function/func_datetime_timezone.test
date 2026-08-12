@@ -235,3 +235,36 @@ from (
 ) as t;
 
 set time_zone = '+00:00';
+
+-- @case
+-- @desc:TIME(timestamp) follows session time_zone and keeps fractional seconds
+drop table if exists t_time_timestamp_timezone;
+create table t_time_timestamp_timezone (
+    id int,
+    ts timestamp(6),
+    dt datetime(6)
+);
+set time_zone = '+00:00';
+insert into t_time_timestamp_timezone values
+    (1, '2024-01-02 04:30:45.654321', '2024-01-02 04:30:45.654321');
+
+set time_zone = '+08:00';
+select time(ts) as ts_time_plus8,
+       time(dt) as dt_time_plus8,
+       hour(ts) as ts_hour_plus8,
+       minute(ts) as ts_minute_plus8,
+       second(ts) as ts_second_plus8,
+       microsecond(time(ts)) as ts_micro_plus8
+from t_time_timestamp_timezone;
+
+set time_zone = '-05:00';
+select time(ts) as ts_time_minus5,
+       time(dt) as dt_time_minus5,
+       hour(ts) as ts_hour_minus5,
+       minute(ts) as ts_minute_minus5,
+       second(ts) as ts_second_minus5,
+       microsecond(time(ts)) as ts_micro_minus5
+from t_time_timestamp_timezone;
+
+set time_zone = '+00:00';
+drop table if exists t_time_timestamp_timezone;

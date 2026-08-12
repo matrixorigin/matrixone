@@ -60,6 +60,38 @@ func makeTaskJob() *tasks.Job {
 	return job
 }
 
+type inlineJobScheduler struct{}
+
+func (inlineJobScheduler) Schedule(job *tasks.Job) error {
+	job.Run()
+	return nil
+}
+
+func (inlineJobScheduler) Stop() {}
+
+type rejectingJobQueue struct{}
+
+func (rejectingJobQueue) Start() {}
+func (rejectingJobQueue) Stop()  {}
+func (rejectingJobQueue) Enqueue(item any) (any, error) {
+	return item, sm.ErrClose
+}
+
+func TestSchedulerPrefetchDoesNotCompleteAcceptedJobTwice(t *testing.T) {
+	pipeline := &IoPipeline{waitQ: rejectingJobQueue{}}
+	pipeline.prefetch.scheduler = inlineJobScheduler{}
+
+	job := new(tasks.Job)
+	job.Init(context.Background(), "completed-before-wait-queue", tasks.JTInvalid,
+		func(context.Context) *tasks.JobResult {
+			return &tasks.JobResult{}
+		})
+
+	require.NotPanics(t, func() {
+		pipeline.schedulerPrefetch(job)
+	})
+}
+
 func TestNewIOPipeline(t *testing.T) {
 	p := NewIOPipeline(makeIOPipelineOptions(0))
 	p.Start()

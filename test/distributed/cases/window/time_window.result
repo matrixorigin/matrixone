@@ -1,6 +1,17 @@
 drop database if exists time_window;
 create database time_window;
 use time_window;
+drop table if exists time_window_null_ts;
+create table time_window_null_ts (event_ts timestamp(6), device varchar(20), value double);
+insert into time_window_null_ts values
+('2026-01-01 00:01:00', 'd1', 10),
+('2026-01-01 00:02:00', 'd1', 20),
+(null, 'd1', 999);
+select _wstart, _wend, count(*) as n from time_window_null_ts interval(event_ts, 1, minute) order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  n[-5,64,0]  𝄀
+2026-01-01 00:01:00  ¦  2026-01-01 00:02:00  ¦  1  𝄀
+2026-01-01 00:02:00  ¦  2026-01-01 00:03:00  ¦  1
+drop table time_window_null_ts;
 drop table if exists time_window01;
 create table time_window01 (ts timestamp, col2 int);
 insert into time_window01 values ('2021-01-12 00:00:00.000', 12);
@@ -61,7 +72,7 @@ insert into time_window04 values ('2020-01-12 12:00:12.000', '1', '2', 'efwq3232
 insert into time_window04 values ('2021-01-12 00:00:00.000', '是', 'srewrew', null);
 insert into time_window04 values ('2023-10-26 10:30:00.000', 'w', null, null);
 select * from time_window04;
-➤ ts[93,64,0]  ¦  col2[1,1,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[1,0,0]  ¦  col3[12,7,0]  ¦  col4[12,0,0]  𝄀
 2023-10-26 10:00:00  ¦  a  ¦  b  ¦  djiweijwfcjwefwq  𝄀
 2020-01-12 12:00:12  ¦  1  ¦  2  ¦  efwq3232e数据库系统  𝄀
 2021-01-12 00:00:00  ¦  是  ¦  srewrew  ¦  null  𝄀
@@ -217,7 +228,7 @@ insert into int02 values ('2023-10-27 13:33:15.110', 2141243.423141234213421421,
 insert into int02 values ('2023-10-27 23:33:15.110', 321421.42314, 38021.324143214, 321798372091.324213421421342);
 insert into int02 values ('2023-10-27 22:33:15.110', 321421.42314, null, null);
 select * from int02;
-➤ ts[93,64,0]  ¦  col2[7,24,0]  ¦  col3[8,54,0]  ¦  col4[3,30,10]  𝄀
+➤ ts[93,64,0]  ¦  col2[7,23,31]  ¦  col3[8,53,31]  ¦  col4[3,30,10]  𝄀
 2023-10-27 00:00:00  ¦  321421.44  ¦  38021.324143214  ¦  321798372091.3242134214  𝄀
 2023-10-27 01:01:00  ¦  -2379823.0  ¦  214214.32143214  ¦  -321798372091.3242134214  𝄀
 2023-10-27 01:59:12  ¦  321421.44  ¦  null  ¦  321798372091.3242134214  𝄀
@@ -231,7 +242,7 @@ select * from int02;
 2023-10-27 23:33:15  ¦  321421.44  ¦  38021.324143214  ¦  321798372091.3242134214  𝄀
 2023-10-27 22:33:15  ¦  321421.44  ¦  null  ¦  null
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts >= '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 1, hour) fill(none);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,24,0]  ¦  min(col3)[8,54,0]  ¦  min(col4)[3,30,10]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,23,31]  ¦  min(col3)[8,53,31]  ¦  min(col4)[3,30,10]  𝄀
 2023-10-27 00:00:00  ¦  2023-10-27 01:00:00  ¦  321421.44  ¦  38021.324143214  ¦  321798372091.3242134214  𝄀
 2023-10-27 01:00:00  ¦  2023-10-27 02:00:00  ¦  321421.44  ¦  214214.32143214  ¦  -321798372091.3242134214  𝄀
 2023-10-27 02:00:00  ¦  2023-10-27 03:00:00  ¦  321421.44  ¦  -38021.111  ¦  321798372091.3242134214  𝄀
@@ -240,7 +251,7 @@ select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts >= '2
 2023-10-27 13:00:00  ¦  2023-10-27 14:00:00  ¦  8430923.0  ¦  332.0  ¦  0E-10  𝄀
 2023-10-27 22:00:00  ¦  2023-10-27 23:00:00  ¦  321421.44  ¦  null  ¦  null
 select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 10, minute) fill(next);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,24,0]  ¦  min(col3)[8,54,0]  ¦  min(col4)[3,30,10]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,23,31]  ¦  min(col3)[8,53,31]  ¦  min(col4)[3,30,10]  𝄀
 2023-10-27 01:00:00  ¦  2023-10-27 01:10:00  ¦  -2379823.0  ¦  214214.32143214  ¦  -321798372091.3242134214  𝄀
 2023-10-27 01:50:00  ¦  2023-10-27 02:00:00  ¦  321421.44  ¦  -38021.111  ¦  321798372091.3242134214  𝄀
 2023-10-27 02:10:00  ¦  2023-10-27 02:20:00  ¦  321421.44  ¦  -38021.111  ¦  321798372091.3242134214  𝄀
@@ -251,7 +262,7 @@ select _wstart, _wend, max(col2), min(col3), min(col4) from int02 where ts > '20
 2023-10-27 13:30:00  ¦  2023-10-27 13:40:00  ¦  8430923.0  ¦  332.0  ¦  0E-10  𝄀
 2023-10-27 22:30:00  ¦  2023-10-27 22:40:00  ¦  321421.44  ¦  null  ¦  null
 select _wstart, _wend, sum(col2), sum(col3), sum(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 60, minute) fill(next);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col2)[8,54,0]  ¦  sum(col3)[8,54,0]  ¦  sum(col4)[3,38,10]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col2)[8,53,31]  ¦  sum(col3)[8,53,31]  ¦  sum(col4)[3,38,10]  𝄀
 2023-10-27 01:00:00  ¦  2023-10-27 02:00:00  ¦  -2058401.5625  ¦  214214.32143214  ¦  0E-10  𝄀
 2023-10-27 02:00:00  ¦  2023-10-27 03:00:00  ¦  321421.4375  ¦  0.2131432140013203  ¦  321798372091.3242134214  𝄀
 2023-10-27 03:00:00  ¦  2023-10-27 04:00:00  ¦  -321.42315673828125  ¦  43824.43543  ¦  3211.3242134877  𝄀
@@ -259,7 +270,7 @@ select _wstart, _wend, sum(col2), sum(col3), sum(col4) from int02 where ts > '20
 2023-10-27 13:00:00  ¦  2023-10-27 14:00:00  ¦  1.05721665E7  ¦  38353.324143214  ¦  321798372091.3242134214  𝄀
 2023-10-27 22:00:00  ¦  2023-10-27 23:00:00  ¦  321421.4375  ¦  null  ¦  null
 select _wstart, _wend, avg(col2), avg(col3), avg(col4) from int02 where ts > '2023-10-27 00:00:00.000' and ts < '2023-10-27 23:00:00.000' interval(ts, 20, minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  ¦  avg(col3)[8,54,0]  ¦  avg(col4)[3,38,12]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  ¦  avg(col3)[8,53,31]  ¦  avg(col4)[3,38,12]  𝄀
 2023-10-27 01:00:00  ¦  2023-10-27 01:20:00  ¦  -2379823.0  ¦  214214.32143214  ¦  -321798372091.324213421400  𝄀
 2023-10-27 01:40:00  ¦  2023-10-27 02:00:00  ¦  321421.4375  ¦  null  ¦  321798372091.324213421400  𝄀
 2023-10-27 02:00:00  ¦  2023-10-27 02:20:00  ¦  321421.4375  ¦  -38021.111  ¦  null  𝄀
@@ -295,7 +306,7 @@ insert into sliding_window01 values ('2023-08-01 00:45:00', 38);
 insert into sliding_window01 values ('2023-08-01 00:50:00', 31);
 insert into sliding_window01 values ('2023-07-31 23:55:00', 22);
 select * from sliding_window01;
-➤ ts[93,64,0]  ¦  col2[8,54,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  25.0  𝄀
 2023-08-01 00:05:00  ¦  26.0  𝄀
 2023-08-01 00:15:00  ¦  28.0  𝄀
@@ -308,7 +319,7 @@ select * from sliding_window01;
 2023-08-01 00:50:00  ¦  31.0  𝄀
 2023-07-31 23:55:00  ¦  22.0
 select _wstart, _wend, max(col2), min(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(5, minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col2)[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  26.0  ¦  26.0  𝄀
 2023-08-01 00:05:00  ¦  2023-08-01 00:15:00  ¦  26.0  ¦  26.0  𝄀
 2023-08-01 00:10:00  ¦  2023-08-01 00:20:00  ¦  28.0  ¦  28.0  𝄀
@@ -320,7 +331,7 @@ select _wstart, _wend, max(col2), min(col2) from sliding_window01 where ts > "20
 2023-08-01 00:40:00  ¦  2023-08-01 00:50:00  ¦  38.0  ¦  28.0  𝄀
 2023-08-01 00:45:00  ¦  2023-08-01 00:55:00  ¦  38.0  ¦  38.0
 select _wstart, _wend, max(col2), min(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(5, minute) fill(null);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col2)[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  26.0  ¦  26.0  𝄀
 2023-08-01 00:05:00  ¦  2023-08-01 00:15:00  ¦  26.0  ¦  26.0  𝄀
 2023-08-01 00:10:00  ¦  2023-08-01 00:20:00  ¦  28.0  ¦  28.0  𝄀
@@ -332,14 +343,14 @@ select _wstart, _wend, max(col2), min(col2) from sliding_window01 where ts > "20
 2023-08-01 00:40:00  ¦  2023-08-01 00:50:00  ¦  38.0  ¦  28.0  𝄀
 2023-08-01 00:45:00  ¦  2023-08-01 00:55:00  ¦  38.0  ¦  38.0
 select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(10, minute) fill(next);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  1  ¦  26.0  𝄀
 2023-08-01 00:10:00  ¦  2023-08-01 00:20:00  ¦  1  ¦  28.0  𝄀
 2023-08-01 00:20:00  ¦  2023-08-01 00:30:00  ¦  2  ¦  28.5  𝄀
 2023-08-01 00:30:00  ¦  2023-08-01 00:40:00  ¦  0  ¦  33.0  𝄀
 2023-08-01 00:40:00  ¦  2023-08-01 00:50:00  ¦  2  ¦  33.0
 select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 10, minute) sliding(6, minute) fill(value,1000);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 00:10:00  ¦  1  ¦  26.0  𝄀
 2023-08-01 00:06:00  ¦  2023-08-01 00:16:00  ¦  1  ¦  28.0  𝄀
 2023-08-01 00:12:00  ¦  2023-08-01 00:22:00  ¦  2  ¦  29.0  𝄀
@@ -349,7 +360,7 @@ select _wstart, _wend, count(col2), avg(col2) from sliding_window01 where ts > "
 2023-08-01 00:36:00  ¦  2023-08-01 00:46:00  ¦  2  ¦  33.0  𝄀
 2023-08-01 00:42:00  ¦  2023-08-01 00:52:00  ¦  1  ¦  38.0
 select _wstart, _wend, sum(col2) from sliding_window01 where ts > "2023-08-01 00:00:00.000" and ts < "2023-08-01 00:50:00.000" interval(ts, 1, hour) sliding(10, minute) fill(none);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col2)[8,53,31]  𝄀
 2023-08-01 00:00:00  ¦  2023-08-01 01:00:00  ¦  177.0  𝄀
 2023-08-01 00:10:00  ¦  2023-08-01 01:10:00  ¦  151.0  𝄀
 2023-08-01 00:20:00  ¦  2023-08-01 01:20:00  ¦  123.0  𝄀
@@ -363,39 +374,39 @@ insert into sliding_window02 values ('2023-08-01 00:01:02.000',-328934.324);
 insert into sliding_window02 values ('2023-08-01 00:01:03.000',-23.23232);
 insert into sliding_window02 values ('2023-08-01 00:01:04.000',null);
 select * from sliding_window02;
-➤ ts[93,64,0]  ¦  col2[8,54,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  -328934.324  𝄀
 2023-08-01 00:01:03  ¦  -23.23232  𝄀
 2023-08-01 00:01:04  ¦  null
 select _wstart, _wend, max(col2), min(col2), sum(col2) from sliding_window02 where ts > "2023-08-01 00:01:00.000" and ts < "2023-08-01 00:01:10.000" interval(ts, 1, second) fill(none);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col2)[8,54,0]  ¦  sum(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col2)[8,53,31]  ¦  sum(col2)[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  2023-08-01 00:01:02  ¦  3.728193232143214E7  ¦  3.728193232143214E7  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:03  ¦  -328934.324  ¦  -328934.324  ¦  -328934.324  𝄀
 2023-08-01 00:01:03  ¦  2023-08-01 00:01:04  ¦  -23.23232  ¦  -23.23232  ¦  -23.23232  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:05  ¦  null  ¦  null  ¦  null
 select _wstart, _wend, max(col2), min(col2), sum(col2) from sliding_window02 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 2, second);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col2)[8,54,0]  ¦  sum(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col2)[8,53,31]  ¦  sum(col2)[8,53,31]  𝄀
 2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  3.728193232143214E7  ¦  3.728193232143214E7  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  -23.23232  ¦  -328934.324  ¦  -328957.55632000003  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  null  ¦  null  ¦  null
 select _wstart, _wend, max(col2), min(col2), sum(col2) from sliding_window02 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 2, second) fill(prev);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col2)[8,54,0]  ¦  sum(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col2)[8,53,31]  ¦  sum(col2)[8,53,31]  𝄀
 2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  3.728193232143214E7  ¦  3.728193232143214E7  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  -23.23232  ¦  -328934.324  ¦  -328957.55632000003  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  -23.23232  ¦  -328934.324  ¦  -328957.55632000003
 select _wstart, _wend, count(col2), avg(col2) from sliding_window02 where ts > "2023-08-01 00:01:00.000" and ts < "2023-08-01 00:01:10.000" interval(ts, 2, second) fill(none);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  1  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  2  ¦  -164478.77816000002  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  0  ¦  null
 select _wstart, _wend, count(col2), avg(col2) from sliding_window02 where ts > "2023-08-01 00:01:00.000" and ts < "2023-08-01 00:01:10.000" interval(ts, 2, second) fill(linear);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  1  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  2  ¦  -164478.77816000002  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  0  ¦  null
 select * from sliding_window02;
-➤ ts[93,64,0]  ¦  col2[8,54,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  3.728193232143214E7  𝄀
 2023-08-01 00:01:02  ¦  -328934.324  𝄀
 2023-08-01 00:01:03  ¦  -23.23232  𝄀
@@ -407,13 +418,13 @@ insert into sliding_window03 values ('2023-08-01 00:01:01.000', 32412.3421);
 insert into sliding_window03 values ('2023-08-01 00:01:03.000', -23.23232);
 insert into sliding_window03 values ('2023-08-01 00:01:04.000', -3289.328939201);
 select * from sliding_window03;
-➤ ts[93,64,0]  ¦  col2[7,24,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[7,23,31]  𝄀
 2023-08-01 00:01:01  ¦  32412.342  𝄀
 2023-08-01 00:01:03  ¦  -23.23232  𝄀
 2023-08-01 00:01:04  ¦  -3289.3289
 prepare s1 from 'select _wstart, _wend, max(col2), min(col2), sum(col2), count(col2), avg(col2) from sliding_window03 where ts > "2023-08-01 00:01:00.000" and ts < "2023-08-01 00:01:10.000" interval(ts, 1, second) fill(none);';
 execute s1;
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,24,0]  ¦  min(col2)[7,24,0]  ¦  sum(col2)[8,54,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[7,23,31]  ¦  min(col2)[7,23,31]  ¦  sum(col2)[8,53,31]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  2023-08-01 00:01:02  ¦  32412.342  ¦  32412.342  ¦  32412.341796875  ¦  1  ¦  32412.341796875  𝄀
 2023-08-01 00:01:03  ¦  2023-08-01 00:01:04  ¦  -23.23232  ¦  -23.23232  ¦  -23.23232078552246  ¦  1  ¦  -23.23232078552246  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:05  ¦  -3289.3289  ¦  -3289.3289  ¦  -3289.328857421875  ¦  1  ¦  -3289.328857421875
@@ -431,7 +442,7 @@ insert into sliding_window04 values ('2023-08-01 00:01:06.000', 0);
 insert into sliding_window04 values ('2023-08-01 00:01:07.111', 0);
 insert into sliding_window04 values ('2023-08-01 00:01:08.123', 38298392.32142142);
 select * from sliding_window04;
-➤ ts[93,64,0]  ¦  col2[8,54,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  1.2143242132142314E8  𝄀
 2023-08-01 00:01:03  ¦  null  𝄀
 2023-08-01 00:01:04  ¦  3.2151323321512513E7  𝄀
@@ -440,7 +451,7 @@ select * from sliding_window04;
 2023-08-01 00:01:07  ¦  0.0  𝄀
 2023-08-01 00:01:08  ¦  3.829839232142142E7
 select _wstart, _wend, count(col2), avg(col2) from sliding_window04 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 1, second) sliding(1, second) fill(prev);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:01:01  ¦  2023-08-01 00:01:02  ¦  1  ¦  1.2143242132142314E8  𝄀
 2023-08-01 00:01:03  ¦  2023-08-01 00:01:04  ¦  0  ¦  1.2143242132142314E8  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:05  ¦  1  ¦  3.2151323321512513E7  𝄀
@@ -449,7 +460,7 @@ select _wstart, _wend, count(col2), avg(col2) from sliding_window04 where ts >= 
 2023-08-01 00:01:07  ¦  2023-08-01 00:01:08  ¦  1  ¦  0.0  𝄀
 2023-08-01 00:01:08  ¦  2023-08-01 00:01:09  ¦  1  ¦  3.829839232142142E7
 select _wstart, _wend, count(col2), avg(col2) from sliding_window04 where ts >= "2023-08-01 00:01:00.000" and ts <= "2023-08-01 00:01:10.000" interval(ts, 2, second) sliding(2, second) fill(next);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2023-08-01 00:01:00  ¦  2023-08-01 00:01:02  ¦  1  ¦  1.2143242132142314E8  𝄀
 2023-08-01 00:01:02  ¦  2023-08-01 00:01:04  ¦  0  ¦  -3073554.4999598153  𝄀
 2023-08-01 00:01:04  ¦  2023-08-01 00:01:06  ¦  2  ¦  -3073554.4999598153  𝄀
@@ -494,7 +505,7 @@ select _wstart, _wend, sum(col2) from sliding_window05 where ts >= '1997-01-13 0
 2021-06-30 00:00:00  ¦  2022-06-30 00:00:00  ¦  -328193471  𝄀
 2022-01-16 00:00:00  ¦  2023-01-16 00:00:00  ¦  -3281891
 select _wstart, _wend, avg(col2) from sliding_window05 where ts >= '1997-01-13 00:00:0.000' and ts <= '2022-07-18 00:04:12.123' interval(ts, 100, day) sliding(100, day) fill(linear);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2018-01-07 00:00:00  ¦  2018-04-17 00:00:00  ¦  100.0  𝄀
 2018-07-26 00:00:00  ¦  2018-11-03 00:00:00  ¦  37213.0  𝄀
 2018-11-03 00:00:00  ¦  2019-02-11 00:00:00  ¦  -2146261.0  𝄀
@@ -526,7 +537,7 @@ insert into sliding_window_sum_decimal128 values ('2024-01-01 00:00:00.000', 922
 insert into sliding_window_sum_decimal128 values ('2024-01-01 00:05:00.000', 1, 1, 1, 1);
 insert into sliding_window_sum_decimal128 values ('2024-01-01 00:20:00.000', -2, null, null, null);
 select _wstart, _wend, count(i64), sum(u16), avg(u32) from sliding_window_sum_decimal128 where ts >= '2024-01-01 00:00:00.000' and ts <= '2024-01-01 00:25:00.000' interval(ts, 10, minute) sliding(5, minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(i64)[-5,64,0]  ¦  sum(u16)[3,38,0]  ¦  avg(u32)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(i64)[-5,64,0]  ¦  sum(u16)[3,38,0]  ¦  avg(u32)[8,53,31]  𝄀
 2024-01-01 00:00:00  ¦  2024-01-01 00:10:00  ¦  2  ¦  65536  ¦  2.147483648E9  𝄀
 2024-01-01 00:05:00  ¦  2024-01-01 00:15:00  ¦  1  ¦  1  ¦  1.0  𝄀
 2024-01-01 00:15:00  ¦  2024-01-01 00:25:00  ¦  1  ¦  null  ¦  null  𝄀
@@ -571,7 +582,7 @@ select _wstart, _wend, sum(col2) from temporary01 where ts >= '2020-10-10 09:09:
 2023-12-12 00:00:00  ¦  2024-12-11 00:00:00  ¦  -3892323  𝄀
 2024-06-29 00:00:00  ¦  2025-06-29 00:00:00  ¦  0
 select _wstart, _wend, avg(col2) from temporary01 where ts >= '2020-10-10 09:09:09' and ts <= '2024-12-12 01:34:46' interval(ts, 365, day) sliding(4800, hour);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  𝄀
 2020-08-29 00:00:00  ¦  2021-08-29 00:00:00  ¦  null  𝄀
 2021-03-17 00:00:00  ¦  2022-03-17 00:00:00  ¦  100.0  𝄀
 2021-10-03 00:00:00  ¦  2022-10-03 00:00:00  ¦  -4.5577363725E8  𝄀
@@ -743,7 +754,7 @@ insert into temporary02 values ('2023-11-01 00:00:12.000', null, null, -23.43243
 insert into temporary02 values ('2023-11-01 00:01:13.000', -0.1, 328903.32334, 909);
 insert into temporary02 values ('2023-11-01 00:13:14.000', null, 392432.4324, 8932);
 select * from temporary02;
-➤ ts[93,64,0]  ¦  col2[8,54,0]  ¦  col3[8,54,0]  ¦  col4[7,24,0]  𝄀
+➤ ts[93,64,0]  ¦  col2[8,53,31]  ¦  col3[8,53,31]  ¦  col4[7,23,31]  𝄀
 2023-11-01 00:00:01  ¦  100.23242134  ¦  73823.90902  ¦  2.8392432E7  𝄀
 2023-11-01 00:00:03  ¦  null  ¦  null  ¦  null  𝄀
 2023-11-01 00:00:04  ¦  -3921.32421  ¦  -3290.32  ¦  null  𝄀
@@ -757,7 +768,7 @@ select * from temporary02;
 2023-11-01 00:01:13  ¦  -0.1  ¦  328903.32334  ¦  909.0  𝄀
 2023-11-01 00:13:14  ¦  null  ¦  392432.4324  ¦  8932.0
 select _wstart, _wend, max(col2), min(col3) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 3, second);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,54,0]  ¦  min(col3)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(col2)[8,53,31]  ¦  min(col3)[8,53,31]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:03  ¦  100.23242134  ¦  73823.90902  𝄀
 2023-11-01 00:00:03  ¦  2023-11-01 00:00:06  ¦  -3921.32421  ¦  -3290.32  𝄀
 2023-11-01 00:00:06  ¦  2023-11-01 00:00:09  ¦  212112.3233  ¦  0.0  𝄀
@@ -766,7 +777,7 @@ select _wstart, _wend, max(col2), min(col3) from temporary02 where ts >= '2023-1
 2023-11-01 00:01:12  ¦  2023-11-01 00:01:15  ¦  -0.1  ¦  328903.32334  𝄀
 2023-11-01 00:13:12  ¦  2023-11-01 00:13:15  ¦  null  ¦  392432.4324
 select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 2, second);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:02  ¦  100.23242134  ¦  1  𝄀
 2023-11-01 00:00:02  ¦  2023-11-01 00:00:04  ¦  null  ¦  0  𝄀
 2023-11-01 00:00:04  ¦  2023-11-01 00:00:06  ¦  -4122.662105  ¦  1  𝄀
@@ -777,7 +788,7 @@ select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:01:12  ¦  2023-11-01 00:01:14  ¦  -0.1  ¦  1  𝄀
 2023-11-01 00:13:14  ¦  2023-11-01 00:13:16  ¦  null  ¦  1
 select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 2, second) fill(none);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:02  ¦  100.23242134  ¦  1  𝄀
 2023-11-01 00:00:02  ¦  2023-11-01 00:00:04  ¦  null  ¦  0  𝄀
 2023-11-01 00:00:04  ¦  2023-11-01 00:00:06  ¦  -4122.662105  ¦  1  𝄀
@@ -788,7 +799,7 @@ select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:01:12  ¦  2023-11-01 00:01:14  ¦  -0.1  ¦  1  𝄀
 2023-11-01 00:13:14  ¦  2023-11-01 00:13:16  ¦  null  ¦  1
 select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 2, second) fill(prev);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:02  ¦  100.23242134  ¦  1  𝄀
 2023-11-01 00:00:02  ¦  2023-11-01 00:00:04  ¦  100.23242134  ¦  0  𝄀
 2023-11-01 00:00:04  ¦  2023-11-01 00:00:06  ¦  -4122.662105  ¦  1  𝄀
@@ -799,7 +810,7 @@ select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:01:12  ¦  2023-11-01 00:01:14  ¦  -0.1  ¦  1  𝄀
 2023-11-01 00:13:14  ¦  2023-11-01 00:13:16  ¦  -0.1  ¦  1
 select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 2, second) fill(linear);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  avg(col2)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:02  ¦  100.23242134  ¦  1  𝄀
 2023-11-01 00:00:02  ¦  2023-11-01 00:00:04  ¦  -2011.21484183  ¦  0  𝄀
 2023-11-01 00:00:04  ¦  2023-11-01 00:00:06  ¦  -4122.662105  ¦  1  𝄀
@@ -810,17 +821,17 @@ select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:01:12  ¦  2023-11-01 00:01:14  ¦  -0.1  ¦  1  𝄀
 2023-11-01 00:13:14  ¦  2023-11-01 00:13:16  ¦  null  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 1, minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  7  𝄀
 2023-11-01 00:01:00  ¦  2023-11-01 00:02:00  ¦  328903.32334  ¦  1  𝄀
 2023-11-01 00:13:00  ¦  2023-11-01 00:14:00  ¦  392432.4324  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 60, second);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  7  𝄀
 2023-11-01 00:01:00  ¦  2023-11-01 00:02:00  ¦  328903.32334  ¦  1  𝄀
 2023-11-01 00:13:00  ¦  2023-11-01 00:14:00  ¦  392432.4324  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 5, second) sliding(4, second) fill(value, 2190);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,54,0]  ¦  count(col4)[-5,64,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
 2023-11-01 00:00:00  ¦  2023-11-01 00:00:05  ¦  70533.58902  ¦  1  𝄀
 2023-11-01 00:00:04  ¦  2023-11-01 00:00:09  ¦  442468.54442339996  ¦  4  𝄀
 2023-11-01 00:00:08  ¦  2023-11-01 00:00:13  ¦  382.343  ¦  3  𝄀
@@ -836,16 +847,16 @@ select _wstart, _wend, max(col2), min(col3), avg(col4) from external01 where ts 
 2014-01-01 00:03:00  ¦  2014-01-01 00:06:00  ¦  31411  ¦  -1952462290  ¦  -3270483797782685655.5000  𝄀
 2014-01-01 00:12:00  ¦  2014-01-01 00:15:00  ¦  22609  ¦  -1679063036  ¦  3137296212355014671.7500
 select _wstart, _wend, count(col2), sum(col6), avg(col7) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 10, minute) sliding(5,minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col6)[3,38,0]  ¦  avg(col7)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col6)[3,38,0]  ¦  avg(col7)[8,53,31]  𝄀
 2014-01-01 00:00:00  ¦  2014-01-01 00:10:00  ¦  6  ¦  305259  ¦  2.183710815E9  𝄀
 2014-01-01 00:05:00  ¦  2014-01-01 00:15:00  ¦  5  ¦  214104  ¦  2.759324657E9  𝄀
 2014-01-01 00:10:00  ¦  2014-01-01 00:20:00  ¦  4  ¦  154055  ¦  2.87065871975E9
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,53,31]  𝄀
 2014-01-01 00:00:00  ¦  2014-01-01 00:15:00  ¦  10  ¦  48.22709999999999  𝄀
 2014-01-01 00:10:00  ¦  2014-01-01 00:25:00  ¦  4  ¦  16.676199999999998
 select _wstart, _wend, count(col2), sum(col10) from external01 where ts >= '2014-01-01 00:01:17' and ts <= '2014-01-01 00:14:58' interval(ts, 15, minute) sliding(10,minute) fill(value,1000);
-➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,54,0]  𝄀
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(col2)[-5,64,0]  ¦  sum(col10)[8,53,31]  𝄀
 2014-01-01 00:00:00  ¦  2014-01-01 00:15:00  ¦  10  ¦  48.22709999999999  𝄀
 2014-01-01 00:10:00  ¦  2014-01-01 00:25:00  ¦  4  ¦  16.676199999999998
 drop table external01;
@@ -853,4 +864,27 @@ drop table if exists tt1;
 create table tt1(ts timestamp primary key, a int);
 select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 ➤ enable[4,32,0]  ¦  collation[4,32,0]
+drop table if exists tw_interval_bad_unit;
+create table tw_interval_bad_unit(ts timestamp(6), v int);
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 0, minute);
+invalid input: time window interval must be greater than zero
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 5, minute) sliding(0, minute);
+invalid input: time window sliding value must be greater than zero
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, year);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, quarter);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, month);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, week);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, year);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
+not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
+drop table tw_interval_bad_unit;
 drop database time_window;
