@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -84,6 +85,32 @@ func (merge *Merge) WithPartial(start, end int32) *Merge {
 	merge.StartIDX = start
 	merge.EndIDX = end
 	return merge
+}
+
+// ActivateReceiverRange moves a partial merge to a new, not-yet-started input
+// range after its current range has been exhausted. UNION ALL uses this to
+// avoid listening for terminal signals from branches that have not started.
+func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int32) error {
+	if merge.MaterializedSource != nil || !merge.Partial {
+		return moerr.NewInternalErrorNoCtx("cannot activate a receiver range on a non-partial merge")
+	}
+	if start < 0 || end <= start || int(end) > len(proc.Reg.MergeReceivers) {
+		return moerr.NewInternalErrorNoCtx("invalid merge receiver range")
+	}
+	if merge.ctr.receiver != nil && merge.ctr.receiver.State().Alive != 0 {
+		return moerr.NewInternalErrorNoCtx("cannot replace an active merge receiver range")
+	}
+	merge.ctr.receiver = process.InitPipelineSignalReceiver(
+		proc.Ctx, proc.Reg.MergeReceivers[start:end])
+	return nil
+}
+
+// DisableReceiverWaitForStartFailure prevents cleanup from waiting on input
+// scopes when a containing lazy scope fails validation before any producer is
+// submitted. The containing pipeline still runs normal cleanup so its own
+// downstream connector receives the startup error.
+func (merge *Merge) DisableReceiverWaitForStartFailure(proc *process.Process) {
+	merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, nil)
 }
 
 func (merge *Merge) Release() {
