@@ -1214,12 +1214,14 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, int32(2), best)
 
-	// An equal maximum timestamp is ambiguous and must fail deterministically.
+	// DuckDB keeps the first candidate when the best timestamp is duplicated.
 	right.Vecs[1].CleanOnlyData()
 	require.NoError(t, vector.AppendFixedList(right.Vecs[1], []types.Timestamp{9, 9}, nil, proc.Mp()))
 	right.SetRowCount(2)
-	_, _, err = arg.ctr.findAsofPredecessor(arg, proc, 0, []int32{0, 1})
-	require.ErrorContains(t, err, "unique right row")
+	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, []int32{0, 1})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int32(0), best)
 
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil

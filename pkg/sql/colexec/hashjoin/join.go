@@ -888,9 +888,6 @@ func (ctr *container) findAsofPredecessor(
 		switch comparison := ctr.asofCompare.Compare(0, 1, bestRow, rowIdx); {
 		case comparison < 0:
 			best = candidate
-		case comparison == 0:
-			return -1, false, moerr.NewInvalidInput(proc.Ctx,
-				"ASOF JOIN requires a unique right row for each equality key and timestamp")
 		}
 	}
 	return best, best >= 0, nil
