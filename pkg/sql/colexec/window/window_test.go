@@ -1316,6 +1316,18 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestNtileBucketCountRejectsNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bucketVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	defer bucketVec.Free(mp)
+
+	ctr := container{
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}},
+	}
+	_, err := ctr.ntileBucketCount(0)
+	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
+}
+
 func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize * 2
