@@ -1661,6 +1661,31 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCopyPreallocatedNullVectorKeepsScalarMetadata(t *testing.T) {
+	const rows = 1024
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	destination := NewVec(types.T_int64.ToType())
+	require.NoError(t, destination.PreExtend(rows, mp))
+	destination.SetLength(rows)
+	destination.SetAllNulls(rows)
+	defer destination.Free(mp)
+
+	for row := rows - 1; row >= 0; row-- {
+		require.NoError(t, destination.Copy(source, int64(row), 0, mp))
+	}
+	require.False(t, destination.HasNull())
+	require.False(t, destination.HasBinaryStringRows())
+	require.False(t, destination.GetIsBinaryString())
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[0])
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[rows-1])
+}
+
 func TestCloneWindow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v1 := NewConstNull(types.T_int32.ToType(), 10, mp)
@@ -5540,6 +5565,34 @@ func TestUnionOneBinaryStringBitmapGrowthIsGeometric(t *testing.T) {
 	// Geometric payload and metadata growth should remain logarithmic.
 	require.Less(t, allocations, float64(128))
 	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkCopyPreallocatedNullVectorReverseFill(b *testing.B) {
+	const rows = 16 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(b, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	b.ReportMetric(float64(rows), "rows/op")
+	for b.Loop() {
+		b.StopTimer()
+		destination := NewVec(types.T_int64.ToType())
+		if err := destination.PreExtend(rows, mp); err != nil {
+			b.Fatal(err)
+		}
+		destination.SetLength(rows)
+		destination.SetAllNulls(rows)
+		b.StartTimer()
+		for row := rows - 1; row >= 0; row-- {
+			if err := destination.Copy(source, int64(row), 0, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		destination.Free(mp)
+		b.StartTimer()
+	}
 }
 
 func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {

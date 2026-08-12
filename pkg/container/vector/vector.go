@@ -1143,6 +1143,9 @@ func (v *Vector) mergePrepareParamKindAt(row int, kind PrepareParamKind, sourceH
 		v.prepareParamKindSeen = true
 		return nil
 	}
+	if v.prepareParamKindSeen && v.prepareParamKind == kind {
+		return nil
+	}
 	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
 		v.prepareParamKind = kind
 		v.prepareParamKindSeen = true
@@ -1541,10 +1544,10 @@ func (v *Vector) preflightPrepareParamKindCopy(
 	if !v.prepareParamKindSeen && kind == PrepareParamNone {
 		return nil
 	}
-	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
+	if v.prepareParamKindSeen && v.prepareParamKind == kind {
 		return nil
 	}
-	if v.prepareParamKindSeen && v.prepareParamKind == kind {
+	if !destinationHasValue && !v.hasPrepareParamValueExcept(row) {
 		return nil
 	}
 
@@ -4571,9 +4574,16 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 			return err
 		}
 		binaryString := w.GetBinaryStringMetadataAt(int(wi))
-		if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(int(vi)) {
-			v.setBinaryStringScalar(binaryString)
-		} else if err := v.SetIsBinaryStringAt(int(vi), binaryString, mp); err != nil {
+		if !v.binaryStringRowsActive {
+			if v.binaryString == binaryString {
+				return nil
+			}
+			if !v.hasPrepareParamValueExcept(int(vi)) {
+				v.setBinaryStringScalar(binaryString)
+				return nil
+			}
+		}
+		if err := v.SetIsBinaryStringAt(int(vi), binaryString, mp); err != nil {
 			return err
 		}
 	}
