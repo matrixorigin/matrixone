@@ -27,7 +27,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -115,10 +114,6 @@ func (m *MockSearch) Load(*sqlexec.SqlProcess) error {
 }
 
 func (m *MockSearch) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error {
-	return nil
-}
-
-func (m *MockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
 
@@ -477,4 +472,8 @@ func TestNewHnswAlgoFn(t *testing.T) {
 	// invalid I8 quantization in MO
 	idxcfg.Usearch.Quantization = usearch.I8
 	assert.Panics(t, func() { newHnswAlgoFn(idxcfg, tblcfg) }, "panic")
+}
+
+func (m *MockSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return nil
 }

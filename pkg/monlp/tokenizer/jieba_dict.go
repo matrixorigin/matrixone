@@ -50,6 +50,12 @@ func jiebaDictPaths() [5]string {
 	}
 }
 
+// JiebaDictDir returns the resolved directory holding jieba.dict.utf8 (respecting
+// MO_JIEBA_DICT_DIR and the build/vendored fallbacks), or "" if none is found.
+// Exposed so callers that read the raw dictionary (e.g. building an FST from the
+// full vocabulary) locate it the same way the tokenizer does.
+func JiebaDictDir() string { return resolveJiebaDictDir() }
+
 func dictDirOK(d string) bool {
 	if d == "" {
 		return false
