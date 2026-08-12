@@ -326,6 +326,47 @@ func LoadColumnDataBySearch(
 	return
 }
 
+// LoadColumnDataByTopN computes vector TopN while the FileService cache entry
+// is pinned. The cached Vector remains private to ObjectIO and only row
+// coordinates plus distances escape this function.
+func LoadColumnDataByTopN(
+	ctx context.Context,
+	column uint16,
+	typ types.Type,
+	fs fileservice.FileService,
+	location objectio.Location,
+	selectRows []int64,
+	orderByLimit *objectio.IndexReaderTopOp,
+	m *mpool.MPool,
+	policy fileservice.Policy,
+) (sels []int64, dists []float64, fromCache bool, err error) {
+	if m == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("nil mpool for object column topn")
+	}
+	ioVectors, fromCache, err := readColumnsData(
+		ctx,
+		[]uint16{column},
+		[]types.Type{typ},
+		fs,
+		location,
+		nil,
+		m,
+		policy,
+	)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer objectio.ReleaseIOVector(&ioVectors)
+
+	sels, dists, err = objectio.SearchCachedVectorTopN(
+		ctx,
+		ioVectors.Entries[0],
+		selectRows,
+		orderByLimit,
+	)
+	return sels, dists, fromCache, err
+}
+
 // LoadColumnDataBySearchAndCheckTS searches a varlen column and checks whether
 // any selected row's requested commit timestamp lies in (from, to].
 func LoadColumnDataBySearchAndCheckTS(
