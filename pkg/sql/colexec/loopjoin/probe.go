@@ -15,8 +15,6 @@
 package loopjoin
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -31,12 +29,6 @@ func (ctr *container) unmatchedRowBytes(
 	inBat *batch.Batch,
 	probeRow int,
 ) int {
-	start := time.Time{}
-	ctr.byteAdmissionRowChecks++
-	sample := ctr.byteAdmissionRowChecks&1023 == 0
-	if sample {
-		start = time.Now()
-	}
 	size := 0
 	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
@@ -46,11 +38,6 @@ func (ctr *container) unmatchedRowBytes(
 			// slot in Batch.Size().
 			size += ctr.resBat.Vecs[i].GetType().TypeSize()
 		}
-	}
-	ctr.byteAdmissionEstimatedBytes += int64(size)
-	if sample {
-		ctr.byteAdmissionRowSamples++
-		ctr.byteAdmissionRowSampleNanos += time.Since(start).Nanoseconds()
 	}
 	return size
 }
@@ -88,7 +75,7 @@ func (ctr *container) admittedJoinedRows(
 	start int,
 	currentRows int,
 ) int {
-	usedBytes := ctr.resultBatchSize()
+	usedBytes := ctr.resBat.Size()
 	count := 0
 	for row := start; row < buildBat.RowCount(); row++ {
 		rowBytes := ctr.joinedRowBytes(ap, inBat, probeRow, buildBat, row)
@@ -399,7 +386,7 @@ func (ctr *container) probe(
 				return scanErr
 			}
 			rowBytes := ctr.unmatchedRowBytes(ap, inbat, i)
-			if !ctr.canAppendRow(rowCountIncrease, ctr.resultBatchSize(), rowBytes) {
+			if !ctr.canAppendRow(rowCountIncrease, ctr.resBat.Size(), rowBytes) {
 				ctr.yieldProbe(result, rowCountIncrease, i, 0, 0, false)
 				return nil
 			}
@@ -421,7 +408,7 @@ func (ctr *container) probe(
 				break
 			}
 			rowBytes := ctr.unmatchedRowBytes(ap, inbat, i)
-			if !ctr.canAppendRow(rowCountIncrease, ctr.resultBatchSize(), rowBytes) {
+			if !ctr.canAppendRow(rowCountIncrease, ctr.resBat.Size(), rowBytes) {
 				ctr.yieldProbe(result, rowCountIncrease, i, 0, 0, false)
 				return nil
 			}
@@ -444,7 +431,7 @@ func (ctr *container) probe(
 				rowBytes = ctr.joinedRowBytes(
 					ap, inbat, i, mpbat[firstBatch], firstRow)
 			}
-			if !ctr.canAppendRow(rowCountIncrease, ctr.resultBatchSize(), rowBytes) {
+			if !ctr.canAppendRow(rowCountIncrease, ctr.resBat.Size(), rowBytes) {
 				ctr.yieldProbe(result, rowCountIncrease, i, 0, 0, false)
 				return nil
 			}
@@ -494,7 +481,7 @@ func (ctr *container) probe(
 							rowBytes := ctr.joinedRowBytes(
 								ap, inbat, i, bat, row)
 							if !ctr.canAppendRow(
-								rowCountIncrease, ctr.resultBatchSize(), rowBytes) {
+								rowCountIncrease, ctr.resBat.Size(), rowBytes) {
 								ctr.yieldProbe(
 									result, rowCountIncrease, i, idx, row, matched)
 								return nil
@@ -549,7 +536,7 @@ func (ctr *container) probe(
 				(ap.JoinType == plan.Node_LEFT || ap.JoinType == plan.Node_OUTER) {
 				rowBytes := ctr.unmatchedRowBytes(ap, inbat, i)
 				if !ctr.canAppendRow(
-					rowCountIncrease, ctr.resultBatchSize(), rowBytes) {
+					rowCountIncrease, ctr.resBat.Size(), rowBytes) {
 					ctr.yieldProbe(
 						result, rowCountIncrease, i, len(mpbat), 0, false)
 					return nil

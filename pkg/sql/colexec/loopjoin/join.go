@@ -16,7 +16,6 @@ package loopjoin
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -63,7 +62,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	loopJoin.recursiveProbe = false
-	loopJoin.ctr.byteAdmissionStatsFlushed = false
 	if loopJoin.ctr.resultBatchByteLimit <= 0 {
 		loopJoin.ctr.resultBatchByteLimit = defaultLoopJoinResultBatchBytes
 	}
@@ -182,28 +180,11 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			return result, nil
 		default:
-			loopJoin.flushByteAdmissionStats(analyzer)
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
 		}
 	}
-}
-
-func (loopJoin *LoopJoin) flushByteAdmissionStats(analyzer process.Analyzer) {
-	if loopJoin.ctr.byteAdmissionStatsFlushed {
-		return
-	}
-	loopJoin.ctr.byteAdmissionStatsFlushed = true
-	stats := analyzer.GetOpStats()
-	stats.AddExtraStat("LoopJoinByteAdmissionRowChecks", loopJoin.ctr.byteAdmissionRowChecks)
-	stats.AddExtraStat("LoopJoinByteAdmissionSizeChecks", loopJoin.ctr.byteAdmissionSizeChecks)
-	stats.AddExtraStat("LoopJoinByteAdmissionRejectedRows", loopJoin.ctr.byteAdmissionRejectedRows)
-	stats.AddExtraStat("LoopJoinByteAdmissionEstimatedBytes", loopJoin.ctr.byteAdmissionEstimatedBytes)
-	stats.AddExtraStat("LoopJoinByteAdmissionRowSampleNanos", loopJoin.ctr.byteAdmissionRowSampleNanos)
-	stats.AddExtraStat("LoopJoinByteAdmissionSizeSampleNanos", loopJoin.ctr.byteAdmissionSizeSampleNanos)
-	stats.AddExtraStat("LoopJoinByteAdmissionRowSamples", loopJoin.ctr.byteAdmissionRowSamples)
-	stats.AddExtraStat("LoopJoinByteAdmissionSizeSamples", loopJoin.ctr.byteAdmissionSizeSamples)
 }
 
 func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
@@ -249,22 +230,7 @@ func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm
 
 func (ctr *container) resultBatchFull(rows int) bool {
 	return rows >= colexec.DefaultBatchSize ||
-		rows > 0 && ctr.resultBatchSize() >= ctr.resultBatchByteLimit
-}
-
-func (ctr *container) resultBatchSize() int {
-	ctr.byteAdmissionSizeChecks++
-	sample := ctr.byteAdmissionSizeChecks&1023 == 0
-	var start time.Time
-	if sample {
-		start = time.Now()
-	}
-	size := ctr.resBat.Size()
-	if sample {
-		ctr.byteAdmissionSizeSamples++
-		ctr.byteAdmissionSizeSampleNanos += time.Since(start).Nanoseconds()
-	}
-	return size
+		rows > 0 && ctr.resBat.Size() >= ctr.resultBatchByteLimit
 }
 
 // canAppendRow is the single result-batch admission rule. A row may be added
@@ -278,12 +244,8 @@ func (ctr *container) canAppendRow(rows, usedBytes, rowBytes int) bool {
 	if rows == 0 {
 		return true
 	}
-	ok := usedBytes <= ctr.resultBatchByteLimit &&
+	return usedBytes <= ctr.resultBatchByteLimit &&
 		rowBytes <= ctr.resultBatchByteLimit-usedBytes
-	if !ok {
-		ctr.byteAdmissionRejectedRows++
-	}
-	return ok
 }
 
 func vectorLogicalRowBytes(vec *vector.Vector, row int) int {
@@ -329,12 +291,6 @@ func (ctr *container) joinedRowBytes(
 	buildBat *batch.Batch,
 	buildRow int,
 ) int {
-	start := time.Time{}
-	ctr.byteAdmissionRowChecks++
-	sample := ctr.byteAdmissionRowChecks&1023 == 0
-	if sample {
-		start = time.Now()
-	}
 	size := 0
 	for i, rp := range ap.ResultCols {
 		if rp.Rel == 0 {
@@ -344,11 +300,6 @@ func (ctr *container) joinedRowBytes(
 		} else {
 			size += ctr.resBat.Vecs[i].GetType().TypeSize()
 		}
-	}
-	ctr.byteAdmissionEstimatedBytes += int64(size)
-	if sample {
-		ctr.byteAdmissionRowSamples++
-		ctr.byteAdmissionRowSampleNanos += time.Since(start).Nanoseconds()
 	}
 	return size
 }
