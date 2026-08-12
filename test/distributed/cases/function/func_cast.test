@@ -356,6 +356,16 @@ insert into t1 values ('2020-12-03 11:11:11');
 select cast(s1 as decimal(7,2)) from t1;
 drop table t1;
 
+set time_zone="+00:00";
+create table ts_cast_time(id int primary key, event_ts timestamp(6));
+insert into ts_cast_time values (1, '2024-02-29 12:34:56.123456'), (2, null);
+select id, cast(event_ts as time(6)) as event_time from ts_cast_time order by id;
+set time_zone="+08:00";
+select id, cast(event_ts as time(6)) as event_time from ts_cast_time order by id;
+select cast(cast('2024-02-29 12:34:56.123456' as timestamp(6)) as time(6)) as literal_time;
+drop table ts_cast_time;
+set time_zone='SYSTEM';
+
 #
 # Test for bug #11283: field conversion from varchar, and text types to decimal
 #

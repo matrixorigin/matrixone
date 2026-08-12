@@ -605,7 +605,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_timestamp: {
 		types.T_int32, types.T_int64,
-		types.T_date, types.T_datetime,
+		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -2156,6 +2156,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return timestampToTime(source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
@@ -4097,6 +4100,27 @@ func datetimeToTime(
 			}
 		} else {
 			if err := to.Append(v.ToTime(totype.Scale), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func timestampToTime(
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Time], length int, zone *time.Location) error {
+	var i uint64
+	l := uint64(length)
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+		} else {
+			if err := to.Append(v.ToDatetime(zone).ToTime(totype.Scale), false); err != nil {
 				return err
 			}
 		}
