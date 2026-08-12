@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"github.com/google/uuid"
@@ -28,17 +29,143 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const fillSpillMagic = uint64(0x46494c4c5350494c)
+const fillSpillWriteBufferSize = 64 << 10
+
+type fillSpillFile struct {
+	file      *os.File
+	writer    *spillutil.AccountedWriter
+	fdToken   *process.ExecutionSpillFDReservation
+	diskToken *process.ExecutionSpillDiskReservation
+}
+
+func newFillSpillFile(
+	proc *process.Process,
+	ctr *container,
+	suffix string,
+) (*fillSpillFile, error) {
+	if proc == nil || ctr == nil || (ctr.allocationAccount != nil && ctr.budget == nil) {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	var (
+		fdToken   *process.ExecutionSpillFDReservation
+		diskToken *process.ExecutionSpillDiskReservation
+		err       error
+	)
+	if ctr.budget != nil {
+		fdToken, err = ctr.budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+		diskToken, err = ctr.budget.ReserveSpillDisk(0)
+		if err != nil {
+			fdToken.Release()
+			return nil, err
+		}
+	}
+	fs, err := proc.GetSpillFileService()
+	if err != nil {
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		if fdToken != nil {
+			fdToken.Release()
+		}
+		return nil, err
+	}
+	fd, err := fs.CreateAndRemoveFile(
+		proc.Ctx,
+		fmt.Sprintf("fill_%s_%s", uuid.NewString(), suffix),
+	)
+	if err != nil {
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		if fdToken != nil {
+			fdToken.Release()
+		}
+		return nil, err
+	}
+	writer, err := spillutil.NewAccountedWriter(
+		proc.Ctx,
+		proc.Mp(),
+		ctr.allocationAccount,
+		mpool.AllocationOwnerFill,
+		fillAllocationSiteSpillWriteBuffer,
+		spillutil.NewDiskReservationWriter(fd, diskToken),
+		fillSpillWriteBufferSize,
+	)
+	if err != nil {
+		_ = fd.Close()
+		if diskToken != nil {
+			diskToken.Release()
+		}
+		if fdToken != nil {
+			fdToken.Release()
+		}
+		return nil, err
+	}
+	return &fillSpillFile{
+		file:      fd,
+		writer:    writer,
+		fdToken:   fdToken,
+		diskToken: diskToken,
+	}, nil
+}
+
+func (f *fillSpillFile) finishWriting() error {
+	if f == nil || f.writer == nil {
+		return nil
+	}
+	writer := f.writer
+	f.writer = nil
+	err := writer.Flush()
+	writer.Free()
+	return err
+}
+
+func (f *fillSpillFile) flush() error {
+	if f == nil || f.writer == nil {
+		return nil
+	}
+	return f.writer.Flush()
+}
+
+func (f *fillSpillFile) close() error {
+	if f == nil {
+		return nil
+	}
+	if f.writer != nil {
+		f.writer.Free()
+		f.writer = nil
+	}
+	var err error
+	if f.file != nil {
+		err = f.file.Close()
+		f.file = nil
+	}
+	if f.diskToken != nil {
+		f.diskToken.Release()
+		f.diskToken = nil
+	}
+	if f.fdToken != nil {
+		f.fdToken.Release()
+		f.fdToken = nil
+	}
+	return err
+}
 
 type fillSpill struct {
-	input  *os.File
-	output *os.File
-	next   *os.File
-	buf    bytes.Buffer
+	input  *fillSpillFile
+	output *fillSpillFile
+	next   *fillSpillFile
+
+	allocation *spillutil.SpillAllocationAccount
 
 	outputReversePos int64
 	ready            bool
@@ -56,39 +183,171 @@ type fillSpill struct {
 	linearLeftValid  []bool
 	linearLeftSteps  []uint64
 	forwardPart      spillPartitionSnapshot
+	scanPart         spillPartitionSnapshot
 }
 
 type spillPartitionSnapshot struct {
-	keys  [][]byte
-	nulls []bool
-	set   bool
+	keys    [][]byte
+	buffers []*mpool.AccountedBuffer
+	nulls   []bool
+	set     bool
+	mp      *mpool.MPool
+	account *mpool.AllocationAccount
+	site    mpool.AllocationSite
 }
 
-func (s *spillPartitionSnapshot) cloneFrom(src *spillPartitionSnapshot) {
-	*s = spillPartitionSnapshot{set: src.set}
-	if len(src.keys) > 0 {
-		s.keys = make([][]byte, len(src.keys))
-		for i := range src.keys {
-			s.keys[i] = append([]byte(nil), src.keys[i]...)
+func (s *spillPartitionSnapshot) configure(
+	mp *mpool.MPool,
+	account *mpool.AllocationAccount,
+	site mpool.AllocationSite,
+) {
+	if s == nil || account == nil {
+		return
+	}
+	s.mp = mp
+	s.account = account
+	s.site = site
+}
+
+func (s *spillPartitionSnapshot) hasCapacity() bool {
+	if s == nil {
+		return false
+	}
+	for i := range s.keys {
+		if cap(s.keys[i]) != 0 {
+			return true
 		}
 	}
-	s.nulls = append([]bool(nil), src.nulls...)
+	return false
 }
 
-func addOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
+func (s *spillPartitionSnapshot) free() {
+	if s == nil {
+		return
+	}
+	for _, buffer := range s.buffers {
+		if buffer != nil {
+			buffer.Free()
+		}
+	}
+	*s = spillPartitionSnapshot{}
+}
+
+func (s *spillPartitionSnapshot) ensureShape(length int) {
+	if cap(s.keys) < length {
+		keys := make([][]byte, length)
+		nulls := make([]bool, length)
+		copy(keys, s.keys)
+		copy(nulls, s.nulls)
+		s.keys = keys
+		s.nulls = nulls
+		if s.account != nil {
+			buffers := make([]*mpool.AccountedBuffer, length)
+			copy(buffers, s.buffers)
+			s.buffers = buffers
+		}
+	} else {
+		s.keys = s.keys[:length]
+		s.nulls = s.nulls[:length]
+		if s.account != nil {
+			if length < len(s.buffers) {
+				for _, buffer := range s.buffers[length:] {
+					if buffer != nil {
+						buffer.Free()
+					}
+				}
+			}
+			if cap(s.buffers) < length {
+				next := make([]*mpool.AccountedBuffer, length)
+				copy(next, s.buffers)
+				s.buffers = next
+			} else {
+				s.buffers = s.buffers[:length]
+			}
+		}
+	}
+}
+
+func (s *spillPartitionSnapshot) setKey(index int, value []byte) error {
+	if s.account == nil {
+		s.keys[index] = append(s.keys[index][:0], value...)
+		return nil
+	}
+	if s.buffers[index] == nil {
+		buffer, err := mpool.NewAccountedBuffer(
+			s.mp,
+			s.account,
+			mpool.AllocationOwnerFill,
+			s.site,
+		)
+		if err != nil {
+			return err
+		}
+		s.buffers[index] = buffer
+	}
+	s.buffers[index].Reset()
+	if _, err := s.buffers[index].Write(value); err != nil {
+		return err
+	}
+	s.keys[index] = s.buffers[index].Bytes()
+	return nil
+}
+
+func (s *spillPartitionSnapshot) cloneFrom(src *spillPartitionSnapshot) error {
+	if s == nil || src == nil || s == src {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	s.ensureShape(len(src.keys))
+	for i := range src.keys {
+		s.nulls[i] = src.nulls[i]
+		if err := s.setKey(i, src.keys[i]); err != nil {
+			return err
+		}
+	}
+	s.set = src.set
+	return nil
+}
+
+func addOriginalNullMarkers(
+	bat *batch.Batch,
+	colLen int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) error {
 	rows := bat.RowCount()
+	vecCount := len(bat.Vecs)
+	attrCount := len(bat.Attrs)
+	rollback := func() {
+		for _, marker := range bat.Vecs[vecCount:] {
+			if marker != nil {
+				marker.Free(mp)
+			}
+		}
+		bat.Vecs = bat.Vecs[:vecCount]
+		bat.Attrs = bat.Attrs[:attrCount]
+	}
 	for c := 0; c < colLen; c++ {
 		marker := vector.NewVec(types.T_bool.ToType())
-		values := make([]bool, rows)
+		if selection != nil {
+			marker = vector.NewOffHeapVecWithType(types.T_bool.ToType())
+			if err := marker.SetAllocationAccount(selection); err != nil {
+				marker.Free(mp)
+				rollback()
+				return err
+			}
+		}
+		bat.Vecs = append(bat.Vecs, nil)
+		bat.Attrs = append(bat.Attrs, "")
+		bat.SetVector(int32(len(bat.Vecs)-1), marker)
+		if err := marker.PreExtend(rows, mp); err != nil {
+			rollback()
+			return err
+		}
+		marker.SetLength(rows)
+		values := vector.MustFixedColWithTypeCheck[bool](marker)
 		for r := 0; r < rows; r++ {
 			values[r] = bat.Vecs[c].IsNull(uint64(r))
 		}
-		if err := vector.AppendFixedList(marker, values, nil, mp); err != nil {
-			marker.Free(mp)
-			return err
-		}
-		bat.Vecs = append(bat.Vecs, marker)
-		bat.Attrs = append(bat.Attrs, "")
 	}
 	return nil
 }
@@ -97,11 +356,16 @@ func addOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error
 // the original-NULL markers. The reverse spill pass stores how many missing
 // positions separate a row from its right endpoint; originalNullAt can keep
 // addressing the final bool marker block unchanged.
-func addLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
+func addLinearDistanceMarkers(
+	bat *batch.Batch,
+	colLen int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) error {
 	if colLen == 0 {
 		return nil
 	}
-	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp)
+	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp, selection)
 	if err != nil {
 		return err
 	}
@@ -113,20 +377,24 @@ func addLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) err
 	return nil
 }
 
-func appendLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
-	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp)
-	if err != nil {
-		return err
-	}
-	bat.Vecs = append(bat.Vecs, markers...)
-	bat.Attrs = append(bat.Attrs, make([]string, colLen)...)
-	return nil
-}
-
-func makeLinearDistanceMarkers(rows, colLen int, mp *mpool.MPool) ([]*vector.Vector, error) {
+func makeLinearDistanceMarkers(
+	rows, colLen int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) ([]*vector.Vector, error) {
 	markers := make([]*vector.Vector, colLen)
 	for col := range markers {
 		marker := vector.NewVec(types.T_uint64.ToType())
+		if selection != nil {
+			marker = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+			if err := marker.SetAllocationAccount(selection); err != nil {
+				marker.Free(mp)
+				for _, allocated := range markers[:col] {
+					allocated.Free(mp)
+				}
+				return nil, err
+			}
+		}
 		if err := vector.AppendMultiFixed(marker, uint64(0), false, rows, mp); err != nil {
 			marker.Free(mp)
 			for _, allocated := range markers[:col] {
@@ -137,6 +405,49 @@ func makeLinearDistanceMarkers(rows, colLen int, mp *mpool.MPool) ([]*vector.Vec
 		markers[col] = marker
 	}
 	return markers, nil
+}
+
+func makeBorrowedSpillBatch(
+	source *batch.Batch,
+	colLen int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	if source == nil || colLen < 0 || colLen > len(source.Vecs) {
+		return nil, moerr.NewInvalidInputNoCtx("invalid fill spill input batch")
+	}
+	bat := batch.NewOffHeapWithSize(len(source.Vecs))
+	copy(bat.Vecs, source.Vecs)
+	bat.Recursive = source.Recursive
+	bat.ShuffleIDX = source.ShuffleIDX
+	bat.SetRowCount(source.RowCount())
+	if err := addOriginalNullMarkers(bat, colLen, mp, selection); err != nil {
+		clear(bat.Vecs)
+		bat.Vecs = nil
+		bat.Attrs = nil
+		bat.SetRowCount(0)
+		return nil, err
+	}
+	return bat, nil
+}
+
+func releaseBorrowedSpillBatch(
+	bat *batch.Batch,
+	colLen int,
+	linear bool,
+	mp *mpool.MPool,
+) {
+	if bat == nil {
+		return
+	}
+	stripOriginalNullMarkers(bat, colLen, mp)
+	if linear {
+		stripLinearDistanceMarkers(bat, colLen, mp)
+	}
+	clear(bat.Vecs)
+	bat.Vecs = nil
+	bat.Attrs = nil
+	bat.SetRowCount(0)
 }
 
 func stripOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
@@ -174,66 +485,93 @@ func setLinearRightDistance(bat *batch.Batch, colLen, col, row int, distance uin
 	return vector.SetFixedAtNoTypeCheck(marker, row, distance)
 }
 
-func newFillSpill(proc *process.Process) (*fillSpill, error) {
-	fs, err := proc.GetSpillFileService()
+func newFillSpill(ctr *container, proc *process.Process) (*fillSpill, error) {
+	input, err := newFillSpillFile(proc, ctr, "in")
 	if err != nil {
 		return nil, err
 	}
-	input, err := fs.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("fill_%s_in", uuid.NewString()))
-	if err != nil {
-		return nil, err
-	}
-	return &fillSpill{input: input}, nil
+	return &fillSpill{
+		input:      input,
+		allocation: ctr.spillAllocation,
+	}, nil
 }
 
-func (s *fillSpill) ensureOutput(proc *process.Process) error {
+func (s *fillSpill) ensureOutput(ctr *container, proc *process.Process) error {
 	if s.output != nil {
 		return nil
 	}
-	fs, err := proc.GetSpillFileService()
-	if err != nil {
-		return err
-	}
-	s.output, err = fs.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("fill_%s_out", uuid.NewString()))
+	var err error
+	s.output, err = newFillSpillFile(proc, ctr, "out")
 	return err
 }
 
-func (s *fillSpill) ensureNext(proc *process.Process) error {
+func (s *fillSpill) ensureNext(ctr *container, proc *process.Process) error {
 	if s.next != nil {
 		return nil
 	}
-	fs, err := proc.GetSpillFileService()
-	if err != nil {
-		return err
-	}
-	s.next, err = fs.CreateAndRemoveFile(proc.Ctx, fmt.Sprintf("fill_%s_next", uuid.NewString()))
+	var err error
+	s.next, err = newFillSpillFile(proc, ctr, "next")
 	return err
 }
 
-func (s *fillSpill) writeRecord(fd *os.File, bat *batch.Batch) error {
-	s.buf.Reset()
-	var zero int64
-	s.buf.Write(types.EncodeInt64(&zero))
-	start := s.buf.Len()
-	if _, err := bat.MarshalBinaryWithPrepareParamKinds(&s.buf, false); err != nil {
-		return err
+func (s *fillSpill) writeRecord(
+	proc *process.Process,
+	file *fillSpillFile,
+	bat *batch.Batch,
+) (int64, error) {
+	if file == nil || file.writer == nil || bat == nil {
+		return 0, fmt.Errorf("fill spill write: %w", io.ErrClosedPipe)
 	}
-	size := int64(s.buf.Len() - start)
-	copy(s.buf.Bytes()[:8], types.EncodeInt64(&size))
-	s.buf.Write(types.EncodeInt64(&size))
-	magic := fillSpillMagic
-	s.buf.Write(types.EncodeUint64(&magic))
-	n, err := fd.Write(s.buf.Bytes())
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return 0, err
+	}
+	var wire batch.Batch
+	wire.Vecs = bat.Vecs
+	wire.Recursive = bat.Recursive
+	wire.ShuffleIDX = bat.ShuffleIDX
+	wire.SetRowCount(bat.RowCount())
+	payloadSize, err := wire.MarshalBinaryWithPrepareParamKindsSize()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if n != s.buf.Len() {
-		return io.ErrShortWrite
+	if payloadSize < 0 || payloadSize > math.MaxInt-24 {
+		return 0, moerr.NewInvalidInputNoCtx("fill spill payload exceeds format")
 	}
-	return nil
+	size := int64(payloadSize)
+	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {
+		return 0, err
+	}
+	if err = wire.MarshalBinaryWithPrepareParamKindsTo(file.writer); err != nil {
+		return 0, err
+	}
+	if err = writeFillBytes(file.writer, types.EncodeInt64(&size)); err != nil {
+		return 0, err
+	}
+	magic := fillSpillMagic
+	if err = writeFillBytes(file.writer, types.EncodeUint64(&magic)); err != nil {
+		return 0, err
+	}
+	return size + 24, nil
 }
 
-func readRecordReverse(fd *os.File, pos *int64, mp *mpool.MPool, reuse *batch.Batch) (*batch.Batch, error) {
+func writeFillBytes(writer io.Writer, value []byte) error {
+	n, err := writer.Write(value)
+	if err == nil && n != len(value) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+func (s *fillSpill) readRecordReverse(
+	file *fillSpillFile,
+	pos *int64,
+	mp *mpool.MPool,
+	reuse *batch.Batch,
+) (*batch.Batch, error) {
+	if file == nil || file.file == nil {
+		return nil, fmt.Errorf("fill spill reverse read: %w", io.ErrClosedPipe)
+	}
+	fd := file.file
 	if *pos < 0 {
 		end, err := fd.Seek(0, io.SeekEnd)
 		if err != nil {
@@ -255,10 +593,10 @@ func readRecordReverse(fd *os.File, pos *int64, mp *mpool.MPool, reuse *batch.Ba
 	if types.DecodeUint64(tail[8:]) != fillSpillMagic || size < 0 {
 		return nil, moerr.NewInternalErrorNoCtx("corrupted fill spill record")
 	}
-	start := *pos - size - 24
-	if start < 0 {
+	if size > *pos-24 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid fill spill record size")
 	}
+	start := *pos - size - 24
 	var head [8]byte
 	if _, err := fd.ReadAt(head[:], start); err != nil {
 		return nil, err
@@ -268,12 +606,18 @@ func readRecordReverse(fd *os.File, pos *int64, mp *mpool.MPool, reuse *batch.Ba
 	}
 	allocated := reuse == nil
 	if reuse == nil {
-		reuse = batch.NewWithSize(0)
+		reuse = batch.NewOffHeapWithSize(0)
+		if s.allocation != nil {
+			if err := s.allocation.ConfigureDecodedBatch(reuse); err != nil {
+				reuse.Clean(mp)
+				return nil, err
+			}
+		}
 	} else {
 		reuse.CleanOnlyData()
 	}
 	section := io.NewSectionReader(fd, start+8, size)
-	if err := reuse.UnmarshalFromReaderWithPrepareParamKinds(section, size, mp); err != nil {
+	if err := reuse.UnmarshalFromReaderWithPrepareParamKindsForSpill(section, size, mp); err != nil {
 		if allocated {
 			reuse.Clean(mp)
 		}
@@ -288,15 +632,15 @@ func (s *fillSpill) close(proc *process.Process) {
 		return
 	}
 	if s.input != nil {
-		_ = s.input.Close()
+		_ = s.input.close()
 		s.input = nil
 	}
 	if s.output != nil {
-		_ = s.output.Close()
+		_ = s.output.close()
 		s.output = nil
 	}
 	if s.next != nil {
-		_ = s.next.Close()
+		_ = s.next.close()
 		s.next = nil
 	}
 	if s.replay != nil {
@@ -311,6 +655,8 @@ func (s *fillSpill) close(proc *process.Process) {
 	s.linearLeft = nil
 	s.linearLeftValid = nil
 	s.linearLeftSteps = nil
+	s.forwardPart.free()
+	s.scanPart.free()
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {
@@ -320,28 +666,41 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 	}
 }
 
-func (s *spillPartitionSnapshot) sameAndSet(partIdx []int32, bat *batch.Batch, row int) bool {
+func (s *spillPartitionSnapshot) sameAndSet(
+	partIdx []int32,
+	bat *batch.Batch,
+	row int,
+) (bool, error) {
 	same := s.set
-	if cap(s.keys) < len(partIdx) {
-		s.keys = make([][]byte, len(partIdx))
-		s.nulls = make([]bool, len(partIdx))
-	}
-	s.keys = s.keys[:len(partIdx)]
-	s.nulls = s.nulls[:len(partIdx)]
+	s.ensureShape(len(partIdx))
 	for i, col := range partIdx {
 		value, isNull := partKeyAt(bat.Vecs[col], row)
 		if s.set && (isNull != s.nulls[i] || (!isNull && !bytes.Equal(value, s.keys[i]))) {
 			same = false
 		}
 		s.nulls[i] = isNull
-		s.keys[i] = append(s.keys[i][:0], value...)
+		if err := s.setKey(i, value); err != nil {
+			return false, err
+		}
 	}
 	s.set = true
-	return same
+	return same, nil
 }
 
-func makeEndpoint(vec *vector.Vector, row int, proc *process.Process) (*vector.Vector, error) {
+func makeEndpoint(
+	vec *vector.Vector,
+	row int,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
 	result := vector.NewVec(*vec.GetType())
+	if selection != nil {
+		result = vector.NewOffHeapVecWithType(*vec.GetType())
+		if err := result.SetAllocationAccount(selection); err != nil {
+			result.Free(proc.Mp())
+			return nil, err
+		}
+	}
 	if err := appendValue(result, vec, row, proc); err != nil {
 		result.Free(proc.Mp())
 		return nil, err
@@ -349,10 +708,16 @@ func makeEndpoint(vec *vector.Vector, row int, proc *process.Process) (*vector.V
 	return result, nil
 }
 
-func setEndpoint(dst **vector.Vector, src *vector.Vector, row int, proc *process.Process) error {
+func setEndpoint(
+	dst **vector.Vector,
+	src *vector.Vector,
+	row int,
+	proc *process.Process,
+	selection *vector.AllocationAccountSelection,
+) error {
 	if *dst == nil {
 		var err error
-		*dst, err = makeEndpoint(src, row, proc)
+		*dst, err = makeEndpoint(src, row, proc, selection)
 		return err
 	}
 	return setValue(*dst, src, 0, row, proc)
@@ -364,11 +729,23 @@ func clearEndpoints(valid []bool) {
 	}
 }
 
-func cloneBatchWindow(bat *batch.Batch, start, end int, mp *mpool.MPool) (*batch.Batch, error) {
+func cloneBatchWindow(
+	bat *batch.Batch,
+	start, end int,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
 	result := batch.NewWithSize(len(bat.Vecs))
+	if selection != nil {
+		result = batch.NewOffHeapWithSize(len(bat.Vecs))
+		if err := result.SetAllocationAccount(selection); err != nil {
+			result.Clean(mp)
+			return nil, err
+		}
+	}
 	result.Attrs = append(result.Attrs, bat.Attrs...)
 	for i, vec := range bat.Vecs {
-		cloned, err := vec.CloneWindow(start, end, mp)
+		cloned, err := vec.CloneWindowWithAllocation(start, end, mp, selection)
 		if err != nil {
 			result.Clean(mp)
 			return nil, err
@@ -380,7 +757,11 @@ func cloneBatchWindow(bat *batch.Batch, start, end int, mp *mpool.MPool) (*batch
 }
 
 func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
-	if err := s.ensureOutput(proc); err != nil {
+	ctr := &ap.ctr
+	if err := s.input.finishWriting(); err != nil {
+		return err
+	}
+	if err := s.ensureOutput(ctr, proc); err != nil {
 		return err
 	}
 	pos := int64(-1)
@@ -399,8 +780,14 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 		}
 	}()
 	var part spillPartitionSnapshot
+	part.configure(
+		proc.Mp(),
+		ctr.allocationAccount,
+		fillAllocationSitePartitionSnapshot,
+	)
+	defer part.free()
 	for {
-		bat, err := readRecordReverse(s.input, &pos, proc.Mp(), reuse)
+		bat, err := s.readRecordReverse(s.input, &pos, proc.Mp(), reuse)
 		if err == io.EOF {
 			break
 		}
@@ -409,10 +796,21 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 		}
 		reuse = bat
 		for row := bat.RowCount() - 1; row >= 0; row-- {
-			if len(ap.PartitionColIdx) > 0 && !part.sameAndSet(ap.PartitionColIdx, bat, row) {
-				clearEndpoints(valid)
-				if ap.FillType == plan.Node_LINEAR {
-					clear(rightSteps)
+			if row&255 == 0 {
+				if cancelErr, canceled := vm.CancelCheck(proc); canceled {
+					return cancelErr
+				}
+			}
+			if len(ap.PartitionColIdx) > 0 {
+				same, partErr := part.sameAndSet(ap.PartitionColIdx, bat, row)
+				if partErr != nil {
+					return partErr
+				}
+				if !same {
+					clearEndpoints(valid)
+					if ap.FillType == plan.Node_LINEAR {
+						clear(rightSteps)
+					}
 				}
 			}
 			for col := 0; col < ap.ColLen; col++ {
@@ -440,18 +838,23 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 				if ap.FillType == plan.Node_LINEAR {
 					rightSteps[col] = 0
 				}
-				if err = setEndpoint(&next[col], bat.Vecs[col], row, proc); err != nil {
+				if err = setEndpoint(
+					&next[col], bat.Vecs[col], row, proc, ctr.retainedAllocation,
+				); err != nil {
 					return err
 				}
 				valid[col] = true
 			}
 		}
-		if err = s.writeRecord(s.output, bat); err != nil {
+		if _, err = s.writeRecord(proc, s.output, bat); err != nil {
 			return err
 		}
 		s.outputRecords++
 	}
-	if _, err := s.output.Seek(0, io.SeekEnd); err != nil {
+	if err := s.output.finishWriting(); err != nil {
+		return err
+	}
+	if _, err := s.output.file.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	s.outputReversePos = -1
@@ -489,10 +892,28 @@ func (s *fillSpill) updateSafeWatermark() {
 // scanSegment advances the earliest unresolved logical row for every fill
 // column. The minimum of those positions is a safe output watermark: later
 // rows may still be pending, but they cannot change anything before it.
-func (s *fillSpill) scanSegment(ctr *container, ap *Fill, bat *batch.Batch) {
+func (s *fillSpill) scanSegment(
+	ap *Fill,
+	bat *batch.Batch,
+	proc *process.Process,
+) error {
 	for row := 0; row < bat.RowCount(); row++ {
+		if row&255 == 0 {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return err
+			}
+		}
 		logicalRow := s.segmentRows
-		if ctr.isNewSegment(ap, bat, row) {
+		newSegment := false
+		if len(ap.PartitionColIdx) > 0 {
+			wasSet := s.scanPart.set
+			same, err := s.scanPart.sameAndSet(ap.PartitionColIdx, bat, row)
+			if err != nil {
+				return err
+			}
+			newSegment = wasSet && !same
+		}
+		if newSegment {
 			for col := range s.segmentPending {
 				s.segmentPending[col] = -1
 				s.segmentLeftValid[col] = false
@@ -523,6 +944,7 @@ func (s *fillSpill) scanSegment(ctr *container, ap *Fill, bat *batch.Batch) {
 		s.segmentRows++
 		s.updateSafeWatermark()
 	}
+	return nil
 }
 
 func (s *fillSpill) finalizeSegment(ctr *container, ap *Fill, proc *process.Process) error {
@@ -531,65 +953,83 @@ func (s *fillSpill) finalizeSegment(ctr *container, ap *Fill, proc *process.Proc
 		return err
 	}
 	if s.input != nil {
-		_ = s.input.Close()
+		_ = s.input.close()
 		s.input = nil
 	}
 	return nil
 }
 
-func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
-	spill, err := newFillSpill(proc)
+func (ctr *container) beginSpill(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	finalizeReadyPrefix bool,
+) error {
+	spill, err := newFillSpill(ctr, proc)
 	if err != nil {
 		return err
 	}
 	spill.segmentPending = make([]int64, ap.ColLen)
 	spill.segmentLeftValid = make([]bool, ap.ColLen)
-	for _, bat := range ctr.bats {
-		spill.segmentRows += int64(bat.RowCount())
-	}
-	coordOffset := func(coord fillCoord) int64 {
-		var offset int64
-		for seq := ctr.baseSeq; seq < coord.seq; seq++ {
-			offset += int64(ctr.batAt(seq).RowCount())
-		}
-		return offset + int64(coord.row)
-	}
 	for col := 0; col < ap.ColLen; col++ {
 		spill.segmentPending[col] = -1
-		if ap.FillType == plan.Node_NEXT {
-			if len(ctr.nextRun[col]) > 0 {
-				coord := ctr.nextRun[col][0]
-				spill.segmentPending[col] = coordOffset(coord)
-			}
-		} else {
-			if len(ctr.linRun[col]) > 0 {
-				coord := ctr.linRun[col][0]
-				spill.segmentPending[col] = coordOffset(coord)
-			}
-			spill.segmentLeftValid[col] = ctr.linPre[col].seq >= 0 || ctr.linSeedValid[col]
+		if ap.FillType == plan.Node_LINEAR && col < len(ctr.linEntryValid) {
+			spill.segmentLeftValid[col] = ctr.linEntryValid[col]
 		}
 	}
-	spill.updateSafeWatermark()
+	spill.scanPart.configure(
+		proc.Mp(),
+		ctr.allocationAccount,
+		fillAllocationSitePartitionSnapshot,
+	)
+	spill.forwardPart.configure(
+		proc.Mp(),
+		ctr.allocationAccount,
+		fillAllocationSitePartitionSnapshot,
+	)
 	if ap.FillType == plan.Node_LINEAR && len(ctr.linEntry) > 0 {
+		if err = spill.scanPart.cloneFrom(&ctr.linEntryPart); err != nil {
+			spill.close(proc)
+			return err
+		}
+		if err = spill.forwardPart.cloneFrom(&ctr.linEntryPart); err != nil {
+			spill.close(proc)
+			return err
+		}
 		spill.linearLeft = ctr.linEntry
 		spill.linearLeftValid = ctr.linEntryValid
-		spill.forwardPart.cloneFrom(&ctr.linEntryPart)
 		ctr.linEntry = make([]*vector.Vector, ap.ColLen)
 		ctr.linEntryValid = make([]bool, ap.ColLen)
-		ctr.linEntryPart = spillPartitionSnapshot{}
+		ctr.linEntryPart.free()
+		ctr.linEntryPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
 	}
 	for i, bat := range ctr.bats {
 		if ap.FillType == plan.Node_LINEAR {
-			if err = addLinearDistanceMarkers(bat, ap.ColLen, proc.Mp()); err != nil {
+			if err = addLinearDistanceMarkers(
+				bat, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
+			); err != nil {
 				spill.close(proc)
 				return err
 			}
 		}
-		if err = spill.writeRecord(spill.input, bat); err != nil {
+		if err = spill.scanSegment(ap, bat, proc); err != nil {
 			spill.close(proc)
 			return err
 		}
+		written, writeErr := spill.writeRecord(proc, spill.input, bat)
+		if writeErr != nil {
+			spill.close(proc)
+			return writeErr
+		}
 		spill.inputRecords++
+		if analyzer != nil {
+			analyzer.Spill(written)
+			analyzer.SpillRows(int64(bat.RowCount()))
+		}
 		bat.Clean(proc.Mp())
 		ctr.bats[i] = nil
 	}
@@ -603,8 +1043,11 @@ func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
 	} else {
 		ctr.flushPendingRunsLinear(ap)
 	}
+	if ctr.allocationAccount != nil {
+		ctr.freeCoordRuns(proc.Mp())
+	}
 	ctr.spill = spill
-	if spill.safeWatermark > spill.segmentStart {
+	if finalizeReadyPrefix && spill.safeWatermark > spill.segmentStart {
 		if err = spill.finalizeSegment(ctr, ap, proc); err != nil {
 			ctr.cleanupSpill(proc)
 			return err
@@ -624,40 +1067,64 @@ func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer pro
 			ctr.spill.safeWatermark = ctr.spill.segmentRows
 			return ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
-		dup, err := result.Batch.Dup(proc.Mp())
-		if err != nil {
+		if err = ctr.appendSpillSource(ap, proc, analyzer, result.Batch); err != nil {
 			return err
 		}
-		if ap.FillType == plan.Node_LINEAR {
-			// Distance markers precede the original-NULL marker block so the
-			// latter remains the final ColLen vectors in every spilled record.
-			if err = appendLinearDistanceMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
-				dup.Clean(proc.Mp())
-				return err
-			}
-		}
-		if err = addOriginalNullMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
-			dup.Clean(proc.Mp())
-			return err
-		}
-		ctr.spill.scanSegment(ctr, ap, dup)
-		if err = ctr.spill.writeRecord(ctr.spill.input, dup); err != nil {
-			dup.Clean(proc.Mp())
-			return err
-		}
-		ctr.spill.inputRecords++
-		if dup.RowCount() > 0 && len(ap.PartitionColIdx) > 0 {
-			ctr.snapshotPartKey(ap.PartitionColIdx, dup, dup.RowCount()-1)
-		}
-		if analyzer != nil {
-			analyzer.Spill(int64(ctr.spill.buf.Len()))
-			analyzer.SpillRows(int64(dup.RowCount()))
-		}
-		dup.Clean(proc.Mp())
 		if ctr.spill.safeWatermark > ctr.spill.segmentStart {
 			return ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
 	}
+}
+
+func (ctr *container) appendSpillSource(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	source *batch.Batch,
+) error {
+	if ctr.spill == nil || ctr.spill.input == nil {
+		return moerr.NewInternalErrorNoCtx("fill spill input is closed")
+	}
+	borrowed, err := makeBorrowedSpillBatch(
+		source,
+		ap.ColLen,
+		proc.Mp(),
+		ctr.retainedAllocation,
+	)
+	if err != nil {
+		return err
+	}
+	linear := ap.FillType == plan.Node_LINEAR
+	defer releaseBorrowedSpillBatch(borrowed, ap.ColLen, linear, proc.Mp())
+	if linear {
+		// Distance markers precede the original-NULL marker block so the
+		// latter remains the final ColLen vectors in every spilled record.
+		if err = addLinearDistanceMarkers(
+			borrowed, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
+		); err != nil {
+			return err
+		}
+	}
+	if err = ctr.spill.scanSegment(ap, borrowed, proc); err != nil {
+		return err
+	}
+	written, err := ctr.spill.writeRecord(proc, ctr.spill.input, borrowed)
+	if err != nil {
+		return err
+	}
+	ctr.spill.inputRecords++
+	if borrowed.RowCount() > 0 && len(ap.PartitionColIdx) > 0 {
+		if err = ctr.snapshotPartKey(
+			ap.PartitionColIdx, borrowed, borrowed.RowCount()-1, proc,
+		); err != nil {
+			return err
+		}
+	}
+	if analyzer != nil {
+		analyzer.Spill(written)
+		analyzer.SpillRows(int64(borrowed.RowCount()))
+	}
+	return nil
 }
 
 func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) (*batch.Batch, error) {
@@ -671,13 +1138,13 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		s.replay = nil
 	}
 	for {
-		bat, err := readRecordReverse(s.output, &s.outputReversePos, proc.Mp(), nil)
+		bat, err := s.readRecordReverse(s.output, &s.outputReversePos, proc.Mp(), nil)
 		if err != nil {
 			return nil, err
 		}
 		rows := int64(bat.RowCount())
 		if s.safeRows <= 0 {
-			if err = s.writeSuffix(proc, bat); err != nil {
+			if err = s.writeSuffix(ctr, proc, bat); err != nil {
 				bat.Clean(proc.Mp())
 				return nil, err
 			}
@@ -700,19 +1167,23 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 		}
 
 		end := int(s.safeRows)
-		prefix, err := cloneBatchWindow(bat, 0, end, proc.Mp())
+		prefix, err := cloneBatchWindow(
+			bat, 0, end, proc.Mp(), ctr.outputAllocation,
+		)
 		if err != nil {
 			bat.Clean(proc.Mp())
 			return nil, err
 		}
-		suffix, err := cloneBatchWindow(bat, end, bat.RowCount(), proc.Mp())
+		suffix, err := cloneBatchWindow(
+			bat, end, bat.RowCount(), proc.Mp(), ctr.retainedAllocation,
+		)
 		if err != nil {
 			prefix.Clean(proc.Mp())
 			bat.Clean(proc.Mp())
 			return nil, err
 		}
 		bat.Clean(proc.Mp())
-		if err = s.writeSuffix(proc, suffix); err != nil {
+		if err = s.writeSuffix(ctr, proc, suffix); err != nil {
 			prefix.Clean(proc.Mp())
 			suffix.Clean(proc.Mp())
 			return nil, err
@@ -733,21 +1204,28 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 	}
 }
 
-func (s *fillSpill) writeSuffix(proc *process.Process, bat *batch.Batch) error {
-	if err := s.ensureNext(proc); err != nil {
+func (s *fillSpill) writeSuffix(
+	ctr *container,
+	proc *process.Process,
+	bat *batch.Batch,
+) error {
+	if err := s.ensureNext(ctr, proc); err != nil {
 		return err
 	}
-	if err := s.writeRecord(s.next, bat); err != nil {
+	if _, err := s.writeRecord(proc, s.next, bat); err != nil {
 		return err
 	}
 	s.hasSuffix = true
 	return nil
 }
 
-func (s *fillSpill) rotateSuffix() {
+func (s *fillSpill) rotateSuffix() error {
 	if s.output != nil {
-		_ = s.output.Close()
+		_ = s.output.close()
 		s.output = nil
+	}
+	if err := s.next.flush(); err != nil {
+		return err
 	}
 	s.input = s.next
 	s.next = nil
@@ -758,6 +1236,7 @@ func (s *fillSpill) rotateSuffix() {
 	s.safeRows = 0
 	s.inputRecords = 0
 	s.outputRecords = 0
+	return nil
 }
 
 func (ctr *container) finishSpillReplay(
@@ -766,27 +1245,44 @@ func (ctr *container) finishSpillReplay(
 ) error {
 	spill := ctr.spill
 	if spill.hasSuffix {
-		spill.rotateSuffix()
-		return nil
+		return spill.rotateSuffix()
 	}
 	if ap.FillType == plan.Node_LINEAR {
 		seed := make([]*vector.Vector, ap.ColLen)
 		seedValid := make([]bool, ap.ColLen)
+		var entryPart spillPartitionSnapshot
+		entryPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
 		for col := 0; col < ap.ColLen; col++ {
 			if !spill.linearLeftValid[col] {
 				continue
 			}
 			var err error
-			seed[col], err = makeEndpoint(spill.linearLeft[col], 0, proc)
+			seed[col], err = makeEndpoint(
+				spill.linearLeft[col], 0, proc, ctr.retainedAllocation,
+			)
 			if err != nil {
 				for _, vec := range seed {
 					if vec != nil {
 						vec.Free(proc.Mp())
 					}
 				}
+				entryPart.free()
 				return err
 			}
 			seedValid[col] = true
+		}
+		if err := entryPart.cloneFrom(&spill.forwardPart); err != nil {
+			for _, vec := range seed {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			entryPart.free()
+			return err
 		}
 		ctr.clearLinearSeeds(proc.Mp())
 		ctr.clearLinearEntries(proc.Mp())
@@ -794,7 +1290,7 @@ func (ctr *container) finishSpillReplay(
 		ctr.linSeedValid = seedValid
 		ctr.linEntry = spill.linearLeft
 		ctr.linEntryValid = spill.linearLeftValid
-		ctr.linEntryPart.cloneFrom(&spill.forwardPart)
+		ctr.linEntryPart = entryPart
 		spill.linearLeft = nil
 		spill.linearLeftValid = nil
 	}
@@ -804,16 +1300,27 @@ func (ctr *container) finishSpillReplay(
 
 func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Process, bat *batch.Batch) error {
 	for row := 0; row < bat.RowCount(); row++ {
+		if row&255 == 0 {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return err
+			}
+		}
 		if len(ap.PartitionColIdx) > 0 {
 			wasSet := s.forwardPart.set
-			if !s.forwardPart.sameAndSet(ap.PartitionColIdx, bat, row) && wasSet {
+			same, err := s.forwardPart.sameAndSet(ap.PartitionColIdx, bat, row)
+			if err != nil {
+				return err
+			}
+			if !same && wasSet {
 				clearEndpoints(s.linearLeftValid)
 				clear(s.linearLeftSteps)
 			}
 		}
 		for col := 0; col < ap.ColLen; col++ {
 			if !originalNullAt(bat, ap.ColLen, col, row) {
-				if err := setEndpoint(&s.linearLeft[col], bat.Vecs[col], row, proc); err != nil {
+				if err := setEndpoint(
+					&s.linearLeft[col], bat.Vecs[col], row, proc, ctr.retainedAllocation,
+				); err != nil {
 					return err
 				}
 				s.linearLeftValid[col] = true
