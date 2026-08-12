@@ -4116,13 +4116,9 @@ func timestampToTime(
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
+			to.AppendMustNull()
 		} else {
-			if err := to.Append(v.ToDatetime(zone).ToTime(totype.Scale), false); err != nil {
-				return err
-			}
+			to.AppendMustValue(v.ToDatetime(zone).ToTime(totype.Scale))
 		}
 	}
 	return nil

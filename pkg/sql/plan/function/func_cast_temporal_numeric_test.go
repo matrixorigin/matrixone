@@ -325,6 +325,28 @@ func TestTimestampToTimeCastUsesSessionTimeZone(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestTimestampToTimeCastUsesTargetScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+
+	datetimeValue, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+	timestampValue := datetimeValue.ToTimestamp(time.UTC)
+	expectedTime, err := types.ParseTime("03:04:05.654", 3)
+	require.NoError(t, err)
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{timestampValue}, nil),
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(3), []types.Time{}, nil),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(3), false, []types.Time{expectedTime}, nil),
+		NewCast,
+	)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
 func TestTemporalNumericCastRejectsPackedValueOutsideInt32(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC
