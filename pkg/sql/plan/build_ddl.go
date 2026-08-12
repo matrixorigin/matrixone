@@ -1500,14 +1500,22 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			sourceDB = ctx.DefaultDatabase()
 		}
 		createView.TableDef.ViewSql = nil
-		createView.TableDef.TableType = catalog.SystemMaterializedRel
+		// Store the result as an ordinary physical table. The materialized-view
+		// marker below is persisted in the create SQL and is used to keep user
+		// DML out of the refresh table. Using the special materialized relation
+		// kind makes the normal TAE/DistTAE DML path treat refreshes as a
+		// relation-definition change.
+		createView.TableDef.TableType = catalog.SystemOrdinaryRel
 		// A materialized view is stored as a physical ordinary table. Views do
 		// not normally need a primary key, so add the same fake key used by an
 		// ordinary CREATE TABLE without an explicit key.
 		fakePK := &ColDef{
-			ColId:   uint64(len(createView.TableDef.Cols)),
-			Name:    catalog.FakePrimaryKeyColName,
-			Hidden:  true,
+			ColId:  uint64(len(createView.TableDef.Cols)),
+			Name:   catalog.FakePrimaryKeyColName,
+			Hidden: true,
+			// The storage engine treats the synthetic primary key as its hidden
+			// auto-increment key. CreateView initializes its sequence explicitly
+			// before the consumer starts refreshing.
 			Typ:     Type{Id: int32(types.T_uint64), AutoIncr: true},
 			Default: &plan.Default{NullAbility: false},
 			NotNull: true,
@@ -1526,7 +1534,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			}
 			for _, prop := range props.Properties {
 				if prop.Key == catalog.SystemRelAttr_Kind {
-					prop.Value = catalog.SystemMaterializedRel
+					prop.Value = catalog.SystemOrdinaryRel
 				}
 			}
 			props.Properties = append(props.Properties,
@@ -1551,13 +1559,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}, nil
 }
 
-// IsMaterializedViewTableDef identifies the dedicated materialized relation
-// kind (and its persisted properties for compatibility with older plans).
+// IsMaterializedViewTableDef identifies materialized views from their marker
+// and supports the dedicated relation kind used by earlier plans.
 func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	if def == nil {
 		return false
 	}
 	if def.GetTableType() == catalog.SystemMaterializedRel {
+		return true
+	}
+	if strings.Contains(def.Createsql, "mv_materialized") {
 		return true
 	}
 	for _, col := range def.GetCols() {

@@ -84,7 +84,11 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 		func(sqlproc *sqlexec.SqlProcess, _ any) error {
 			sqlctx := sqlproc.SqlCtx
 			refreshCtx := context.WithValue(sqlproc.GetContext(), defines.MaterializedViewRefreshKey{}, true)
-			deleteSQL := fmt.Sprintf("delete from `%s`.`%s`", c.info.DBName, c.info.TableName)
+			// Keep this as a row DELETE. A predicate is required because a
+			// predicate-free DELETE is optimized to TRUNCATE, which replaces the
+			// physical relation and unregisters the source ISCP job as a side
+			// effect. The fake primary key is present on every MV result row.
+			deleteSQL := fmt.Sprintf("delete from `%s`.`%s` where `__mo_fake_pk_col` is not null", c.info.DBName, c.info.TableName)
 			res, err := ExecWithResult(refreshCtx, deleteSQL, sqlctx.GetService(), sqlctx.Txn())
 			if err != nil {
 				return err

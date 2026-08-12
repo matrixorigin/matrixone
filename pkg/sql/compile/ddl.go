@@ -2531,6 +2531,20 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
+		// CreateView has a physical-table path for materialized views, but it
+		// does not go through CreateTable's auto-increment setup. The storage
+		// engine adds the hidden fake primary key, so initialize its sequence
+		// before the ISCP consumer can issue the first refresh insert.
+		if err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			qry.GetTableDef(),
+			c.proc.GetTxnOperator(),
+			nil,
+		); err != nil {
+			return err
+		}
 		var sourceDB, sourceTable, sourceSQL, refreshSQL string
 		for _, def := range qry.GetTableDef().GetDefs() {
 			props := def.GetProperties()
