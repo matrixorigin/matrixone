@@ -2628,20 +2628,19 @@ func pkCommitTSMatchedInRange(
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	rowCount := commitTSVec.Length()
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
+	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		ts := timestamps[sel]
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}

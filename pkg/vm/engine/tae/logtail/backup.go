@@ -138,13 +138,25 @@ func visibleAppendableRows(
 		return nil, err
 	}
 	commitVec := bat.Vecs[commitPos]
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitVec)
+	commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
+		bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length(),
+		commitVec,
+	)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(
+			ctx,
+			"appendable tombstone has invalid commit timestamp column: %v",
+			err,
+		)
+	}
 	var abortVec *vector.Vector
 	if abortPos, ok := layout.resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
 		abortVec = bat.Vecs[abortPos]
 	}
-	rows := make([]int64, 0, len(commitTSs))
-	for row, commitTS := range commitTSs {
+	rowCount := bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length()
+	rows := make([]int64, 0, rowCount)
+	for row := range rowCount {
+		commitTS := commitTSs.At(row)
 		if commitVec.IsNull(uint64(row)) {
 			return nil, moerr.NewInternalErrorf(ctx, "appendable tombstone commit timestamp row %d is null", row)
 		}
