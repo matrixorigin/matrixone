@@ -852,6 +852,8 @@ message Node {
     INDEX = 8;
     L2 = 9;
     DEDUP = 10;
+    ASOF = 11;
+    ASOF_LEFT = 12;
   }
 
   enum AggMode {
@@ -1045,6 +1047,10 @@ message Node {
   // node during pushdown. This is used when a predicate observes a final DML
   // row image and moving it would change statement semantics.
   bool filter_is_barrier = 79;
+
+  // ASOF/ASOF_LEFT only: right input column used to choose the latest
+  // qualifying predecessor after equality-key lookup.
+  int32 asof_right_col = 80;
 }
 
 message SnapshotExtraInfo {

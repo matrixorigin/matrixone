@@ -1,0 +1,45 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mysql
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+func TestAsofJoinSyntaxRoundTrip(t *testing.T) {
+	tests := []string{
+		"select * from l asof join r on l.k = r.k and l.ts >= r.ts",
+		"select * from l asof left join r on l.k = r.k and l.ts > r.ts tolerance interval 2 minute",
+		"select * from l asof left outer join r on l.k1 = r.k1 and l.k2 = r.k2 and r.ts <= l.ts",
+	}
+
+	for _, sql := range tests {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		formatted := tree.String(stmt, dialect.MYSQL)
+		stmt.Free()
+
+		roundTrip, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTrip, dialect.MYSQL))
+		roundTrip.Free()
+	}
+}

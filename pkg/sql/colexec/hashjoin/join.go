@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,6 +64,10 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		buf.WriteString(": hash mark join ")
 	case plan.Node_OUTER:
 		buf.WriteString(": full outer join ")
+	case plan.Node_ASOF:
+		buf.WriteString(": asof join ")
+	case plan.Node_ASOF_LEFT:
+		buf.WriteString(": asof left join ")
 	}
 }
 
@@ -71,6 +76,18 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsAsof() {
+		if hashJoin.NonEqCond == nil || len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 ||
+			len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) || hashJoin.HashOnPK ||
+			hashJoin.AsofRightCol < 0 || int(hashJoin.AsofRightCol) >= len(hashJoin.RightTypes) ||
+			!isAsofTemporalType(hashJoin.RightTypes[hashJoin.AsofRightCol].Oid) {
+			return moerr.NewInternalError(proc.Ctx, "invalid ASOF join physical contract")
+		}
+		hashJoin.ctr.asofCompare = compare.New(hashJoin.RightTypes[hashJoin.AsofRightCol], false, false)
+		if hashJoin.ctr.asofCompare == nil {
+			return moerr.NewInternalError(proc.Ctx, "unsupported ASOF timestamp type")
+		}
+	}
 	if hashJoin.IsMark() {
 		if err := hashJoin.validateMarkJoin(proc); err != nil {
 			return err
@@ -135,6 +152,15 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	return err
+}
+
+func isAsofTemporalType(typeID types.T) bool {
+	switch typeID {
+	case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+		return true
+	default:
+		return false
+	}
 }
 
 func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
@@ -610,6 +636,41 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				continue
 			}
 
+			if hashJoin.IsAsof() {
+				candidates := []int32{int32(idx)}
+				if !ctr.probeHashOnPK {
+					candidates = ctr.mp.GetSels(uint64(idx))
+				}
+				best, found, findErr := ctr.findAsofPredecessor(hashJoin, proc, row, candidates)
+				if findErr != nil {
+					return findErr
+				}
+				if found {
+					bestBatch := int64(best / colexec.DefaultBatchSize)
+					bestRow := int64(best % colexec.DefaultBatchSize)
+					if err = ctr.appendOneMatch(hashJoin, proc, row, bestBatch, bestRow); err != nil {
+						return err
+					}
+					resRowCnt++
+				} else if ctr.probeEmitUnmatched {
+					if err = ctr.appendOneNotMatch(hashJoin, proc, row); err != nil {
+						return err
+					}
+					resRowCnt++
+				}
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+				continue
+			}
+
 			if ctr.probeHashOnPK {
 				if hashJoin.NonEqCond == nil {
 					if ctr.probeRightSemiAnti {
@@ -794,6 +855,45 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			}
 		}
 	}
+}
+
+func (ctr *container) findAsofPredecessor(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	candidates []int32,
+) (best int32, found bool, err error) {
+	best = -1
+	for _, candidate := range candidates {
+		batchIdx := int64(candidate / colexec.DefaultBatchSize)
+		rowIdx := int64(candidate % colexec.DefaultBatchSize)
+		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+		if evalErr != nil {
+			return -1, false, evalErr
+		}
+		if !qualified {
+			continue
+		}
+		if best < 0 {
+			best = candidate
+			continue
+		}
+
+		bestBatch := int64(best / colexec.DefaultBatchSize)
+		bestRow := int64(best % colexec.DefaultBatchSize)
+		bestVec := ctr.rightBats[bestBatch].Vecs[hashJoin.AsofRightCol]
+		candidateVec := ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol]
+		ctr.asofCompare.Set(0, bestVec)
+		ctr.asofCompare.Set(1, candidateVec)
+		switch comparison := ctr.asofCompare.Compare(0, 1, bestRow, rowIdx); {
+		case comparison < 0:
+			best = candidate
+		case comparison == 0:
+			return -1, false, moerr.NewInvalidInput(proc.Ctx,
+				"ASOF JOIN requires a unique right row for each equality key and timestamp")
+		}
+	}
+	return best, best >= 0, nil
 }
 
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

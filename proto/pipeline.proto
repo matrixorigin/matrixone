@@ -282,6 +282,7 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
+  int32 asof_right_col = 16;
 }
 
 message LoopJoin {

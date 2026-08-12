@@ -81,7 +81,7 @@ func analyzeRuntimeFilterJoinPolicy(node *plan.Node) runtimeFilterJoinPolicy {
 	}
 
 	switch node.JoinType {
-	case plan.Node_LEFT, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_LEFT, plan.Node_OUTER, plan.Node_MARK, plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		return runtimeFilterJoinPolicy{}
 
 	case plan.Node_SINGLE:

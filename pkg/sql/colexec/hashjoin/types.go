@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,6 +94,7 @@ type container struct {
 	probeLeftAnti          bool
 	probeMark              bool
 	buildHasNullKey        bool
+	asofCompare            compare.Compare
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -144,6 +146,7 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+	AsofRightCol       int32
 	allocationAccount  *mpool.AllocationAccount
 	resultAllocation   *vector.AllocationAccountSelection
 	// recursiveProbe is derived from the operator tree during Prepare. An empty
@@ -211,6 +214,9 @@ func (hashJoin *HashJoin) GetOperatorBase() *vm.OperatorBase {
 }
 
 func (hashJoin *HashJoin) NeedBuildBatches() bool {
+	if hashJoin.IsAsof() {
+		return true
+	}
 	if hashJoin.NonEqCond != nil {
 		return true
 	}
@@ -277,6 +283,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.bitmapSynced = false
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
+	ctr.asofCompare = nil
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
@@ -356,7 +363,11 @@ func (hashJoin *HashJoin) IsInner() bool {
 }
 
 func (hashJoin *HashJoin) IsLeftOuter() bool {
-	return hashJoin.JoinType == plan.Node_LEFT
+	return hashJoin.JoinType == plan.Node_LEFT || hashJoin.JoinType == plan.Node_ASOF_LEFT
+}
+
+func (hashJoin *HashJoin) IsAsof() bool {
+	return hashJoin.JoinType == plan.Node_ASOF || hashJoin.JoinType == plan.Node_ASOF_LEFT
 }
 
 func (hashJoin *HashJoin) IsRightOuter() bool {

@@ -32,6 +32,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	// without first deciding whether the keyword should be non-reserved instead.
 	"_binary":           "legacy parser behavior before incremental keyword policy",
 	"apply":             "legacy parser behavior before incremental keyword policy",
+	"asof":              "contextual join keyword; reserving it avoids ambiguity with subquery aliases",
 	"auto_update":       "legacy parser behavior before incremental keyword policy",
 	"cdc":               "legacy parser behavior before incremental keyword policy",
 	"centroidx":         "legacy parser behavior before incremental keyword policy",

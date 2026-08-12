@@ -4210,7 +4210,8 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK,
+		plan.Node_ASOF, plan.Node_ASOF_LEFT:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
@@ -4485,6 +4486,15 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 				rs[i].setRootOperator(op)
 			}
+		}
+		c.anal.isFirst = false
+	case plan.Node_ASOF, plan.Node_ASOF_LEFT:
+		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
+		currentFirstFlag := c.anal.isFirst
+		for i := range rs {
+			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			rs[i].setRootOperator(op)
 		}
 		c.anal.isFirst = false
 	case plan.Node_OUTER:

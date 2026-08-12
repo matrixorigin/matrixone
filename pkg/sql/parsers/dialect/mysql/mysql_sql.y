@@ -685,6 +685,7 @@ func sqlTaskInt64(v any) int64 {
 %type <selectOption> select_option_opt
 %type <tableExprs> table_name_wild_list
 %type <joinTableExpr>  join_table
+%type <expr> tolerance_opt
 %type <applyTableExpr> apply_table
 %type <tableExpr> into_table_name table_function table_factor table_reference escaped_table_reference table_references
 %type <direction> asc_desc_opt
@@ -768,7 +769,7 @@ func sqlTaskInt64(v any) int64 {
 %type <aliasedTableExpr> aliased_table_name
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
-%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join
+%type <str> inner_join straight_join outer_join natural_join apply_type dedup_join asof_join
 %type <funcType> func_type_opt
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
@@ -957,6 +958,7 @@ func sqlTaskInt64(v any) int64 {
 // declarations so adding them does not renumber the existing generated lexer
 // constants and downstream serialized plans.
 %token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
+%token <str> ASOF TOLERANCE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -7277,6 +7279,16 @@ join_table:
             Cond: $4,
         }
     }
+|   table_reference asof_join table_factor join_condition tolerance_opt
+    {
+        $$ = &tree.JoinTableExpr{
+            Left: $1,
+            JoinType: $2,
+            Right: $3,
+            Cond: $4,
+            Tolerance: $5,
+        }
+    }
 
 apply_table:
     table_reference apply_type table_factor
@@ -7345,6 +7357,29 @@ dedup_join:
     DEDUP JOIN
     {
         $$ = tree.JOIN_TYPE_DEDUP
+    }
+
+asof_join:
+    ASOF JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF
+    }
+|   ASOF LEFT JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+|   ASOF LEFT OUTER JOIN
+    {
+        $$ = tree.JOIN_TYPE_ASOF_LEFT
+    }
+
+tolerance_opt:
+    {
+        $$ = nil
+    }
+|   TOLERANCE interval_expr
+    {
+        $$ = $2
     }
 
 values_stmt:
@@ -15326,6 +15361,7 @@ non_reserved_keyword:
 |	SUPER
 |	TABLESPACE
 |	TRUNCATE
+|   TOLERANCE
 |	VISIBLE
 |	WITHOUT
 |	VALIDATION

@@ -547,7 +547,7 @@ func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
 	switch node.NodeType {
 	case plan.Node_JOIN:
 		switch node.JoinType {
-		case plan.Node_LEFT:
+		case plan.Node_LEFT, plan.Node_ASOF_LEFT:
 			return childIdx == 1
 		case plan.Node_RIGHT:
 			return childIdx == 0
@@ -1371,6 +1371,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 						}
 					}
 				}
+			}
+		}
+		if node.JoinType == plan.Node_ASOF || node.JoinType == plan.Node_ASOF_LEFT {
+			if err := refreshAsofRightColAfterRemap(node); err != nil {
+				return nil, err
 			}
 		}
 		if node.JoinType == plan.Node_MARK &&
@@ -10614,6 +10619,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_DEDUP:
 		joinType = plan.Node_DEDUP
+	case tree.JOIN_TYPE_ASOF:
+		joinType = plan.Node_ASOF
+	case tree.JOIN_TYPE_ASOF_LEFT:
+		joinType = plan.Node_ASOF_LEFT
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -10666,7 +10675,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		nodeID = builder.appendNode(node, ctx)
 	}
 
-	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
+	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT ||
+		joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
 		ctx.binder = NewJoinOnBinder(builder, ctx)
 	} else {
 		ctx.binder = NewTableBinder(builder, ctx)
@@ -10724,8 +10734,16 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			node.Children[1] = rightChildID
 		}
 		node.OnList = joinConds
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			if err = builder.configureAsofJoin(node, tbl, ctx, leftChildID, rightChildID); err != nil {
+				return 0, err
+			}
+		}
 
 	case *tree.UsingJoinCond:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_CENTROIDX {
 			for _, col := range cond.Cols {
 				expr, err := ctx.addUsingColForCrossL2(string(col), joinType, leftCtx, rightCtx)
@@ -10744,6 +10762,9 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 	default:
+		if joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
+			return 0, moerr.NewSyntaxError(builder.GetContext(), "ASOF JOIN requires an ON clause")
+		}
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_FULL {
 			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {

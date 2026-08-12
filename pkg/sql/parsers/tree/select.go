@@ -601,6 +601,8 @@ const (
 	JOIN_TYPE_NATURAL_FULL  = "NATURAL FULL"
 	JOIN_TYPE_CENTROIDX     = "CENTROIDX"
 	JOIN_TYPE_DEDUP         = "DEDUP"
+	JOIN_TYPE_ASOF          = "ASOF"
+	JOIN_TYPE_ASOF_LEFT     = "ASOF LEFT"
 )
 
 // the table expression
@@ -612,11 +614,12 @@ var _ TableExpr = &Subquery{}
 
 type JoinTableExpr struct {
 	TableExpr
-	JoinType string
-	Left     TableExpr
-	Right    TableExpr
-	Cond     JoinCond
-	Option   string
+	JoinType  string
+	Left      TableExpr
+	Right     TableExpr
+	Cond      JoinCond
+	Option    string
+	Tolerance Expr
 }
 
 func (node *JoinTableExpr) Format(ctx *FmtCtx) {
@@ -645,6 +648,10 @@ func (node *JoinTableExpr) Format(ctx *FmtCtx) {
 	if node.Cond != nil {
 		ctx.WriteByte(' ')
 		node.Cond.Format(ctx)
+	}
+	if node.Tolerance != nil {
+		ctx.WriteString(" tolerance ")
+		node.Tolerance.Format(ctx)
 	}
 }
 
