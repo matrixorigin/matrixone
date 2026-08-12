@@ -194,6 +194,22 @@ type AggFuncExec interface {
 	Free()
 }
 
+// sourcePreservingMerger is implemented only by aggregate executors whose
+// Merge method leaves the source group unchanged. Merge normally permits
+// ownership transfer because distributed aggregation consumes partial states;
+// window execution needs the stronger contract when it snapshots a running
+// aggregate into multiple result groups.
+type sourcePreservingMerger interface {
+	sourcePreservingMerge()
+}
+
+// MergePreservesSource reports whether repeated merges can safely snapshot
+// exec without consuming or otherwise mutating its source group.
+func MergePreservesSource(exec AggFuncExec) bool {
+	_, ok := exec.(sourcePreservingMerger)
+	return ok
+}
+
 // PrepareParamKindStateAccessor is an optional capability implemented by the
 // aggregate state backed executors.  It exposes the provenance of the value
 // vector without widening AggFuncExec (value-window and other non-serializable
