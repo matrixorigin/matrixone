@@ -432,6 +432,14 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			fn:     builtInUnixTimestamp,
 		},
 		{
+			name: "typed timestamp decimal",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{types.ZeroTimestamp}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false, []types.Decimal128{{}}, []bool{true}),
+			fn:     builtInUnixTimestamp,
+		},
+		{
 			name:   "varchar int64",
 			inputs: varcharInput,
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
@@ -456,6 +464,29 @@ func TestUnixTimestampZeroValueReturnsNull(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	ts, err := types.ParseTimestamp(time.UTC, "2024-02-29 23:59:59.999999", 6)
+	require.NoError(t, err)
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil),
+		},
+		NewFunctionTestResult(
+			types.New(types.T_decimal128, 38, 6),
+			false,
+			[]types.Decimal128{mustDecimal128(t, "1709251199.999999", 38, 6)},
+			[]bool{false},
+		),
+		builtInUnixTimestamp,
+	)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, info)
 }
 
 func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
