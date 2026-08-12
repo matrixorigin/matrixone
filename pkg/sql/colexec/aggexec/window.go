@@ -415,47 +415,49 @@ func (exec *ntileWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		return moerr.NewInternalErrorNoCtx("ntile requires vectors")
 	}
 
-	// vectors[0] is the os (order sequence) vector
-	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
-	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
-
 	// If vectors[1] exists, it's the bucket count parameter
 	if len(vectors) > 1 && exec.bucketCounts[groupIndex] == 0 {
 		bucketVec := vectors[1]
-		if !bucketVec.IsNull(uint64(row)) {
-			var bucketCount int64
-			switch bucketVec.GetType().Oid {
-			case types.T_int64:
-				bucketCount = vector.MustFixedColWithTypeCheck[int64](bucketVec)[row]
-			case types.T_int32:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int32](bucketVec)[row])
-			case types.T_int16:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int16](bucketVec)[row])
-			case types.T_int8:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int8](bucketVec)[row])
-			case types.T_uint64:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint64](bucketVec)[row])
-			case types.T_uint32:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint32](bucketVec)[row])
-			case types.T_uint16:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint16](bucketVec)[row])
-			case types.T_uint8:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint8](bucketVec)[row])
-			default:
-				return moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
-			}
-
-			if bucketCount <= 0 {
-				return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
-			}
-			exec.bucketCounts[groupIndex] = bucketCount
+		if bucketVec.IsNull(uint64(row)) {
+			return moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
 		}
+
+		var bucketCount int64
+		switch bucketVec.GetType().Oid {
+		case types.T_int64:
+			bucketCount = vector.MustFixedColWithTypeCheck[int64](bucketVec)[row]
+		case types.T_int32:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int32](bucketVec)[row])
+		case types.T_int16:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int16](bucketVec)[row])
+		case types.T_int8:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int8](bucketVec)[row])
+		case types.T_uint64:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint64](bucketVec)[row])
+		case types.T_uint32:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint32](bucketVec)[row])
+		case types.T_uint16:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint16](bucketVec)[row])
+		case types.T_uint8:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint8](bucketVec)[row])
+		default:
+			return moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
+		}
+
+		if bucketCount <= 0 {
+			return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+		}
+		exec.bucketCounts[groupIndex] = bucketCount
 	}
 
 	// Default to 1 bucket if not set
 	if exec.bucketCounts[groupIndex] == 0 {
 		exec.bucketCounts[groupIndex] = 1
 	}
+
+	// vectors[0] is the os (order sequence) vector
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
 
 	return nil
 }
