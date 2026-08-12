@@ -1189,6 +1189,42 @@ type Reader interface {
 	//SetScanType()
 }
 
+// ReaderFilterResult describes which rows survived a ReaderFilter. Sels must
+// contain sorted, unique positions in the callback's input batch, and its
+// length must equal the filtered batch row count. Sels is borrowed from the
+// callback and is only valid until the next callback. When All is true, every
+// row survived, the callback must not change the row count, and Sels is ignored.
+type ReaderFilterResult struct {
+	Sels []int64
+	All  bool
+}
+
+// ReaderFilter evaluates a residual predicate over the columns listed in
+// loadedColumns. loadedColumns contains positions in the full output schema;
+// nil means every output column is already loaded and the row mapping is not
+// consumed. The callback must shrink the loaded vectors and update bat.RowCount
+// when only a subset survives. Readers invoke the callback synchronously and
+// must finish consuming its result before ReadWithFilter returns.
+type ReaderFilter func(
+	bat *batch.Batch,
+	loadedColumns []int,
+) (ReaderFilterResult, error)
+
+// LateMaterializationReader is an optional Reader capability. It reads the
+// early columns, applies filter, and materializes the remaining columns only
+// for surviving persisted rows. Readers must fall back to an eager read for
+// data sources that cannot be revisited, such as in-memory workspace data.
+type LateMaterializationReader interface {
+	ReadWithFilter(
+		ctx context.Context,
+		cols []string,
+		earlyColumns []int,
+		filter ReaderFilter,
+		mp *mpool.MPool,
+		outBatch *batch.Batch,
+	) (isEnd bool, err error)
+}
+
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)
