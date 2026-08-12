@@ -168,6 +168,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 		exe.Free()
 	}
 	require.Equal(t, 1, resultHit)
+	require.NoError(t, reader.Close())
 	require.NoError(t, txn.Commit(ctx))
 }
 
@@ -221,14 +222,16 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 		require.NoError(t, relation.Write(ctx, containers.ToCNBatch(bat1)))
 
 		var bat2 *batch.Batch
-		txn.GetWorkspace().(*disttae.Transaction).ForEachTableWrites(
-			relation.GetDBID(ctx), relation.GetTableID(ctx), 1, func(entry disttae.Entry) {
+		dtxn := txn.GetWorkspace().(*disttae.Transaction)
+		require.NoError(t, dtxn.VisitTableMutations(
+			ctx, txn.GetWorkspace().CurrentReadView(),
+			relation.GetDBID(ctx), relation.GetTableID(ctx), func(entry disttae.Entry) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
-			})
+			}))
 
 		require.NoError(t, relation.Delete(ctx, bat2, catalog.Row_ID))
 	}
@@ -256,6 +259,7 @@ func TestReaderCanReadUncommittedInMemInsertAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 1, int(ret.RowCount()))
+	require.NoError(t, reader.Close())
 	require.NoError(t, txn.Commit(ctx))
 }
 
@@ -372,6 +376,7 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		require.True(t, ret.Allocated() > 0)
 
 		require.Equal(t, 2, ret.RowCount())
+		require.NoError(t, reader.Close())
 		require.NoError(t, txn.Commit(ctx))
 		ret.Clean(mp)
 	}
@@ -409,8 +414,10 @@ func Test_ReaderCanReadCommittedInMemInsertAndDeletes(t *testing.T) {
 		nmp, _ := mpool.NewMPool("test", mpool.MB, mpool.NoFixed)
 
 		ret := testutil.EmptyBatchFromSchema(schema, primaryKeyIdx)
-		reader.Read(ctx, ret.Attrs, nil, nmp, ret)
+		_, err = reader.Read(ctx, ret.Attrs, nil, nmp, ret)
+		require.NoError(t, err)
 		// ?  what is the expected error? require.Error(t, err)
+		require.NoError(t, reader.Close())
 		require.NoError(t, txn.Commit(ctx))
 	}
 
@@ -784,6 +791,7 @@ func Test_ShardingRemoteReader(t *testing.T) {
 		require.True(t, ret.Allocated() > 0)
 
 		require.Equal(t, 2, ret.RowCount())
+		require.NoError(t, reader.Close())
 		require.NoError(t, txn.Commit(ctx))
 		ret.Clean(mp)
 	}
@@ -1069,7 +1077,8 @@ func Test_ShardingTableDelegate(t *testing.T) {
 	relData, err := delegate.Ranges(ctx, engine.DefaultRangesParam)
 	require.NoError(t, err)
 
-	tomb, err := delegate.CollectTombstones(ctx, 0, engine.Policy_CollectAllTombstones)
+	readView := txn.GetWorkspace().CurrentReadView()
+	tomb, err := delegate.CollectTombstones(ctx, readView, engine.Policy_CollectAllTombstones)
 	require.NoError(t, err)
 	require.True(t, tomb.HasAnyInMemoryTombstone())
 
@@ -1084,7 +1093,7 @@ func Test_ShardingTableDelegate(t *testing.T) {
 		nil,
 		relData,
 		1,
-		0,
+		readView,
 		false,
 		0,
 		engine.FilterHint{},
@@ -1251,13 +1260,14 @@ func Test_ShardingLocalReader(t *testing.T) {
 		shardSvr := testutil.MockShardService()
 		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 		num := 10
+		readView := txn.GetWorkspace().CurrentReadView()
 		_, err = delegate.BuildShardingReaders(
 			ctx,
 			rel.GetProcess(),
 			nil,
 			nil,
 			num,
-			0,
+			readView,
 			false,
 			0,
 		)
@@ -1279,13 +1289,14 @@ func Test_ShardingLocalReader(t *testing.T) {
 		shardSvr := testutil.MockShardService()
 		delegate, _ := disttae.MockTableDelegate(rel, shardSvr)
 		num := 10
+		readView := txn.GetWorkspace().CurrentReadView()
 		rds, err := delegate.BuildShardingReaders(
 			ctx,
 			rel.GetProcess(),
 			nil,
 			relData,
 			num,
-			0,
+			readView,
 			false,
 			0,
 		)

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -816,10 +815,11 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 }
 
 func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
-	rel, db, ctx, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
+	rel, db, ctx, readView, err := c.handleDbRelContext(s.DataSource.node, s.IsRemote)
 	if err != nil {
 		return err
 	}
+	s.TxnReadView = readView
 
 	if s.NodeInfo.CNCNT == 1 {
 		rsp := &engine.RangesShuffleParam{
@@ -833,6 +833,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			rel,
 			db,
 			ctx,
+			readView,
 			blockExprList,
 			engine.Policy_CollectAllData,
 			rsp)
@@ -870,6 +871,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 			rel,
 			db,
 			ctx,
+			readView,
 			blockExprList,
 			policyForLocal,
 			rsp,
@@ -884,6 +886,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		rel,
 		db,
 		ctx,
+		readView,
 		blockExprList,
 		policyForRemote,
 		rsp,
@@ -1031,7 +1034,7 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
-		parallelScopes[i].TxnOffset = s.TxnOffset
+		parallelScopes[i].TxnReadView = s.TxnReadView
 		parallelScopes[i].setRootOperator(dupOperatorRecursivelyWithContext(s.RootOp, i, s.NodeInfo.Mcpu, dupCtx))
 	}
 
@@ -1581,7 +1584,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			s.NodeInfo.Mcpu,
-			s.TxnOffset,
+			s.TxnReadView,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 			hint,
@@ -1615,22 +1618,13 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// todo:
 		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		{
-			n := s.DataSource.node
-			if n.ScanSnapshot != nil && n.ScanSnapshot.TS != nil {
-				if !n.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
-					n.ScanSnapshot.TS.Less(c.proc.GetTxnOperator().Txn().SnapshotTS) {
-					if c.proc.GetCloneTxnOperator() == nil {
-						txnOp := c.proc.GetTxnOperator().CloneSnapshotOp(*n.ScanSnapshot.TS)
-						c.proc.SetCloneTxnOperator(txnOp)
-					}
-
-					if n.ScanSnapshot.Tenant != nil {
-						ctx = context.WithValue(ctx, defines.TenantIDKey{}, n.ScanSnapshot.Tenant.TenantID)
-					}
-				}
-			}
+		txnOp, scanCtx, resolveErr := c.getCompileTableScanDataSourceTxn(s)
+		if resolveErr != nil {
+			err = resolveErr
+			return
 		}
+		ctx = scanCtx
+		s.TxnReadView = txnReadViewForOperator(txnOp, c.TxnReadView)
 
 		var mainRds []engine.Reader
 
@@ -1665,7 +1659,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			s.DataSource.FilterExpr,
 			s.NodeInfo.Data,
 			s.NodeInfo.Mcpu,
-			s.TxnOffset,
+			s.TxnReadView,
 			len(s.DataSource.OrderBy) > 0,
 			engine.Policy_CheckAll,
 			hint,

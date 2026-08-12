@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -62,6 +63,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -470,6 +472,22 @@ func TestScopeSerialization2(t *testing.T) {
 	checkScopeRoot(t, scope)
 }
 
+func TestRemoteScopeDoesNotInheritCoordinatorWorkspaceReadView(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	sourceScope.TxnReadView = client.NewWorkspaceReadView(11, 7, 23)
+
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	require.True(t, remoteScope.TxnReadView.IsZero(),
+		"a remote CN must not use another CN's workspace-local read view")
+}
+
 func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.counterSet = &perfcounter.CounterSet{}
@@ -495,6 +513,10 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		proc.Base.SessionInfo.Buf = buffer.New()
 		ctrl := gomock.NewController(t)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		// These cases compile ordinary table scans on the statement owner. The
+		// read-view resolver must distinguish them from historical snapshot
+		// operators, which own an isolated workspace view.
+		txnOp.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false).AnyTimes()
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
 		e := newStubEngine()
@@ -2402,7 +2424,7 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -2448,7 +2470,7 @@ func (m *mockRelationForParallelOrderBy) BuildReaders(
 	*plan.Expr,
 	engine.RelData,
 	int,
-	int,
+	client.WorkspaceReadView,
 	bool,
 	engine.TombstoneApplyPolicy,
 	engine.FilterHint,
@@ -2478,7 +2500,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2512,7 +2533,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2546,7 +2566,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2582,7 +2601,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2616,7 +2634,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2651,7 +2668,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)
@@ -2686,7 +2702,6 @@ func TestBuildReadersMembershipFilterHint(t *testing.T) {
 			NodeInfo: engine.Node{
 				Mcpu: 1,
 			},
-			TxnOffset: 0,
 		}
 
 		c := NewMockCompile(t)

@@ -16,7 +16,6 @@ package test
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
@@ -443,7 +442,7 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 
 	// Guarantee workspace state: one persisted INSERT entry with exactly 3 ObjectStats in one batch.
 	dbID, tableID := rel.GetDBID(ctx), rel.GetTableID(ctx)
-	assertWorkspaceHasPersistedInsertWithMultipleObjectStats(t, txn, dbID, tableID, 3)
+	assertWorkspaceHasPersistedInsertWithMultipleObjectStats(t, ctx, txn, dbID, tableID, 3)
 
 	// StarCount must sum all 3 objects: 100 + 10 + 20 + 30 = 160.
 	// Bug would only count first ObjectStats -> 100+10=110.
@@ -745,7 +744,8 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 	require.Equal(t, uint64(210), count, "Should count all rows including mixed in-memory and persisted")
 
 	// Verify workspace state: should have both in-memory and persisted writes
-	inMemory, persisted := countWorkspaceWrites(txn)
+	inMemory, persisted := countWorkspaceWrites(
+		t, ctx, txn, rel.GetDBID(ctx), rel.GetTableID(ctx))
 	t.Logf("Workspace state: in-memory writes=%d, persisted writes=%d", inMemory, persisted)
 	require.Greater(t, inMemory, 0, "Should have in-memory writes")
 	require.Greater(t, persisted, 0, "Should have persisted writes")
@@ -760,30 +760,29 @@ func TestStarCountMixedInMemoryAndPersisted(t *testing.T) {
 // that triggers the bug: one batch with multiple ObjectStats.
 func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
 	t *testing.T,
+	ctx context.Context,
 	txn client.TxnOperator,
 	dbID, tableID uint64,
 	wantObjectStatsRows int,
 ) {
 	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
 	require.True(t, ok, "workspace must be *disttae.Transaction")
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	require.True(t, writesField.IsValid(), "writes field must exist")
-	writesLen := writesField.Len()
 
 	var found bool
-	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
-		if entry.Type() != disttae.INSERT || entry.FileName() == "" || entry.Bat() == nil {
-			return
-		}
-		bat := entry.Bat()
-		if len(bat.Attrs) < 2 || bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			return
-		}
-		if bat.Vecs[1].Length() == wantObjectStatsRows {
-			found = true
-		}
-	})
+	require.NoError(t, dtxn.VisitTableMutations(
+		ctx, txn.GetWorkspace().CurrentReadView(),
+		dbID, tableID, func(entry disttae.Entry) {
+			if entry.Type() != disttae.INSERT || entry.FileName() == "" || entry.Bat() == nil {
+				return
+			}
+			bat := entry.Bat()
+			if len(bat.Attrs) < 2 || bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+				return
+			}
+			if bat.Vecs[1].Length() == wantObjectStatsRows {
+				found = true
+			}
+		}))
 	require.True(t, found,
 		"workspace must contain one persisted INSERT entry with exactly %d ObjectStats rows (Vecs[1].Length()=%d); this guarantees the bug scenario is exercised",
 		wantObjectStatsRows, wantObjectStatsRows)
@@ -795,79 +794,54 @@ func assertWorkspaceHasPersistedInsertWithMultipleObjectStats(
 // countUncommittedPersistedTombstones for-loop.
 func assertWorkspaceHasPersistedTombstones(
 	t *testing.T,
+	ctx context.Context,
 	txn client.TxnOperator,
 	dbID, tableID uint64,
 ) {
 	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
 	require.True(t, ok, "workspace must be *disttae.Transaction")
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	require.True(t, writesField.IsValid(), "writes field must exist")
-	writesLen := writesField.Len()
 
 	var found bool
-	dtxn.ForEachTableWrites(dbID, tableID, writesLen, func(entry disttae.Entry) {
-		if entry.Type() != disttae.DELETE || entry.FileName() == "" || entry.Bat() == nil {
-			return
-		}
-		bat := entry.Bat()
-		if bat.IsEmpty() || bat.Vecs[0].Length() == 0 {
-			return
-		}
-		if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
-			found = true
-		}
-	})
+	require.NoError(t, dtxn.VisitTableMutations(
+		ctx, txn.GetWorkspace().CurrentReadView(),
+		dbID, tableID, func(entry disttae.Entry) {
+			if entry.Type() != disttae.DELETE || entry.FileName() == "" || entry.Bat() == nil {
+				return
+			}
+			bat := entry.Bat()
+			if bat.IsEmpty() || bat.Vecs[0].Length() == 0 {
+				return
+			}
+			if len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.ObjectMeta_ObjectStats {
+				found = true
+			}
+		}))
 	require.True(t, found,
 		"workspace must contain at least one persisted DELETE entry (typ=DELETE, fileName!=empty, bat with ObjectStats in column 0); this guarantees countUncommittedPersistedTombstones path is exercised")
 }
 
-// countWorkspaceWrites counts in-memory and persisted writes in the transaction workspace
-func countWorkspaceWrites(txn client.TxnOperator) (inMemory, persisted int) {
-	// Access the internal transaction workspace
-	workspace := txn.GetWorkspace()
-	dtxn, ok := workspace.(*disttae.Transaction)
-	if !ok {
-		return 0, 0
-	}
-
-	// Use reflection to access the writes slice since there's no public API
-	// to iterate all writes across all tables
-	txnValue := reflect.ValueOf(dtxn).Elem()
-	writesField := txnValue.FieldByName("writes")
-	if !writesField.IsValid() {
-		return 0, 0
-	}
-
-	// Count all INSERT writes
-	for i := 0; i < writesField.Len(); i++ {
-		entry := writesField.Index(i)
-
-		// Get typ field
-		typField := entry.FieldByName("typ")
-		if !typField.IsValid() || typField.Int() != int64(disttae.INSERT) {
-			continue
-		}
-
-		// Get fileName field
-		fileNameField := entry.FieldByName("fileName")
-		if !fileNameField.IsValid() {
-			continue
-		}
-
-		// Get bat field
-		batField := entry.FieldByName("bat")
-		if !batField.IsValid() {
-			continue
-		}
-
-		if fileNameField.String() != "" {
-			persisted++
-		} else if !batField.IsNil() {
-			inMemory++
-		}
-	}
-
+// countWorkspaceWrites counts in-memory and persisted table mutations through
+// the immutable workspace inspection boundary.
+func countWorkspaceWrites(
+	t *testing.T,
+	ctx context.Context,
+	txn client.TxnOperator,
+	dbID, tableID uint64,
+) (inMemory, persisted int) {
+	dtxn, ok := txn.GetWorkspace().(*disttae.Transaction)
+	require.True(t, ok, "workspace must be *disttae.Transaction")
+	require.NoError(t, dtxn.VisitTableMutations(
+		ctx, txn.GetWorkspace().CurrentReadView(), dbID, tableID,
+		func(entry disttae.Entry) {
+			if entry.Type() != disttae.INSERT || entry.Bat() == nil {
+				return
+			}
+			if entry.FileName() == "" {
+				inMemory++
+			} else {
+				persisted++
+			}
+		}))
 	return inMemory, persisted
 }
 
@@ -1209,7 +1183,7 @@ func TestStarCountWithPersistedTombstones(t *testing.T) {
 	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
 
 	// Step 4: Assert workspace has uncommitted persisted tombstones (guarantees the path is exercisable)
-	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
+	assertWorkspaceHasPersistedTombstones(t, p.Ctx, txnop, dbID, tableID)
 
 	// Step 5: StarCount must use persisted tombstones and return 80
 	count, err = rel.StarCount(p.Ctx)
@@ -1276,8 +1250,8 @@ func TestStarCountDeleteUncommittedInserts(t *testing.T) {
 
 	// Note: We cannot easily get rowids of uncommitted inserts to delete them
 	// because they don't have stable rowids yet. This scenario is actually
-	// handled by the deleteBatch() mechanism which marks uncommitted inserts
-	// for deletion via batchSelectList.
+	// handled by the workspace payload selections attached to the corresponding
+	// mutation.
 	//
 	// For this test, we'll delete committed rows instead to verify the formula.
 	// The actual "delete uncommitted inserts" scenario is handled internally
@@ -1485,7 +1459,7 @@ func TestStarCountMixedInMemoryAndPersistedTombstones(t *testing.T) {
 	tbat.SetRowCount(1)
 	require.NoError(t, rel.Delete(p.Ctx, tbat, catalog.Row_ID))
 
-	assertWorkspaceHasPersistedTombstones(t, txnop, dbID, tableID)
+	assertWorkspaceHasPersistedTombstones(t, p.Ctx, txnop, dbID, tableID)
 
 	count, err := rel.StarCount(p.Ctx)
 	require.NoError(t, err)

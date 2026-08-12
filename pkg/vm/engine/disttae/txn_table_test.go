@@ -85,6 +85,26 @@ func newTxnTableForTest() *txnTable {
 	return table
 }
 
+func TestTxnTableCurrentWorkspaceReadViewUsesOwningSnapshotWorkspace(t *testing.T) {
+	baseTable := newTxnTableForTest()
+	baseTxn := baseTable.getTxn()
+	baseTxn.workspace = newTxnWorkspace()
+
+	snapshotOp := baseTable.db.op.CloneSnapshotOp(timestamp.Timestamp{})
+	require.True(t, snapshotOp.IsSnapOp())
+	snapshotTxn := snapshotOp.GetWorkspace().(*Transaction)
+	snapshotTable := &txnTable{db: &txnDatabase{op: snapshotOp}}
+
+	baseView := baseTable.currentWorkspaceReadView()
+	snapshotView := snapshotTable.currentWorkspaceReadView()
+	require.Equal(t, baseTxn.workspace.id, baseView.WorkspaceID())
+	require.Equal(t, snapshotTxn.workspace.id, snapshotView.WorkspaceID())
+	require.NotEqual(t, baseView.WorkspaceID(), snapshotView.WorkspaceID())
+
+	require.NoError(t, baseTxn.workspace.close(nil))
+	require.NoError(t, snapshotTxn.workspace.close(nil))
+}
+
 func TestTxnTableGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	table := &txnTable{
 		db:      &txnDatabase{},
@@ -130,12 +150,11 @@ func newResetTxnForTest(t *testing.T, eng *Engine) (client.TxnOperator, *Transac
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 	txn := &Transaction{
-		op:          op,
-		proc:        proc,
-		engine:      eng,
-		tableCache:  new(sync.Map),
-		tableOps:    newTableOps(),
-		databaseOps: newDbOps(),
+		op:         op,
+		proc:       proc,
+		engine:     eng,
+		tableCache: new(sync.Map),
+		workspace:  newTxnWorkspace(),
 	}
 	op.AddWorkspace(txn)
 	return op, txn
@@ -268,7 +287,7 @@ func TestReusableRelationHandleResetFromCatalogCacheMiss(t *testing.T) {
 	key := genTableKey(7, "t", 10, "db")
 	_, cached := newTxn.tableCache.Load(key)
 	require.False(t, cached)
-	require.Nil(t, newTxn.tableOps.existAndActive(key))
+	require.Nil(t, newTxn.workspace.activeTable(key))
 	insertCatalogTableForResetTest(t, eng, newTxn, 7, 10, 84, "db", "t")
 
 	require.NoError(t, handle.Reset(newOp))
@@ -314,7 +333,7 @@ func TestReusableRelationHandleResetRejectsDeletedTable(t *testing.T) {
 
 	newOp, newTxn := newResetTxnForTest(t, oldCanonical.eng.(*Engine))
 	key := genTableKey(0, "t", 10, "db")
-	newTxn.tableOps.addDeleteTable(key, 0, oldCanonical.tableId)
+	require.NoError(t, newTxn.workspace.addTableOp(key, DELETE, oldCanonical.tableId, nil))
 	// A txn-local DROP must win even if a stale canonical relation is cached.
 	newTxn.tableCache.Store(key, &txnTableDelegate{origin: oldCanonical})
 

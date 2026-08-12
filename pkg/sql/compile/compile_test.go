@@ -101,7 +101,30 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.NoError(t, err)
 
 	ctrl := gomock.NewController(t)
-	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	var writeMarks []client.WorkspaceWriteMark
+	var adjustedMarks []client.WorkspaceWriteMark
+	var workspaceEvents []string
+	ws := &Ws{}
+	ws.beginWriteAttempt = func() client.WorkspaceWriteMark {
+		mark := client.NewWorkspaceWriteMark(1, 1, uint64(len(writeMarks)+1), 0, uint64(len(writeMarks)+1))
+		writeMarks = append(writeMarks, mark)
+		workspaceEvents = append(workspaceEvents, "begin")
+		return mark
+	}
+	ws.rollbackLastStatement = func(context.Context) error {
+		workspaceEvents = append(workspaceEvents, "rollback")
+		return nil
+	}
+	ws.incrStatementID = func(context.Context, bool) error {
+		workspaceEvents = append(workspaceEvents, "advance")
+		return nil
+	}
+	ws.adjust = func(mark client.WorkspaceWriteMark) error {
+		adjustedMarks = append(adjustedMarks, mark)
+		workspaceEvents = append(workspaceEvents, "adjust")
+		return nil
+	}
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC, ws)
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 	proc.Ctx = ctx
@@ -133,6 +156,14 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, evaluations)
 	require.Equal(t, 2, c.retryTimes)
+	require.Len(t, writeMarks, 3)
+	require.Equal(t, []client.WorkspaceWriteMark{writeMarks[2]}, adjustedMarks)
+	require.Equal(t, []string{
+		"begin",
+		"rollback", "advance", "begin",
+		"rollback", "advance", "begin",
+		"adjust",
+	}, workspaceEvents)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
@@ -302,7 +333,11 @@ func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 }
 
 type Ws struct {
-	advanceSnapshot func(context.Context, timestamp.Timestamp) error
+	advanceSnapshot       func(context.Context, timestamp.Timestamp) error
+	incrStatementID       func(context.Context, bool) error
+	rollbackLastStatement func(context.Context) error
+	beginWriteAttempt     func() client.WorkspaceWriteMark
+	adjust                func(client.WorkspaceWriteMark) error
 }
 
 func (w *Ws) SetCloneTxn(snapshot int64) {}
@@ -328,6 +363,9 @@ func (w *Ws) Snapshot() bool {
 }
 
 func (w *Ws) IncrStatementID(ctx context.Context, commit bool) error {
+	if w.incrStatementID != nil {
+		return w.incrStatementID(ctx, commit)
+	}
 	return nil
 }
 
@@ -339,6 +377,9 @@ func (w *Ws) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error 
 }
 
 func (w *Ws) RollbackLastStatement(ctx context.Context) error {
+	if w.rollbackLastStatement != nil {
+		return w.rollbackLastStatement(ctx)
+	}
 	return nil
 }
 
@@ -356,18 +397,25 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) UpdateSnapshotWriteOffset() {
+func (w *Ws) PublishReadView() client.WorkspaceReadView {
+	return client.WorkspaceReadView{}
 }
 
-func (w *Ws) GetSnapshotWriteOffset() int {
-	return 0
+func (w *Ws) CurrentReadView() client.WorkspaceReadView {
+	return client.WorkspaceReadView{}
 }
 
-func (w *Ws) WriteOffset() uint64 {
-	return 0
+func (w *Ws) BeginWriteAttempt() client.WorkspaceWriteMark {
+	if w.beginWriteAttempt != nil {
+		return w.beginWriteAttempt()
+	}
+	return client.WorkspaceWriteMark{}
 }
 
-func (w *Ws) Adjust(_ uint64) error {
+func (w *Ws) Adjust(mark client.WorkspaceWriteMark) error {
+	if w.adjust != nil {
+		return w.adjust(mark)
+	}
 	return nil
 }
 
@@ -1469,20 +1517,18 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 	}
 }
 
-// TestNewCompileTxnOffsetForInternalSql verifies the statement-boundary
-// contract of NewCompile and Compile.Reset (issue #25557): a compile of a
-// user statement advances the workspace snapshot write offset, while an
-// internal sub-sql compile (DisableIncrStatement, marked on the process)
-// must not touch the shared boundary — it captures the current end of the
-// workspace as its own TxnOffset instead.
-func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
+// TestNewCompileTxnReadViewForInternalSql verifies the statement-boundary
+// contract of NewCompile and Compile.Reset (issue #25557): a user statement
+// publishes the workspace visibility boundary, while internal SQL captures
+// the current view without changing the public boundary.
+func TestNewCompileTxnReadViewForInternalSql(t *testing.T) {
 	t.Run("user statement advances the boundary", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		ws.EXPECT().UpdateSnapshotWriteOffset().Times(1)
-		ws.EXPECT().GetSnapshotWriteOffset().Return(3).Times(1)
+		readView := client.NewWorkspaceReadView(1, 2, 3)
+		ws.EXPECT().PublishReadView().Return(readView).Times(1)
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 
@@ -1490,7 +1536,7 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		proc.Base.TxnOperator = txnOp
 
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
-		require.Equal(t, 3, c.TxnOffset)
+		require.Equal(t, readView, c.TxnReadView)
 	})
 
 	t.Run("internal sub-sql must not advance the boundary", func(t *testing.T) {
@@ -1498,9 +1544,10 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		defer ctrl.Finish()
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
-		// no UpdateSnapshotWriteOffset expectation: the mock controller
-		// fails the test if the internal compile advances the boundary
-		ws.EXPECT().WriteOffset().Return(uint64(7)).Times(1)
+		// no PublishReadView expectation: the mock controller fails the test
+		// if the internal compile advances the public boundary.
+		readView := client.NewWorkspaceReadView(1, 7, 9)
+		ws.EXPECT().CurrentReadView().Return(readView).Times(1)
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 
@@ -1509,6 +1556,36 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 		proc.SetIncrStatementDisabled(true)
 
 		c := NewCompile("test", "test", "select 1", "", "", nil, proc, nil, false, nil, time.Now())
-		require.Equal(t, 7, c.TxnOffset)
+		require.Equal(t, readView, c.TxnReadView)
+	})
+}
+
+func TestTxnReadViewForOperator(t *testing.T) {
+	t.Run("base operator keeps the statement view", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws)
+		txnOp.EXPECT().IsSnapOp().Return(false)
+
+		statementView := client.NewWorkspaceReadView(1, 2, 3)
+		require.Equal(t, statementView, txnReadViewForOperator(txnOp, statementView))
+	})
+
+	t.Run("snapshot operator uses its isolated workspace view", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		statementView := client.NewWorkspaceReadView(1, 2, 3)
+		snapshotView := client.NewWorkspaceReadView(4, 5, 0)
+		ws := mock_frontend.NewMockWorkspace(ctrl)
+		ws.EXPECT().CurrentReadView().Return(snapshotView)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(ws)
+		txnOp.EXPECT().IsSnapOp().Return(true)
+
+		require.Equal(t, snapshotView, txnReadViewForOperator(txnOp, statementView))
 	})
 }

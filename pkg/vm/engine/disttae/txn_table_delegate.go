@@ -290,7 +290,10 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 	var blocks objectio.BlockInfoSlice
 	var uncommitted []objectio.ObjectStats
 	if rangesParam.Policy != engine.Policy_CheckCommittedOnly {
-		uncommitted, _ = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnOffset)
+		uncommitted, _, err = tbl.origin.collectUnCommittedDataObjs(rangesParam.TxnReadView)
+		if err != nil {
+			return nil, err
+		}
 	}
 	err = tbl.origin.rangesOnePart(
 		ctx,
@@ -313,7 +316,6 @@ func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.Rang
 			param.RangesParam.Exprs = rangesParam.BlockFilters
 			param.RangesParam.PreAllocSize = 2
 			param.RangesParam.DataCollectPolicy = engine.Policy_CollectCommittedData
-			param.RangesParam.TxnOffset = 0
 
 		},
 		func(resp []byte) {
@@ -383,11 +385,11 @@ func (tbl *txnTableDelegate) EstimateCommittedTombstoneCount(ctx context.Context
 
 func (tbl *txnTableDelegate) CollectTombstones(
 	ctx context.Context,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
 	if tbl.combined.is {
-		return tbl.combined.tbl.CollectTombstones(ctx, txnOffset, policy)
+		return tbl.combined.tbl.CollectTombstones(ctx, readView, policy)
 	}
 
 	is, err := tbl.isLocal()
@@ -397,14 +399,14 @@ func (tbl *txnTableDelegate) CollectTombstones(
 	if is {
 		return tbl.origin.CollectTombstones(
 			ctx,
-			txnOffset,
+			readView,
 			policy,
 		)
 	}
 
 	localTombstones, err := tbl.origin.CollectTombstones(
 		ctx,
-		txnOffset,
+		readView,
 		engine.Policy_CollectUncommittedTombstones,
 	)
 	if err != nil {
@@ -516,7 +518,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
@@ -528,7 +530,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			expr,
 			relData,
 			num,
-			txnOffset,
+			readView,
 			orderBy,
 			policy,
 			filterHint,
@@ -546,7 +548,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 			expr,
 			relData,
 			num,
-			txnOffset,
+			readView,
 			orderBy,
 			engine.Policy_CheckAll,
 			filterHint,
@@ -558,7 +560,7 @@ func (tbl *txnTableDelegate) BuildReaders(
 		expr,
 		relData,
 		num,
-		txnOffset,
+		readView,
 		orderBy,
 		engine.Policy_CheckAll,
 	)
@@ -570,7 +572,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	expr *plan.Expr,
 	relData engine.RelData,
 	num int,
-	txnOffset int,
+	readView client.WorkspaceReadView,
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
@@ -581,7 +583,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 			expr,
 			relData,
 			num,
-			txnOffset,
+			readView,
 			orderBy,
 			policy,
 		)
@@ -604,10 +606,13 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	//	return nil, moerr.NewInternalErrorNoCtx("orderBy only support one reader")
 	//}
 
-	_, uncommittedObjNames := tbl.origin.collectUnCommittedDataObjs(txnOffset)
+	_, uncommittedObjNames, err := tbl.origin.collectUnCommittedDataObjs(readView)
+	if err != nil {
+		return nil, err
+	}
 	uncommittedTombstones, err := tbl.origin.CollectTombstones(
 		ctx,
-		txnOffset,
+		readView,
 		engine.Policy_CollectUncommittedTombstones)
 	if err != nil {
 		return nil, err
@@ -675,7 +680,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 		if localRelData.DataCnt() > 0 {
 			ds, err := tbl.origin.buildLocalDataSource(
 				ctx,
-				txnOffset,
+				readView,
 				localRelData,
 				policy|engine.Policy_SkipCommittedInMemory|engine.Policy_SkipCommittedS3,
 				engine.ShardingLocalDataSource)
@@ -1185,15 +1190,15 @@ func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
 	)
 	openSys := tbl.origin.db.databaseId == catalog.MO_CATALOG_ID &&
 		catalog.IsSystemTableByName(tbl.origin.tableName)
-	if !openSys && txn.tableOps != nil {
-		if txn.tableOps.existAndDeleted(key) {
+	if !openSys && txn.workspace != nil {
+		if txn.workspace.tableDeleted(key) {
 			return moerr.NewNoSuchTable(
 				txn.proc.Ctx,
 				tbl.origin.db.databaseName,
 				tbl.origin.tableName,
 			)
 		}
-		if created := txn.tableOps.existAndActive(key); created != nil {
+		if created := txn.workspace.activeTable(key); created != nil {
 			created.proc.Store(txn.proc)
 			return tbl.bindRelation(created)
 		}

@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -840,8 +841,9 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
-		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
+		ws.EXPECT().PublishReadView().Return(client.WorkspaceReadView{}).AnyTimes()
+		ws.EXPECT().CurrentReadView().Return(client.WorkspaceReadView{}).AnyTimes()
+		ws.EXPECT().BeginWriteAttempt().Return(client.WorkspaceWriteMark{}).AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 		ws.EXPECT().CloneSnapshotWS().AnyTimes()
 		ws.EXPECT().BindTxnOp(gomock.Any()).AnyTimes()
@@ -945,9 +947,10 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
-		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
-		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
+		ws.EXPECT().PublishReadView().Return(client.WorkspaceReadView{}).AnyTimes()
+		ws.EXPECT().CurrentReadView().Return(client.WorkspaceReadView{}).AnyTimes()
+		ws.EXPECT().BeginWriteAttempt().Return(client.WorkspaceWriteMark{}).AnyTimes()
+		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().CloneSnapshotWS().AnyTimes()

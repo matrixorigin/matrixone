@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -738,7 +739,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 		nil,
 		relData,
 		1,
-		0,
+		client.NoWorkspaceReadView(),
 		false,
 		engine.Policy_CheckCommittedOnly,
 		engine.FilterHint{},

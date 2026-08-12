@@ -58,7 +58,6 @@ func TestTransaction(t *testing.T) {
 		meta:     newTxnMeta(rand.Int63()),
 		fileMap:  make(map[string]uint64),
 	}
-	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	ro := txn.ReadOnly()
 	require.Equal(t, false, ro)
 	err := txn.WriteBatch(INSERT, 0, 0, "test", "test", batch.NewOffHeapEmpty())
@@ -754,7 +753,7 @@ func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	txn := &Transaction{tableOps: newTableOps()}
+	txn := &Transaction{workspace: newTxnWorkspace()}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(txn).AnyTimes()
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{}).AnyTimes()
@@ -773,7 +772,8 @@ func TestFilterDeleteDatabaseRelationsSkipsAlreadyDeletedRelation(t *testing.T) 
 		databaseName: dbName,
 		op:           txnOp,
 	}
-	txn.tableOps.addDeleteTable(genTableKey(accountID, deletedTable, databaseID, dbName), 0, tableID)
+	require.NoError(t, txn.workspace.addTableOp(
+		genTableKey(accountID, deletedTable, databaseID, dbName), DELETE, tableID, nil))
 
 	rels := filterDeleteDatabaseRelations(db, []string{deletedTable, activeTable}, dbName, txnOp)
 	require.Equal(t, []string{activeTable}, rels)
@@ -783,7 +783,7 @@ func TestIsDeleteDatabaseRelationDeletedInTxn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	txn := &Transaction{tableOps: newTableOps()}
+	txn := &Transaction{workspace: newTxnWorkspace()}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(txn).AnyTimes()
 
@@ -802,7 +802,8 @@ func TestIsDeleteDatabaseRelationDeletedInTxn(t *testing.T) {
 
 	require.False(t, isDeleteDatabaseRelationDeletedInTxn(db, accountID, tableName))
 
-	txn.tableOps.addDeleteTable(genTableKey(accountID, tableName, databaseID, dbName), 0, tableID)
+	require.NoError(t, txn.workspace.addTableOp(
+		genTableKey(accountID, tableName, databaseID, dbName), DELETE, tableID, nil))
 	require.True(t, isDeleteDatabaseRelationDeletedInTxn(db, accountID, tableName))
 
 	require.False(t, isDeleteDatabaseRelationDeletedInTxn(db, accountID+1, tableName))
@@ -813,7 +814,7 @@ func TestIsDeleteDatabaseRelationDeletedInTxnUsesSystemAccount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	txn := &Transaction{tableOps: newTableOps()}
+	txn := &Transaction{workspace: newTxnWorkspace()}
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().GetWorkspace().Return(txn).AnyTimes()
 
@@ -824,6 +825,11 @@ func TestIsDeleteDatabaseRelationDeletedInTxnUsesSystemAccount(t *testing.T) {
 		op:           txnOp,
 	}
 
-	txn.tableOps.addDeleteTable(genTableKey(catalog.System_Account, tableName, catalog.MO_CATALOG_ID, catalog.MO_CATALOG), 0, catalog.MO_TABLES_ID)
+	require.NoError(t, txn.workspace.addTableOp(
+		genTableKey(catalog.System_Account, tableName, catalog.MO_CATALOG_ID, catalog.MO_CATALOG),
+		DELETE,
+		catalog.MO_TABLES_ID,
+		nil,
+	))
 	require.True(t, isDeleteDatabaseRelationDeletedInTxn(db, uint32(99), tableName))
 }

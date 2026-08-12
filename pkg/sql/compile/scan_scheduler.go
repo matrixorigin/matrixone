@@ -25,7 +25,7 @@ import (
 )
 
 func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
-	rel, _, _, err := c.handleDbRelContext(node, false)
+	rel, _, _, _, err := c.handleDbRelContext(node, false)
 	if err != nil {
 		return nil, err
 	}
