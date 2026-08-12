@@ -5325,6 +5325,19 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 	if addCnt == 0 {
 		return nil
 	}
+	// UnionBatch permits the source to be the destination itself or a borrowed
+	// Window into it. Preserve that source before any destination growth: mpool
+	// growth may replace and release both the varlena headers and area backing,
+	// leaving an aliased source slice pointing at returned storage.
+	if v.typ.IsVarlen() && w != nil &&
+		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+		preserved, err := w.CloneWindow(int(offset), int(offset)+cnt, mp)
+		if err != nil {
+			return err
+		}
+		defer preserved.Free(mp)
+		return v.UnionBatch(preserved, 0, cnt, flags, mp)
+	}
 	oldLen := v.length
 	if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 		return err
@@ -6042,6 +6055,16 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+func byteSlicesOverlap(left, right []byte) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	leftStart := uintptr(unsafe.Pointer(unsafe.SliceData(left)))
+	rightStart := uintptr(unsafe.Pointer(unsafe.SliceData(right)))
+	return leftStart < rightStart+uintptr(len(right)) &&
+		rightStart < leftStart+uintptr(len(left))
 }
 
 // unionBatchContiguousVarlenRange appends [offset, offset+cnt) when all

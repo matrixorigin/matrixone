@@ -205,6 +205,120 @@ func TestUnionBatchVarlenRangeFallsBackForReorderedArea(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestUnionBatchVarlenPartialSelfAppendForcedGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	const offset = 1
+	cnt := vec.Length() - offset
+	requireUnionBatchAliasGrowth(t, vec, values, isNull, offset, cnt)
+
+	oldLength := vec.Length()
+	require.NoError(t, vec.UnionBatch(vec, offset, cnt, nil, mp))
+	assertUnionBatchAliasResult(t, vec, values, isNull, oldLength, offset, cnt)
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestUnionBatchVarlenWindowAliasForcedGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	const offset = 1
+	cnt := vec.Length() - offset
+	requireUnionBatchAliasGrowth(t, vec, values, isNull, offset, cnt)
+
+	window, err := vec.Window(offset, offset+cnt)
+	require.NoError(t, err)
+	oldLength := vec.Length()
+	require.NoError(t, vec.UnionBatch(window, 0, window.Length(), nil, mp))
+	assertUnionBatchAliasResult(t, vec, values, isNull, oldLength, offset, cnt)
+
+	window.Free(mp)
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func newForcedGrowthAliasVector(
+	t *testing.T,
+	mp *mpool.MPool,
+) (*Vector, []string, []bool) {
+	t.Helper()
+	vec := NewVec(types.T_varchar.ToType())
+	values := make([]string, 0, 128)
+	isNull := make([]bool, 0, 128)
+	for row := 0; row < 128; row++ {
+		null := row%7 == 3
+		value := fmt.Sprintf("row-%03d-", row) + string(make([]byte, 256+row%13))
+		require.NoError(t, AppendBytes(vec, []byte(value), null, mp))
+		values = append(values, value)
+		isNull = append(isNull, null)
+		if row < 7 {
+			continue
+		}
+		payloadBytes := 0
+		for i := 1; i < len(values); i++ {
+			if !isNull[i] {
+				payloadBytes += len(values[i])
+			}
+		}
+		selectedRows := len(values) - 1
+		if len(vec.area)+payloadBytes > cap(vec.area) &&
+			len(vec.data)+selectedRows*vec.typ.TypeSize() > cap(vec.data) {
+			nulls.Add(&vec.gsp, 2)
+			return vec, values, isNull
+		}
+	}
+	vec.Free(mp)
+	t.Fatal("failed to construct a vector that forces data and area growth")
+	return nil, nil, nil
+}
+
+func requireUnionBatchAliasGrowth(
+	t *testing.T,
+	vec *Vector,
+	values []string,
+	isNull []bool,
+	offset int,
+	cnt int,
+) {
+	t.Helper()
+	payloadBytes := 0
+	for row := offset; row < offset+cnt; row++ {
+		if !isNull[row] {
+			payloadBytes += len(values[row])
+		}
+	}
+	require.Greater(t, len(vec.area)+payloadBytes, cap(vec.area))
+	require.Greater(t, len(vec.data)+cnt*vec.typ.TypeSize(), cap(vec.data))
+}
+
+func assertUnionBatchAliasResult(
+	t *testing.T,
+	vec *Vector,
+	values []string,
+	isNull []bool,
+	oldLength int,
+	offset int,
+	cnt int,
+) {
+	t.Helper()
+	require.Equal(t, oldLength+cnt, vec.Length())
+	for i := 0; i < cnt; i++ {
+		sourceRow := offset + i
+		targetRow := oldLength + i
+		require.Equalf(t, isNull[sourceRow], vec.IsNull(uint64(targetRow)),
+			"null row %d", targetRow)
+		require.Equalf(t,
+			vec.GetGrouping().Contains(uint64(sourceRow)),
+			vec.GetGrouping().Contains(uint64(targetRow)),
+			"grouping row %d", targetRow)
+		if !isNull[sourceRow] {
+			require.Equalf(t, values[sourceRow], string(vec.GetBytesAt(targetRow)),
+				"value row %d", targetRow)
+		}
+	}
+}
+
 func BenchmarkUnionBatchVarlenWindow768(b *testing.B) {
 	mp := mpool.MustNewZero()
 	const (
