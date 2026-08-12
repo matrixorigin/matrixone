@@ -13107,6 +13107,48 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.DatetimeEpoch, got[1])
 }
 
+func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	fallFirst := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	fallSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, fallFirst, fallSecond}, nil, proc.Mp()))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.ZeroTimestamp, got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()), got[2])
+}
+
+func TestMoWinTruncateTimestampOverloadDoesNotCastToDatetime(t *testing.T) {
+	got, err := GetFunctionByName(
+		context.Background(),
+		"mo_win_truncate",
+		[]types.Type{types.T_timestamp.ToTypeWithScale(6), types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	_, shouldCast := got.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	_, overloadID := DecodeOverloadID(got.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overloadID)
+	require.Equal(t, types.T_timestamp, got.GetReturnType().Oid)
+	require.Equal(t, int32(6), got.GetReturnType().Scale)
+}
+
 func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
 	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
 

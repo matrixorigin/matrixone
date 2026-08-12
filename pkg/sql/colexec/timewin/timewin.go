@@ -92,7 +92,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			return err
 		}
 
-		if timeWin.WStart {
+		if timeWin.WStart && !timeWin.timestampWindow() {
 			s, err := newTsExpr(timeWin.TsType, proc.Ctx)
 			if err != nil {
 				return err
@@ -103,7 +103,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 
-		if timeWin.WEnd {
+		if timeWin.WEnd && !timeWin.timestampWindow() {
 			e := timeWin.EndExpr
 			if e == nil {
 				e, err = newTsExpr(timeWin.TsType, proc.Ctx)
@@ -450,6 +450,20 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 	}, nil
 }
 
+func (ctr *container) windowValue(vecIdx, rowIdx int) types.Datetime {
+	if ctr.tsOid == types.T_timestamp {
+		return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](ctr.tsVec[vecIdx])[rowIdx])
+	}
+	return vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[vecIdx])[rowIdx]
+}
+
+func (ctr *container) zeroWindowValue() types.Datetime {
+	if ctr.tsOid == types.T_timestamp {
+		return types.Datetime(types.ZeroTimestamp)
+	}
+	return types.ZeroDatetime
+}
+
 func (ctr *container) nextWindow(t *TimeWin) error {
 	emit := !ctr.withoutFill || t.GapFill
 	if emit {
@@ -521,15 +535,16 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 	if err := ctr.accountGapFillWindow(t); err != nil {
 		return err
 	}
-	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
-	if val == types.ZeroDatetime {
+	val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
+	zeroValue := ctr.zeroWindowValue()
+	if val == zeroValue {
 		// A zero temporal has no chronological position, but it is a storable
 		// non-NULL key. Keep it in its own sentinel window instead of letting
 		// -1 % interval turn it into the valid epoch (0).
-		ctr.left = types.ZeroDatetime
-		ctr.right = types.ZeroDatetime
-		ctr.nextLeft = types.ZeroDatetime
-		ctr.nextRight = types.ZeroDatetime
+		ctr.left = zeroValue
+		ctr.right = zeroValue
+		ctr.nextLeft = zeroValue
+		ctr.nextRight = zeroValue
 		ctr.zeroWindow = true
 	} else {
 		ctr.left = val - val%t.Interval
@@ -561,16 +576,17 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 
 func (ctr *container) fillRows() error {
 	cnt := ctr.tsVec[ctr.curVecIdx].Length()
-	vals := vector.MustFixedColNoTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])
+	zeroValue := ctr.zeroWindowValue()
 
 	outRange := false
 	partBreak := false
 	for ; ctr.curRowIdx < cnt; ctr.curRowIdx++ {
+		val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
 		if ctr.zeroWindow {
 			if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
 				if !ctr.withoutFill {
-					ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
-					ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+					ctr.wStart = append(ctr.wStart, zeroValue)
+					ctr.wEnd = append(ctr.wEnd, zeroValue)
 				}
 				ctr.breakVecIdx = ctr.curVecIdx
 				ctr.breakRowIdx = ctr.curRowIdx
@@ -579,22 +595,22 @@ func (ctr *container) fillRows() error {
 				ctr.status = flush
 				return nil
 			}
-			if vals[ctr.curRowIdx] == types.ZeroDatetime {
+			if val == zeroValue {
 				for j, agg := range ctr.aggs {
 					if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
 						return err
 					}
 				}
 				ctr.withoutFill = false
-				ctr.partLastVal = vals[ctr.curRowIdx]
+				ctr.partLastVal = val
 				ctr.partLastVecIdx = ctr.curVecIdx
 				ctr.partLastRowIdx = ctr.curRowIdx
 				continue
 			}
 
 			if !ctr.withoutFill {
-				ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
-				ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+				ctr.wStart = append(ctr.wStart, zeroValue)
+				ctr.wEnd = append(ctr.wEnd, zeroValue)
 			}
 			ctr.zeroWindow = false
 			ctr.status = firstWindow
@@ -613,23 +629,23 @@ func (ctr *container) fillRows() error {
 			partBreak = true
 			break
 		}
-		ctr.partLastVal = vals[ctr.curRowIdx]
+		ctr.partLastVal = val
 		ctr.partLastVecIdx = ctr.curVecIdx
 		ctr.partLastRowIdx = ctr.curRowIdx
 
-		if vals[ctr.curRowIdx] <= ctr.nextLeft {
+		if val <= ctr.nextLeft {
 			ctr.preVecIdx = ctr.curVecIdx
 			ctr.preRowIdx = ctr.curRowIdx
 		}
 
-		if vals[ctr.curRowIdx] >= ctr.left && vals[ctr.curRowIdx] < ctr.right {
+		if val >= ctr.left && val < ctr.right {
 			for j, agg := range ctr.aggs {
 				if err := agg.Fill(ctr.group, ctr.curRowIdx, ctr.aggVec[ctr.curVecIdx][j]); err != nil {
 					return err
 				}
 			}
 			ctr.withoutFill = false
-		} else if vals[ctr.curRowIdx] >= ctr.right {
+		} else if val >= ctr.right {
 			outRange = true
 			break
 		}
@@ -658,7 +674,7 @@ func (ctr *container) fillRows() error {
 			ctr.status = nextWindow
 		}
 	default:
-		ctr.lastVal = vals[cnt-1]
+		ctr.lastVal = ctr.windowValue(ctr.curVecIdx, cnt-1)
 		ctr.status = nextBatch
 	}
 	return nil
@@ -684,6 +700,21 @@ func (ctr *container) accountGapFillWindow(timeWin *TimeWin) error {
 		return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
 	}
 	return nil
+}
+
+func appendTimestampBoundaryVector(
+	values []types.Datetime,
+	typ plan.Type,
+	proc *process.Process,
+) (*vector.Vector, error) {
+	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
+	vec := vector.NewVec(tsType)
+	for _, value := range values {
+		if err := vector.AppendFixed(vec, types.Timestamp(value), false, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
+	return vec, nil
 }
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
@@ -722,41 +753,61 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 	bat := batch.NewWithSize(1)
 	if ap.WStart {
-		if ctr.startVec != nil {
-			ctr.startVec.CleanOnlyData()
+		if ap.timestampWindow() {
+			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc)
+			if err != nil {
+				return err
+			}
+			ctr.startVecInBatch = true
+			ctr.bat.Vecs[int32(i)] = ctr.startVec
 		} else {
-			ctr.startVec = vector.NewVec(types.T_datetime.ToType())
-		}
-		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
-		if err != nil {
-			return err
-		}
+			ctr.startVecInBatch = false
+			if ctr.startVec != nil {
+				ctr.startVec.CleanOnlyData()
+			} else {
+				ctr.startVec = vector.NewVec(types.T_datetime.ToType())
+			}
+			err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
+			if err != nil {
+				return err
+			}
 
-		bat.SetVector(0, ctr.startVec)
-		batch.SetLength(bat, ctr.startVec.Length())
-		ctr.bat.Vecs[int32(i)], err = ctr.startExe.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return err
+			bat.SetVector(0, ctr.startVec)
+			batch.SetLength(bat, ctr.startVec.Length())
+			ctr.bat.Vecs[int32(i)], err = ctr.startExe.Eval(proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
 		}
 		i++
 	}
 
 	if ap.WEnd {
-		if ctr.endVec != nil {
-			ctr.endVec.CleanOnlyData()
+		if ap.timestampWindow() {
+			ctr.endVec, err = appendTimestampBoundaryVector(ctr.wEnd, ap.TsType, proc)
+			if err != nil {
+				return err
+			}
+			ctr.endVecInBatch = true
+			ctr.bat.Vecs[int32(i)] = ctr.endVec
 		} else {
-			ctr.endVec = vector.NewVec(types.T_datetime.ToType())
-		}
-		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
-		if err != nil {
-			return err
-		}
+			ctr.endVecInBatch = false
+			if ctr.endVec != nil {
+				ctr.endVec.CleanOnlyData()
+			} else {
+				ctr.endVec = vector.NewVec(types.T_datetime.ToType())
+			}
+			err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
+			if err != nil {
+				return err
+			}
 
-		bat.SetVector(0, ctr.endVec)
-		batch.SetLength(bat, ctr.endVec.Length())
-		ctr.bat.Vecs[int32(i)], err = ctr.endExe.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return err
+			bat.SetVector(0, ctr.endVec)
+			batch.SetLength(bat, ctr.endVec.Length())
+			ctr.bat.Vecs[int32(i)], err = ctr.endExe.Eval(proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
 		}
 		i++
 	}
@@ -834,11 +885,10 @@ func (ctr *container) setPartVecsForInterval(slot int) {
 }
 
 // freeFlushedAggVecs releases the aggregate vectors of the previously flushed
-// result. Each flush replaces ctr.bat, and the Flush() results are the only
-// vectors that batch owns outright -- the boundaries belong to their expression
-// executors and the partition keys to ctr.partOut. Without this, every flush
-// after the first orphans a set of aggregate vectors, which partitioning makes
-// routine rather than rare.
+// result. Each flush replaces ctr.bat. The aggregate vectors are always batch
+// owned; TIMESTAMP boundary vectors are also batch owned because they bypass
+// cast executors. Without this, every flush after the first orphans vectors,
+// which partitioning makes routine rather than rare.
 func (ctr *container) freeFlushedAggVecs(mp *mpool.MPool) {
 	if ctr.bat == nil {
 		return
@@ -849,6 +899,16 @@ func (ctr *container) freeFlushedAggVecs(mp *mpool.MPool) {
 			ctr.bat.SetVector(int32(i), nil)
 		}
 	}
+	if ctr.startVecInBatch && ctr.startVec != nil {
+		ctr.startVec.Free(mp)
+		ctr.startVec = nil
+	}
+	ctr.startVecInBatch = false
+	if ctr.endVecInBatch && ctr.endVec != nil {
+		ctr.endVec.Free(mp)
+		ctr.endVec = nil
+	}
+	ctr.endVecInBatch = false
 }
 
 // setPartVecsForWindows broadcasts the current partition's key across the rows

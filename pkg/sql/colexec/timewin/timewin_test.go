@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -358,6 +359,77 @@ func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.ZeroDatetime, ctr.right)
 	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
 	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
+}
+
+func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: hour,
+		Sliding:  hour,
+	}
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	inputTs := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], inputTs, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(len(inputTs))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, proc.Mp())
+	bat.SetRowCount(len(inputTs))
+
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	wantStarts := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+	}
+	wantEnds := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 8, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.Equal(t, []int64{1, 2, 3, 4}, sums)
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, wantEnds, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // singleAggInfo is the basic information of single column agg.

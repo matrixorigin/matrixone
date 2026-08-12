@@ -3528,11 +3528,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
-		})
-		if err != nil {
-			return nil, err
+		if types.T(args[0].Typ.Id) != types.T_timestamp {
+			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
+				Id: int32(types.T_datetime),
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {

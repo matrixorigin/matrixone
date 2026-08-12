@@ -1735,6 +1735,37 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return nil
 }
 
+func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	diff, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	num, err := getIntervalNum(diff, unit, proc)
+	if err != nil {
+		return err
+	}
+	t := num
+
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+		}
+		if v == types.ZeroTimestamp {
+			if err = rs.Append(types.ZeroTimestamp, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.Append(types.Timestamp(int64(v)-int64(v)%t), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	var num int64
 	iTyp := types.IntervalType(unit)
