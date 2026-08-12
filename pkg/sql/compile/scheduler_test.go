@@ -31,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -211,6 +213,264 @@ func TestScheduleQueryWorkersKeepsLocalExecTypesFromRuntimeStateLookup(t *testin
 		require.NoError(t, err)
 		require.Equal(t, engine.Nodes{{Id: localID, Addr: "local:6001", Mcpu: tt.mcpu}}, nodes)
 	}
+}
+
+type panicReadonlyWorkspace struct{ *Ws }
+
+func (*panicReadonlyWorkspace) Readonly() bool {
+	panic("local execution must not inspect workspace routing state")
+}
+
+func TestScheduleQueryWorkersKeepsLocalExecHotPathFromWorkspaceInspection(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl, &panicReadonlyWorkspace{Ws: &Ws{}})
+
+	for _, execType := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN} {
+		c := NewMockCompile(t)
+		c.proc.Base.TxnOperator = txnOp
+		c.execType = execType
+		c.e = &schedulerTestEngine{err: errors.New("candidate lookup should not run")}
+
+		_, err := c.scheduleQueryWorkers()
+		require.NoError(t, err)
+	}
+}
+
+func TestScheduleQueryWorkersKeepsIngressInWritableWorkspaceTopology(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl, &Ws{})
+
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "ingress", PipelineServiceAddress: "ingress:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 8},
+			{Service: metadata.CNService{
+				ServiceID: "remote", PipelineServiceAddress: "remote:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 16},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "ingress", Addr: "ingress:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+			{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+		},
+	}
+	c.e = provider
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: "ingress", Addr: "ingress:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+	}, nodes)
+	require.Equal(t, 1, provider.discoveryCalls)
+	require.Equal(t, 1, provider.resolutionCalls)
+	require.True(t, c.queryPlacement.RequireCurrentCN)
+	require.False(t, c.queryPlacement.IngressOnly)
+	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
+func TestScheduleQueryWorkersKeepsDefaultLoadDataLocalOnIngressWithoutDiscovery(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.stmt = &tree.Load{Local: true}
+	c.e = &schedulerTestEngine{err: errors.New("candidate lookup should not run")}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Addr: "ingress:6001", Mcpu: c.ncpu}}, nodes)
+	require.True(t, c.queryPlacement.RequireCurrentCN)
+	require.True(t, c.queryPlacement.IngressOnly)
+	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
+func TestScheduleQueryWorkersKeepsStrictLoadDataLocalOnIngress(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.stmt = &tree.Load{Local: true}
+	c.SetQuerySchedulingIntent(schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackStrict,
+		EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+	})
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID:              "ingress",
+				PipelineServiceAddress: "ingress:6001",
+				WorkState:              metadata.WorkState_Working,
+			},
+			Mcpu: 8,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "ingress", Addr: "ingress:6001", Mcpu: 8,
+			WorkState: metadata.WorkState_Working,
+		}, {
+			Id: "remote", Addr: "remote:6001", Mcpu: 16,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.e = provider
+	// Unit test processes do not own a lock service, so their
+	// ingress identity has no service ID. Model that same identity in the
+	// provider and retain a remote control candidate to prove LOCAL selects
+	// only the ingress route.
+	provider.candidates[0].Service.ServiceID = ""
+	provider.resolvedNodes[0].Id = ""
+	provider.candidates = append(provider.candidates, engine.QueryCandidate{
+		Service: metadata.CNService{
+			ServiceID: "remote", PipelineServiceAddress: "remote:6001",
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 16,
+	})
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Addr: "ingress:6001", Mcpu: c.ncpu, WorkState: metadata.WorkState_Working}}, nodes)
+	require.Equal(t, 1, provider.discoveryCalls)
+	require.Equal(t, 1, provider.resolutionCalls)
+	require.True(t, c.queryPlacement.RequireCurrentCN)
+	require.True(t, c.queryPlacement.IngressOnly)
+	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
+func TestScheduleQueryWorkersCanonicalizesWritableIngressAddress(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl, &Ws{})
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: "ingress"}).AnyTimes()
+
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	c.proc.Base.LockService = lockSvc
+	c.addr = "ingress-real:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "ingress", PipelineServiceAddress: "ingress-stale:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 8},
+			{Service: metadata.CNService{
+				ServiceID: "remote", PipelineServiceAddress: "remote:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 16},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "ingress", Addr: "ingress-stale:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+			{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: "ingress", Addr: "ingress-real:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+	}, nodes)
+}
+
+func TestScheduleQueryWorkersRejectsIngressOwnedStateOutsideResolvedPool(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		workspace client.Workspace
+		stmt      tree.Statement
+		strict    bool
+	}{
+		{name: "writable-workspace", workspace: &Ws{}},
+		{name: "load-data-local", workspace: &readonlyWorkspaceForIvfTest{Ws: &Ws{}}, stmt: &tree.Load{Local: true}, strict: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			_, txnOp := newTestTxnClientAndOp(ctrl, test.workspace)
+			provider := &schedulerProviderTestEngine{
+				schedulerTestEngine: &schedulerTestEngine{},
+				candidates: engine.QueryCandidates{{
+					Service: metadata.CNService{
+						ServiceID: "remote", PipelineServiceAddress: "remote:6001",
+						WorkState: metadata.WorkState_Working,
+					}, Mcpu: 16,
+				}},
+				resolvedNodes: engine.Nodes{{
+					Id: "remote", Addr: "remote:6001", Mcpu: 16,
+					WorkState: metadata.WorkState_Working,
+				}},
+			}
+			c := NewMockCompile(t)
+			c.proc.Base.TxnOperator = txnOp
+			c.addr = "ingress:6001"
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.stmt = test.stmt
+			c.e = provider
+			if test.strict {
+				c.SetQuerySchedulingIntent(schedule.SchedulingIntent{
+					PoolFallback:      schedule.PoolFallbackStrict,
+					EmptyWorkerPolicy: schedule.EmptyWorkerFail,
+				})
+			}
+
+			_, err := c.scheduleQueryWorkers()
+			require.ErrorContains(t, err, schedule.ReasonRequiredCurrentOutsidePool)
+			require.Equal(t, 1, provider.discoveryCalls)
+			require.Equal(t, 1, provider.resolutionCalls)
+			require.False(t, c.queryPlacement.Satisfied)
+			require.Empty(t, c.cnList)
+		})
+	}
+}
+
+func TestScheduleQueryWorkersRejectsIngressInvariantExcludedPolicyBeforeDiscovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl, &Ws{})
+
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.SetQuerySchedulingIntent(schedule.SchedulingIntent{
+		CurrentCNPolicy: schedule.CurrentCNExcluded,
+	})
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+	}
+	c.e = provider
+
+	_, err := c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonIngressConstraintConflict)
+	require.Equal(t, schedule.ReasonIngressConstraintConflict, c.queryPlacement.Reason)
+	require.Zero(t, provider.discoveryCalls)
+	require.Zero(t, provider.resolutionCalls)
+}
+
+func TestScheduleQueryWorkersAllowsReadOnlyWorkspaceToUseRemoteCN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	_, txnOp := newTestTxnClientAndOp(ctrl, &readonlyWorkspaceForIvfTest{Ws: &Ws{}})
+
+	c := NewMockCompile(t)
+	c.proc.Base.TxnOperator = txnOp
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.e = &schedulerTestEngine{nodes: engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 8}}}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{Id: "remote", Addr: "remote:6001", Mcpu: 8}}, nodes)
+	require.False(t, c.queryPlacement.RequireCurrentCN)
+	require.False(t, c.queryPlacement.IngressOnly)
 }
 
 func TestScheduleQueryWorkersAllowsLocalExecWithoutAddress(t *testing.T) {
