@@ -4111,6 +4111,42 @@ func TestTimestampToTimeUsesSessionTimeZone(t *testing.T) {
 	}
 }
 
+func TestTimeTemporalOverloadsPreserveInputScale(t *testing.T) {
+	var timeFn *FuncNew
+	for i := range supportedDateAndTimeBuiltIns {
+		if supportedDateAndTimeBuiltIns[i].functionId == TIME {
+			timeFn = &supportedDateAndTimeBuiltIns[i]
+			break
+		}
+	}
+	require.NotNil(t, timeFn)
+
+	testCases := []struct {
+		argType types.T
+		scale   int32
+	}{
+		{argType: types.T_datetime, scale: 6},
+		{argType: types.T_timestamp, scale: 6},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.argType.String(), func(t *testing.T) {
+			var matched *overload
+			for i := range timeFn.Overloads {
+				overload := &timeFn.Overloads[i]
+				if len(overload.args) == 1 && overload.args[0] == tc.argType {
+					matched = overload
+					break
+				}
+			}
+			require.NotNil(t, matched)
+
+			got := matched.retType([]types.Type{tc.argType.ToTypeWithScale(tc.scale)})
+			require.Equal(t, types.T_time, got.Oid)
+			require.Equal(t, tc.scale, got.Scale)
+		})
+	}
+}
+
 func initToTimestampCase() []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
 	d2, _ := types.ParseDatetime("2022-01-01 00:00:00", 6)
