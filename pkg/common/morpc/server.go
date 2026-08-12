@@ -192,12 +192,11 @@ func (s *server) Start() error {
 
 func (s *server) Close() error {
 	s.stopper.Stop()
-	err := s.application.Stop()
+	err := s.application.StopAndWait()
 	if err != nil {
 		s.logger.Error("stop rpc server failed",
 			zap.Error(err))
 	}
-
 	return err
 }
 
