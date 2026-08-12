@@ -34,6 +34,8 @@ INSERT INTO ntile_input VALUES (1, 1), (2, 1), (3, 1), (4, 2);
 PREPARE p_ntile FROM 'SELECT id, NTILE(?) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id';
 SET @value = 2;
 EXECUTE p_ntile USING @value;
+SET @value = NULL;
+EXECUTE p_ntile USING @value;
 DEALLOCATE PREPARE p_ntile;
 
 PREPARE p_recursive FROM 'WITH RECURSIVE r(n) AS (SELECT ? UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT CAST(SUM(n) AS SIGNED) AS got FROM r';
