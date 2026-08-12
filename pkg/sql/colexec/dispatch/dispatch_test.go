@@ -797,7 +797,7 @@ func TestDispatchResetAbortsSpoolWhenSomeLocalRegIsFull(t *testing.T) {
 	}
 }
 
-func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.T) {
+func TestDispatchResetRecordsEndForFullAndAvailableChannels(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
 	t.Cleanup(func() {
@@ -841,39 +841,42 @@ func TestDispatchResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing.
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Dispatch.Reset blocked after normal End delivery failed")
+		t.Fatal("Dispatch.Reset blocked while recording normal End")
 	}
 	require.Nil(t, d.ctr)
-	require.Nil(t, d.cleanupSpool)
-	require.Equal(t, int64(0), mp.CurrNB())
+	require.Same(t, sp, d.cleanupSpool)
+	require.Greater(t, mp.CurrNB(), int64(0))
 
 	select {
 	case <-fullReg.Done():
 	default:
-		t.Fatal("fallback abort did not close Done for full receiver")
+		t.Fatal("durable End did not close Done for full receiver")
 	}
-	require.ErrorIs(t, fullReg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+	require.NoError(t, fullReg.Err())
 	select {
 	case <-healthyReg.Done():
 	default:
 		t.Fatal("End did not close Done for healthy receiver")
 	}
+	require.NoError(t, healthyReg.Err())
 
-	staleSignal := <-fullReg.Ch2
-	got, info := staleSignal.Action()
-	require.Nil(t, got)
-	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
+	for _, reg := range []*process.WaitRegister{fullReg, healthyReg} {
+		receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+		got, info := receiver.GetNextBatch(nil)
+		require.NoError(t, info)
+		require.NotNil(t, got)
+		require.Equal(t, 1024, got.RowCount())
+		got, info = receiver.GetNextBatch(nil)
+		require.Nil(t, got)
+		require.NoError(t, info)
+	}
 
-	staleSignal = <-healthyReg.Ch2
-	got, info = staleSignal.Action()
-	require.Nil(t, got)
-	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
-
-	terminalSignal := <-healthyReg.Ch2
-	require.Equal(t, process.EventEnd, terminalSignal.EventType)
+	d.CleanupDeferredSpool()
+	require.Nil(t, d.cleanupSpool)
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
+func TestDispatchResetEndDoesNotWaitForChannelCapacity(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond
 	t.Cleanup(func() {
@@ -896,9 +899,9 @@ func TestDispatchResetUsesSharedTerminalSendBudget(t *testing.T) {
 		select {
 		case <-reg.Done():
 		default:
-			t.Fatal("fallback abort should mark every failed receiver edge terminal")
+			t.Fatal("durable End should mark every receiver edge terminal")
 		}
-		require.ErrorIs(t, reg.Err(), process.ErrPipelineEndSignalDeliveryFailed)
+		require.NoError(t, reg.Err())
 	}
 }
 

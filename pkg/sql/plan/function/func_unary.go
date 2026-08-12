@@ -4678,6 +4678,7 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
@@ -4685,8 +4686,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
+	loc := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
 	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
-		return v.ToDatetime(time.Local).ToTime(scale)
+		return v.ToDatetime(loc).ToTime(scale)
 	}, selectList)
 }
 
