@@ -26,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
-// BenchmarkWindowFirstBatch models a LIMIT consumer: it asks Window for only
-// the first output batch and then resets the pipeline. The input is large
-// enough to cross eight aggregate-result chunks.
+// BenchmarkWindowFirstBatch models the #23107 LIMIT consumer: it asks Window
+// for only the first output batch of a large cumulative frame and then resets
+// the pipeline.
 func BenchmarkWindowFirstBatch(b *testing.B) {
 	const rows = colexec.DefaultBatchSize * 8
 
@@ -44,7 +44,7 @@ func BenchmarkWindowFirstBatch(b *testing.B) {
 		input.SetRowCount(rows)
 
 		spec := makeWindowSpec()
-		spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+		spec.Expr.(*plan.Expr_W).W.Frame = makeFiniteCumulativeFrame(2147483647)
 		arg := &Window{
 			WinSpecList: []*plan.Expr{spec},
 			Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
