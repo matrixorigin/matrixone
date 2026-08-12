@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -390,9 +391,53 @@ func TestNormalizePreparedDecimalPayload(t *testing.T) {
 		{input: "  123", want: "123"},
 		{input: "\t123", want: "123"},
 		{input: "\v\f\r\n-1E+1", want: "-1e+1"},
+		{input: "12.3tail", want: "12.3"},
+		{input: "", want: "0"},
+		{input: "abc", want: "0"},
 	} {
 		t.Run(test.input, func(t *testing.T) {
 			require.Equal(t, test.want, string(normalizePreparedDecimalPayload([]byte(test.input))))
+		})
+	}
+}
+
+func TestPreparedParamBindingCategoryIgnoresExactDecimalDomain(t *testing.T) {
+	require.True(t, preparedParamBindingCategoryEqual(
+		types.New(types.T_decimal256, 7, 6), types.New(types.T_decimal256, 13, 2)))
+	left := types.T_text.ToType()
+	left.Charset = preparedNumericTextBindingCharset
+	left.Size = preparedNumericTextPrefix
+	left.Width, left.Scale = 7, 6
+	right := left
+	right.Width, right.Scale = 13, 2
+	require.True(t, preparedParamBindingCategoryEqual(left, right))
+	right.Size = preparedNumericTextFloat
+	require.False(t, preparedParamBindingCategoryEqual(left, right))
+}
+
+func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
+	tests := []struct {
+		name      string
+		width     int32
+		scale     int32
+		full      bool
+		exponent  bool
+		wantMode  int32
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "ordinary", width: 13, scale: 2, full: true, wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
+		{name: "wide 67 plus 9", width: 76, scale: 9, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
+		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericPrefixMax, wantWidth: 74, wantScale: 9},
+		{name: "peer scale cannot consume integral digits", width: 65, full: true, wantMode: preparedNumericFallback},
+		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := preparedDecimalBindingType(test.width, test.scale, test.full, test.exponent)
+			require.Equal(t, test.wantMode, got.Size)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
 		})
 	}
 }
@@ -545,13 +590,12 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 
 	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
 	exactDecimalPlan, resultType := execute()
-	require.NotSame(t, decimalPlan, exactDecimalPlan,
-		"a different exact DECIMAL domain must rebuild the common-type plan")
+	require.Same(t, decimalPlan, exactDecimalPlan,
+		"exact DECIMAL width and scale changes must reuse the stable plan")
 	require.True(t, types.T(resultType.Id).IsDecimal())
 	require.Len(t, prepareStmt.paramBindingTypes, 1)
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
-	require.Equal(t, int32(7), prepareStmt.paramBindingTypes[0].Width)
-	require.Equal(t, int32(6), prepareStmt.paramBindingTypes[0].Scale)
+	require.Equal(t, decimalPlan.GetDcl().GetPrepare().Plan, exactDecimalPlan.GetDcl().GetPrepare().Plan)
 
 	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
 	secondFloatPlan, resultType := execute()
@@ -580,7 +624,6 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 	}()
 
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
 	tests := []struct {
 		value     string
 		wantWidth int32
@@ -591,20 +634,23 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 		{value: "1E-31", wantWidth: 38, wantScale: 30},
 		{value: "1E-40", wantWidth: 38, wantScale: 30},
 	}
-	for _, test := range tests {
-		t.Run(test.value, func(t *testing.T) {
-			prepareStmt.params.CleanOnlyData()
-			require.NoError(t, vector.AppendBytes(
-				prepareStmt.params, []byte(test.value), false, cw.proc.Mp()))
-			_, queryPlan, _, _, _, err := initExecuteStmtParam(
-				execCtx, ses, cw, nil, prepareStmt.Name)
-			require.NoError(t, err)
-			columns := plan2.GetResultColumnsFromPlan(queryPlan)
-			require.Len(t, columns, 1)
-			require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
-			require.Equal(t, test.wantWidth, columns[0].Typ.Width)
-			require.Equal(t, test.wantScale, columns[0].Typ.Scale)
-		})
+	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL} {
+		for _, test := range tests {
+			t.Run(fmt.Sprintf("type_%d/%s", mysqlType, test.value), func(t *testing.T) {
+				prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+				prepareStmt.params.CleanOnlyData()
+				require.NoError(t, vector.AppendBytes(
+					prepareStmt.params, []byte(test.value), false, cw.proc.Mp()))
+				_, queryPlan, _, _, _, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				columns := plan2.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 1)
+				require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+				require.Equal(t, test.wantWidth, columns[0].Typ.Width)
+				require.Equal(t, test.wantScale, columns[0].Typ.Scale)
+			})
+		}
 	}
 }
 

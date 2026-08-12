@@ -2936,6 +2936,28 @@ func TestParseExecuteDataPreservesExactJsonOrderingParams(t *testing.T) {
 	}
 }
 
+func TestParseExecuteDataNormalizesDecimalProtocolTypes(t *testing.T) {
+	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL} {
+		for _, test := range []struct {
+			payload string
+			want    string
+		}{
+			{payload: "1E+35", want: "1e+35"},
+			{payload: "\t12.3tail", want: "12.3"},
+			{payload: "", want: "0"},
+		} {
+			t.Run(fmt.Sprintf("type_%d/%q", mysqlType, test.payload), func(t *testing.T) {
+				ctx := context.TODO()
+				proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+				packet := buildStringExecutePacket(proto, mysqlType, test.payload)
+				require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt, packet, 0))
+				require.Equal(t, test.want, prepareStmt.params.GetStringAt(0))
+				require.Equal(t, byte(mysqlType), prepareStmt.ParamTypes[0])
+			})
+		}
+	}
+}
+
 func TestParseExecuteDataPreservesYearWireType(t *testing.T) {
 	data := make([]byte, 11)
 	copy(data, []byte{0, 0, 0, 0, 0, 0, 1, byte(defines.MYSQL_TYPE_YEAR), 0})

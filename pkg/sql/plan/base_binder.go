@@ -4882,26 +4882,10 @@ func decimalParamCommonTypeResolutionTypes(
 		}
 	}
 	if hasParam {
-		// Preserve the peer scale and give a runtime numeric-prefix parameter all
-		// remaining Decimal256 integral digits. The parameter payload itself follows
-		// MySQL's 65-digit DECIMAL domain, but combining it with a peer scale may use
-		// MatrixOne's wider 76-digit physical representation without losing value.
-		availableIntegral := max(int32(76)-maxScale, 0)
-		for i, typ := range resolutionTypes {
-			if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !typ.Oid.IsDecimal() ||
-				typ.Width-typ.Scale+maxScale <= 76 {
-				continue
-			}
-			integral := min(typ.Width-typ.Scale, availableIntegral)
-			resolutionTypes[i] = types.New(types.T_decimal256, max(integral+typ.Scale, 1), typ.Scale)
-		}
-		maxIntegral = 0
-		for _, typ := range resolutionTypes {
-			if typ.Oid.IsDecimal() {
-				maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
-			}
-		}
 		if maxIntegral+maxScale > 76 {
+			// No Decimal256 type can preserve both domains. Leave the direct
+			// parameter unresolved so the normal non-narrowing text path decides the
+			// common type instead of discarding high integral digits.
 			return argsType
 		}
 	}
@@ -5044,6 +5028,9 @@ func runtimePreparedNumericType(expr *Expr) (types.Type, int32, bool) {
 	}
 	if mode == 3 {
 		return types.T_float64.ToType(), mode, true
+	}
+	if mode == 5 {
+		return types.T_text.ToType(), mode, true
 	}
 	var typ types.Type
 	switch {

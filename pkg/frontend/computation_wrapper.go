@@ -730,6 +730,9 @@ const preparedNumericTextBindingCharset = uint8(255)
 const (
 	preparedNumericTextPrefix int32 = 2
 	preparedNumericTextFloat  int32 = 3
+	preparedNumericWide       int32 = 4
+	preparedNumericFallback   int32 = 5
+	preparedNumericPrefixMax  int32 = 6
 )
 
 func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
@@ -744,25 +747,33 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	case vector.PrepareParamDecimal:
 		value = normalizePreparedDecimalPayload(value)
 		width, scale := preparedNativeDecimalDomain(value)
-		integral := max(width-scale, 0)
-		scale = min(scale, 30)
-		return types.New(types.T_decimal256,
-			max(min(integral, 65-scale)+scale, 1), scale)
+		return preparedDecimalBindingType(width, scale, true, false)
 	case vector.PrepareParamBoolean:
 		return types.T_bool.ToType()
 	}
 
 	width, scale, full, exponent := preparedNumericTextDomain(value)
+	return preparedDecimalBindingType(width, scale, full, exponent)
+}
+
+func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.Type {
 	binding := types.T_text.ToType()
 	binding.Charset = preparedNumericTextBindingCharset
 	integral := max(width-scale, 0)
 	switch {
-	case full && exponent && integral > 65:
+	case full && exponent && integral > 76:
 		binding.Size = preparedNumericTextFloat
-	default:
+	case integral <= 35 && scale <= 30:
 		binding.Size = preparedNumericTextPrefix
-		binding.Scale = min(scale, 30)
-		binding.Width = max(min(integral, 65-binding.Scale)+binding.Scale, 1)
+		binding.Width, binding.Scale = 65, 30
+	case integral <= 67 && scale <= 9:
+		binding.Size = preparedNumericWide
+		binding.Width, binding.Scale = 76, 9
+	case !full && integral > 76:
+		binding.Size = preparedNumericPrefixMax
+		binding.Width, binding.Scale = 74, 9
+	default:
+		binding.Size = preparedNumericFallback
 	}
 	return binding
 }
@@ -775,21 +786,57 @@ func normalizePreparedDecimalPayload(value []byte) []byte {
 	for start < len(value) && isPreparedNumericSpace(value[start]) {
 		start++
 	}
-	normalized := value[start:]
+	value = value[start:]
+	end := preparedDecimalPrefixEnd(value)
+	if end == 0 {
+		return []byte{'0'}
+	}
+	normalized := value[:end]
 	for i, ch := range normalized {
-		if ch != 'E' {
-			continue
+		if ch == 'E' {
+			copyValue := append([]byte(nil), normalized...)
+			copyValue[i] = 'e'
+			return copyValue
 		}
-		copyValue := append([]byte(nil), normalized...)
-		copyValue[i] = 'e'
-		for j := i + 1; j < len(copyValue); j++ {
-			if copyValue[j] == 'E' {
-				copyValue[j] = 'e'
-			}
-		}
-		return copyValue
 	}
 	return normalized
+}
+
+func preparedDecimalPrefixEnd(value []byte) int {
+	i := 0
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+		digits++
+	}
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0
+	}
+	mantissaEnd := i
+	if i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		i++
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			i++
+		}
+		exponentStart := i
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+		}
+		if i == exponentStart {
+			return mantissaEnd
+		}
+	}
+	return i
 }
 
 // preparedNativeDecimalDomain preserves the lexical scale carried by a native
@@ -983,11 +1030,34 @@ func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, depe
 		if i < len(right) {
 			rightType = right[i]
 		}
-		if !leftType.Eq(rightType) {
+		if !preparedParamBindingCategoryEqual(leftType, rightType) {
 			return false
 		}
 	}
 	return true
+}
+
+func preparedParamBindingCategoryEqual(left, right types.Type) bool {
+	if left.Oid == 0 && isStablePreparedDecimalBinding(right) ||
+		right.Oid == 0 && isStablePreparedDecimalBinding(left) {
+		return true
+	}
+	if left.Oid != right.Oid {
+		return false
+	}
+	if left.Oid == types.T_text && left.Charset == preparedNumericTextBindingCharset &&
+		right.Charset == preparedNumericTextBindingCharset {
+		return left.Size == right.Size
+	}
+	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
+		return true
+	}
+	return left.Eq(right)
+}
+
+func isStablePreparedDecimalBinding(typ types.Type) bool {
+	return typ.Oid == types.T_text && typ.Charset == preparedNumericTextBindingCharset &&
+		typ.Size == preparedNumericTextPrefix
 }
 
 func clonePreparedParamBindingTypes(bindingTypes []types.Type) []types.Type {

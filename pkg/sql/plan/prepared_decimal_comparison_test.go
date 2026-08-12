@@ -501,10 +501,10 @@ func TestRuntimePreparedDecimalCommonTypeUsesStableDomain(t *testing.T) {
 	}
 }
 
-func TestRuntimePreparedDecimalCommonTypePreserves65IntegralDigits(t *testing.T) {
+func TestRuntimePreparedDecimalCommonTypePreservesWideIntegralDigits(t *testing.T) {
 	ctx := context.Background()
 	peer := types.New(types.T_decimal64, 10, 2)
-	for _, width := range []int32{63, 64, 65} {
+	for _, width := range []int32{63, 64, 65, 66, 67} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			param := makeRuntimeNumericPreparedParam(0, 2, width, 0)
 			for _, name := range []string{"coalesce", "greatest", "least"} {
@@ -518,6 +518,17 @@ func TestRuntimePreparedDecimalCommonTypePreserves65IntegralDigits(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestRuntimePreparedDecimalCommonTypeDoesNotTradeIntegralDigitsForPeerScale(t *testing.T) {
+	peer := types.New(types.T_decimal256, 65, 30)
+	param := makeRuntimeNumericPreparedParam(0, 5, 65, 0)
+	args := []*planpb.Expr{param, makePreparedDecimalComparisonColumn(peer)}
+
+	resolution := decimalParamCommonTypeResolutionTypes(
+		"coalesce", args, []types.Type{types.T_text.ToType(), peer}, true)
+	require.Equal(t, types.T_text, resolution[0].Oid)
+	require.Equal(t, peer, resolution[1])
 }
 
 func TestRuntimePreparedDecimalCommonTypeUsesAvailablePhysicalDomain(t *testing.T) {

@@ -153,12 +153,16 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return values
 		}
-		assertSQLPrepareType("1.234567", "DECIMAL", 14, 6)
+		assertSQLPrepareType("1.234567", "DECIMAL", 65, 30)
+		values := assertSQLPrepareType("1e-40", "DECIMAL", 65, 30)
+		require.Equal(t, "0.000000000000000000000000000000", values[0])
 		assertSQLPrepareType("1e100", "DOUBLE", 0, 0)
 		for _, value := range []string{
 			"999999999999999999999999999999999999999999999999999999999999999",
 			"9999999999999999999999999999999999999999999999999999999999999999",
 			"99999999999999999999999999999999999999999999999999999999999999999",
+			"999999999999999999999999999999999999999999999999999999999999999999",
+			"9999999999999999999999999999999999999999999999999999999999999999999",
 			"1e62",
 			"1e63",
 		} {
@@ -168,12 +172,16 @@ func TestIssue26879PreparedDecimalRuntimeDomains(t *testing.T) {
 			} else if value == "1e63" {
 				want = "1" + strings.Repeat("0", 63)
 			}
-			precision := int64(len(want) + 2)
-			values := assertSQLPrepareType(value, "DECIMAL", precision, 2)
-			require.Equal(t, want+".00", values[0])
-			require.Equal(t, want+".00", values[1])
-			require.Equal(t, "2.00", values[2])
+			values := assertSQLPrepareType(value, "DECIMAL", 76, 9)
+			require.Equal(t, want+".000000000", values[0])
+			require.Equal(t, want+".000000000", values[1])
+			require.Equal(t, "2.000000000", values[2])
 		}
+		values = assertSQLPrepareType("1e100tail", "DECIMAL", 74, 9)
+		maxPrefix := strings.Repeat("9", 65) + ".000000000"
+		require.Equal(t, maxPrefix, values[0])
+		require.Equal(t, maxPrefix, values[1])
+		require.Equal(t, "2.000000000", values[2])
 
 		_, err = conn.ExecContext(ctx,
 			"prepare issue26879_set from 'set @issue26879_out = coalesce(?, cast(2 as decimal(10,2)))'")
