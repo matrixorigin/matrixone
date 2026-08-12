@@ -339,13 +339,23 @@ func TestSnapshotGaugeDeltasAggregateAcrossOwners(t *testing.T) {
 
 	serverMetrics1 := newServerMetrics(t.Name() + "-server")
 	serverMetrics2 := newServerMetrics(t.Name() + "-server")
-	serverMetrics1.setSessionSize(2)
-	serverMetrics2.setSessionSize(3)
+	server1 := &server{metrics: serverMetrics1, sessions: &sync.Map{}}
+	server2 := &server{metrics: serverMetrics2, sessions: &sync.Map{}}
+	server1Sessions := []*clientSession{{}, {}}
+	server2Sessions := []*clientSession{{}, {}, {}}
+	for id, session := range server1Sessions {
+		server1.loadOrStoreClientSession(uint64(id), session)
+	}
+	for id, session := range server2Sessions {
+		server2.loadOrStoreClientSession(uint64(id), session)
+	}
 	require.Equal(t, float64(5), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
-	serverMetrics1.setSessionSize(1)
+	require.True(t, server1.deleteClientSession(0, server1Sessions[0]))
 	require.Equal(t, float64(4), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
-	serverMetrics1.setSessionSize(0)
-	serverMetrics2.setSessionSize(0)
+	require.True(t, server1.deleteClientSession(1, server1Sessions[1]))
+	for id, session := range server2Sessions {
+		require.True(t, server2.deleteClientSession(uint64(id), session))
+	}
 	require.Equal(t, float64(0), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
 }
 

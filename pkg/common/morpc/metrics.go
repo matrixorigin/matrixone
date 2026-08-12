@@ -217,27 +217,12 @@ type serverMetrics struct {
 	outputBytesCounter            prometheus.Counter
 	sendingQueueSizeGauge         prometheus.Gauge
 	sessionSizeGauge              prometheus.Gauge
-	sessionSizeMu                 sync.Mutex
-	sessionSize                   int
 	receivedStreamStateGauge      prometheus.Gauge
 	sentStreamStateGauge          prometheus.Gauge
 	messageCacheStateGauge        prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
 	writeDurationHistogram        prometheus.Observer
 	writeLatencyDurationHistogram prometheus.Observer
-}
-
-func (m *serverMetrics) setSessionSize(size int) {
-	if m == nil {
-		return
-	}
-	m.sessionSizeMu.Lock()
-	defer m.sessionSizeMu.Unlock()
-	delta := size - m.sessionSize
-	m.sessionSize = size
-	if delta != 0 {
-		m.sessionSizeGauge.Add(float64(delta))
-	}
 }
 
 func newServerMetrics(name string) *serverMetrics {

@@ -109,16 +109,17 @@ func WithServerMessageCacheScanHookForTesting(hook func()) ServerOption {
 }
 
 type server struct {
-	name        string
-	metrics     *serverMetrics
-	address     string
-	logger      *zap.Logger
-	codec       Codec
-	application goetty.NetApplication
-	stopper     *stopper.Stopper
-	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
-	sessions    *sync.Map // session-id => *clientSession
-	options     struct {
+	name               string
+	metrics            *serverMetrics
+	address            string
+	logger             *zap.Logger
+	codec              Codec
+	application        goetty.NetApplication
+	stopper            *stopper.Stopper
+	handler            func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
+	sessions           *sync.Map // session-id => *clientSession
+	sessionOwnershipMu sync.Mutex
+	options            struct {
 		goettyOptions            []goetty.Option
 		bufferSize               int
 		batchSendSize            int
@@ -499,8 +500,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 }
 
 func (s *server) closeClientSession(cs *clientSession) {
-	s.sessions.Delete(cs.conn.ID())
-	s.metrics.setSessionSize(s.getSessionCount())
+	s.deleteClientSession(cs.conn.ID(), cs)
 	if err := cs.Close(); err != nil {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
@@ -514,19 +514,47 @@ func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
 
 	cs := newClientSession(s.metrics, rs, s.codec, s.newFuture, s.options.releaseMessageFunc)
 	cs.messageCacheScanHook = s.options.messageCacheScanHook
-	v, loaded := s.sessions.LoadOrStore(rs.ID(), cs)
+	v, loaded := s.loadOrStoreClientSession(rs.ID(), cs)
 	if loaded {
 		close(cs.c)
-		return v.(*clientSession), nil
+		return v, nil
 	}
 
-	s.metrics.setSessionSize(s.getSessionCount())
 	rs.Ref()
 	if err := s.startWriteLoop(cs); err != nil {
 		s.closeClientSession(cs)
 		return nil, err
 	}
 	return cs, nil
+}
+
+// loadOrStoreClientSession couples the session's map ownership with its gauge
+// ownership. Only the generation that wins LoadOrStore contributes +1.
+func (s *server) loadOrStoreClientSession(
+	id uint64,
+	cs *clientSession,
+) (*clientSession, bool) {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	v, loaded := s.sessions.LoadOrStore(id, cs)
+	if !loaded && s.metrics != nil {
+		s.metrics.sessionSizeGauge.Inc()
+	}
+	return v.(*clientSession), loaded
+}
+
+// deleteClientSession retires only the matching generation. This prevents a
+// repeated or stale close from removing a replacement or decrementing twice.
+func (s *server) deleteClientSession(id uint64, cs *clientSession) bool {
+	s.sessionOwnershipMu.Lock()
+	defer s.sessionOwnershipMu.Unlock()
+	if !s.sessions.CompareAndDelete(id, cs) {
+		return false
+	}
+	if s.metrics != nil {
+		s.metrics.sessionSizeGauge.Dec()
+	}
+	return true
 }
 
 func (s *server) releaseFuture(f *Future) {
@@ -557,15 +585,6 @@ func (s *server) closeDisconnectedSession(ctx context.Context) {
 			})
 		}
 	}
-}
-
-func (s *server) getSessionCount() int {
-	n := 0
-	s.sessions.Range(func(key, value any) bool {
-		n++
-		return true
-	})
-	return n
 }
 
 // sentStreamState owns the complete lifecycle of server-side stream response
@@ -654,7 +673,9 @@ type clientSession struct {
 	disconnectedC           chan struct{}
 	queueMetricMu           struct {
 		sync.Mutex
-		depth int
+		accounted sync.Cond
+		depth     int
+		waiters   int
 	}
 	mu struct {
 		sync.RWMutex
@@ -683,6 +704,7 @@ func newClientSession(
 		newFutureFunc:           newFutureFunc,
 		releaseMessageFunc:      releaseMessageFunc,
 	}
+	cs.queueMetricMu.accounted.L = &cs.queueMetricMu.Mutex
 	cs.mu.caches = make(map[uint64]cacheWithContext)
 	return cs
 }
@@ -810,13 +832,10 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	if !f.oneWay {
 		f.ref()
 	}
-	cs.queueMetricMu.Lock()
 	select {
 	case cs.c <- f:
-		cs.changeQueueDepthLocked(1)
-		cs.queueMetricMu.Unlock()
+		cs.changeQueueDepth(1)
 	case <-msg.Ctx.Done():
-		cs.queueMetricMu.Unlock()
 		cs.releaseMessage(msg)
 		f.Close()
 		if !f.oneWay {
@@ -830,17 +849,21 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 func (cs *clientSession) changeQueueDepth(delta int) {
 	cs.queueMetricMu.Lock()
 	defer cs.queueMetricMu.Unlock()
-	cs.changeQueueDepthLocked(delta)
-}
-
-func (cs *clientSession) changeQueueDepthLocked(delta int) {
-	depth := cs.queueMetricMu.depth + delta
-	if depth < 0 {
-		panic("negative MORPC server sending queue depth")
+	for cs.queueMetricMu.depth+delta < 0 {
+		// A receive can win scheduling immediately after its matching send.
+		// Wait only for that sender's post-admission accounting; the sender does
+		// not depend on this receiver and Cond.Wait releases the mutex.
+		cs.queueMetricMu.waiters++
+		cs.queueMetricMu.accounted.Wait()
+		cs.queueMetricMu.waiters--
 	}
+	depth := cs.queueMetricMu.depth + delta
 	cs.queueMetricMu.depth = depth
 	if cs.metrics != nil {
 		cs.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	}
+	if delta > 0 && cs.queueMetricMu.waiters > 0 {
+		cs.queueMetricMu.accounted.Signal()
 	}
 }
 
