@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -1293,7 +1292,7 @@ func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
 		return nil
 	}
 	if procCtx != nil && procCtx.Err() != nil &&
-		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		isScopeCancellationFrom(err, context.Canceled) {
 		return nil
 	}
 	return err

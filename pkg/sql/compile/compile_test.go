@@ -727,7 +727,10 @@ func TestDebugLogFor19288(t *testing.T) {
 func TestPreferPrimaryScopeResult(t *testing.T) {
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
+	joinedDeadlineErr := errors.Join(context.DeadlineExceeded, context.Canceled)
 	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+	joinedCancellationErr := errors.Join(context.Canceled, queryInterrupted)
 	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
 	cancelInternal(executionErr)
 	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
@@ -754,11 +757,14 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	}{
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
+		{name: "joined independent deadline replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedDeadlineErr}, want: context.DeadlineExceeded},
 		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
 		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
 		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
 		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
+		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
@@ -831,6 +837,34 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 			runErr:      context.DeadlineExceeded,
 			want:        context.DeadlineExceeded,
 		},
+		{
+			name:        "joined independent deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined cancellation fallout remains secondary",
+			cancelCause: nil,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: nil,
+		},
+		{
+			name:        "joined cancellation fallout resolves to substantive cause",
+			cancelCause: primaryErr,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: primaryErr,
+		},
+		{
+			name:        "joined independent deadline survives substantive cancellation cause",
+			cancelCause: primaryErr,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
 	}
 
 	for _, test := range tests {
@@ -856,24 +890,38 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 }
 
 func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	deadlineCtx, cancelDeadline := context.WithTimeoutCause(
-		context.Background(), 0, moerr.CauseInternalExecutorExec)
-	defer cancelDeadline()
-	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
-	proc.BuildPipelineContext(queryCtx)
-
-	op := &scopeRunCancelErrorOperator{
-		MockOperator: colexec.NewMockOperator(),
-		runErr:       context.DeadlineExceeded,
+	tests := []struct {
+		name   string
+		runErr error
+	}{
+		{name: "deadline", runErr: context.DeadlineExceeded},
+		{name: "canceled child", runErr: context.Canceled},
+		{name: "query interrupted", runErr: moerr.NewQueryInterrupted(context.Background())},
+		{name: "joined deadline and cancellation", runErr: errors.Join(context.DeadlineExceeded, context.Canceled)},
 	}
-	got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
-	require.ErrorIs(t, got, context.DeadlineExceeded)
-	require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
 
-	attached := moerr.AttachCause(deadlineCtx, got)
-	require.ErrorIs(t, attached, context.DeadlineExceeded)
-	require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+				context.Background(), 0, moerr.CauseInternalExecutorExec)
+			defer cancelDeadline()
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
+			proc.BuildPipelineContext(queryCtx)
+
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				runErr:       test.runErr,
+			}
+			got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
+			require.ErrorIs(t, got, context.DeadlineExceeded)
+			require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
+
+			attached := moerr.AttachCause(deadlineCtx, got)
+			require.ErrorIs(t, attached, context.DeadlineExceeded)
+			require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
+		})
+	}
 }
 
 func TestLockMeta_doLock(t *testing.T) {

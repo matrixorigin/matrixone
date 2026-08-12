@@ -582,6 +582,34 @@ func isScopeCancellationError(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
 }
 
+// isScopeCancellationFrom reports whether every leaf in err can be attributed
+// to the same canceled context. A joined error is attributable only as a whole;
+// one matching cancellation leaf must not hide an independent deadline leaf.
+func isScopeCancellationFrom(err error, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationFrom(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationFrom(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
 // normalizeScopeRunError distinguishes a substantive execution failure from
 // cancellation fallout.  A child pipeline canceled by a successfully finished
 // consumer is secondary and may be ignored, while a real error carried as the
@@ -596,14 +624,6 @@ func normalizeScopeRunError(
 		pipelineCtx == nil || pipelineCtx.Err() == nil {
 		return err, false
 	}
-	// A context-shaped error is secondary only when it was derived from this
-	// pipeline's cancellation.  Preserve an independent operator timeout that
-	// merely raced a different pipeline cancellation.
-	if !errors.Is(err, pipelineCtx.Err()) &&
-		!moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
-		return err, false
-	}
-
 	// Query cancellation owns the terminal classification. In particular,
 	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
 	// carries diagnostic detail. Replacing the former with the latter would make
@@ -614,11 +634,22 @@ func normalizeScopeRunError(
 			if errors.Is(queryErr, context.DeadlineExceeded) {
 				return queryErr, true
 			}
+			if !isScopeCancellationFrom(err, queryErr) {
+				return err, false
+			}
 			if cause := context.Cause(queryCtx); cause != nil {
 				return cause, true
 			}
 			return queryErr, true
 		}
+	}
+
+	// A context-shaped error is secondary only when every leaf was derived from
+	// this pipeline's cancellation. Preserve an independent operator timeout
+	// that merely raced a different pipeline cancellation, including when the
+	// two errors were joined.
+	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return err, false
 	}
 
 	if cause := context.Cause(pipelineCtx); cause != nil {
@@ -643,7 +674,7 @@ func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
 // error, while an externally canceled query keeps its external cause.
 func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	current, _ = current.resolveCancelCause()
-	candidate, candidateHasCause := candidate.resolveCancelCause()
+	candidate, candidateNormalized := candidate.resolveCancelCause()
 
 	if current.err == nil {
 		return candidate
@@ -653,13 +684,11 @@ func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult 
 		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
-	// Without a cancellation cause, a canceled sibling does not prove that the
-	// cleanup fallback was secondary. Process-backed production results always
-	// carry their pipeline context, but keep this conservative for synthetic
-	// and start-failure results that do not.
-	if !candidateHasCause &&
-		(errors.Is(candidate.err, context.Canceled) ||
-			moerr.IsMoErrCode(candidate.err, moerr.ErrQueryInterrupted)) {
+	// An unresolved pure cancellation does not prove that the cleanup fallback
+	// was secondary. A mixed error tree is substantive, however, and must not be
+	// rejected merely because one leaf is context.Canceled.
+	if !candidateNormalized &&
+		isScopeCancellationFrom(candidate.err, context.Canceled) {
 		return current
 	}
 	return candidate
