@@ -55,4 +55,16 @@ EXECUTE p_recursive USING @value;
 ➤ got[-5,64,0]  𝄀
 6
 DEALLOCATE PREPARE p_recursive;
+CREATE TABLE count_input(id INT PRIMARY KEY);
+INSERT INTO count_input SELECT result FROM generate_series(1, 10000) g;
+PREPARE p_count_table FROM 'SELECT COUNT(?) AS got FROM count_input LIMIT 1';
+SET @value = 'x';
+EXECUTE p_count_table USING @value;
+➤ got[-5,64,0]  𝄀
+10000
+SET @value = NULL;
+EXECUTE p_count_table USING @value;
+➤ got[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_count_table;
 DROP DATABASE prepared_numeric_aggregate;
