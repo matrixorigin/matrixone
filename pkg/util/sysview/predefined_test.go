@@ -104,9 +104,20 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 }
 
 func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
+	assert.NoError(t, err)
+	assert.Len(t, statements, 1)
+	defer statements[0].Free()
+
 	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
 	assert.Contains(t, InformationSchemaColumnsDDL,
-		"not exists (select 1 from mo_catalog.mo_view_refresh vr")
+		"(not exists (select 1 from mo_catalog.mo_view_refresh vr")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"not exists (select 1 from mo_catalog.mo_view_dependencies vd")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vd.source_relation_kind<>'REVALIDATE_REQUIRED'")
 	assert.Contains(t, InformationSchemaColumnsDDL,
 		"mt.reldatabase in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
 }

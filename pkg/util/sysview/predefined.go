@@ -206,8 +206,11 @@ var (
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
 		"and (mt.relkind<>'v' or mt.reldatabase in (%s) or "+
-		"not exists (select 1 from mo_catalog.mo_view_refresh vr "+
-		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id) or "+
+		"(not exists (select 1 from mo_catalog.mo_view_refresh vr "+
+		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0 "+
+		"and vd.source_relation_kind<>'REVALIDATE_REQUIRED')) or "+
 		"exists (select 1 from mo_catalog.mo_view_refresh vr "+
 		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id "+
 		"and vr.status='CURRENT')) "+

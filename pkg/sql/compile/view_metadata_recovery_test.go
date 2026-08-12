@@ -637,6 +637,39 @@ func TestViewMetadataRecoveryErrorAndEmptyWorkPaths(t *testing.T) {
 	})
 }
 
+func TestRecoverViewMetadataCommandRoutesDurableRecoveryModes(t *testing.T) {
+	t.Run("capability disabled", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		count, err := recoverViewMetadataCommand(proc, `{"worker_id":"worker"}`)
+		require.NoError(t, err)
+		require.Zero(t, count)
+	})
+
+	tests := []struct {
+		name      string
+		parameter string
+		wantSQL   string
+	}{
+		{name: "recover", parameter: `{"worker_id":"worker"}`, wantSQL: "status in ('PENDING','DISCOVERING')"},
+		{name: "legacy manual worker", parameter: "manual-worker", wantSQL: "status in ('PENDING','DISCOVERING')"},
+		{name: "discover", parameter: `{"discover":true}`, wantSQL: "source_relation_kind"},
+		{name: "revalidate", parameter: `{"revalidate":true}`, wantSQL: "source_relation_kind='REVALIDATE_SCAN'"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			exec := &viewMetadataCleanupRecordingExecutor{}
+			installViewMetadataTestExecutor(t, proc, exec)
+			count, err := recoverViewMetadataCommand(proc, tc.parameter)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, count, 0)
+			require.NotEmpty(t, exec.sqls)
+			require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+			require.Contains(t, strings.Join(exec.sqls[1:], "\n"), tc.wantSQL)
+		})
+	}
+}
+
 func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 	t.Run("initialize cursor", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
@@ -734,22 +767,35 @@ func TestBeginViewMetadataRevalidationPropagatesCatalogError(t *testing.T) {
 }
 
 func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T) {
-	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, {}, {}}}
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, {}, {}, {}}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
-	require.Len(t, exec.sqls, 3)
+	require.Len(t, exec.sqls, 4)
 	require.Contains(t, exec.sqls[0],
 		"where not exists")
 	require.Contains(t, exec.sqls[0], "'REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[1],
-		"source_relation_kind='REVALIDATE_REQUIRED'")
+		"select a.account_id")
 	require.Contains(t, exec.sqls[1],
-		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN')")
-	require.Contains(t, exec.sqls[2],
-		"source_relation_kind='REVALIDATE_SCAN'")
+		"d.account_id=a.account_id")
+	require.Contains(t, exec.sqls[1], "'REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[2],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[2], "source_account_id=0")
+	require.Contains(t, exec.sqls[2],
+		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN')")
+	require.NotContains(t, exec.sqls[2], "where account_id=0")
+	require.Contains(t, exec.sqls[3],
+		"source_relation_kind='REVALIDATE_SCAN'")
+	require.Contains(t, exec.sqls[3],
+		"source_relation_kind='REVALIDATE_REQUIRED'")
+	require.Contains(t, exec.sqls[3], "source_account_id=0")
+	require.NotContains(t, exec.sqls[3], "where account_id=0")
+	for _, sql := range exec.sqls {
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		require.Len(t, statements, 1)
+		statements[0].Free()
+	}
 }
 
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
@@ -761,10 +807,16 @@ func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T)
 		require.Len(t, exec.sqls, 1)
 	})
 
-	t.Run("required sentinel transition", func(t *testing.T) {
+	t.Run("required tenant marker insert", func(t *testing.T) {
 		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{2: testErr}}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 2)
+	})
+
+	t.Run("required marker transition", func(t *testing.T) {
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{3: testErr}}
+		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
+		require.Len(t, exec.sqls, 3)
 	})
 
 	t.Run("start scan transition", func(t *testing.T) {

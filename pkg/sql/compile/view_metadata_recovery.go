@@ -69,9 +69,24 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		return err
 	}
 	inserted.Close()
+	markers, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
+		"insert into %s.%s (account_id,%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
+			"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
+			"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
+			"and d.dependency_ordinal=0)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.ViewRefreshStatusRevalidateRequired,
+		catalog.MO_CATALOG, catalog.MOAccountTable,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	markers.Close()
 	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
 		"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 "+
+			"where target_relation_id=0 and dependency_ordinal=0 "+
 			"and source_relation_kind in ('%s','%s')",
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		catalog.ViewRefreshStatusRevalidateRequired,
@@ -103,7 +118,7 @@ func updateViewMetadataRevalidationCursor(
 	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
 		"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
 			"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
+			"where target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, toStatus, fromStatus),
 		executor.Options{}.WithAccountID(catalog.System_Account))
 	if err != nil {
@@ -217,7 +232,7 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 	result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, fmt.Sprintf(
 		"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
 			"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
+			"where target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		catalog.ViewRefreshStatusRevalidateScan,
 		catalog.ViewRefreshStatusRevalidateRequired), executor.Options{}.
