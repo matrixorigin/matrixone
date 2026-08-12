@@ -983,17 +983,34 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(pkFilters)
 	}
 
-	for _, e := range s.DataSource.BlockFilterList {
+	blockFilterList := s.DataSource.BlockFilterList
+	if s.IsRemote {
+		// Keep the decoded scope as a reusable raw-expression template. Fold IDs
+		// belong to this Compile generation and must not be stored back in it.
+		blockFilterList = plan2.DeepCopyExprList(blockFilterList)
+	}
+	for _, e := range blockFilterList {
+		// RemoteRun carries the original block-filter expressions so this Compile
+		// owns the Fold executors used to expand ranges. A Fold already present on
+		// the wire contains a sender-owned executor ID and is therefore invalid.
+		if s.IsRemote {
+			if plan2.HasFoldValExpr(e) {
+				return nil, moerr.NewInternalErrorNoCtx("remote block filter contains a sender-owned Fold value")
+			}
+			if _, err := plan2.ReplaceFoldExpr(s.Proc, e, &c.filterExprExes); err != nil {
+				return nil, err
+			}
+		}
 		err := plan2.EvalFoldExpr(s.Proc, e, &c.filterExprExes)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if len(runtimeInExprList) == 0 && len(s.DataSource.BlockFilterList) == 0 {
+	if len(runtimeInExprList) == 0 && len(blockFilterList) == 0 {
 		return nil, nil
 	}
-	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
+	return append(runtimeInExprList, blockFilterList...), nil
 }
 
 func (s *Scope) isTableScan() bool {
