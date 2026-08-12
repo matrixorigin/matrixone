@@ -40,14 +40,19 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 		execSQLRequire(t, ctx, db, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
 
 		const (
-			sourceDB       = "issue_26127_src"
-			branchDB       = "issue_26127_branch"
-			cloneDB        = "issue_26127_clone"
-			sourceTableSQL = "`src``table`"
-			sourceViewSQL  = "`view``v`"
-			roleName       = "issue_26127_view_role"
-			userName       = "issue_26127_view_user"
-			snapshotName   = "issue_26127_snapshot"
+			sourceDB         = "issue_26127_src"
+			branchDB         = "issue_26127_branch"
+			cloneDB          = "issue_26127_clone"
+			sourceTableSQL   = "`src``table`"
+			sourceViewSQL    = "`view``v`"
+			viewOnlySourceDB = "issue_26127_view_src"
+			viewOnlyBranchDB = "issue_26127_view_branch"
+			viewOnlyCloneDB  = "issue_26127_view_clone"
+			viewOnlyTableSQL = "`base`"
+			viewOnlyViewSQL  = "`view``v`"
+			roleName         = "issue_26127_view_role"
+			userName         = "issue_26127_view_user"
+			snapshotName     = "issue_26127_snapshot"
 		)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -55,7 +60,7 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 			execSQLMaybe(t, cleanupCtx, db, "drop snapshot if exists "+snapshotName)
 			execSQLMaybe(t, cleanupCtx, db, "drop user if exists "+userName)
 			execSQLMaybe(t, cleanupCtx, db, "drop role if exists "+roleName)
-			for _, name := range []string{branchDB, cloneDB, sourceDB} {
+			for _, name := range []string{viewOnlyBranchDB, viewOnlyCloneDB, viewOnlySourceDB, branchDB, cloneDB, sourceDB} {
 				execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+name+"`")
 			}
 		}()
@@ -72,6 +77,19 @@ func TestIssue26127CloneAndBranchEmbeddedBacktickTable(t *testing.T) {
 		execSQLRequire(t, ctx, db, "grant "+roleName+" to "+userName)
 		execSQLRequire(t, ctx, db, "grant connect on account * to "+roleName)
 		execSQLRequire(t, ctx, db, "grant select on view `"+sourceDB+"`."+sourceViewSQL+" to "+roleName)
+
+		t.Run("embedded view over ordinary table", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create database `"+viewOnlySourceDB+"`")
+			execSQLRequire(t, ctx, db, "create table `"+viewOnlySourceDB+"`."+viewOnlyTableSQL+" (id int primary key, note varchar(32))")
+			execSQLRequire(t, ctx, db, "insert into `"+viewOnlySourceDB+"`."+viewOnlyTableSQL+" values (1, 'source-row')")
+			execSQLRequire(t, ctx, db, "create view `"+viewOnlySourceDB+"`."+viewOnlyViewSQL+" as select id, note from `"+viewOnlySourceDB+"`."+viewOnlyTableSQL)
+			assertIssue26127ViewCount(t, ctx, db, viewOnlySourceDB, viewOnlyViewSQL, 1)
+
+			execSQLRequire(t, ctx, db, "data branch create database `"+viewOnlyBranchDB+"` from `"+viewOnlySourceDB+"`")
+			execSQLRequire(t, ctx, db, "create database `"+viewOnlyCloneDB+"` clone `"+viewOnlySourceDB+"`")
+			assertIssue26127ViewCount(t, ctx, db, viewOnlyBranchDB, viewOnlyViewSQL, 1)
+			assertIssue26127ViewCount(t, ctx, db, viewOnlyCloneDB, viewOnlyViewSQL, 1)
+		})
 
 		userDB, err := sql.Open("mysql", fmt.Sprintf(userName+":111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)

@@ -26,7 +26,25 @@ restore database issue_26127_view_src {snapshot="issue_26127_view_snapshot"};
 select count(*) as restored_source_view_rows from issue_26127_view_src.`view``v`;
 restored_source_view_rows
 1
+create database issue_26127_dependent_view_src;
+create table issue_26127_dependent_view_src.`base`(id int primary key, note varchar(20));
+insert into issue_26127_dependent_view_src.`base` values (1, 'source');
+create view issue_26127_dependent_view_src.`view``v` as select id, note from issue_26127_dependent_view_src.`base`;
+select count(*) as dependent_source_view_rows from issue_26127_dependent_view_src.`view``v`;
+dependent_source_view_rows
+1
+data branch create database issue_26127_dependent_view_branch from issue_26127_dependent_view_src;
+create database issue_26127_dependent_view_clone clone issue_26127_dependent_view_src;
+select count(*) as dependent_branch_view_rows from issue_26127_dependent_view_branch.`view``v`;
+dependent_branch_view_rows
+1
+select count(*) as dependent_clone_view_rows from issue_26127_dependent_view_clone.`view``v`;
+dependent_clone_view_rows
+1
 drop database issue_26127_view_branch;
 drop database issue_26127_view_clone;
 drop database issue_26127_view_src;
 drop snapshot issue_26127_view_snapshot;
+drop database issue_26127_dependent_view_branch;
+drop database issue_26127_dependent_view_clone;
+drop database issue_26127_dependent_view_src;

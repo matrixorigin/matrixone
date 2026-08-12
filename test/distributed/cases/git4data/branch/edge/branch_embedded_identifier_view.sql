@@ -3,6 +3,9 @@ drop snapshot if exists issue_26127_view_snapshot;
 drop database if exists issue_26127_view_branch;
 drop database if exists issue_26127_view_clone;
 drop database if exists issue_26127_view_src;
+drop database if exists issue_26127_dependent_view_branch;
+drop database if exists issue_26127_dependent_view_clone;
+drop database if exists issue_26127_dependent_view_src;
 
 create database issue_26127_view_src;
 create table issue_26127_view_src.`base``t`(id int primary key, note varchar(20));
@@ -21,7 +24,21 @@ select count(*) as changed_source_view_rows from issue_26127_view_src.`view``v`;
 restore database issue_26127_view_src {snapshot="issue_26127_view_snapshot"};
 select count(*) as restored_source_view_rows from issue_26127_view_src.`view``v`;
 
+create database issue_26127_dependent_view_src;
+create table issue_26127_dependent_view_src.`base`(id int primary key, note varchar(20));
+insert into issue_26127_dependent_view_src.`base` values (1, 'source');
+create view issue_26127_dependent_view_src.`view``v` as select id, note from issue_26127_dependent_view_src.`base`;
+select count(*) as dependent_source_view_rows from issue_26127_dependent_view_src.`view``v`;
+
+data branch create database issue_26127_dependent_view_branch from issue_26127_dependent_view_src;
+create database issue_26127_dependent_view_clone clone issue_26127_dependent_view_src;
+select count(*) as dependent_branch_view_rows from issue_26127_dependent_view_branch.`view``v`;
+select count(*) as dependent_clone_view_rows from issue_26127_dependent_view_clone.`view``v`;
+
 drop database issue_26127_view_branch;
 drop database issue_26127_view_clone;
 drop database issue_26127_view_src;
 drop snapshot issue_26127_view_snapshot;
+drop database issue_26127_dependent_view_branch;
+drop database issue_26127_dependent_view_clone;
+drop database issue_26127_dependent_view_src;
