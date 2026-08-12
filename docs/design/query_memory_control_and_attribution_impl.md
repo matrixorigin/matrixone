@@ -547,6 +547,12 @@ MergeOrder:
   metadata bounded;
 - retain `spillMemUsage + Batch.Size` only as an early hint.
 
+Local status (2026-08-13): the MergeOrder slice is implemented and locally
+closed; its ownership inventory, fault/lifecycle matrix, terminal-zero checks,
+and resident benchmark are recorded in
+`docs/design/evidence/25866_m4_mergeorder_baseline.md`. Top and Fill remain
+independent follow-up slices of M4.
+
 Top:
 
 - account key vectors and bounded top rows;

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -42,7 +43,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGroupActivatesAllocationLifecycle(t *testing.T) {
+func TestRetainingOperatorsActivateAllocationLifecycle(t *testing.T) {
 	group := groupop.NewArgument()
 	defer group.Release()
 	_, ownsAllocation := any(group).(executionAllocationAccountOwner)
@@ -51,6 +52,11 @@ func TestGroupActivatesAllocationLifecycle(t *testing.T) {
 	mergeGroup := groupop.NewArgumentMergeGroup()
 	defer mergeGroup.Release()
 	_, ownsAllocation = any(mergeGroup).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	order := mergeorder.NewArgument()
+	defer order.Release()
+	_, ownsAllocation = any(order).(executionAllocationAccountOwner)
 	require.True(t, ownsAllocation)
 }
 
