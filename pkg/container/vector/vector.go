@@ -6115,7 +6115,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 
 	copy(vCol[oldLen:oldLen+cnt], wCol[offset:offset+cnt])
 	if !hasNull && areaStart == 0 && baseOff == 0 {
-		v.length += cnt
+		v.setLengthAfterExtend(v.length + cnt)
 		return true, nil
 	}
 	for i := 0; i < cnt; i++ {
@@ -6132,7 +6132,7 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 				uint32(baseOff)+off-uint32(areaStart), length)
 		}
 	}
-	v.length += cnt
+	v.setLengthAfterExtend(v.length + cnt)
 	return true, nil
 }
 
