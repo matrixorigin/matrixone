@@ -332,7 +332,6 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
 	}
-	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 	return indexDef, nil
 }
 

@@ -674,6 +674,9 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	var irel engine.Relation
 	var size uint64
 	for _, idef := range rel.GetTableDef(ctx).Indexes {
+		if idef == nil {
+			continue
+		}
 		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
 			logutil.Info("indexesTableSize->Relation",
 				zap.String("originTable", rel.GetTableName()),

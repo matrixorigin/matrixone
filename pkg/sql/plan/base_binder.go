@@ -534,7 +534,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
 		expr = &plan.Expr{
-			Typ: b.ctx.groups[groupPos].Typ,
+			Typ: b.ctx.groupOutputType(groupPos),
 			Expr: &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
 					RelPos: b.ctx.groupTag,
@@ -2529,6 +2529,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 		})
 	}
+	if (strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc)) &&
+		astExpr.WindowSpec != nil {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile window functions")
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -2552,9 +2557,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 // item; recursively binding a miss would incorrectly accept derived
 // expressions such as GROUPING(a+b) for GROUP BY a, b.
 func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, error) {
-	if b.ctx == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"Argument #1 of GROUPING function is not in GROUP BY")
+	if b.ctx == nil || !b.ctx.groupingFuncAllowed {
+		return nil, moerr.NewInvalidGroupFuncUse(b.GetContext())
 	}
 
 	args := make([]*plan.Expr, len(astExpr.Exprs))
@@ -2582,22 +2586,35 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
 
-// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
-// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
-// transport and an explicit cast materializes the inferred computation type.
+func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
+	if isPreparedNumericAggregate(name, argCount) {
+		return nil, true
+	}
+	if argCount == 1 && strings.EqualFold(name, "ntile") {
+		typ := types.T_int64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	return nil, false
+}
+
+// bindPreparedNumericFuncExpr gives prepared numeric function arguments the
+// same static context as prepared arithmetic. SUM/AVG use the inferred numeric
+// domain, while NTILE requires an integer domain. ParamRef remains TEXT for
+// transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
-// SUM/AVG over string columns continues to be rejected by aggregate overload
-// resolution.
-func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+// string inputs continue to be rejected by function overload resolution.
+func (b *baseBinder) bindPreparedNumericFuncExpr(
 	name string,
 	astArgs []tree.Expr,
 	depth int32,
 ) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
+	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
-	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
 	}
@@ -3429,6 +3446,22 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateOrderedPercentileArgs enforces the scalar MVP contract for the
+// ordered-set percentile aggregates. The aggregate executor consumes the
+// percentile as compile-time configuration, while the first argument is the
+// value expression ordered by WITHIN GROUP.
+func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInputf(ctx,
+			"percentile argument of %s must be a non-null constant", name)
+	}
+	return nil
+}
+
 // bindMixedInListComparison applies MySQL's REAL comparison semantics for a
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
@@ -3461,6 +3494,11 @@ func bindFuncExprImplByPlanExpr(
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+	if name == NamePercentileCont || name == NamePercentileDisc {
+		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
 			return nil, err
 		}
 	}
@@ -3532,6 +3570,21 @@ func bindFuncExprImplByPlanExpr(
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
 			return nil, err
+		}
+	case "uuid", "uuid_v7", "uuid_v1", "uuid_v6":
+		// uuid(interval 1 minute) generates an id whose embedded timestamp is
+		// the evaluation-time wall clock shifted by the interval; rewrite the
+		// INTERVAL expression to (count, unit) args like date_add does. The
+		// resulting (count, unit) overload is internal — reject direct
+		// multi-argument calls like uuid_v7(5, 3) so only the rewrite above
+		// can reach it.
+		if len(args) == 1 && args[0].Typ.Id == int32(types.T_interval) {
+			args, err = resetIntervalFunction(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+		} else if len(args) > 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function needs zero or one arg", len(args))
 		}
 	case "mo_win_truncate":
 		if len(args) != 2 {
@@ -4862,7 +4915,7 @@ func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
 	}
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion17
+	return ok && valid && version >= defines.MORPCVersion18
 }
 
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {

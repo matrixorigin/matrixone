@@ -1381,7 +1381,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion17)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)

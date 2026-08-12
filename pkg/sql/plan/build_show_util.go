@@ -237,6 +237,9 @@ func constructCreateTableSQL(
 		indexNames := make(map[string]bool)
 
 		for _, indexdef := range tableDef.Indexes {
+			if indexdef == nil {
+				continue
+			}
 			// Index Name can be empty string when CREATE TABLE with index
 			// avoid duplicate only work when index name is not empty
 			if len(indexdef.IndexName) > 0 {
@@ -300,9 +303,6 @@ func constructCreateTableSQL(
 						}
 					}
 
-				}
-				if !catalog.IsIndexVisible(indexdef) {
-					indexStr += " INVISIBLE"
 				}
 
 			} else {
@@ -370,10 +370,6 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
-				if !catalog.IsIndexVisible(indexdef) {
-					indexStr += " INVISIBLE"
-					rewriteIndexStr += " INVISIBLE"
-				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string

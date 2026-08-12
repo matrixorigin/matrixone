@@ -469,6 +469,7 @@ type BindContext struct {
 	isCorrelated              bool
 	hasSingleRow              bool
 	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -564,6 +565,24 @@ type BindContext struct {
 	groupingFlag []bool
 
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {
