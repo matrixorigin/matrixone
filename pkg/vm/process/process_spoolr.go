@@ -36,7 +36,7 @@ var (
 	PipelineSignalSendTimeout = 30 * time.Second
 
 	// ErrPipelineEndSignalDeliveryFailed marks a successful cleanup path that
-	// could not enqueue its normal End signal and had to fall back to abort.
+	// could not durably record its normal End and had to fall back to abort.
 	ErrPipelineEndSignalDeliveryFailed = moerr.NewInternalErrorNoCtx("pipeline end signal delivery failed")
 
 	// ErrPipelineTerminalWithoutCause marks a failure/abort terminal event whose
@@ -565,18 +565,16 @@ func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {
 
 // receiveSignalOrTerminal handles an edge whose Done channel is ready. Ch2
 // remains the ordered source of truth: buffered data and successfully enqueued
-// terminal signals must be consumed before a terminal that failed to enqueue is
-// synthesized from the edge's durable terminal state.
+// terminal signals must be consumed before a terminal recorded only in the
+// edge's durable state is synthesized.
 func (receiver *PipelineSignalReceiver) receiveSignalOrTerminal(idx int) (int, PipelineSignal) {
 	reg := receiver.srcReg[idx]
 	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
 		return idx + 1, signal
 	}
 
-	// Synchronize with an in-flight terminal sender. The sender closes Done
-	// before attempting a fatal enqueue, so it may enqueue after our first
-	// non-blocking receive. Recheck Ch2 after taking the snapshot to avoid
-	// synthesizing a duplicate terminal.
+	// Synchronize with an in-flight terminal sender. Recheck Ch2 after taking
+	// the snapshot to avoid synthesizing a duplicate terminal.
 	terminal := reg.terminalSignalSnapshot()
 	if signal, ok := tryReceivePipelineSignal(reg.Ch2); ok {
 		return idx + 1, signal
