@@ -8902,7 +8902,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	return h, nil
 }
 
-const unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+const unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit"
 
 func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
 	if astTimeWindow == nil {
@@ -8925,7 +8925,7 @@ func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
 		return err
 	}
 	switch typ {
-	case types.Second, types.Minute, types.Hour, types.Day:
+	case types.MicroSecond, types.Second, types.Minute, types.Hour, types.Day:
 		return nil
 	default:
 		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)
