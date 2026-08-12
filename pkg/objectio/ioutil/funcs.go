@@ -450,20 +450,21 @@ func ReadDeletes(
 	commitIdx := len(cols) - 1
 	rowCount := cacheVectors[0].Length()
 	if _, err = ValidateTombstoneCommitTSColumn(rowCount, &cacheVectors[commitIdx]); err != nil {
-		if physicalCommitTS, ok := resolveLegacyBackupCommitTS(
-			meta.GetBlockMeta(uint32(deltaLoc.ID())),
-			&cacheVectors[commitIdx],
-		); ok {
-			release()
-			cols[commitIdx] = physicalCommitTS
-			meta, release, err = LoadTombstoneColumns(
-				ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
-			)
-			if err != nil {
-				return
+		if cacheVectors[commitIdx].IsConstNull() {
+			if physicalCommitTS, ok := ResolveLegacyBackupTombstoneCommitTS(
+				meta.GetBlockMeta(uint32(deltaLoc.ID())),
+			); ok {
+				release()
+				cols[commitIdx] = physicalCommitTS
+				meta, release, err = LoadTombstoneColumns(
+					ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
+				)
+				if err != nil {
+					return
+				}
+				rowCount = cacheVectors[0].Length()
+				_, err = ValidateTombstoneCommitTSColumn(rowCount, &cacheVectors[commitIdx])
 			}
-			rowCount = cacheVectors[0].Length()
-			_, err = ValidateTombstoneCommitTSColumn(rowCount, &cacheVectors[commitIdx])
 		}
 		if err != nil {
 			if release != nil {
@@ -475,21 +476,18 @@ func ReadDeletes(
 	return
 }
 
-// resolveLegacyBackupCommitTS recognizes the exact non-appendable tombstone
+// ResolveLegacyBackupTombstoneCommitTS recognizes the exact non-appendable tombstone
 // layout produced by the v4.1 and affected v4.2 Backup rewrite. That rewrite
 // used the generic object writer, so [rowid, primary-key, commitTS] was
 // persisted with dense seqnums [0, 1, 2] and MaxSeqnum 2 instead of declaring
 // commitTS as a special column. The v4.1 reader inferred the trailing column by
 // position, so a same-version restore still worked; the stricter 4.2 reader
-// needs this narrow mapping. Keep the rule local to the non-CN tombstone reader
-// so ordinary timestamp columns are never reinterpreted globally.
-func resolveLegacyBackupCommitTS(
-	block objectio.BlockObject,
-	resolvedCommitTS *vector.Vector,
-) (uint16, bool) {
+// needs this narrow mapping. Callers must additionally know that the object is
+// a non-CN tombstone; this metadata signature alone can also describe an
+// ordinary three-column object and must never be applied to generic reads.
+func ResolveLegacyBackupTombstoneCommitTS(block objectio.BlockObject) (uint16, bool) {
 	const legacyCommitTSPosition uint16 = 2
-	if resolvedCommitTS == nil || !resolvedCommitTS.IsConstNull() ||
-		block.BlockHeader().Appendable() ||
+	if block.BlockHeader().Appendable() ||
 		block.GetColumnCount() != 3 ||
 		block.GetMetaColumnCount() != 3 ||
 		block.GetMaxSeqnum() != legacyCommitTSPosition ||

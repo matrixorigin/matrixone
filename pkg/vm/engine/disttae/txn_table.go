@@ -2999,6 +2999,29 @@ func tombstonePKExistsInRange(
 					mp,
 					fileservice.Policy(0),
 				)
+				if err == nil && !usable {
+					objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+					if metaErr != nil {
+						err = metaErr
+					} else if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(
+						objectMeta.MustDataMeta().GetBlockMeta(uint32(loc.ID())),
+					); ok {
+						changed, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+							ctx,
+							objectio.TombstoneAttr_PK_SeqNum,
+							pkType,
+							fs,
+							loc,
+							cachedSearch,
+							false,
+							legacyCommitTS,
+							from,
+							to,
+							mp,
+							fileservice.Policy(0),
+						)
+					}
+				}
 				if err != nil {
 					return true, "tombstone_read_error", nil
 				}

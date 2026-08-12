@@ -263,6 +263,74 @@ func TestBackupTombstoneWriterPreservesHiddenCommitTS(t *testing.T) {
 	require.True(t, deleted)
 }
 
+func TestBackupDeltaLocDataSourceReadsLegacyGenericWriterTombstone(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	defer input.Clean(common.DebugAllocator)
+
+	var deletedBlock types.Blockid
+	for row, commitTS := range []types.TS{types.BuildTS(5, 0), types.BuildTS(20, 0)} {
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[0],
+			types.NewRowid(&deletedBlock, uint32(row+1)),
+			false,
+			common.DebugAllocator,
+		))
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[1], int64(row+1), false, common.DebugAllocator,
+		))
+		require.NoError(t, vector.AppendFixed(
+			input.Vecs[2], commitTS, false, common.DebugAllocator,
+		))
+	}
+	input.SetRowCount(2)
+
+	// The affected Backup path wrote [rowid, pk, commitTS] with the generic
+	// writer, so commitTS was physical user seqnum 2 rather than SEQNUM_COMMITTS.
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriter(fs, name.String())
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(input)
+	require.NoError(t, err)
+	blocks, extent, err := writer.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	require.Equal(t, uint16(3), blocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(2), blocks[0].GetMaxSeqnum())
+	require.Equal(t, uint8(types.T_TS), blocks[0].ColumnMeta(2).DataType())
+
+	dataSource := NewBackupDeltaLocDataSource(
+		ctx,
+		fs,
+		types.BuildTS(10, 0),
+		make(map[string]*objData),
+	)
+	legacyStats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(legacyStats, name))
+	require.NoError(t, objectio.SetObjectStatsExtent(legacyStats, extent))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(legacyStats, uint32(input.RowCount())))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(legacyStats, uint32(len(blocks))))
+	require.NoError(t, objectio.SetObjectStatsSize(legacyStats, extent.End()))
+	dataSource.tombstones = []objectio.ObjectStats{*legacyStats}
+	t.Cleanup(func() {
+		for _, data := range dataSource.ds {
+			for _, bat := range data.data {
+				bat.Clean(common.DebugAllocator)
+			}
+		}
+	})
+
+	deletedRows, err := dataSource.GetTombstones(ctx, &deletedBlock)
+	require.NoError(t, err)
+	defer deletedRows.Release()
+	require.True(t, deletedRows.Contains(1))
+	require.False(t, deletedRows.Contains(2))
+}
+
 func TestRewriteCheckpointCanonicalizesBackupTombstone(t *testing.T) {
 	ctx := context.Background()
 	srcFS := testutil.NewSharedFS()

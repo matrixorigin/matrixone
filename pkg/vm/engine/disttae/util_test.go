@@ -348,8 +348,73 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 	require.True(t, changed)
 	require.Equal(t, "tombstone_cn_hit", reason)
 
+	legacyBatch := batch.NewWithSize(3)
+	legacyBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	legacyBatch.Vecs[1] = vector.NewVec(varcharType)
+	legacyBatch.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(legacyBatch.Vecs[0], makeRowid(4), false, mp))
+	require.NoError(t, vector.AppendBytes(legacyBatch.Vecs[1], []byte("legacy"), false, mp))
+	require.NoError(t, vector.AppendFixed(
+		legacyBatch.Vecs[2], types.BuildTS(10, 0), false, mp,
+	))
+	legacyBatch.SetRowCount(1)
+	legacyName := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	legacyWriter, err := ioutil.NewBlockWriter(fs, legacyName.String())
+	require.NoError(t, err)
+	_, err = legacyWriter.WriteBatch(legacyBatch)
+	require.NoError(t, err)
+	legacyBlocks, legacyExtent, err := legacyWriter.Sync(ctx)
+	require.NoError(t, err)
+	require.Len(t, legacyBlocks, 1)
+	require.Equal(t, uint16(3), legacyBlocks[0].GetMetaColumnCount())
+	require.Equal(t, uint16(2), legacyBlocks[0].GetMaxSeqnum())
+	require.Equal(t, uint8(types.T_TS), legacyBlocks[0].ColumnMeta(2).DataType())
+	legacyStats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(legacyStats, legacyName))
+	require.NoError(t, objectio.SetObjectStatsExtent(legacyStats, legacyExtent))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(legacyStats, uint32(legacyBatch.RowCount())))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(legacyStats, uint32(len(legacyBlocks))))
+	require.NoError(t, objectio.SetObjectStatsSize(legacyStats, legacyExtent.End()))
+	legacyBatch.Clean(mp)
+
+	legacyState := logtailreplay.NewPartitionState("", true, 0, false)
+	require.NoError(t, legacyState.HandleObjectEntry(ctx, fs, objectio.ObjectEntry{
+		ObjectStats: *legacyStats,
+		CreateTime:  types.BuildTS(40, 0),
+	}, true))
+	legacyKey := vector.NewVec(varcharType)
+	require.NoError(t, vector.AppendBytes(legacyKey, []byte("legacy"), false, mp))
+	changed, reason, err = tombstonePKExistsInRange(
+		ctx,
+		legacyState,
+		types.BuildTS(20, 0),
+		types.BuildTS(30, 0),
+		legacyKey,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.False(t, changed, "the legacy physical commit timestamp is before the range")
+	require.Empty(t, reason)
+
+	changed, reason, err = tombstonePKExistsInRange(
+		ctx,
+		legacyState,
+		types.BuildTS(5, 0),
+		types.BuildTS(15, 0),
+		legacyKey,
+		varcharType,
+		fs,
+		mp,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "tombstone_commit_ts_hit", reason)
+
 	key.Free(mp)
 	missing.Free(mp)
+	legacyKey.Free(mp)
 }
 
 func TestBlockMetaMarshal(t *testing.T) {

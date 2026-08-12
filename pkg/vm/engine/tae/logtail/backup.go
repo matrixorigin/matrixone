@@ -99,6 +99,9 @@ func resolveBackupSpecialColumnLayout(block objectio.BlockObject) backupSpecialC
 		pos++
 	}
 	if pos >= metaColumnCount || block.ColumnMeta(pos).DataType() != uint8(types.T_TS) {
+		if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(block); ok {
+			layout.CommitTS = legacyCommitTS
+		}
 		return layout
 	}
 	layout.CommitTS = pos
