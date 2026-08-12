@@ -737,6 +737,11 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	cancelExternal()
 	externalDeadlineCtx, cancelExternalDeadline := context.WithTimeout(context.Background(), 0)
 	defer cancelExternalDeadline()
+	queryDeadlineCauseCtx, cancelQueryDeadlineCause := context.WithTimeoutCause(
+		context.Background(), 0, moerr.CauseInternalExecutorExec)
+	defer cancelQueryDeadlineCause()
+	pipelineDeadlineCauseCtx, cancelPipelineDeadlineCause := context.WithCancelCause(queryDeadlineCauseCtx)
+	defer cancelPipelineDeadlineCause(nil)
 	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
 	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
 	cancelExternalCause(externalCause)
@@ -759,7 +764,8 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
 		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
 		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
 	}
 
@@ -847,6 +853,27 @@ func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+		context.Background(), 0, moerr.CauseInternalExecutorExec)
+	defer cancelDeadline()
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
+	proc.BuildPipelineContext(queryCtx)
+
+	op := &scopeRunCancelErrorOperator{
+		MockOperator: colexec.NewMockOperator(),
+		runErr:       context.DeadlineExceeded,
+	}
+	got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
+	require.ErrorIs(t, got, context.DeadlineExceeded)
+	require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
+
+	attached := moerr.AttachCause(deadlineCtx, got)
+	require.ErrorIs(t, attached, context.DeadlineExceeded)
+	require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
 }
 
 func TestLockMeta_doLock(t *testing.T) {
