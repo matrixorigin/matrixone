@@ -251,6 +251,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		case eval:
 			result := vm.NewCallResult()
+			// A new materialized input batch starts a new aggregate generation.
+			// Normally the previous generation is released after its last chunk;
+			// this also closes reuse after an interrupted or failed generation.
+			ctr.freeRunningAgg()
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -394,6 +398,21 @@ func (ctr *container) makeAggregateExecutor(
 ) error {
 	ctr.freeAggFun()
 	ctr.batAggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
+	exec, err := ctr.newAggregateExecutor(idx, ap, proc, groupCount)
+	if err != nil {
+		ctr.batAggs = nil
+		return err
+	}
+	ctr.batAggs[idx] = exec
+	return nil
+}
+
+func (ctr *container) newAggregateExecutor(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	groupCount int,
+) (aggexec.AggFuncExec, error) {
 	ag := ap.Aggs[idx]
 	// Derive one argument type per aggregate argument so multi-argument
 	// window aggregates (for example json_objectagg) match Group's contract.
@@ -405,23 +424,26 @@ func (ctr *container) makeAggregateExecutor(
 		)
 	}
 
-	var err error
-	ctr.batAggs[idx], err = aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
+	exec, err := aggexec.MakeAgg(proc.Mp(), ag.GetAggID(), ag.IsDistinct(), argTypes...)
 	if err != nil {
-		ctr.freeAggFun()
-		return err
+		return nil, err
 	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			exec.Free()
+		}
+	}()
 	if config := ag.GetExtraInformation(); config != nil {
-		if err = ctr.batAggs[idx].SetExtraInformation(config, 0); err != nil {
-			ctr.freeAggFun()
-			return err
+		if err = exec.SetExtraInformation(config, 0); err != nil {
+			return nil, err
 		}
 	}
-	if err = ctr.batAggs[idx].GroupGrow(groupCount); err != nil {
-		ctr.freeAggFun()
-		return err
+	if err = exec.GroupGrow(groupCount); err != nil {
+		return nil, err
 	}
-	return nil
+	succeeded = true
+	return exec, nil
 }
 
 func (ctr *container) processAggregateFuncRange(
@@ -436,8 +458,14 @@ func (ctr *container) processAggregateFuncRange(
 	}
 	defer ctr.freeAggFun()
 
-	n := ctr.bat.RowCount()
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	frame := ctr.frameAt(idx, w.Frame)
+	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
+		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
+		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
+	}
+
+	n := ctr.bat.RowCount()
 	for j := outputStart; j < outputEnd; j++ {
 		if err := checkCanceled(proc, j-outputStart); err != nil {
 			return nil, err
@@ -449,7 +477,7 @@ func (ctr *container) processAggregateFuncRange(
 		}
 
 		left, right, err := ctr.buildInterval(
-			j, partitionStart, partitionEnd, ctr.frameAt(idx, w.Frame))
+			j, partitionStart, partitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
@@ -484,6 +512,137 @@ func (ctr *container) processAggregateFuncRange(
 	// Aggregate state initializes its physical capacity as NULL. Keep only
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	return vec, nil
+}
+
+// cumulativeRowsFrame reports whether every frame in the materialized batch
+// starts at its partition boundary and ends at the current row. A finite
+// PRECEDING bound is equivalent to UNBOUNDED PRECEDING when it covers the
+// largest runtime partition.
+func cumulativeRowsFrame(frame *plan.FrameClause, partitions []int64, rowCount int) bool {
+	if frame == nil || frame.Type != plan.FrameClause_ROWS ||
+		frame.Start == nil || frame.End == nil ||
+		frame.Start.Type != plan.FrameBound_PRECEDING ||
+		frame.End.Type != plan.FrameBound_CURRENT_ROW || frame.End.UnBounded {
+		return false
+	}
+	if frame.Start.UnBounded {
+		return true
+	}
+	if frame.Start.Val == nil || frame.Start.Val.GetLit() == nil {
+		return false
+	}
+	bound, ok := frame.Start.Val.GetLit().Value.(*plan.Literal_U64Val)
+	if !ok {
+		return false
+	}
+
+	maxPartitionRows, ok := largestPartitionSize(partitions, rowCount)
+	if !ok {
+		return false
+	}
+	if maxPartitionRows <= 1 {
+		return true
+	}
+	return bound.U64Val >= uint64(maxPartitionRows-1)
+}
+
+func largestPartitionSize(partitions []int64, rowCount int) (int, bool) {
+	if rowCount < 0 {
+		return 0, false
+	}
+	if len(partitions) == 0 {
+		return rowCount, true
+	}
+	if partitions[0] != 0 {
+		return 0, false
+	}
+
+	maxRows := 0
+	for i, start := range partitions {
+		end := int64(rowCount)
+		if i+1 < len(partitions) {
+			end = partitions[i+1]
+		}
+		if start < 0 || end <= start || end > int64(rowCount) {
+			return 0, false
+		}
+		maxRows = max(maxRows, int(end-start))
+	}
+	return maxRows, true
+}
+
+func partitionEnd(partitions []int64, partition int, rowCount int) int {
+	if len(partitions) == 0 || partition+1 >= len(partitions) {
+		return rowCount
+	}
+	return int(partitions[partition+1])
+}
+
+// processCumulativeAggregateFuncRange advances one aggregate state per input
+// row and snapshots it into the corresponding output group. This changes
+// fixed-size cumulative aggregates such as SUM from O(partitionRows^2) Fill
+// calls to O(partitionRows), while retaining state across output chunks.
+func (ctr *container) processCumulativeAggregateFuncRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	if outputStart != ctr.runningNextRow {
+		ctr.freeRunningAgg()
+		return nil, moerr.NewInternalErrorNoCtx("cumulative window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeRunningAgg()
+		}
+	}()
+
+	if ctr.runningAgg == nil {
+		ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+		if retErr != nil {
+			return nil, retErr
+		}
+	}
+
+	n := ctr.bat.RowCount()
+	currentPartitionEnd := partitionEnd(ctr.ps, ctr.runningPartition, n)
+	for j := outputStart; j < outputEnd; j++ {
+		if err := checkCanceled(proc, j-outputStart); err != nil {
+			return nil, err
+		}
+		if j == currentPartitionEnd {
+			ctr.runningAgg.Free()
+			ctr.runningAgg, retErr = ctr.newAggregateExecutor(idx, ap, proc, 1)
+			if retErr != nil {
+				return nil, retErr
+			}
+			ctr.runningPartition++
+			currentPartitionEnd = partitionEnd(ctr.ps, ctr.runningPartition, n)
+		}
+		if err := ctr.runningAgg.Fill(0, j, ctr.aggVecs[idx].Vec); err != nil {
+			return nil, err
+		}
+		if err := ctr.batAggs[idx].Merge(ctr.runningAgg, j-outputStart, 0); err != nil {
+			return nil, err
+		}
+		ctr.runningNextRow = j + 1
+	}
+
+	vecs, err := ctr.batAggs[idx].Flush()
+	if err != nil {
+		return nil, err
+	}
+	vec, err := aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
+	if outputEnd == n {
+		ctr.freeRunningAgg()
+	}
 	return vec, nil
 }
 
@@ -605,8 +764,11 @@ func (ctr *container) ntileBucketCount(idx int) (int64, error) {
 		return 1, nil
 	}
 	vec := ctr.aggVecs[idx].Vec[0]
-	if vec.Length() == 0 || vec.IsNull(0) {
+	if vec.Length() == 0 {
 		return 1, nil
+	}
+	if vec.IsNull(0) {
+		return 0, moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
 	}
 	bucketCount, ok := getInt64FromVec(vec, 0)
 	if !ok {

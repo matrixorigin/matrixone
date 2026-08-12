@@ -117,6 +117,8 @@ type sumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | types.F
 	ofCheck func(T, T, T) error
 }
 
+func (*sumAvgExec[T, A]) sourcePreservingMerge() {}
+
 func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
@@ -684,6 +686,8 @@ type sumAvgDecExec[A sumAvgDecimalArg, S sumAvgDecimalState] struct {
 	isSum        bool
 	localAddSafe bool // true when state type is wider than arg type (overflow impossible in local buffer)
 }
+
+func (*sumAvgDecExec[A, S]) sourcePreservingMerge() {}
 
 func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
