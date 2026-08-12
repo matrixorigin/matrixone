@@ -180,11 +180,6 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestIvfflatUpdateConfig(t *testing.T) {
-	s := &IvfflatSearch[float32]{}
-	require.NoError(t, s.UpdateConfig(nil))
-}
-
 func TestIvfSearchRace(t *testing.T) {
 
 	runSql = mock_runSql
@@ -630,4 +625,10 @@ func TestBuildActiveCentroidIDsUsesNonOverlappingBucketSlices(t *testing.T) {
 	require.Equal(t, uint(4), cursor.NextBucketOffset)
 	require.Equal(t, uint(1), cursor.CurrentBucketCount)
 	require.True(t, cursor.Exhausted)
+}
+
+// TestSearchIntoUnsupported covers the SearchInto stub (ivfflat has not migrated to the
+// box-free SearchOutput path yet; it must report "not supported", not silently no-op).
+func TestSearchIntoUnsupported(t *testing.T) {
+	require.ErrorContains(t, (&IvfflatSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
 }
