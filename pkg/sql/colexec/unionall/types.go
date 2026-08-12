@@ -24,13 +24,33 @@ import (
 var _ vm.Operator = new(UnionAll)
 
 type UnionAll struct {
+	SequentialBranches int
+	startBranch        func(int) error
+	currentBranch      int
 	vm.OperatorBase
 }
 
+func (unionall *UnionAll) WithSequentialBranches(count int) *UnionAll {
+	unionall.SequentialBranches = count
+	return unionall
+}
+
+// SetBranchStarter installs the execution-generation callback owned by the
+// containing merge scope. It is cleared when that MergeRun generation ends.
+func (unionall *UnionAll) SetBranchStarter(start func(int) error) {
+	unionall.startBranch = start
+}
+
+func (unionall *UnionAll) ClearBranchStarter() {
+	unionall.startBranch = nil
+}
+
 func (unionall *UnionAll) Free(proc *process.Process, pipelineFailed bool, err error) {
+	unionall.startBranch = nil
 }
 
 func (unionall *UnionAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	unionall.currentBranch = 0
 }
 
 func (unionall *UnionAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

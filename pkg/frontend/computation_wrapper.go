@@ -1091,7 +1091,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:            string(raw),
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
+		}
 	}
 	return values, nil
 }
@@ -1142,7 +1146,11 @@ func buildExecuteUserParams(
 		if err != nil {
 			return
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		paramVals[i] = plan2.ParamValue{
+			Value:            param,
+			IsBin:            paramIsBin[i],
+			PrepareParamKind: paramKinds[i],
+		}
 	}
 	return
 }

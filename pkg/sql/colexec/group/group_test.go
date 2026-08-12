@@ -63,6 +63,18 @@ func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
 
+func countPreparedParamAgg() aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfCountColumn,
+		false,
+		[]*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}},
+		nil,
+	)
+}
+
 func minPreparedParamAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfMin,
@@ -1100,6 +1112,36 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestPreparedCountParamUsesInputRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("x"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	makeInput := func(rows int) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
+		input.SetRowCount(rows)
+		return input
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeInput(3), makeInput(2)})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countPreparedParamAgg()})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Vecs, 1)
+	require.Equal(t, int64(5), vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[0])[0])
+
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestGroupUsesReducedHashKeyAndKeepsFullOutput(t *testing.T) {
