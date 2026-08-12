@@ -945,11 +945,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
-	// Explicit scheduling intent must be evaluated for this execution, so it
-	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
-	// default cached topology dormant, though: prepared compiles already coexist
-	// with other statement compiles on the session process, and it may become
-	// reusable if a session-level scheduling override is later cleared.
+	// Explicit scheduling or Sirius intent must be evaluated for this execution,
+	// so neither can reuse a native topology compiled under prepare-time defaults.
+	// Keep that cached topology dormant: prepared compiles already coexist with
+	// other statement compiles on the session process, and the ordinary scheduling
+	// cache may become reusable if a session-level override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
@@ -959,9 +959,12 @@ func initExecuteStmtParamWithResolverInSession(
 		// PREPARE time. A procedure executes with a distinct background process.
 		retComp = nil
 	}
-	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
-		owner, originSQL, prepareStmt.schedulingSQLMode).Explicit {
-		retComp = nil
+	if retComp != nil {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if executionIntent.Explicit || siriusStatementSelected(originSQL, prepareStmt.PrepareStmt) {
+			retComp = nil
+		}
 	}
 	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
 	if err != nil {
@@ -1196,7 +1199,9 @@ func createCompile(
 	if schedulingSQL == "" {
 		schedulingSQL = originSQL
 	}
-	compileCtx := siriusCompileContext(execCtx.reqCtx, schedulingSQL, stmt)
+	crs := new(perfcounter.CounterSet)
+	compileCtx := compileStatementContext(execCtx.reqCtx, schedulingSQL, stmt, crs)
+	execCtx.reqCtx = compileCtx
 	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
@@ -1212,8 +1217,6 @@ func createCompile(
 	if stats != nil {
 		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
 	}
-	crs := new(perfcounter.CounterSet)
-	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
 		if stats != nil {
 			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
@@ -1275,7 +1278,13 @@ func createCompile(
 	return
 }
 
-func siriusCompileContext(ctx context.Context, sql string, stmt tree.Statement) context.Context {
+func compileStatementContext(
+	ctx context.Context,
+	sql string,
+	stmt tree.Statement,
+	crs *perfcounter.CounterSet,
+) context.Context {
+	ctx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
 	if siriusStatementSelected(sql, stmt) {
 		return compile.WithSiriusOffload(ctx)
 	}
