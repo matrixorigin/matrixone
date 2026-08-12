@@ -1486,6 +1486,43 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.Cols = tableDef.Cols
 	createView.TableDef.ViewSql = tableDef.ViewSql
 	createView.TableDef.Defs = tableDef.Defs
+	if stmt.Materialized {
+		clause, ok := stmt.AsSource.Select.(*tree.SelectClause)
+		if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
+		}
+		aliased, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+		if !ok {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
+		}
+		source, ok := aliased.Expr.(*tree.TableName)
+		if !ok {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
+		}
+		sourceDB := string(source.SchemaName)
+		if sourceDB == "" {
+			sourceDB = ctx.DefaultDatabase()
+		}
+		createView.TableDef.ViewSql = nil
+		createView.TableDef.TableType = catalog.SystemMaterializedRel
+		for _, def := range createView.TableDef.Defs {
+			props := def.GetProperties()
+			if props == nil {
+				continue
+			}
+			for _, prop := range props.Properties {
+				if prop.Key == catalog.SystemRelAttr_Kind {
+					prop.Value = catalog.SystemMaterializedRel
+				}
+			}
+			props.Properties = append(props.Properties,
+				&plan.Property{Key: "mv_source_database", Value: sourceDB},
+				&plan.Property{Key: "mv_source_table", Value: string(source.ObjectName)},
+				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
+				&plan.Property{Key: "mv_refresh_sql", Value: tree.String(stmt.AsSource, dialect.MYSQL)},
+			)
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -4693,7 +4730,10 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 	} else {
-		if tableDef.ViewSql == nil {
+		if stmt.Materialized && tableDef.TableType != catalog.SystemMaterializedRel {
+			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+		}
+		if !stmt.Materialized && tableDef.ViewSql == nil {
 			if !dropTable.IfExists {
 				return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
 			}
@@ -4706,6 +4746,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 	dropTable.IsView = true
+	dropTable.TableDef = tableDef
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{

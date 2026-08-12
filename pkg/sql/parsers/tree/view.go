@@ -26,11 +26,18 @@ func init() {
 
 type CreateView struct {
 	statementImpl
-	Replace     bool
-	Name        *TableName
-	ColNames    IdentifierList
-	AsSource    *Select
-	IfNotExists bool
+	Replace      bool
+	Name         *TableName
+	ColNames     IdentifierList
+	AsSource     *Select
+	IfNotExists  bool
+	Materialized bool
+}
+
+func NewCreateMaterializedView(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+	node := NewCreateView(false, name, colNames, asSource, ifNotExists)
+	node.Materialized = true
+	return node
 }
 
 func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
@@ -54,6 +61,9 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 		ctx.WriteString("or replace ")
 	}
 
+	if node.Materialized {
+		ctx.WriteString("materialized ")
+	}
 	ctx.WriteString("view ")
 
 	if node.IfNotExists {

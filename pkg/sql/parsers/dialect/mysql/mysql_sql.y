@@ -427,7 +427,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME REMOVE ANALYZE PHYPLAN ADD RETURNS
-%token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
+%token <str> SCHEMA TABLE SEQUENCE INDEX VIEW MATERIALIZED TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
@@ -5629,6 +5629,11 @@ drop_table_stmt:
     }
 
 drop_view_stmt:
+	DROP MATERIALIZED VIEW exists_opt table_name_list
+	{
+		$$ = tree.NewDropMaterializedView($4, $5)
+	}
+|
     DROP VIEW exists_opt table_name_list
     {
         var ifExists = $3
@@ -8362,6 +8367,11 @@ func_handler:
     }
 
 create_view_stmt:
+	CREATE MATERIALIZED VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
+	{
+		$$ = tree.NewCreateMaterializedView($5, $6, $8, $4)
+	}
+|
     CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
         var Replace bool

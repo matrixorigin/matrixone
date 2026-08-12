@@ -35,6 +35,9 @@ func NewConsumer(
 	if info.ConsumerType == int8(ConsumerType_IndexSync) {
 		return NewIndexConsumer(cnUUID, cnEngine, cnTxnClient, tableDef, jobID, info)
 	}
+	if info.ConsumerType == int8(ConsumerType_MaterializedView) {
+		return NewMaterializedViewConsumer(cnUUID, cnEngine, cnTxnClient, jobID, info)
+	}
 	panic("todo")
 
 }

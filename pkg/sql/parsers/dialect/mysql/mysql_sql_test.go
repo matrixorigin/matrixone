@@ -60,6 +60,28 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestCreateMaterializedView(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create materialized view if not exists mv as select k, count(*) from src group by k", 1)
+	require.NoError(t, err)
+	view, ok := stmt.(*tree.CreateView)
+	require.True(t, ok)
+	require.True(t, view.Materialized)
+	require.True(t, view.IfNotExists)
+	require.Equal(t,
+		"create materialized view if not exists mv as select k, count(*) from src group by k",
+		tree.String(view, dialect.MYSQL))
+}
+
+func TestDropMaterializedView(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "drop materialized view if exists mv", 1)
+	require.NoError(t, err)
+	view, ok := stmt.(*tree.DropView)
+	require.True(t, ok)
+	require.True(t, view.Materialized)
+	require.Equal(t, "drop materialized view if exists mv", tree.String(view, dialect.MYSQL))
+}
+
 func TestSetNamesAssignmentKind(t *testing.T) {
 	tests := []struct {
 		name     string

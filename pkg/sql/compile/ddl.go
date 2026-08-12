@@ -2530,6 +2530,38 @@ func (s *Scope) CreateView(c *Compile) error {
 		)
 		return err
 	}
+	if qry.GetTableDef().GetTableType() == catalog.SystemMaterializedRel {
+		var sourceDB, sourceTable, sourceSQL, refreshSQL string
+		for _, def := range qry.GetTableDef().GetDefs() {
+			props := def.GetProperties()
+			if props == nil {
+				continue
+			}
+			for _, prop := range props.GetProperties() {
+				switch prop.GetKey() {
+				case "mv_source_database":
+					sourceDB = prop.GetValue()
+				case "mv_source_table":
+					sourceTable = prop.GetValue()
+				case "mv_refresh_sql":
+					refreshSQL = prop.GetValue()
+				case "mv_source_sql":
+					sourceSQL = prop.GetValue()
+				}
+			}
+		}
+		if sourceDB == "" || sourceTable == "" || sourceSQL == "" || refreshSQL == "" {
+			return moerr.NewInternalError(c.proc.Ctx, "incomplete materialized view definition")
+		}
+		spec := &iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{
+			ConsumerType: int8(iscp.ConsumerType_MaterializedView),
+			DBName:       dbName, TableName: viewName, RefreshSQL: refreshSQL, SourceSQL: sourceSQL,
+		}}
+		job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
+		if _, err = CreateCdcTask(c, spec, job, false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -3714,6 +3746,28 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Unregister the source-table ISCP job before deleting its materialized result.
+	if qry.GetTableDef().GetTableType() == catalog.SystemMaterializedRel {
+		var sourceDB, sourceTable string
+		for _, def := range qry.GetTableDef().GetDefs() {
+			if props := def.GetProperties(); props != nil {
+				for _, prop := range props.GetProperties() {
+					if prop.GetKey() == "mv_source_database" {
+						sourceDB = prop.GetValue()
+					} else if prop.GetKey() == "mv_source_table" {
+						sourceTable = prop.GetValue()
+					}
+				}
+			}
+		}
+		if sourceDB != "" && sourceTable != "" {
+			job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + qry.Database + "_" + qry.Table}
+			if _, err = DeleteCdcTask(c, job); err != nil {
+				return err
+			}
 		}
 	}
 

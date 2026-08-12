@@ -204,6 +204,10 @@ func (r *DataRetrieverImpl) GetTableID() uint64 {
 	return r.tableID
 }
 
+func (r *DataRetrieverImpl) GetToTS() types.TS {
+	return r.status.To
+}
+
 func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) bool {
 	if r.hasError() {
 		return false

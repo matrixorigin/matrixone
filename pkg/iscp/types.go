@@ -39,6 +39,7 @@ type ConsumerType int8
 const (
 	ConsumerType_IndexSync ConsumerType = iota
 	ConsumerType_CNConsumer
+	ConsumerType_MaterializedView
 
 	ConsumerType_CustomizedStart = 1000
 )
@@ -254,6 +255,8 @@ type ConsumerInfo struct {
 	Columns      []string
 	SrcTable     TableInfo
 	InitSQL      string
+	RefreshSQL   string
+	SourceSQL    string
 }
 
 type TableInfo struct {

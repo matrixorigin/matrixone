@@ -351,6 +351,7 @@ func init() {
 		"month":                      MONTH,
 		"mode":                       MODE,
 		"memory":                     MEMORY,
+		"materialized":               MATERIALIZED,
 		"modifies":                   UNUSED,
 		"multilinestring":            MULTILINESTRING,
 		"multipoint":                 MULTIPOINT,
