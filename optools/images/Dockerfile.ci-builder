@@ -1,0 +1,44 @@
+# Nightly-refreshed CI builder image: a Go toolchain with every PR-invariant
+# build input prebuilt — the Go module cache, the Go build cache warmed by a
+# full -cover build of the default branch, and the compiled C thirdparties.
+# PR CI mounts its checkout into this image and runs make build: only packages
+# that changed since the nightly refresh recompile, and go build incrementally
+# downloads any modules newer than the baked cache, so a stale image only
+# costs speed, never correctness.
+#
+# Refreshed by the nightly image workflow (matrixorigin/CI image-build.yaml,
+# ci-builder job) as matrixorigin/matrixone:ci-builder and consumed by
+# matrixorigin/CI build-mo.yaml. Keep the base image in sync with
+# optools/images/Dockerfile.
+FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS warm
+
+ENV GOWORK=off
+
+# PR-time builds must mount the repo at this same path: cgo compile-cache
+# entries hash the -I include paths, so a different workspace path would miss
+# the warm cache for every cgo-dependent package.
+WORKDIR /go/src/github.com/matrixorigin/matrixone
+
+ARG GOPROXY="https://proxy.golang.org,direct"
+RUN go env -w GOPROXY=${GOPROXY}
+
+COPY . .
+
+# Warm with the -cover flavor: it is the flavor PR CI builds, and coverage
+# instrumentation changes the compiled objects.
+RUN make build GOBUILD_OPT=-cover
+
+# Keep only the caches and prebuilt native artifacts; dropping the source
+# tree (and its .git) keeps the nightly image as small as the caches allow.
+FROM matrixorigin/golang:1.26.4-ubuntu22.04
+
+ENV GOWORK=off
+
+ARG GOPROXY="https://proxy.golang.org,direct"
+RUN go env -w GOPROXY=${GOPROXY}
+
+COPY --from=warm /go/pkg/mod /go/pkg/mod
+COPY --from=warm /root/.cache/go-build /root/.cache/go-build
+# Seeded into the PR tree before make build; the prerequisite-less file
+# targets in thirdparties/Makefile then treat the C libraries as up to date.
+COPY --from=warm /go/src/github.com/matrixorigin/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
