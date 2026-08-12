@@ -221,7 +221,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
 		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
 	} else {
-		expr, err = b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
+		expr, err = b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
 	}
 	if err != nil {
 		b.insideAgg = false
