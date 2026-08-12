@@ -149,6 +149,93 @@ func TestSingleTableDMLLimitControlsKeepExistingErrors(t *testing.T) {
 	require.EqualError(t, err, "invalid input: column missing_col does not exist")
 }
 
+func TestMissingColumnUsesMySQLBadFieldDiagnostic(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		sql           string
+		isPrepareStmt bool
+		message       string
+	}{
+		{
+			name:    "unqualified column",
+			sql:     "SELECT missing_col FROM nation",
+			message: "invalid input: column missing_col does not exist",
+		},
+		{
+			name:    "qualified column",
+			sql:     "SELECT nation.missing_col FROM nation",
+			message: "invalid input: column 'nation.missing_col' does not exist",
+		},
+		{
+			name:          "prepared query",
+			sql:           "SELECT missing_col FROM nation WHERE n_nationkey = ?",
+			isPrepareStmt: true,
+			message:       "invalid input: column missing_col does not exist",
+		},
+		{
+			name:    "join using missing from both sides",
+			sql:     "SELECT * FROM nation JOIN region USING (missing_col)",
+			message: "invalid input: column 'missing_col' specified in USING clause does not exist in left table",
+		},
+		{
+			name:    "join using missing from right side",
+			sql:     "SELECT * FROM nation JOIN region USING (n_name)",
+			message: "invalid input: column 'n_name' specified in USING clause does not exist in right table",
+		},
+		{
+			name:    "on duplicate key update",
+			sql:     "INSERT INTO nation VALUES (1, 'n', 1, 'comment') ON DUPLICATE KEY UPDATE n_name = missing_col",
+			message: "invalid input: column 'missing_col' does not exist",
+		},
+		{
+			name:    "on duplicate key update target",
+			sql:     "INSERT INTO nation VALUES (1, 'n', 1, 'comment') ON DUPLICATE KEY UPDATE missing_col = 1",
+			message: "invalid input: column 'missing_col' does not exist",
+		},
+		{
+			name:    "on duplicate key values",
+			sql:     "INSERT INTO nation VALUES (1, 'n', 1, 'comment') ON DUPLICATE KEY UPDATE n_name = VALUES(missing_col)",
+			message: "invalid input: column 'missing_col' does not exist",
+		},
+		{
+			name:    "replace set",
+			sql:     "REPLACE INTO nation SET n_name = missing_col",
+			message: "invalid input: column 'missing_col' does not exist",
+		},
+		{
+			name:    "update target",
+			sql:     "UPDATE nation SET missing_col = 1",
+			message: "internal error: column 'missing_col' not found in table",
+		},
+		{
+			name:    "qualified update target",
+			sql:     "UPDATE nation SET nation.missing_col = 1",
+			message: "internal error: column 'missing_col' not found in table nation",
+		},
+		{
+			name:    "update target with cte",
+			sql:     "WITH cte AS (SELECT 1) UPDATE nation SET missing_col = 1",
+			message: "internal error: column 'missing_col' not found in table or the target table cte of the UPDATE is not updatable",
+		},
+		{
+			name:    "load target column",
+			sql:     "LOAD DATA INLINE FORMAT='csv', DATA='1' INTO TABLE nation FIELDS TERMINATED BY ',' (missing_col)",
+			message: "internal error: column 'missing_col' does not exist",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, tc.sql, tc.isPrepareStmt)
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok, "unexpected error type %T: %v", err, err)
+			require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+			require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+			require.Equal(t, "42S22", moErr.SqlState())
+			require.Equal(t, tc.message, moErr.Error())
+		})
+	}
+}
+
 func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
 	t.Helper()
 	ctx := NewMockCompilerContext(true)

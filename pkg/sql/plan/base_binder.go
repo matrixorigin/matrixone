@@ -461,9 +461,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 					},
 				}, nil
 			}
-			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
+			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		} else {
-			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
+			err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column %s does not exist", name)
 		}
 	} else {
 		var binding *Binding
@@ -487,7 +487,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = DeepCopyType(binding.types[colPos])
 				relPos = binding.tag
 			} else {
-				err = moerr.NewInvalidInputf(localErrCtx, "column '%s' does not exist", name)
+				err = moerr.NewBadFieldErrorf(localErrCtx, "invalid input: column '%s' does not exist", name)
 			}
 		} else {
 			err = moerr.NewInvalidInputf(localErrCtx, "missing FROM-clause entry for table '%v'", table)

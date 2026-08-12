@@ -196,6 +196,14 @@ func TestNoSuchTableWithFormattedMessage(t *testing.T) {
 	require.Equal(t, `SQL parser error: table "missing" does not exist`, err.Error())
 }
 
+func TestBadFieldErrorWithFormattedMessage(t *testing.T) {
+	err := NewBadFieldErrorf(context.Background(), "invalid input: column %s does not exist", "metric")
+	require.Equal(t, ErrBadFieldError, err.ErrorCode())
+	require.Equal(t, ER_BAD_FIELD_ERROR, err.MySQLCode())
+	require.Equal(t, "42S22", err.SqlState())
+	require.Equal(t, "invalid input: column metric does not exist", err.Error())
+}
+
 func TestMPoolCapacityEncoding(t *testing.T) {
 	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
 	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
