@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -49,6 +50,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -902,6 +904,7 @@ func (ses *Session) Close() {
 		realName string
 	}
 	var tempTables []tempTableEntry
+	var tenant *TenantInfo
 	ses.mu.Lock()
 	for key, realName := range ses.tempTables {
 		if db, _, ok := strings.Cut(key, "."); ok {
@@ -912,36 +915,54 @@ func (ses *Session) Close() {
 	}
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
+	tenant = ses.tenant
 	ses.mu.Unlock()
+	var tenantInfo *TenantInfo
+	if tenant != nil {
+		tenantInfo = tenant.Copy()
+	}
 
 	if len(tempTables) > 0 {
+		service := ses.GetService()
+		timeZone := ses.GetTimeZone()
 		go func() {
 			// use a new context to clean up temp tables
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			_, _ = ExecuteFuncWithRecover(func() error {
-				// Use an independent background executor.
-				// We use a "minimal" session or just a way to run SQL.
-				// Here we can use the service's background executor if available,
-				// or just create one that doesn't depend on the closing session's pool.
-				// For now, to keep it simple and following the suggestion of "independent executor",
-				// we'll use GetBackgroundExec but we need to be careful.
-				// Actually, the suggestion implies we should not block Close.
-				// In MatrixOne, we can use the internal executor.
-
-				bh := ses.GetBackgroundExec(ctx)
-				defer bh.Close()
+				serviceRuntime := moruntime.ServiceRuntime(service)
+				if serviceRuntime == nil {
+					logutil.Errorf("failed to clean temporary tables: service runtime is not ready")
+					return nil
+				}
+				v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+				if !ok {
+					logutil.Errorf("failed to clean temporary tables: internal SQL executor is not ready")
+					return nil
+				}
+				exec, ok := v.(executor.SQLExecutor)
+				if !ok {
+					logutil.Errorf("failed to clean temporary tables: invalid internal SQL executor")
+					return nil
+				}
+				opts := executor.Options{}.WithTimeZone(timeZone)
+				if tenantInfo != nil {
+					opts = opts.WithAccountID(tenantInfo.GetTenantID()).WithStatementOption(
+						executor.StatementOption{}.
+							WithAccountID(tenantInfo.GetTenantID()).
+							WithUserID(tenantInfo.GetUserID()).
+							WithRoleID(tenantInfo.GetDefaultRoleID()),
+					)
+				}
 				for _, tbl := range tempTables {
-					var dropSQL string
-					if tbl.dbName != "" {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS `%s`.`%s`", tbl.dbName, tbl.realName)
-					} else {
-						dropSQL = fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl.realName)
-					}
-					if err := bh.Exec(ctx, dropSQL); err != nil {
+					dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
+					res, err := exec.Exec(ctx, dropSQL, opts)
+					if err != nil {
 						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
+						continue
 					}
+					res.Close()
 				}
 				return nil
 			})

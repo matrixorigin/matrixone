@@ -775,6 +775,32 @@ func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestScopeTableCloneIfNotExistsSkipsRestore(t *testing.T) {
+	createTable := &plan2.CreateTable{
+		Database: "test", Temporary: true, IfNotExists: true,
+		TableDef: &plan2.TableDef{Name: "temporary_table"},
+	}
+	createPlan := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+	}}}
+	clonePlan := &plan2.CloneTable{
+		CreateTable: createPlan, DstDatabaseName: "test", DstTableName: "temporary_table",
+	}
+	s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+		Definition: &plan2.DataDefinition_CloneTable{CloneTable: clonePlan},
+	}}}}
+	proc := testutil.NewProcess(t)
+	session := &trackingTempTableSession{tables: make(map[string]string)}
+	session.AddTempTable("test", "temporary_table", "physical_temporary_table")
+	proc.Session = session
+	c := NewCompile("test", "test", "create temporary table if not exists temporary_table clone src", "", "", newStubEngine(), proc, nil, false, nil, time.Now())
+
+	require.NoError(t, s.TableClone(c))
+	realName, exists := session.GetTempTable("test", "temporary_table")
+	require.True(t, exists)
+	require.Equal(t, "physical_temporary_table", realName)
+}
+
 func TestScope_CreateView(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name: "v1",

@@ -103,6 +103,47 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	))
 }
 
+func TestRemoveFailedTemporaryCloneAlias(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("failed clone removes its newly registered alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, errors.New("clone failed"))
+
+		_, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.False(t, exists)
+	})
+
+	t.Run("failed if not exists clone preserves a preexisting alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", true, errors.New("later failure"))
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
+
+	t.Run("successful clone preserves its new alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, nil)
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
+}
+
 func TestShouldLockNamedDataBranchCloneSnapshot(t *testing.T) {
 	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
 	named := &plan.Snapshot{

@@ -30,6 +30,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -1024,6 +1026,64 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
 	ses.RemoveTempTable("db1", "alias")
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
+}
+
+type sessionCloseExecutor struct {
+	sql  string
+	opts executor.Options
+	done chan struct{}
+}
+
+func (e *sessionCloseExecutor) Exec(
+	ctx context.Context, sql string, opts executor.Options,
+) (executor.Result, error) {
+	e.sql, e.opts = sql, opts
+	close(e.done)
+	return executor.Result{}, nil
+}
+
+func (e *sessionCloseExecutor) ExecTxn(
+	context.Context, func(executor.TxnExecutor) error, executor.Options,
+) error {
+	return nil
+}
+
+func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
+	const service = "session-close-temp-table"
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(sv, nil, nil, nil))
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	exec := &sessionCloseExecutor{done: make(chan struct{})}
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	proto := &testMysqlWriter{}
+	ses := NewSession(context.Background(), service, proto, nil)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant: "tenant", TenantID: 42,
+		User: "admin", UserID: 7,
+		DefaultRole: "accountadmin", DefaultRoleID: 9,
+	})
+	ses.AddTempTable("db`name", "alias", "physical`table")
+	ses.Close()
+
+	select {
+	case <-exec.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("temporary table cleanup did not run")
+	}
+	require.Equal(t,
+		"DROP TABLE IF EXISTS "+sqlquote.QualifiedIdent("db`name", "physical`table"),
+		exec.sql,
+	)
+	require.Equal(t, uint32(42), exec.opts.AccountID())
+	require.True(t, exec.opts.HasAccountID())
+	statementOpts := exec.opts.StatementOption()
+	require.True(t, statementOpts.HasAccountID())
+	require.Equal(t, uint32(42), statementOpts.AccountID())
+	require.Equal(t, uint32(7), statementOpts.UserID())
+	require.Equal(t, uint32(9), statementOpts.RoleID())
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {

@@ -617,7 +617,19 @@ func handleCloneTable(
 		toAccountId   uint32
 		opAccountId   uint32
 		fromAccountId uint32
+
+		tempTargetDB               string
+		tempTargetAlias            string
+		tempTargetExistedBeforeRun bool
 	)
+	// This defer is intentionally registered before the background transaction's
+	// finish defer. It therefore observes commit failures as well as execution
+	// failures and removes only aliases introduced by this statement.
+	defer func() {
+		removeFailedTemporaryCloneAlias(
+			ses, tempTargetDB, tempTargetAlias, tempTargetExistedBeforeRun, err,
+		)
+	}()
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
@@ -696,6 +708,11 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf(
 			"no db selected for the dst table %s", stmt.CreateTable.Table.ObjectName)
 		return
+	}
+	if stmt.CreateTable.Temporary {
+		tempTargetDB = stmt.CreateTable.Table.SchemaName.String()
+		tempTargetAlias = stmt.CreateTable.Table.ObjectName.String()
+		_, tempTargetExistedBeforeRun = ses.GetTempTable(tempTargetDB, tempTargetAlias)
 	}
 
 	oldDefault := bh.(*backExec).backSes.GetDatabaseName()
@@ -820,6 +837,17 @@ func handleCloneTable(
 	}
 
 	return
+}
+
+func removeFailedTemporaryCloneAlias(
+	ses *Session,
+	dbName, alias string,
+	existedBeforeRun bool,
+	err error,
+) {
+	if err != nil && alias != "" && !existedBeforeRun {
+		ses.RemoveTempTable(dbName, alias)
+	}
 }
 
 // create database x clone y {MO_TS, SNAPSHOT}

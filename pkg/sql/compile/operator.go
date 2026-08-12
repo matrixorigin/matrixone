@@ -2474,13 +2474,18 @@ func constructTableClone(
 		}
 	}()
 
+	dstTableName := clonePlan.DstTableName
+	if createTable := clonePlan.GetCreateTable().GetDdl().GetCreateTable(); createTable.GetTemporary() {
+		dstTableName = physicalTemporaryTableName(c.proc, clonePlan.DstDatabaseName, dstTableName)
+	}
+
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
 		SrcTblDef: clonePlan.SrcTableDef,
 		SrcObjDef: clonePlan.SrcObjDef,
 
 		ScanSnapshot:    clonePlan.ScanSnapshot,
-		DstTblName:      clonePlan.DstTableName,
+		DstTblName:      dstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 	dstTblDef := clonePlan.SrcTableDef
