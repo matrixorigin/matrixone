@@ -152,6 +152,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		tag2NodeID:             make(map[int32]int32),
 		isPrepareStatement:     isPrepareStatement,
 		deleteNode:             make(map[uint64]int32),
+		fkUpdatedTables:        make(map[uint64]struct{}),
 		skipStats:              skipStats,
 		optimizationHistory:    make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an

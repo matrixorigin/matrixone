@@ -62,14 +62,196 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 		return 0, err
 	}
 	replaceOrdinalPos := int32(-1)
+	orderedSourceStep := int32(-1)
 	if fkChecksEnabled && hasOrderedSelfReferentialAction(tableDef) {
 		lastNodeID, replaceOrdinalPos, err = builder.appendReplaceSourceOrdinal(bindCtx, lastNodeID)
 		if err != nil {
 			return 0, err
 		}
+		lastNodeID, err = builder.appendOrderedSelfFkAsserts(
+			bindCtx, lastNodeID, dmlCtx.objRefs[0], tableDef, colName2Idx, replaceOrdinalPos)
+		if err != nil {
+			return 0, err
+		}
+		orderedSourceTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
+		orderedSourceSink := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, orderedSourceTag)
+		builder.qry.Nodes[orderedSourceSink].ExtraOptions = materialized.CTESinkOption
+		builder.preserveSinkProjection[orderedSourceSink] = struct{}{}
+		orderedSourceStep = builder.appendStep(orderedSourceSink)
+		mainSourceTag := builder.genNewBindTag()
+		lastNodeID = builder.appendTaggedSinkScan(bindCtx, orderedSourceStep, mainSourceTag)
+	}
+	sourceCanConflict := true
+	if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok {
+		sourceCanConflict = len(values.Rows) > 1
 	}
 	return builder.appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes, replaceOrdinalPos)
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes,
+		replaceOrdinalPos, sourceCanConflict, orderedSourceStep)
+}
+
+// appendOrderedSelfFkAsserts checks only rows produced by this REPLACE and
+// respects their input order.  A self parent is visible when it existed before
+// the statement or was produced by the current/earlier source row; a parent
+// produced by a later row is deliberately not visible.  This avoids both the
+// forward-reference false acceptance and the unrelated historical-orphan false
+// rejection caused by the old whole-table post-check.
+func (builder *QueryBuilder) appendOrderedSelfFkAsserts(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	objRef *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	colName2Idx map[string]int32,
+	ordinalPos int32,
+) (int32, error) {
+	inputNode := builder.qry.Nodes[lastNodeID]
+	if len(inputNode.BindingTags) != 1 || ordinalPos < 0 || int(ordinalPos) >= len(inputNode.ProjectList) {
+		return 0, moerr.NewInternalError(
+			builder.GetContext(), "ordered self-referencing FK source is unavailable")
+	}
+	inputTag := inputNode.BindingTags[0]
+	sinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, inputTag)
+	sinkIDNode := builder.qry.Nodes[sinkID]
+	sinkIDNode.ExtraOptions = materialized.CTESinkOption
+	if builder.preserveSinkProjection == nil {
+		builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	builder.preserveSinkProjection[sinkID] = struct{}{}
+	step := builder.appendStep(sinkID)
+
+	selfFks := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
+	for _, fk := range tableDef.Fkeys {
+		if fk.ForeignTbl != 0 || len(fk.Cols) == 0 || len(fk.Cols) != len(fk.ForeignCols) {
+			continue
+		}
+		selfFks = append(selfFks, fk)
+	}
+	for fkIdx, fk := range selfFks {
+		childTag := builder.genNewBindTag()
+		childID := builder.appendTaggedSinkScan(bindCtx, step, childTag)
+		oldParentTag := builder.genNewBindTag()
+		oldParentID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{},
+			ObjRef: objRef, TableDef: CloneTableDefForPlan(tableDef, true),
+			BindingTags: []int32{oldParentTag}, ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		oldPredicates := make([]*plan.Expr, 0, len(fk.Cols))
+		for i, childColID := range fk.Cols {
+			childName := colIDToName(tableDef, childColID)
+			parentName := colIDToName(tableDef, fk.ForeignCols[i])
+			childPos, ok := colName2Idx[tableDef.Name+"."+childName]
+			parentPos, parentOK := tableDef.Name2ColIndex[parentName]
+			if !ok || !parentOK {
+				return 0, moerr.NewInternalError(
+					builder.GetContext(), "ordered self-referencing FK mapping is incomplete")
+			}
+			childExpr := &plan.Expr{Typ: inputNode.ProjectList[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: childPos,
+			}}}
+			parentExpr := &plan.Expr{Typ: tableDef.Cols[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: oldParentTag, ColPos: parentPos,
+			}}}
+			equal, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			oldPredicates = append(oldPredicates, equal)
+		}
+		oldJoinID, oldMarker, err := builder.insertMarkJoin(
+			childID, oldParentID, oldPredicates, nil, false, bindCtx)
+		if err != nil {
+			return 0, err
+		}
+
+		newParentTag := builder.genNewBindTag()
+		newParentID := builder.appendTaggedSinkScan(bindCtx, step, newParentTag)
+		newPredicates := make([]*plan.Expr, 0, len(fk.Cols)+1)
+		for i, childColID := range fk.Cols {
+			childName := colIDToName(tableDef, childColID)
+			parentName := colIDToName(tableDef, fk.ForeignCols[i])
+			childPos := colName2Idx[tableDef.Name+"."+childName]
+			parentPos := colName2Idx[tableDef.Name+"."+parentName]
+			childExpr := &plan.Expr{Typ: inputNode.ProjectList[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: childPos,
+			}}}
+			parentExpr := &plan.Expr{Typ: inputNode.ProjectList[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: newParentTag, ColPos: parentPos,
+			}}}
+			equal, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			newPredicates = append(newPredicates, equal)
+		}
+		parentOrdinal := &plan.Expr{Typ: inputNode.ProjectList[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: newParentTag, ColPos: ordinalPos,
+		}}}
+		childOrdinal := &plan.Expr{Typ: inputNode.ProjectList[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: childTag, ColPos: ordinalPos,
+		}}}
+		visible, bindErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "<=", []*plan.Expr{parentOrdinal, childOrdinal})
+		if bindErr != nil {
+			return 0, bindErr
+		}
+		newPredicates = append(newPredicates, visible)
+		newJoinID, newMarker, err := builder.insertMarkJoin(
+			oldJoinID, newParentID, newPredicates, nil, false, bindCtx)
+		if err != nil {
+			return 0, err
+		}
+		valid, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "or", []*plan.Expr{oldMarker, newMarker})
+		if err != nil {
+			return 0, err
+		}
+		for _, childColID := range fk.Cols {
+			childPos := colName2Idx[tableDef.Name+"."+colIDToName(tableDef, childColID)]
+			childExpr := &plan.Expr{Typ: inputNode.ProjectList[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: childPos,
+			}}}
+			isNull, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "isnull", []*plan.Expr{childExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			valid, bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{valid, isNull})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+		}
+		errExpr := makePlan2StringConstExprWithType(
+			"Cannot add or update a child row: a foreign key constraint fails")
+		assertExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "assert", []*plan.Expr{valid, errExpr})
+		if err != nil {
+			return 0, err
+		}
+		filteredID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{newJoinID}, FilterList: []*plan.Expr{assertExpr},
+		}, bindCtx)
+		nextTag := builder.genNewBindTag()
+		projection := make([]*plan.Expr, len(inputNode.ProjectList))
+		for pos, expr := range inputNode.ProjectList {
+			projection[pos] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: childTag, ColPos: int32(pos),
+			}}}
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{filteredID},
+			ProjectList: projection, BindingTags: []int32{nextTag},
+		}, bindCtx)
+		if fkIdx < len(selfFks)-1 {
+			sinkID = appendSinkNodeWithTag(builder, bindCtx, lastNodeID, nextTag)
+			builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
+			builder.preserveSinkProjection[sinkID] = struct{}{}
+			step = builder.appendStep(sinkID)
+		}
+	}
+	return lastNodeID, nil
 }
 
 func hasOrderedSelfReferentialAction(tableDef *plan.TableDef) bool {
@@ -138,6 +320,8 @@ func (builder *QueryBuilder) applyOrderedSelfActionsFromConflicts(
 	newColName2Idx map[string]int32,
 	oldColName2Idx map[string][2]int32,
 	ordinalPos int32,
+	sourceCanConflict bool,
+	orderedSourceStep int32,
 ) (int32, int32, error) {
 	inputProjection := getProjectionByLastNodeWithTag(builder, lastNodeID, inputTag)
 	rowWidth := len(inputProjection)
@@ -175,6 +359,112 @@ func (builder *QueryBuilder) applyOrderedSelfActionsFromConflicts(
 		rightTag := builder.genNewBindTag()
 		leftID := builder.appendTaggedSinkScan(bindCtx, step, leftTag)
 		rightID := builder.appendTaggedSinkScan(bindCtx, step, rightTag)
+
+		// A later source row can replace a row inserted earlier by the same
+		// REPLACE statement.  Such a replacement is a real delete event even
+		// though it has no old-table RowID.  Derive that event from the evaluated
+		// PK/UK images and feed it through the same ordered action path as a
+		// conflict with a pre-existing table row.
+		sourceRightTag, sourceRightID := int32(0), int32(0)
+		priorTag, priorID := int32(0), int32(0)
+		if sourceCanConflict && orderedSourceStep >= 0 {
+			sourceRightTag = builder.genNewBindTag()
+			sourceRightID = builder.appendTaggedSinkScan(bindCtx, orderedSourceStep, sourceRightTag)
+			priorTag = builder.genNewBindTag()
+			priorID = builder.appendTaggedSinkScan(bindCtx, orderedSourceStep, priorTag)
+		}
+		var priorIsEarlier *plan.Expr
+		var bindErr error
+		var sourceKeyConflict *plan.Expr
+		appendKeyConflict := func(pos int32) error {
+			if pos < 0 || int(pos) >= rowWidth {
+				return nil
+			}
+			rightKey := &plan.Expr{Typ: inputProjection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: sourceRightTag, ColPos: pos,
+			}}}
+			priorKey := &plan.Expr{Typ: inputProjection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: priorTag, ColPos: pos,
+			}}}
+			equal, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*plan.Expr{rightKey, priorKey})
+			if err != nil {
+				return err
+			}
+			if sourceKeyConflict == nil {
+				sourceKeyConflict = equal
+			} else {
+				sourceKeyConflict, err = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "or", []*plan.Expr{sourceKeyConflict, equal})
+			}
+			return err
+		}
+		if sourceCanConflict && orderedSourceStep >= 0 {
+			rightOrdinalForConflict := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: sourceRightTag, ColPos: ordinalPos,
+			}}}
+			priorOrdinal := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: priorTag, ColPos: ordinalPos,
+			}}}
+			priorIsEarlier, bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "<", []*plan.Expr{priorOrdinal, rightOrdinalForConflict})
+			if bindErr != nil {
+				return 0, 0, bindErr
+			}
+			if err := appendKeyConflict(newColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]); err != nil {
+				return 0, 0, err
+			}
+			for _, idxDef := range tableDef.Indexes {
+				if !idxDef.Unique {
+					continue
+				}
+				if err := appendKeyConflict(newColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]); err != nil {
+					return 0, 0, err
+				}
+			}
+		}
+		var sourceEventID, sourceEventTag int32
+		if sourceKeyConflict != nil {
+			sourceEventProjection := make([]*plan.Expr, 0, len(fk.ForeignCols)+1)
+			for _, parentColID := range fk.ForeignCols {
+				parentName := colIDToName(tableDef, parentColID)
+				parentPos, ok := newColName2Idx[tableDef.Name+"."+parentName]
+				if !ok || int(parentPos) >= rowWidth {
+					return 0, 0, moerr.NewInternalError(
+						builder.GetContext(), "self-referencing REPLACE source parent is unavailable")
+				}
+				sourceEventProjection = append(sourceEventProjection, &plan.Expr{
+					Typ: inputProjection[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: priorTag, ColPos: parentPos,
+					}},
+				})
+			}
+			sourceEventProjection = append(sourceEventProjection, &plan.Expr{
+				Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: sourceRightTag, ColPos: ordinalPos,
+				}},
+			})
+			sourceEventJoinID := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN, Children: []int32{sourceRightID, priorID},
+				JoinType: plan.Node_INNER, OnList: []*plan.Expr{priorIsEarlier, sourceKeyConflict},
+				SpillMem: builder.joinSpillMem,
+			}, bindCtx)
+			sourceEventProjectTag := builder.genNewBindTag()
+			sourceEventID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{sourceEventJoinID},
+				ProjectList: sourceEventProjection, BindingTags: []int32{sourceEventProjectTag},
+			}, bindCtx)
+			sourceEventSinkID := appendSinkNodeWithTag(builder, bindCtx, sourceEventID, sourceEventProjectTag)
+			builder.qry.Nodes[sourceEventSinkID].ExtraOptions = materialized.CTESinkOption
+			builder.preserveSinkProjection[sourceEventSinkID] = struct{}{}
+			sourceEventStep := builder.appendStep(sourceEventSinkID)
+			sourceEventTag = builder.genNewBindTag()
+			sourceEventID = builder.appendTaggedSinkScan(bindCtx, sourceEventStep, sourceEventTag)
+			if builder.preserveScanProjection == nil {
+				builder.preserveScanProjection = make(map[int32]struct{})
+			}
+			builder.preserveScanProjection[sourceEventID] = struct{}{}
+		}
 		predicates := make([]*plan.Expr, 0, len(fk.Cols)+2)
 		for i, childColID := range fk.Cols {
 			childName := colIDToName(tableDef, childColID)
@@ -229,10 +519,72 @@ func (builder *QueryBuilder) applyOrderedSelfActionsFromConflicts(
 		if bindErr != nil {
 			return 0, 0, bindErr
 		}
+		outputTag := leftTag
+		if sourceEventID != 0 {
+			markedTag := builder.genNewBindTag()
+			markedProjection := make([]*plan.Expr, 0, rowWidth+1)
+			for pos, expr := range inputProjection {
+				markedProjection = append(markedProjection, &plan.Expr{
+					Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: leftTag, ColPos: int32(pos),
+					}},
+				})
+			}
+			markedProjection = append(markedProjection, DeepCopyExpr(marker))
+			joinID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{joinID},
+				ProjectList: markedProjection, BindingTags: []int32{markedTag},
+			}, bindCtx)
+			outputTag = markedTag
+			sourcePredicates := make([]*plan.Expr, 0, len(fk.Cols)+1)
+			for i, childColID := range fk.Cols {
+				childName := colIDToName(tableDef, childColID)
+				childPos := newColName2Idx[tableDef.Name+"."+childName]
+				childExpr := &plan.Expr{Typ: inputProjection[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: markedTag, ColPos: childPos,
+				}}}
+				parentExpr := &plan.Expr{Typ: inputProjection[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: sourceEventTag, ColPos: int32(i),
+				}}}
+				equal, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "=", []*plan.Expr{childExpr, parentExpr})
+				if err != nil {
+					return 0, 0, err
+				}
+				sourcePredicates = append(sourcePredicates, equal)
+			}
+			eventOrdinalPos := int32(len(fk.ForeignCols))
+			eventOrdinal := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: sourceEventTag, ColPos: eventOrdinalPos,
+			}}}
+			markedOrdinal := &plan.Expr{Typ: inputProjection[ordinalPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: markedTag, ColPos: ordinalPos,
+			}}}
+			childBeforeEvent, err := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "<", []*plan.Expr{markedOrdinal, eventOrdinal})
+			if err != nil {
+				return 0, 0, err
+			}
+			sourcePredicates = append(sourcePredicates, childBeforeEvent)
+			var sourceMarker *plan.Expr
+			joinID, sourceMarker, err = builder.insertMarkJoin(
+				joinID, sourceEventID, sourcePredicates, nil, false, bindCtx)
+			if err != nil {
+				return 0, 0, err
+			}
+			oldMarker := &plan.Expr{Typ: marker.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: markedTag, ColPos: int32(rowWidth),
+			}}}
+			marker, err = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*plan.Expr{oldMarker, sourceMarker})
+			if err != nil {
+				return 0, 0, err
+			}
+		}
 		nextProjection := make([]*plan.Expr, rowWidth)
 		for pos := range nextProjection {
 			nextProjection[pos] = &plan.Expr{Typ: inputProjection[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: leftTag, ColPos: int32(pos),
+				RelPos: outputTag, ColPos: int32(pos),
 			}}}
 		}
 		positionsToNull := make(map[int32]struct{})
@@ -309,7 +661,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	irregularIndexes []*plan.IndexDef,
 ) (int32, error) {
 	return builder.appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes, -1)
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes, -1, false, -1)
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrdinal(
@@ -320,6 +672,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 	skipUniqueIdx []bool,
 	irregularIndexes []*plan.IndexDef,
 	replaceOrdinalPos int32,
+	sourceCanConflict bool,
+	orderedSourceStep int32,
 ) (int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	tableDef := dmlCtx.tableDefs[0]
@@ -1144,7 +1498,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplaceWithOrd
 		conflictInputTag := fullProjTag
 		lastNodeID, fullProjTag, err = builder.applyOrderedSelfActionsFromConflicts(
 			bindCtx, lastNodeID, fullProjTag, tableDef, colName2Idx,
-			oldColName2Idx, replaceOrdinalPos)
+			oldColName2Idx, replaceOrdinalPos, sourceCanConflict, orderedSourceStep)
 		if err != nil {
 			return 0, err
 		}
@@ -1599,7 +1953,8 @@ func (builder *QueryBuilder) appendReplaceCycleAsserts(
 			ObjRef: parentRef, TableDef: CloneTableDefForPlan(parentDef, true),
 			BindingTags: []int32{parentTag}, ScanSnapshot: bindCtx.snapshot,
 		}, bindCtx)
-		if deleteSinkID, ok := builder.deleteNode[parentDef.TblId]; ok {
+		_, parentIsUpdated := builder.fkUpdatedTables[parentDef.TblId]
+		if deleteSinkID, ok := builder.deleteNode[parentDef.TblId]; ok && !parentIsUpdated {
 			deleteStep := getStepByNodeId(builder, deleteSinkID)
 			rowIDPos, rowIDOK := parentDef.Name2ColIndex[catalog.Row_ID]
 			if deleteStep < 0 || !rowIDOK {

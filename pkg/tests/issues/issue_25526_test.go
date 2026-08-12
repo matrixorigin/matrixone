@@ -325,12 +325,51 @@ func TestIssue26875ConflictDrivenSelfActions(t *testing.T) {
 			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
 				id int primary key, pid int,
 				foreign key(pid) references %s(id) on delete %s)`, name, name, action))
-			mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(2,1),(1,null)", name))
+			_, err = conn.ExecContext(ctx, fmt.Sprintf("replace into %s values(2,1),(1,null)", name))
+			require.Error(t, err)
 			var rows, linked int
 			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
 				"select count(*), count(case when id=2 and pid=1 then 1 end) from %s", name)).Scan(&rows, &linked))
-			require.Equal(t, 2, rows)
-			require.Equal(t, 1, linked)
+			require.Equal(t, 0, rows)
+			require.Equal(t, 0, linked)
+			mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(1,null),(2,1)", name))
+		}
+
+		for _, action := range []string{"cascade", "set null"} {
+			name := "source_conflict_" + strings.ReplaceAll(action, " ", "_")
+			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+				id int primary key, u int unique, pid int,
+				foreign key(pid) references %s(id) on delete %s)`, name, name, action))
+			mustExec(t, ctx, conn, fmt.Sprintf(
+				"replace into %s values(1,10,null),(3,30,1),(1,11,null)", name))
+			var childRows, nulledRows int
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where id=3", name)).Scan(&childRows))
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where id=3 and pid is null", name)).Scan(&nulledRows))
+			if action == "cascade" {
+				require.Equal(t, 0, childRows)
+			} else {
+				require.Equal(t, 1, childRows)
+				require.Equal(t, 1, nulledRows)
+			}
+
+			ukName := name + "_uk"
+			mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+				id int primary key, u int unique, pid int,
+				foreign key(pid) references %s(id) on delete %s)`, ukName, ukName, action))
+			mustExec(t, ctx, conn, fmt.Sprintf(
+				"replace into %s values(1,10,null),(3,30,1),(4,10,null)", ukName))
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where id=3", ukName)).Scan(&childRows))
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from %s where id=3 and pid is null", ukName)).Scan(&nulledRows))
+			if action == "cascade" {
+				require.Equal(t, 0, childRows)
+			} else {
+				require.Equal(t, 1, childRows)
+				require.Equal(t, 1, nulledRows)
+			}
 		}
 
 		mustExec(t, ctx, conn, `create table conflict_cascade(
@@ -460,5 +499,76 @@ func TestIssue26875ReplaceCycleChecksEvaluatedRowsOnly(t *testing.T) {
 		require.Equal(t, 3, compositeRows)
 		mustExec(t, ctx, conn, "set foreign_key_checks=0")
 		mustExec(t, ctx, conn, "replace into composite_a values(1.6,1,1,1)")
+	})
+}
+
+func TestIssue26875RecursiveActionClosure(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf(
+			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		dbName := testutils.GetDatabaseName(t)
+		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
+		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		defer db.ExecContext(context.Background(), fmt.Sprintf("drop database if exists `%s`", dbName))
+
+		mustExec(t, ctx, conn, "set foreign_key_checks=0")
+		mustExec(t, ctx, conn, "create table cycle_setnull_a(id int primary key, bid int)")
+		mustExec(t, ctx, conn, "create table cycle_setnull_b(id int primary key, aid int)")
+		mustExec(t, ctx, conn, `alter table cycle_setnull_a add foreign key(bid)
+			references cycle_setnull_b(id) on delete cascade`)
+		mustExec(t, ctx, conn, `alter table cycle_setnull_b add foreign key(aid)
+			references cycle_setnull_a(id) on delete set null`)
+		mustExec(t, ctx, conn, "insert into cycle_setnull_a values(1,1)")
+		mustExec(t, ctx, conn, "insert into cycle_setnull_b values(1,1)")
+		mustExec(t, ctx, conn, "set foreign_key_checks=1")
+		mustExec(t, ctx, conn, "replace into cycle_setnull_a values(1,1)")
+		var nulled int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from cycle_setnull_b where id=1 and aid is null").Scan(&nulled))
+		require.Equal(t, 1, nulled)
+
+		mustExec(t, ctx, conn, "create table multi_null_parent(id int primary key)")
+		mustExec(t, ctx, conn, `create table multi_null_child(
+			id int primary key, x int, y int, unique key uk_x(x), unique key uk_y(y),
+			foreign key(x) references multi_null_parent(id) on delete set null,
+			foreign key(y) references multi_null_parent(id) on delete set null)`)
+		mustExec(t, ctx, conn, "insert into multi_null_parent values(1)")
+		mustExec(t, ctx, conn, "insert into multi_null_child values(1,1,1)")
+		mustExec(t, ctx, conn, "replace into multi_null_parent values(1)")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_null_child where id=1 and x is null and y is null").Scan(&nulled))
+		require.Equal(t, 1, nulled)
+
+		mustExec(t, ctx, conn, `create table alternating_cascade(
+			id int primary key, p1 int, p2 int,
+			foreign key(p1) references alternating_cascade(id) on delete cascade,
+			foreign key(p2) references alternating_cascade(id) on delete cascade)`)
+		mustExec(t, ctx, conn, "insert into alternating_cascade values(1,null,null),(2,null,1),(3,2,null)")
+		mustExec(t, ctx, conn, "replace into alternating_cascade values(1,null,null)")
+		var rows int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from alternating_cascade").Scan(&rows))
+		require.Equal(t, 1, rows)
+
+		mustExec(t, ctx, conn, `create table alternating_mixed(
+			id int primary key, p1 int, p2 int,
+			foreign key(p1) references alternating_mixed(id) on delete set null,
+			foreign key(p2) references alternating_mixed(id) on delete cascade)`)
+		mustExec(t, ctx, conn, "insert into alternating_mixed values(1,null,null),(2,null,1),(3,2,null)")
+		mustExec(t, ctx, conn, "replace into alternating_mixed values(1,null,null)")
+		var mixedRows, mixedNulled int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*), count(case when id=3 and p1 is null then 1 end) from alternating_mixed").
+			Scan(&mixedRows, &mixedNulled))
+		require.Equal(t, 2, mixedRows)
+		require.Equal(t, 1, mixedNulled)
 	})
 }

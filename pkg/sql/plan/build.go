@@ -255,18 +255,6 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 			// marker solely for the optimistic-transaction fail-closed guard.
 			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
 		}
-		sqls, err := genSqlsForCheckFKSelfRefer(
-			ctx.GetContext(),
-			tblInfo.objRef[0].SchemaName,
-			tblInfo.tableDefs[0].Name,
-			tblInfo.tableDefs[0].Cols,
-			tblInfo.tableDefs[0].Fkeys,
-		)
-		if err != nil {
-			return nil, err
-		}
-		query.DetectSqls = append(query.DetectSqls, sqls...)
-
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
 			ctx.GetContext(),

@@ -241,6 +241,9 @@ func buildInsertPlans(
 // buildUpdatePlans  build update plan.
 func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
 	var err error
+	if updatePlanCtx.isFkRecursionCall {
+		builder.fkUpdatedTables[updatePlanCtx.tableDef.TblId] = struct{}{}
+	}
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
 	if updatePlanCtx.preserveUpdateSourceProjection {
@@ -686,13 +689,23 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// always stores the SINK node id of the current merged plan so every subsequent entry
 	// can follow the same code path regardless of how many times we merge.
 	if !delCtx.skipTargetDelete {
-		if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
+		selfActionCount := 0
+		for _, fk := range delCtx.tableDef.Fkeys {
+			if fk.ForeignTbl == 0 &&
+				(fk.OnDelete == plan.ForeignKeyDef_CASCADE || fk.OnDelete == plan.ForeignKeyDef_SET_NULL) {
+				selfActionCount++
+			}
+		}
+		if selfActionCount > 1 {
+			// Each self action owns an independent recursive source. Sharing one
+			// deleteNode across different FK edges either drops action-specific
+			// columns (SET NULL versus CASCADE) or creates a sink wait cycle.
+		} else if sinkNodeId, ok := builder.deleteNode[delCtx.tableDef.TblId]; ok {
 			step := getStepByNodeId(builder, sinkNodeId)
 			if step == -1 || delCtx.sourceStep == -1 {
 				panic("steps should not be -1")
 			}
 			newSourceDependencies := collectStepDependencyNodes(builder, delCtx.sourceStep)
-
 			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
 			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 			unionProjection := getProjectionByLastNode(builder, sinkNodeId)
@@ -1210,6 +1223,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.rowIdPos = childRowIdPos
 					upPlanCtx.sourceStep = combinedStep
 					upPlanCtx.updateColPosMap = updateMap
+					upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(markerByColumn))
+					for columnName := range markerByColumn {
+						upPlanCtx.fkSetNullColumns[columnName] = struct{}{}
+					}
 					upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
 					upPlanCtx.insertColPos = insertColPos
 					upPlanCtx.isFkRecursionCall = true
@@ -1588,8 +1605,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						// inner join cannot dealwith null expr in projectList. so we append a project node
+						taggedSetNullSource := delCtx.skipTargetDelete || (!isUpdate && delCtx.sourceTag != 0)
 						projectProjection := getProjectionByLastNode(builder, lastNodeId)
-						if delCtx.skipTargetDelete {
+						if taggedSetNullSource {
 							projectProjection = DeepCopyExprList(builder.qry.Nodes[lastNodeId].ProjectList)
 						}
 						for _, e := range rightConds {
@@ -1609,7 +1627,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							BindingTags: []int32{builder.genNewBindTag()},
 						}, bindCtx)
 
-						if delCtx.skipTargetDelete {
+						if taggedSetNullSource {
 							projectTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
 							lastNodeId = appendSinkNodeWithTag(builder, bindCtx, lastNodeId, projectTag)
 							if builder.preserveSinkProjection == nil {
@@ -1637,7 +1655,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.insertColPos = insertColPos
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
-						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						upPlanCtx.preserveUpdateSourceProjection = taggedSetNullSource
 						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
@@ -1684,8 +1702,15 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 									JoinType:    plan.Node_INNER,
 									OnList:      joinConds,
 									ProjectList: joinProjection,
+									BindingTags: func() []int32 {
+										if fkSelfReferCond && delCtx.skipTargetDelete {
+											return []int32{childScanTag}
+										}
+										return nil
+									}(),
 								}, bindCtx)
-								lastNodeId = appendAggNodeForFkJoin(builder, bindCtx, lastNodeId, false)
+								lastNodeId = appendAggNodeForFkJoin(
+									builder, bindCtx, lastNodeId, fkSelfReferCond && delCtx.skipTargetDelete)
 								newSourceStep := builder.appendStep(lastNodeId)
 
 								upPlanCtx := getDmlPlanCtx()
@@ -2035,51 +2060,63 @@ func appendSelfReferCascadeSource(
 		BindingTags: []int32{descendantTag},
 	}, bindCtx)
 
-	recursiveConds := make([]*Expr, len(fk.Cols))
-	for i, childColID := range fk.Cols {
-		childName := ""
-		parentName := ""
-		for _, col := range childTableDef.Cols {
-			if col.ColId == childColID {
-				childName = col.Name
+	var recursiveCond *Expr
+	for _, cascadeFK := range childTableDef.Fkeys {
+		if cascadeFK.ForeignTbl != 0 || cascadeFK.OnDelete != plan.ForeignKeyDef_CASCADE ||
+			len(cascadeFK.Cols) == 0 || len(cascadeFK.Cols) != len(cascadeFK.ForeignCols) {
+			continue
+		}
+		var fkCond *Expr
+		for i, childColID := range cascadeFK.Cols {
+			childName := colIDToName(childTableDef, childColID)
+			parentName := colIDToName(childTableDef, cascadeFK.ForeignCols[i])
+			childPos, childOK := childPosMap[childName]
+			parentPos, parentOK := childPosMap[parentName]
+			if !childOK || !parentOK {
+				return 0, moerr.NewInternalErrorf(
+					builder.GetContext(), "self-referencing foreign key column mapping is incomplete")
 			}
-			if col.ColId == fk.ForeignCols[i] {
-				parentName = col.Name
+			leftExpr := &Expr{Typ: childTableDef.Cols[parentPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: cteTag, ColPos: parentPos, Name: parentName,
+			}}}
+			rightExpr := &Expr{Typ: childTableDef.Cols[childPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: descendantTag, ColPos: childPos, Name: childName,
+			}}}
+			cond, bindErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+			if bindErr != nil {
+				return 0, bindErr
+			}
+			if fkCond == nil {
+				fkCond = cond
+			} else {
+				fkCond, bindErr = BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "and", []*Expr{fkCond, cond})
+				if bindErr != nil {
+					return 0, bindErr
+				}
 			}
 		}
-		childPos, childOK := childPosMap[childName]
-		parentPos, parentOK := childPosMap[parentName]
-		if !childOK || !parentOK {
-			return 0, moerr.NewInternalErrorf(
-				builder.GetContext(), "self-referencing foreign key column mapping is incomplete")
+		if recursiveCond == nil {
+			recursiveCond = fkCond
+		} else {
+			var bindErr error
+			recursiveCond, bindErr = BindFuncExprImplByPlanExpr(
+				builder.GetContext(), "or", []*Expr{recursiveCond, fkCond})
+			if bindErr != nil {
+				return 0, bindErr
+			}
 		}
-		leftExpr := &Expr{
-			Typ: childTableDef.Cols[parentPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: cteTag,
-				ColPos: parentPos,
-				Name:   parentName,
-			}},
-		}
-		rightExpr := &Expr{
-			Typ: childTableDef.Cols[childPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: descendantTag,
-				ColPos: childPos,
-				Name:   childName,
-			}},
-		}
-		cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
-		if err != nil {
-			return 0, err
-		}
-		recursiveConds[i] = cond
+	}
+	if recursiveCond == nil {
+		return 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "self-referencing cascade has no recursive edge")
 	}
 	recursiveJoinID := builder.appendNode(&Node{
 		NodeType:    plan.Node_JOIN,
 		Children:    []int32{recursiveScanID, descendantScanID},
 		JoinType:    plan.Node_INNER,
-		OnList:      recursiveConds,
+		OnList:      []*Expr{recursiveCond},
 		ProjectList: descendantJoinProject,
 	}, bindCtx)
 	recursiveJoinID, err = appendExcludeReplaceOldRows(

@@ -269,7 +269,8 @@ type QueryBuilder struct {
 	skipStats              bool
 	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	deleteNode      map[uint64]int32    //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	fkUpdatedTables map[uint64]struct{} // FK UPDATE actions delete and reinsert these base-table rows
 
 	// spill memory for aggregate function
 	aggSpillMem int64
