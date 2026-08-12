@@ -7447,6 +7447,11 @@ func (builder *QueryBuilder) bindGroupBy(
 				ctx.groupingFlag[i] = true
 			}
 		}
+
+		// GROUPING() is meaningful only for grouping extensions. Apart marks an
+		// internally expanded ROLLUP/CUBE/GROUPING SETS branch; GroupingSets also
+		// covers the single-set form, which does not need branch expansion.
+		ctx.groupingFuncAllowed = clause.Apart || clause.Cube || clause.GroupingSets || clause.Rollup
 	}
 
 	if astTimeWindow != nil {
