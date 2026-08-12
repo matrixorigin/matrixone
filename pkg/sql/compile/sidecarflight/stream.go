@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -160,51 +161,47 @@ func (e *Execution) CancelAndJoin(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for {
-		e.mu.Lock()
-		if e.terminal || e.quiesced {
-			e.mu.Unlock()
-			return nil
-		}
-		if e.cleanupRunning {
-			done := e.cleanupDone
-			e.mu.Unlock()
-			select {
-			case <-done:
-				e.mu.Lock()
-				err := e.cleanupErr
-				e.mu.Unlock()
-				return err
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}
-		e.cleanupRunning = true
-		e.cleanupDone = make(chan struct{})
-		done := e.cleanupDone
-		cancel := e.streamCancel
-		ticket := append([]byte(nil), e.ticket...)
-		idempotencyKey := append([]byte(nil), e.idempotencyKey...)
+	e.mu.Lock()
+	if e.terminal || e.quiesced {
 		e.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		if len(ticket) == 0 {
-			idempotencyKey = append([]byte(nil), e.idempotencyKey...)
-		} else {
-			idempotencyKey = nil
-		}
-		actionErr := e.runtime.cancel(ctx, ticket, idempotencyKey)
-		e.mu.Lock()
-		e.cleanupErr = actionErr
-		e.cleanupRunning = false
-		if actionErr == nil {
-			e.quiesced = true
-		}
-		close(done)
-		e.mu.Unlock()
-		return actionErr
+		return nil
 	}
+	if e.cleanupRunning {
+		done := e.cleanupDone
+		e.mu.Unlock()
+		select {
+		case <-done:
+			e.mu.Lock()
+			err := e.cleanupErr
+			e.mu.Unlock()
+			return err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	e.cleanupRunning = true
+	e.cleanupDone = make(chan struct{})
+	done := e.cleanupDone
+	cancel := e.streamCancel
+	ticket := slices.Clone(e.ticket)
+	var idempotencyKey []byte
+	if len(ticket) == 0 {
+		idempotencyKey = slices.Clone(e.idempotencyKey)
+	}
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	actionErr := e.runtime.cancel(ctx, ticket, idempotencyKey)
+	e.mu.Lock()
+	e.cleanupErr = actionErr
+	e.cleanupRunning = false
+	if actionErr == nil {
+		e.quiesced = true
+	}
+	close(done)
+	e.mu.Unlock()
+	return actionErr
 }
 
 // CleanupAfterRun preserves the cancellation-before-lease-release ordering.
@@ -251,50 +248,48 @@ func (e *Execution) releaseLeases(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for {
-		e.mu.Lock()
-		if e.terminal {
-			e.mu.Unlock()
-			return nil
-		}
-		if !e.quiesced {
-			e.mu.Unlock()
-			return internalErrorf("sidecar flight: cannot release leases before quiescence")
-		}
-		if e.releaseRunning {
-			done := e.releaseDone
-			e.mu.Unlock()
-			select {
-			case <-done:
-				e.mu.Lock()
-				err := e.releaseErr
-				e.mu.Unlock()
-				return err
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}
-		e.releaseRunning = true
-		e.releaseDone = make(chan struct{})
-		done := e.releaseDone
-		release := e.release
+	e.mu.Lock()
+	if e.terminal {
 		e.mu.Unlock()
-
-		var err error
-		if release != nil {
-			err = release(ctx)
-		}
-		e.mu.Lock()
-		e.releaseErr = err
-		e.releaseRunning = false
-		if err == nil {
-			e.terminal = true
-		}
-		close(done)
-		e.mu.Unlock()
-		if err == nil {
-			e.runtime.remove(e)
-		}
-		return err
+		return nil
 	}
+	if !e.quiesced {
+		e.mu.Unlock()
+		return internalErrorf("sidecar flight: cannot release leases before quiescence")
+	}
+	if e.releaseRunning {
+		done := e.releaseDone
+		e.mu.Unlock()
+		select {
+		case <-done:
+			e.mu.Lock()
+			err := e.releaseErr
+			e.mu.Unlock()
+			return err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	e.releaseRunning = true
+	e.releaseDone = make(chan struct{})
+	done := e.releaseDone
+	release := e.release
+	e.mu.Unlock()
+
+	var err error
+	if release != nil {
+		err = release(ctx)
+	}
+	e.mu.Lock()
+	e.releaseErr = err
+	e.releaseRunning = false
+	if err == nil {
+		e.terminal = true
+	}
+	close(done)
+	e.mu.Unlock()
+	if err == nil {
+		e.runtime.remove(e)
+	}
+	return err
 }
