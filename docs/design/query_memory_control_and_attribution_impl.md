@@ -550,8 +550,10 @@ MergeOrder:
 Local status (2026-08-13): the MergeOrder slice is implemented and locally
 closed; its ownership inventory, fault/lifecycle matrix, terminal-zero checks,
 and resident benchmark are recorded in
-`docs/design/evidence/25866_m4_mergeorder_baseline.md`. Top and Fill remain
-independent follow-up slices of M4.
+`docs/design/evidence/25866_m4_mergeorder_baseline.md`. The independent Top
+slice is also locally closed and recorded in
+`docs/design/evidence/25866_m4_top_baseline.md`. Fill remains the final M4
+follow-up slice.
 
 Top:
 
@@ -562,6 +564,13 @@ Top:
   tokens;
 - replace whole-record `make([]byte, info.size)` with bounded streaming decode;
 - bound spill-index metadata independently of the number of input batches.
+
+Local result: the old spill index and duplicate ordered-reference slice are
+deleted. Accounted typed slices own selections and direct record references;
+the query spill service owns one admitted file; the stable streaming Batch
+codec preserves prepared provenance while rejecting spill Attrs/ExtraBuf; and
+the output-chunk map is bounded at 8,192 rows. Resident performance remains
+inside the 2% gate.
 
 Fill:
 
