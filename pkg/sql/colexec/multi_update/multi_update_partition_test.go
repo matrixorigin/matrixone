@@ -19,6 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -44,6 +48,81 @@ func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 	require.False(t, insertContexts[0].DedupByTargetRowID)
 	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
 	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
+}
+
+func TestPartitionTargetSelectionPrecedesDirectAndS3Routing(t *testing.T) {
+	for name, action := range map[string]UpdateAction{
+		"direct": UpdateWriteTable,
+		"s3":     UpdateWriteS3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				rowNulls []uint64
+				active   []bool
+				partNull []bool
+				wantPart []int32
+			}{
+				{name: "mixed", rowNulls: []uint64{1}, active: []bool{true, false}, partNull: []bool{false, true}, wantPart: []int32{1}},
+				{name: "fully-unmatched", rowNulls: []uint64{0, 1}, active: []bool{false, false}, partNull: []bool{true, true}, wantPart: []int32{}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					mp := proc.Mp()
+					input := batch.NewWithSize(4)
+					input.Vecs[0] = testutil.MakeRowIdVector(
+						[]types.Rowid{types.BuildTestRowid(1, 1), types.BuildTestRowid(1, 2)},
+						tc.rowNulls,
+						mp,
+					)
+					input.Vecs[1] = testutil.NewInt64Vector(
+						2, types.T_int64.ToType(), mp, false, nil, []int64{1, 1})
+					input.Vecs[2] = testutil.NewBoolVector(
+						2, types.T_bool.ToType(), mp, false, nil, tc.active)
+					input.Vecs[3] = testutil.NewInt32Vector(
+						2, types.T_int32.ToType(), mp, false, tc.partNull, []int32{1, 0})
+					input.SetRowCount(2)
+					defer input.Clean(mp)
+
+					ctx := &MultiUpdateCtx{
+						TableDef:           &plan.TableDef{TblId: 42, FeatureFlag: features.Partitioned},
+						DeleteCols:         []int{0, 3, 1, 2},
+						DedupByTargetRowID: true,
+					}
+					op := &PartitionMultiUpdate{
+						raw: &MultiUpdate{
+							Action: action,
+							ctr:    container{seenTargetRows: map[uint64]*hashmap.StrHashMap{}},
+						},
+					}
+					op.raw.addAffectedRowsFunc = op.doAddAffectedRows
+					target := &partitionUpdateTarget{tableID: 42, contexts: []*MultiUpdateCtx{ctx}}
+
+					filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+					require.NoError(t, err)
+					require.True(t, owned)
+					defer filtered.Clean(mp)
+					require.Equal(t, len(tc.wantPart), filtered.RowCount())
+					require.Equal(t, tc.wantPart, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
+					require.Zero(t, op.GetAffectedRows())
+				})
+			}
+		})
+	}
+}
+
+func TestClonePartitionTargetContextsDisablesSecondSelectionPass(t *testing.T) {
+	contexts := []*MultiUpdateCtx{
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
+	}
+	cloned := clonePartitionTargetContexts(contexts)
+	require.Len(t, cloned, 2)
+	for i := range cloned {
+		require.NotSame(t, contexts[i], cloned[i])
+		require.False(t, cloned[i].DedupByTargetRowID)
+		require.True(t, contexts[i].DedupByTargetRowID)
+	}
 }
 
 func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {

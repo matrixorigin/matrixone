@@ -131,6 +131,34 @@ SELECT id, x FROM multi_update_plain_target ORDER BY id;
 DROP TABLE multi_update_partition_target;
 DROP TABLE multi_update_plain_target;
 
+DROP TABLE IF EXISTS multi_update_partition_outer;
+DROP TABLE IF EXISTS multi_update_partition_outer_sibling;
+CREATE TABLE multi_update_partition_outer (
+    id INT PRIMARY KEY,
+    v INT
+) PARTITION BY RANGE (id) (
+    PARTITION p0 VALUES LESS THAN (2),
+    PARTITION p1 VALUES LESS THAN (MAXVALUE)
+);
+CREATE TABLE multi_update_partition_outer_sibling (id INT PRIMARY KEY, v INT);
+INSERT INTO multi_update_partition_outer VALUES (1, 0);
+INSERT INTO multi_update_partition_outer_sibling VALUES (1, 0), (2, 0);
+UPDATE multi_update_partition_outer p
+RIGHT JOIN multi_update_partition_outer_sibling n ON p.id = n.id
+SET p.v = p.v + 1, n.v = n.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_partition_outer ORDER BY id;
+SELECT * FROM multi_update_partition_outer_sibling ORDER BY id;
+TRUNCATE TABLE multi_update_partition_outer;
+UPDATE multi_update_partition_outer p
+RIGHT JOIN multi_update_partition_outer_sibling n ON p.id = n.id
+SET p.v = 9, n.v = n.v + 1;
+SELECT ROW_COUNT();
+SELECT * FROM multi_update_partition_outer ORDER BY id;
+SELECT * FROM multi_update_partition_outer_sibling ORDER BY id;
+DROP TABLE multi_update_partition_outer;
+DROP TABLE multi_update_partition_outer_sibling;
+
 DROP TABLE IF EXISTS multi_update_master_target;
 DROP TABLE IF EXISTS multi_update_master_plain;
 CREATE TABLE multi_update_master_target (
