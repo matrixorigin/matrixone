@@ -297,6 +297,34 @@ func castTextVecExpr(typ types.T, text string) *plan.Expr {
 	}
 }
 
+// TestVecFloatKey_QuantizingVecCastNotPeeled: a vector-to-vector cast changes the value, so the inner
+// literal must NOT be peeled and parsed at the outer element type. cast(cast('[1.001]' as vecbf16) as
+// vecf16) is 0x3c00 (bf16 truncates 1.001 to 1.0), while a direct vecf16 of the same text is 0x3c01 —
+// treating them as the same query vector would rewrite a SELECT distance to a score computed for a
+// different vector. The nested cast yields no key (fail-safe); the direct textual cast still does.
+func TestVecFloatKey_QuantizingVecCastNotPeeled(t *testing.T) {
+	// Sanity: the two encodings really do differ, so this is a genuine counterexample.
+	direct, err := types.StringToArray[types.Float16]("[1.001]")
+	require.NoError(t, err)
+	viaBf16 := []types.Float16{types.Float16FromFloat32(types.BF16FromFloat32(1.001).ToFloat32())}
+	require.NotEqual(t, direct, viaBf16, "sanity: vecf16(1.001) and vecbf16(1.001)->vecf16 must differ")
+
+	nested := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float16)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{castTextVecExpr(types.T_array_bf16, "[1.001]")},
+		}},
+	}
+	_, ok := vecFloatKey(nested, types.T_array_float16)
+	require.False(t, ok, "a quantizing vector-to-vector cast must not be peeled to the inner literal")
+
+	// Control: the plain textual cast('[...]' as vecf16) is still parsed and keyed.
+	k, ok := vecFloatKey(castTextVecExpr(types.T_array_float16, "[1.001]"), types.T_array_float16)
+	require.True(t, ok, "a direct textual cast must still yield a key")
+	require.Equal(t, string(types.ArrayToBytes(direct)), k)
+}
+
 // TestVecFloatKey_Uint8ByteExactNoNaNCollision: two distinct folded vecuint8 vectors whose 4 raw bytes
 // happen to be distinct float32 NaN payloads must produce distinct keys. Decoding as float32 (the old
 // behavior) canonicalized both to "[NaN]" and made a distance to one silently rewrite to the other.

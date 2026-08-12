@@ -999,7 +999,9 @@ func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg
 
 // vecFloatKey parses a vector-literal expression into a canonical BYTE key so two references to the
 // same query vector compare equal regardless of how each is encoded, decoding at the ACTUAL element
-// type (elemType) rather than treating every non-f64 vector as float32. It unwraps a CAST, then:
+// type (elemType) rather than treating every non-f64 vector as float32. It unwraps a value-preserving
+// CAST (one whose input is not itself a vector — a vector-to-vector cast changes the value and is not
+// peeled; see the loop below), then:
 //   - a constant-folded vector literal already stores the raw element bytes in VecVal; those bytes ARE
 //     the canonical type-exact key and are compared directly (decoding narrow/int bytes as float32
 //     collapses distinct vectors onto a shared NaN string — e.g. vecuint8 [0,0,192,127] and
@@ -1012,11 +1014,21 @@ func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg
 // no rewrite).
 func vecFloatKey(e *plan.Expr, elemType types.T) (string, bool) {
 	for e != nil {
-		if f := e.GetF(); f != nil && f.Func.ObjName == "cast" && len(f.Args) >= 1 {
-			e = f.Args[0]
-			continue
+		f := e.GetF()
+		if f == nil || f.Func.ObjName != "cast" || len(f.Args) < 1 {
+			break
 		}
-		break
+		// Only a cast whose INPUT is NOT itself a vector may be peeled — that is the textual
+		// cast('[...]' as vec<T>) shape, where the inner literal spells the query vector verbatim and
+		// parsing it at elemType reproduces the cast exactly. A vector-to-vector cast CONVERTS the
+		// value (vecf16('[1.001]') is 0x3c01, but vecbf16('[1.001]') re-cast to vecf16 is 0x3c00), so
+		// peeling it would parse the inner literal at the wrong type and equate two DIFFERENT vectors,
+		// silently rewriting the SELECT distance to a score computed for the other one. Stop and yield
+		// no key (fail-safe: no rewrite) rather than guess at the conversion.
+		if vecElemByteSize(types.T(f.Args[0].Typ.GetId())) != 0 {
+			return "", false
+		}
+		e = f.Args[0]
 	}
 	lit := e.GetLit()
 	if lit == nil {
