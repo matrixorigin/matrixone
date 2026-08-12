@@ -357,10 +357,8 @@ func (tableScan *TableScan) clearLoadedFilterColumns(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) {
-	if loadedColumns != nil {
-		for _, pos := range loadedColumns {
-			bat.Vecs[pos].CleanOnlyData()
-		}
+	for _, pos := range loadedColumns {
+		bat.Vecs[pos].CleanOnlyData()
 	}
 	bat.SetRowCount(0)
 }
