@@ -1778,6 +1778,65 @@ func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
 	assertRows(t, destination, []bool{true, false, true})
 	destination.Free(mp)
 
+	t.Run("sparse-flags", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			source     func() *Vector
+			flags      []uint8
+			cnt        int
+			wantBinary []bool
+			wantNull   []bool
+		}{
+			{
+				name: "high-row",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("match")}, nil, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(3, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+			{
+				name: "selected-null",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), nil, []byte("match")}, []bool{false, true, false}, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 1, 1}, cnt: 2, wantBinary: []bool{false, true}, wantNull: []bool{true, false},
+			},
+			{
+				name: "const",
+				source: func() *Vector {
+					vec, err := NewConstBytes(types.T_text.ToType(), []byte("match"), 4, mp)
+					require.NoError(t, err)
+					vec.SetIsBinaryString(true)
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				source := tc.source()
+				defer source.Free(mp)
+				destination := NewVec(types.T_text.ToType())
+				require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+				require.NoError(t, destination.UnionBatch(source, 0, tc.cnt, tc.flags, mp))
+				for row, want := range tc.wantBinary {
+					require.Equal(t, want, destination.GetBinaryStringMetadataAt(row+1))
+					require.Equal(t, tc.wantNull[row], destination.IsNull(uint64(row+1)))
+				}
+				require.Equal(t, "match", destination.GetStringAt(destination.Length()-1))
+				destination.Free(mp)
+			})
+		}
+	})
+
 	shrunk, err := source.Dup(mp)
 	require.NoError(t, err)
 	shrunk.Shrink([]int64{1, 2}, false)

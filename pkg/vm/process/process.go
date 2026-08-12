@@ -324,6 +324,13 @@ func BinaryStringPrepareParamMetadataForRemote(
 			"invalid binary-string prepare parameter metadata length %d for %d parameters",
 			len(metadata), paramCount)
 	}
+	hasBinaryString := false
+	for _, binaryString := range metadata {
+		hasBinaryString = hasBinaryString || binaryString
+	}
+	if !hasBinaryString {
+		return nil, nil
+	}
 	if prepareParamProtocolVersion(service) < defines.MORPCVersion18 {
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"binary string prepared parameters require MORPC protocol version %d",

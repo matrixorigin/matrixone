@@ -2095,7 +2095,11 @@ func summarizeBinaryStringSelection[T int32 | int64](w *Vector, sels []T) (summa
 
 func summarizeBinaryStringBatch(w *Vector, offset int64, cnt int, flags []uint8) (summary binaryStringAppendSummary) {
 	binaryString, uniform := w.uniformBinaryString()
-	for i := 0; i < cnt; i++ {
+	limit := cnt
+	if flags != nil {
+		limit = len(flags)
+	}
+	for i := 0; i < limit; i++ {
 		if flags != nil && flags[i] == 0 {
 			continue
 		}
@@ -2319,7 +2323,11 @@ func (v *Vector) propagateBinaryStringBatch(w *Vector, oldLength int, offset int
 		return nil
 	}
 	output := oldLength
-	for i := 0; i < cnt; i++ {
+	limit := cnt
+	if flags != nil {
+		limit = len(flags)
+	}
+	for i := 0; i < limit; i++ {
 		if flags != nil && flags[i] == 0 {
 			continue
 		}

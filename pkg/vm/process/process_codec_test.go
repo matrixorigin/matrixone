@@ -471,6 +471,46 @@ func TestBuildProcessInfoGatesBinaryStringMetadataByProtocolVersion(t *testing.T
 	require.Equal(t, []bool{false, true}, info.PrepareParams.IsBinaryString)
 }
 
+func TestBuildProcessInfoRejectsInvalidBinaryStringMetadataLength(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	serviceRuntime := rt.ServiceRuntime(proc.GetService())
+	original, hadOriginal := serviceRuntime.GetGlobalVariables(rt.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+	serviceRuntime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion18)
+
+	params := proc.GetPrepareParams()
+	for _, tc := range []struct {
+		name     string
+		params   *vector.Vector
+		metadata []bool
+	}{
+		{name: "too-short", params: params, metadata: []bool{true}},
+		{name: "too-long", params: params, metadata: []bool{true, false, false}},
+		{name: "zero-params-with-metadata", params: vector.NewVec(types.T_varchar.ToType()), metadata: []bool{true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.params != params {
+				defer tc.params.Free(proc.Mp())
+			}
+			proc.SetPrepareParamsWithMetadata(tc.params, nil, tc.metadata)
+			_, err := proc.BuildProcessInfo("select ?")
+			require.ErrorContains(t, err, "invalid binary-string prepare parameter metadata length")
+		})
+	}
+
+	proc.SetPrepareParamsWithMetadata(params, nil, []bool{false, false})
+	info, err := proc.BuildProcessInfo("select ?")
+	require.NoError(t, err)
+	require.Empty(t, info.PrepareParams.IsBinaryString)
+}
+
 func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	decodedTxn := fakeCodecTxnOperator{}
