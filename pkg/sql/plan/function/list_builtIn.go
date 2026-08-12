@@ -10417,7 +10417,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToTime
@@ -10487,7 +10487,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 9,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToTime
