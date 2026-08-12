@@ -16,7 +16,9 @@ package window
 
 import (
 	"bytes"
+	"context"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -978,7 +980,10 @@ func (ctr *container) processValueFuncRange(
 		if len(ctr.aggVecs[idx].Vec) >= 2 {
 			nthVec = ctr.aggVecs[idx].Vec[1]
 			if nthVec.IsConst() {
-				constNth, constOK = getInt64FromVec(nthVec, 0)
+				constNth, constOK, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, 0)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		for j := outputStart; j < outputEnd; j++ {
@@ -987,7 +992,10 @@ func (ctr *container) processValueFuncRange(
 			}
 			nthVal, ok := constNth, constOK
 			if nthVec != nil && !nthVec.IsConst() {
-				nthVal, ok = getInt64FromVec(nthVec, j)
+				nthVal, ok, err = getNthValueOffsetFromVec(proc.Ctx, nthVec, j)
+				if err != nil {
+					return nil, err
+				}
 			}
 			if !ok || nthVal < 1 {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
@@ -1027,6 +1035,26 @@ func (ctr *container) processValueFuncRange(
 	}
 
 	return localResult, nil
+}
+
+func getNthValueOffsetFromVec(ctx context.Context, vec *vector.Vector, row int) (int64, bool, error) {
+	if !types.T(vec.GetType().Oid).IsMySQLString() {
+		value, ok := getInt64FromVec(vec, row)
+		return value, ok, nil
+	}
+
+	if vec.IsConst() {
+		row = 0
+	}
+	if vec.Length() == 0 || vec.IsNull(uint64(row)) ||
+		!vec.HasPrepareParamKind() || vec.GetPrepareParamKindAt(row) != vector.PrepareParamInteger {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	value, err := strconv.ParseUint(vec.GetStringAt(row), 10, 63)
+	if err != nil || value == 0 {
+		return 0, false, moerr.NewWrongArguments(ctx, "nth_value")
+	}
+	return int64(value), true, nil
 }
 
 // getInt64FromVec extracts an int64 value from a vector at the given row.
