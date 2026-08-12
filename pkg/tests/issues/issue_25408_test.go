@@ -278,6 +278,57 @@ func TestIssue25408PreparedNestedExactAndStringDomains(t *testing.T) {
 			"execute enum_text using @enum_value, @enum_value").Scan(&greatest, &least))
 		require.Equal(t, []string{"mid", "low"}, []string{greatest, least})
 		mustExec(t, ctx, conn, "deallocate prepare enum_text")
+
+		for _, test := range []struct {
+			name  string
+			query string
+			arg   any
+			want  string
+		}{
+			{name: "regexp keeps direction", query: "select 12 regexp (? + 0)", arg: int64(2), want: "1"},
+			{name: "not regexp keeps direction", query: "select 12 not regexp (? + 0)", arg: int64(2), want: "0"},
+			{name: "explicit bigint", query: "select cast(? as bigint) + 1", arg: float64(2.5), want: "4"},
+			{name: "fixed decimal exact string", query: "select cast(? as decimal(20,0)) + 1", arg: "9007199254740993", want: "9007199254740994"},
+			{name: "derived explicit bigint", query: "select x + 1 from (select cast(? as bigint) as x) d", arg: float64(2.5), want: "4"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				stmt, prepareErr := conn.PrepareContext(ctx, test.query)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				var got string
+				require.NoError(t, stmt.QueryRowContext(ctx, test.arg).Scan(&got))
+				require.Equal(t, test.want, got)
+			})
+		}
+
+		mustExec(t, ctx, conn, "set @regexp_value = 2")
+		mustExec(t, ctx, conn, "prepare regexp_text from 'select 12 regexp (? + 0), 12 not regexp (? + 0)'")
+		var regexpValue, notRegexpValue string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"execute regexp_text using @regexp_value, @regexp_value").Scan(&regexpValue, &notRegexpValue))
+		require.Equal(t, []string{"1", "0"}, []string{regexpValue, notRegexpValue})
+		mustExec(t, ctx, conn, "deallocate prepare regexp_text")
+
+		mustExec(t, ctx, conn, "set @invalid_decimal = 'not-a-number'")
+		mustExec(t, ctx, conn, "prepare fixed_decimal_text from 'select cast(? as decimal(20,0)) + 1'")
+		_, err = conn.ExecContext(ctx, "execute fixed_decimal_text using @invalid_decimal")
+		require.Error(t, err)
+		mustExec(t, ctx, conn, "deallocate prepare fixed_decimal_text")
+
+		bitStmt, err := conn.PrepareContext(ctx, "select isnull(cast(? as bit(8)) + 1)")
+		require.NoError(t, err)
+		defer bitStmt.Close()
+		var bitNull string
+		require.NoError(t, bitStmt.QueryRowContext(ctx, nil).Scan(&bitNull))
+		require.Equal(t, "1", bitNull)
+
+		castCTAS, err := conn.PrepareContext(ctx,
+			"create table fixed_cast_ctas as select cast(? as bigint) + 1 as v")
+		require.NoError(t, err)
+		defer castCTAS.Close()
+		_, err = castCTAS.ExecContext(ctx, float64(2.5))
+		require.NoError(t, err)
+		requireIssue25408Scalar(t, ctx, conn, "4", "select v from fixed_cast_ctas")
 	})
 }
 

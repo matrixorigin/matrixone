@@ -775,9 +775,18 @@ func TestPreparedDynamicNumericPlanSpecializesPerExecutionValue(t *testing.T) {
 		})
 	}
 
-	explicitCast := buildPreparedAggregatePlan(t, "select cast(? as decimal(65, 30)) + 1")
-	require.False(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
-		"an explicit DECIMAL(65,30) cast is a user contract, not a dynamic marker")
+	for _, sql := range []string{
+		"select cast(? as decimal(65, 30)) + 1",
+		"select cast(? as bigint) + 1",
+		"select cast(? as signed) + 1",
+		"select cast(? as bit(8)) + 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			explicitCast := buildPreparedAggregatePlan(t, sql)
+			require.True(t, HasPreparedDynamicNumericParams(explicitCast.Plan),
+				"the parameter source needs runtime specialization while the explicit target stays fixed")
+		})
+	}
 }
 
 func TestPreparedDynamicNumericSpecializationPreservesParamRefs(t *testing.T) {

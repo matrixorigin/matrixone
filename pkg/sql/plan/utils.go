@@ -3286,7 +3286,8 @@ func containsPreparedDynamicNumericParam(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if expr.GetP() != nil && isPreparedDynamicNumericType(expr.Typ) {
+	if expr.GetP() != nil && (isPreparedDynamicNumericType(expr.Typ) ||
+		expr.Typ.Table == preparedFixedNumericSourceMarker) {
 		return true
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -3297,7 +3298,9 @@ func containsPreparedDynamicNumericParam(expr *Expr) bool {
 					continue
 				}
 				_, overload := function.DecodeOverloadID(cast.Func.GetObj())
-				if overload == 0 && !bytes.Equal(cast.AggConfig, []byte(preparedSpecializedNumericCastMarker)) {
+				if overload == 0 &&
+					!bytes.Equal(cast.AggConfig, []byte(preparedSpecializedNumericCastMarker)) &&
+					!bytes.Equal(cast.AggConfig, []byte(preparedFixedNumericCastMarker)) {
 					return true
 				}
 			}

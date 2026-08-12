@@ -56,11 +56,12 @@ func TestUseExplicitCastOverload(t *testing.T) {
 		{name: "signed integer", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "integer"}, want: true},
 		{name: "unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), Unsigned: true}, want: true},
 		{name: "decimal", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_NEWDECIMAL), FamilyString: "decimal"}, want: true},
-		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}},
-		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}},
-		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}},
-		{name: "bigint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint"}},
-		{name: "bigint unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint", Unsigned: true}},
+		{name: "tinyint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_TINY), FamilyString: "tinyint"}, want: true},
+		{name: "smallint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_SHORT), FamilyString: "smallint"}, want: true},
+		{name: "int", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONG), FamilyString: "int"}, want: true},
+		{name: "bigint", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint"}, want: true},
+		{name: "bigint unsigned", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_LONGLONG), FamilyString: "bigint", Unsigned: true}, want: true},
+		{name: "bit", typ: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_BIT), FamilyString: "bit"}, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

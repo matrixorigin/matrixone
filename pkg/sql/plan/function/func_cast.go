@@ -6176,6 +6176,14 @@ func strToSigned[T constraints.Signed](
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				if len(explicit) > 0 && explicit[0] &&
+					from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamFloat {
+					value, parseErr := strconv.ParseFloat(s, 64)
+					if parseErr != nil {
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					s = strconv.FormatFloat(math.Round(value), 'f', 0, 64)
+				}
 				var r int64
 				var err error
 				if len(explicit) > 0 && explicit[0] {
@@ -6613,6 +6621,14 @@ func strToUnsigned[T constraints.Unsigned](
 				val, tErr = strconv.ParseUint(s, 16, 64)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
+				if len(explicit) > 0 && explicit[0] &&
+					from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamFloat {
+					value, parseErr := strconv.ParseFloat(s, 64)
+					if parseErr != nil {
+						return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), s)
+					}
+					s = strconv.FormatFloat(math.Round(value), 'f', 0, 64)
+				}
 				res = &s
 				if len(explicit) > 0 && explicit[0] {
 					val, tErr = parseUnsignedExplicitCastString(s, bitSize)
@@ -7628,7 +7644,7 @@ func strToBit(
 	for i := 0; i < length; i++ {
 		v, null := from.GetStrValue(uint64(i))
 		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
+			if err := to.Append(0, true); err != nil {
 				return err
 			}
 		} else {

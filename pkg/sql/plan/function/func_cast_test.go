@@ -203,6 +203,14 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("boolean", vector.PrepareParamBoolean,
 		[]string{"true", "false"}, bit64, []uint64{1, 0}, false)
 	run("string bytes", vector.PrepareParamNone, []string{"5"}, bit64, []uint64{53}, false)
+	nullInput := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{0}, []bool{true}), NewCast)
+	succeed, info := nullInput.Run()
+	require.True(t, succeed, info)
 	mixed := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5", "5"}, nil),
@@ -212,7 +220,7 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
-	succeed, info := mixed.Run()
+	succeed, info = mixed.Run()
 	require.True(t, succeed, info)
 	run("negative string rejected", vector.PrepareParamNone,
 		[]string{"-6109877384019645241"}, bit64, nil, true)
@@ -221,6 +229,17 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	run("negative float rejected", vector.PrepareParamFloat, []string{"-1"}, bit64, nil, true)
 	run("negative decimal rejected", vector.PrepareParamDecimal, []string{"-1.5"}, bit64, nil, true)
 	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
+}
+
+func TestPreparedFloatTextExplicitIntegerCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2.5"}, nil)
+	tcc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{input, NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, nil), NewExplicitCast)
+	tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
 }
 
 func TestPreparedBooleanTextToNumeric(t *testing.T) {

@@ -543,7 +543,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					continue
 				}
 				_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-				if overload == 0 {
+				if overload == 0 && !isPreparedFixedNumericCast(arg) {
 					arg.Typ.Table = preparedDynamicNumericTypeMarker
 					fn.Args[0].Typ.Table = preparedDynamicNumericTypeMarker
 					markPreparedDynamicNumericCast(arg)
@@ -698,6 +698,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// boundaries. Start their lineage generation from the EXECUTE type;
 			// downstream ColRefs and overloads are refreshed bottom-up.
 			target := rule.params[int(exprImpl.P.Pos)].Typ
+			if e.Typ.Table == preparedFixedNumericSourceMarker &&
+				(types.T(target.Id).IsMySQLString() || types.T(target.Id) == types.T_bool || target.Id == 0) {
+				// Fixed CASTs consume string/BOOL/NULL through the original TEXT
+				// parameter representation (including boolean provenance). Numeric
+				// protocol values need a typed source cast to avoid precision loss.
+				return e, nil
+			}
 			if target.Id == 0 || samePreparedNumericShape(e.Typ, target) {
 				return e, nil
 			}

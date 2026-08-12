@@ -209,6 +209,10 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
 		}
+		if err == nil && b.builder != nil && b.builder.isPrepareStatement &&
+			makeTypeByPlan2Type(typ).IsNumeric() {
+			markPreparedFixedNumericCast(expr)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -343,10 +347,9 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
-	case defines.MYSQL_TYPE_LONGLONG:
-		family := strings.ToLower(internal.FamilyString)
-		return family == "signed" || family == "integer" ||
-			(internal.Unsigned && (family == "" || family == "unsigned"))
+	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT:
+		return true
 	default:
 		return false
 	}
@@ -1381,6 +1384,8 @@ const (
 	preparedDynamicNumericTypeMarker     = "__mo_prepared_dynamic_numeric"
 	preparedDynamicNumericCastMarker     = preparedDynamicNumericTypeMarker
 	preparedSpecializedNumericCastMarker = "__mo_prepared_specialized_numeric"
+	preparedFixedNumericCastMarker       = "__mo_prepared_fixed_numeric"
+	preparedFixedNumericSourceMarker     = "__mo_prepared_fixed_numeric_source"
 )
 
 func markPreparedDynamicNumericCast(expr *Expr) {
@@ -1389,12 +1394,33 @@ func markPreparedDynamicNumericCast(expr *Expr) {
 	}
 }
 
+func markPreparedFixedNumericCast(expr *Expr) {
+	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" {
+		fn.AggConfig = []byte(preparedFixedNumericCastMarker)
+		if len(fn.Args) > 0 && fn.Args[0].GetP() != nil {
+			// The declared CAST target is fixed, but a direct prepared argument
+			// still needs its source representation restored at EXECUTE. Keeping
+			// these two generations distinct yields CAST(runtime-source AS target).
+			fn.Args[0].Typ.Table = preparedFixedNumericSourceMarker
+		}
+	}
+}
+
+func isPreparedFixedNumericCast(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn != nil && fn.Func.GetObjName() == "cast" &&
+		bytes.Equal(fn.AggConfig, []byte(preparedFixedNumericCastMarker))
+}
+
 func isPreparedDynamicNumericCast(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func.GetObjName() != "cast" {
+		return false
+	}
+	if isPreparedFixedNumericCast(expr) {
 		return false
 	}
 	if isPreparedDynamicNumericType(expr.Typ) || bytes.Equal(fn.AggConfig, []byte(preparedDynamicNumericCastMarker)) {
@@ -2463,6 +2489,9 @@ func (b *baseBinder) bindPreparedDynamicComparison(
 	if b.builder == nil || !b.builder.isPrepareStatement {
 		return nil, false, nil
 	}
+	if !supportsPreparedDynamicNumericComparison(op) {
+		return nil, false, nil
+	}
 	leftScan, leftErr := b.numericAstTypesWithHint(leftAst, depth, nil)
 	rightScan, rightErr := b.numericAstTypesWithHint(rightAst, depth, nil)
 	if leftErr != nil || rightErr != nil {
@@ -2553,6 +2582,15 @@ func commuteComparisonOperator(op string) string {
 		return "<="
 	default:
 		return op
+	}
+}
+
+func supportsPreparedDynamicNumericComparison(op string) bool {
+	switch op {
+	case "=", "<>", "<=>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
 	}
 }
 
