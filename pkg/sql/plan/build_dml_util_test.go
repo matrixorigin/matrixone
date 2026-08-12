@@ -607,6 +607,14 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		"tenant": 2,
 	}
 
+	extractJoinNode := func(t *testing.T, builder *QueryBuilder, nodeID int32) *plan.Node {
+		t.Helper()
+		output := builder.qry.Nodes[nodeID]
+		require.Equal(t, plan.Node_PROJECT, output.NodeType)
+		require.Len(t, output.BindingTags, 1)
+		require.Len(t, output.Children, 1)
+		return builder.qry.Nodes[output.Children[0]]
+	}
 	extractLookupExpr := func(t *testing.T, joinNode *plan.Node) *plan.Expr {
 		t.Helper()
 		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
@@ -618,7 +626,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Len(t, joinFn.Args, 2)
 		return joinFn.Args[1]
 	}
-	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64) {
+	requirePrefixExpr := func(t *testing.T, expr *plan.Expr, colName string, length int64, tag int32) {
 		t.Helper()
 
 		castFn := expr.GetF()
@@ -631,13 +639,14 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Equal(t, "substring", substringFn.Func.ObjName)
 		require.Len(t, substringFn.Args, 3)
 		require.Equal(t, colName, substringFn.Args[0].GetCol().Name)
-		require.Equal(t, int32(1), substringFn.Args[0].GetCol().RelPos)
+		require.Equal(t, tag, substringFn.Args[0].GetCol().RelPos)
 		require.Equal(t, int64(1), substringFn.Args[1].GetLit().GetI64Val())
 		require.Equal(t, length, substringFn.Args[2].GetLit().GetI64Val())
 	}
 
 	t.Run("single prefix part", func(t *testing.T) {
 		builder, bindCtx, lastNodeID := newBuilder(t)
+		builder.qry.HasForeignKeyAction = true
 
 		gotNodeID, err := appendDeleteIndexTablePlan(
 			builder,
@@ -652,11 +661,21 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			true,
+			true,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
-		requirePrefixExpr(t, lookupExpr, "body", 8)
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		require.Len(t, joinNode.Children, 2)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		source := builder.qry.Nodes[joinNode.Children[1]]
+		require.Len(t, indexScan.BindingTags, 1)
+		require.Len(t, source.BindingTags, 1)
+		require.NotEqual(t, indexScan.BindingTags[0], source.BindingTags[0])
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		lookupExpr := extractLookupExpr(t, joinNode)
+		requirePrefixExpr(t, lookupExpr, "body", 8, source.BindingTags[0])
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -675,16 +694,18 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			false,
+			true,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial_full", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, builder.qry.Nodes[joinNode.Children[1]].BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 
@@ -704,16 +725,18 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			posMap,
 			lastNodeID,
 			true,
+			true,
 		)
 
 		require.NoError(t, err)
-		lookupExpr := extractLookupExpr(t, builder.qry.Nodes[gotNodeID])
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		lookupExpr := extractLookupExpr(t, joinNode)
 
 		serialFn := lookupExpr.GetF()
 		require.NotNil(t, serialFn)
 		require.Equal(t, "serial", serialFn.Func.ObjName)
 		require.Len(t, serialFn.Args, 2)
-		requirePrefixExpr(t, serialFn.Args[0], "body", 8)
+		requirePrefixExpr(t, serialFn.Args[0], "body", 8, builder.qry.Nodes[joinNode.Children[1]].BindingTags[0])
 		require.Equal(t, "tenant", serialFn.Args[1].GetCol().Name)
 	})
 }
