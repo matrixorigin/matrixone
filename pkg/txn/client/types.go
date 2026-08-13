@@ -390,8 +390,8 @@ type Workspace interface {
 	BeginWriteAttempt() WorkspaceWriteMark
 
 	// Adjust closes the write scope opened by BeginWriteAttempt. The workspace
-	// validates scope ownership and LIFO nesting; mutation commit order is
-	// assigned when each mutation is created and is not changed here.
+	// validates scope ownership and exactly-once completion; mutation commit
+	// order is assigned when each mutation is created and is not changed here.
 	Adjust(mark WorkspaceWriteMark) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)

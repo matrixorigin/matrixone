@@ -773,8 +773,9 @@ func (txn *Transaction) BeginWriteAttempt() client.WorkspaceWriteMark {
 }
 
 // Adjust closes one write scope. Mutation commit order is immutable from
-// creation; the workspace only validates ownership, attempt identity and LIFO
-// nesting here.
+// creation; the workspace only validates ownership, attempt identity and
+// exactly-once completion here. Concurrent Compile branches may close in any
+// order within the same statement attempt.
 func (txn *Transaction) Adjust(mark client.WorkspaceWriteMark) error {
 	start := time.Now()
 	seq := txn.op.NextSequence()

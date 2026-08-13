@@ -514,7 +514,12 @@ type statementAttempt struct {
 	statementID      uint64
 	attemptID        uint64
 	nextWriteScopeID uint64
-	writeScopes      []uint64
+	// activeWriteScopes owns every Compile execution currently contributing to
+	// this statement attempt. Compile branches (for example UNION branches and
+	// internal Data Branch SQL) may finish in a different order from the one in
+	// which they started, so this is an ownership set rather than a nesting
+	// stack. A statement boundary is publishable only after the set is empty.
+	activeWriteScopes map[uint64]struct{}
 	// mutations owns the active physical representatives of logical writes
 	// created by this attempt. Physical rewrite/spill publication transfers
 	// membership from retired source IDs to their replacement IDs, so rollback
@@ -994,7 +999,7 @@ func (j *statementJournal) recordRewriteUndo(
 }
 
 func (j *statementJournal) validateAdvance() error {
-	if !j.retryPending && len(j.current.writeScopes) != 0 {
+	if !j.retryPending && len(j.current.activeWriteScopes) != 0 {
 		return moerr.NewInternalErrorNoCtx(
 			"workspace statement has unfinished write scopes")
 	}
@@ -1821,7 +1826,10 @@ func (w *txnWorkspace) beginWriteAttempt() client.WorkspaceWriteMark {
 	defer w.mu.Unlock()
 	attempt := w.journal.current
 	attempt.nextWriteScopeID++
-	attempt.writeScopes = append(attempt.writeScopes, attempt.nextWriteScopeID)
+	if attempt.activeWriteScopes == nil {
+		attempt.activeWriteScopes = make(map[uint64]struct{})
+	}
+	attempt.activeWriteScopes[attempt.nextWriteScopeID] = struct{}{}
 	return client.NewWorkspaceWriteMark(
 		w.id,
 		attempt.statementID,
@@ -1842,12 +1850,11 @@ func (w *txnWorkspace) adjustAttempt(mark client.WorkspaceWriteMark) error {
 		return err
 	}
 	attempt := w.journal.current
-	if len(attempt.writeScopes) == 0 ||
-		attempt.writeScopes[len(attempt.writeScopes)-1] != mark.WriteScopeID() {
+	if _, active := attempt.activeWriteScopes[mark.WriteScopeID()]; !active {
 		return moerr.NewInternalErrorNoCtx(
-			"workspace write scopes must complete in nesting order")
+			"workspace write scope is not active")
 	}
-	attempt.writeScopes = attempt.writeScopes[:len(attempt.writeScopes)-1]
+	delete(attempt.activeWriteScopes, mark.WriteScopeID())
 	return nil
 }
 

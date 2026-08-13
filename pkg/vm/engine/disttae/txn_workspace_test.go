@@ -373,14 +373,14 @@ func TestTxnWorkspaceInternalReadViewKeepsCompileCommitEpoch(t *testing.T) {
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
-func TestTxnWorkspaceAdjustAttemptRejectsOutOfOrderNestedScope(t *testing.T) {
+func TestTxnWorkspaceAdjustAttemptAllowsOutOfOrderCompletion(t *testing.T) {
 	workspace := newTxnWorkspace()
-	outer := workspace.beginWriteAttempt()
-	inner := workspace.beginWriteAttempt()
-	require.ErrorContains(t, workspace.adjustAttempt(outer),
-		"must complete in nesting order")
-	require.NoError(t, workspace.adjustAttempt(inner))
-	require.NoError(t, workspace.adjustAttempt(outer))
+	first := workspace.beginWriteAttempt()
+	second := workspace.beginWriteAttempt()
+	require.NoError(t, workspace.adjustAttempt(first))
+	require.NoError(t, workspace.adjustAttempt(second))
+	require.ErrorContains(t, workspace.adjustAttempt(first),
+		"write scope is not active")
 }
 
 func TestTxnWorkspaceStatementBoundaryRejectsUnfinishedWriteScope(t *testing.T) {
@@ -412,7 +412,7 @@ func TestTxnWorkspaceRetryDiscardsUnfinishedWriteScopes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), retry.statementID)
 	require.Equal(t, uint64(2), retry.attemptID)
-	require.Empty(t, workspace.journal.current.writeScopes)
+	require.Empty(t, workspace.journal.current.activeWriteScopes)
 }
 
 func TestTxnWorkspaceAdjustAttemptDoesNotRewritePublishedCommitOrder(t *testing.T) {

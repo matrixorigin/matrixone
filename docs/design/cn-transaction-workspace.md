@@ -209,7 +209,7 @@ TableOverlay。构造时在同一个 Workspace 读锁临界区内捕获最新逻
 - 使用显式 commit order，不依赖 slice index；
 - 新逻辑 mutation 在创建时一次性获得不可变顺序
   `(protocol-order-epoch, catalog-rank, descending-type-rank, append-ordinal)`；
-  `Adjust` 只校验 WriteMark 和嵌套 scope，不得事后改写顺序。write scope 之前的 mutation 因此
+  `Adjust` 只校验 WriteMark 的归属和精确一次关闭，不得事后改写顺序。write scope 之前的 mutation 因此
   不形成独立排序前缀；整个普通 Compile 及其内部 SQL 保持 catalog 优先、mutation type 降序及
   同类追加顺序，而不同普通 Compile 之间绝不重排；
 - commit order 属于逻辑 mutation 而不是物理 payload 或追加时刻。一对一 rewrite 原位继承；
@@ -298,7 +298,7 @@ benchmark 的稳定基线不是固定 `ns/op`，而是输入维度不变性：�
 | `IncrStatementID` | 合并/必要 spill，原子完成 Journal attempt transition 与 RC boundary publication | 不结束 frontend execution，不回收该 execution 的 ReadView |
 | `PublishReadView` | 推进 protocol-order epoch，并将当前 revision 与 MutationID frontier 发布为普通 Compile 边界 | 不改变 StatementID |
 | `CurrentReadView` | 捕获当前 revision/frontier，供内部 SQL 或隔离 Workspace 使用，并继承当前 epoch | 不发布普通 Compile 边界、不推进 epoch |
-| `BeginWriteAttempt` / `Adjust` | 打开/关闭 LIFO write scope，返回/校验稳定 WriteMark | 不按物理 offset 重排 mutation |
+| `BeginWriteAttempt` / `Adjust` | 注册/关闭 attempt 内的 active write scope，返回/校验稳定 WriteMark | 不按物理 offset 重排 mutation |
 | `RollbackLastStatement` | rollback 当前 Attempt，返回锁外清理资源并把 Journal 标记为 retry pending | 不直接创建下一 Attempt |
 | retry 后的 `IncrStatementID` | 保持 StatementID、递增 AttemptID，创建下一 open Attempt | 不重复清理上一 Attempt |
 | `EndStatement` | 关闭 execution guard、使本次 ReadView 不能再新 pin、回收未 pin 的 retired 状态 | 不等同于 Statement 完成；已 pin lease 继续有效 |
@@ -315,7 +315,7 @@ frontend execution
      or CurrentReadView                      // internal SQL / isolated workspace
   -> BeginWriteAttempt
   -> append / rewrite mutations
-  -> Adjust(WriteMark)                       // close LIFO write scope
+  -> Adjust(WriteMark)                       // close this active write scope exactly once
   -> readers / EntrySets release their leases
   -> EndStatement
        -> expire this execution's ReadViews for new resolution
