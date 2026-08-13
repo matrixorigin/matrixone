@@ -1067,8 +1067,11 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	// the JOIN path does, and for the same reason. Equality-matched against the single served
 	// MATCH, so a different MATCH is left alone rather than given this one's score. It runs
 	// BEFORE the base-ColRef remap so a rewritten MATCH's arguments are gone by then instead of
-	// being remapped to TVF columns. (Reachable only when the MATCH's own column arguments are
-	// themselves include columns; otherwise guard (d) already sent the query to the JOIN path.)
+	// being remapped to TVF columns.
+	//
+	// Reachable when the MATCH's column argument is the PRIMARY KEY -- guard (d) descends into
+	// the MATCH's arguments, and an indexed text column is rejected as an INCLUDE column, so
+	// the pk is the only way it counts as covered. fulltext2_wrapped_score pins that shape.
 	wrappedRewriter := builder.fullTextScoreRewriter([]fulltextServedMatch{{fn: fn, nodeID: ftnodeID}})
 	for i := range projNode.ProjectList {
 		if isProjIndexPosition(projids, int32(i)) {

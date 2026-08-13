@@ -181,6 +181,26 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table covpk(body varchar(100) primary key, tag int);
+insert into covpk values ('hello',1),('hello hello',2),('hello hello hello',3),('world',4);
+create fulltext2 index ci_covpk on covpk(body) include(tag);
+select body, tag, match(body) against('hello') as sc from covpk where match(body) against('hello') order by body;
+➤ body[12,75,0]  ¦  tag[4,32,0]  ¦  sc[7,5,0]  𝄀
+hello  ¦  1  ¦  0.019339437  𝄀
+hello hello  ¦  2  ¦  0.02132055  𝄀
+hello hello hello  ¦  3  ¦  0.022074306
+select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello') order by body;
+➤ body[12,75,0]  ¦  tag[4,32,0]  ¦  r[8,53,31]  𝄀
+hello  ¦  1  ¦  0.019  𝄀
+hello hello  ¦  2  ¦  0.021  𝄀
+hello hello hello  ¦  3  ¦  0.022
+explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Table Function on fulltext2_search
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118 limit 1;
 ➤ id[4,32,0]  𝄀
 5

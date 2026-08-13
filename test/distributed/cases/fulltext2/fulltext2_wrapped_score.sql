@@ -137,6 +137,26 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 
+-- ---------------- wrapped MATCH on the COVERED fast path -------------------------
+-- tryApplyCoveredFulltext2 drops the base-table JOIN and reads pk/score/include columns
+-- straight from the TVF, remapping only the projections it recognised as bare MATCHes -- a
+-- wrapped one was left behind to throw. It needs the same sweep as the JOIN path.
+--
+-- Reaching the covered path with a wrapped MATCH needs the MATCH's column to count as covered,
+-- and an indexed text column is rejected as an INCLUDE column, so the pk is the only way in.
+create table covpk(body varchar(100) primary key, tag int);
+insert into covpk values ('hello',1),('hello hello',2),('hello hello hello',3),('world',4);
+create fulltext2 index ci_covpk on covpk(body) include(tag);
+
+-- baseline, then the wrapped form: the scores must be the same numbers
+select body, tag, match(body) against('hello') as sc from covpk where match(body) against('hello') order by body;
+select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello') order by body;
+
+-- and it must still be the covered plan, not a fallback to the JOIN
+-- @separator:table
+-- @regex("Table Function on fulltext2_search", true)
+explain select body, tag, round(match(body) against('hello'),3) as r from covpk where match(body) against('hello');
+
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------
 -- Lifting a wrapped predicate off the scan empties FilterList, which used to re-enable the
 -- LIMIT pushdown into the fulltext TVF. The predicate runs ABOVE the join, so a capped stream
