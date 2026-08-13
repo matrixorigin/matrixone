@@ -534,6 +534,52 @@ func TestHandleCloneDatabaseWithSourceIfNotExistsSkipsExistingTarget(t *testing.
 	require.Empty(t, receipts)
 }
 
+func TestHandleCloneDatabaseWithSourceIfNotExistsPropagatesLookupErrors(t *testing.T) {
+	stmt := &tree.CloneDatabase{
+		IfNotExists: true,
+		DstDatabase: tree.Identifier("destination"),
+		SrcDatabase: tree.Identifier("source"),
+	}
+
+	t.Run("target account context is missing", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(context.Background(), ctrl),
+			ses,
+			mock_frontend.NewMockBackgroundExec(ctrl),
+			stmt,
+			nil,
+		)
+		require.Error(t, err)
+	})
+
+	t.Run("destination existence query fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+
+		wantErr := errors.New("destination lookup failed")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet()
+		bh.EXPECT().Exec(
+			gomock.Any(),
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'destination' LIMIT 1",
+		).Return(wantErr)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses,
+			bh,
+			stmt,
+			nil,
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+}
+
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
 		Tenant: &plan.SnapshotTenant{TenantID: 1001},

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -54,4 +55,38 @@ func TestCheckDatabaseExistsAtSnapshot(t *testing.T) {
 	exists, err := checkDatabaseExistsAtSnapshot(ctx, bh, snapshot, "db'name")
 	require.NoError(t, err)
 	require.True(t, exists)
+}
+
+func TestCheckDatabaseExistsAtSnapshotPropagatesErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("catalog query fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		wantErr := errors.New("catalog query failed")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet()
+		bh.EXPECT().Exec(
+			gomock.Any(),
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' LIMIT 1",
+		).Return(wantErr)
+
+		exists, err := checkDatabaseExistsAtSnapshot(ctx, bh, nil, "source")
+		require.False(t, exists)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("catalog result is malformed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet()
+		bh.EXPECT().Exec(
+			gomock.Any(),
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' LIMIT 1",
+		).Return(nil)
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{"not an ExecResult"})
+
+		exists, err := checkDatabaseExistsAtSnapshot(ctx, bh, nil, "source")
+		require.False(t, exists)
+		require.Error(t, err)
+	})
 }
