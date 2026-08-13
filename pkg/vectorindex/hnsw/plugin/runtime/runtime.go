@@ -90,6 +90,8 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 	return []types.T{types.T_array_float32, types.T_array_float64}
 }
 
+func (CatalogHooks) IsVectorIndex() bool { return true }
+
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 

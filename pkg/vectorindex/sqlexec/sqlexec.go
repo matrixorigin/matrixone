@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -165,6 +166,24 @@ func (s *SqlProcess) GetResolveVariableFunc() func(varName string, isSystemVar, 
 	return nil
 }
 
+// GetService returns the CN UUID (service name) of the underlying proc or SqlContext.
+// Captured at load so a later background query (e.g. the cache IsStale check) can reach
+// the internal SQL executor by service name.
+func (s *SqlProcess) GetService() string {
+	if s.Proc != nil {
+		return s.Proc.GetService()
+	}
+	return s.SqlCtx.GetService()
+}
+
+// GetAccountID returns the tenant account id of the underlying proc or SqlContext.
+func (s *SqlProcess) GetAccountID() (uint32, error) {
+	if s.Proc != nil {
+		return defines.GetAccountId(s.Proc.Ctx)
+	}
+	return s.SqlCtx.AccountId, nil
+}
+
 // run SQL in batch mode. Result batches will stored in memory and return once all result batches received.
 func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 	if sqlproc.Proc != nil {
@@ -233,6 +252,30 @@ func RunSql(sqlproc *SqlProcess, sql string) (executor.Result, error) {
 		return exec.Exec(execCtx, sql, opts)
 
 	}
+}
+
+// RunSqlAutoCommit runs a read-only SQL in a BACKGROUND context with an executor-managed
+// (auto-commit) txn — no caller sqlproc/txn required, only the CN UUID + tenant. The
+// internal SQL executor holds the engine/txnClient, so omitting WithTxn makes it
+// create+commit its own txn (Options.ExistsTxn()==false). Used by the vector-index cache's
+// IsStale freshness check, which runs on the housekeeping goroutine long after the loading
+// query's txn is gone; it captures cnUUID+accountID at load and re-queries here. The caller
+// owns ctx (deadline/cancel) and must Close the returned Result.
+func RunSqlAutoCommit(ctx context.Context, cnUUID string, accountID uint32, db, sql string) (executor.Result, error) {
+	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("RunSqlAutoCommit: missing internal sql executor")
+	}
+	exec := v.(executor.SQLExecutor)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+	opts := executor.Options{}.
+		WithDisableIncrStatement().
+		WithAccountID(accountID).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	if db != "" {
+		opts = opts.WithDatabase(db)
+	}
+	return exec.Exec(ctx, sql, opts)
 }
 
 // run SQL in WithStreaming() and pass the channel to SQL executor
