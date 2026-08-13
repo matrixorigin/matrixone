@@ -428,8 +428,7 @@ func (r *optSplitResult) unmarshalFromReader(reader io.Reader) (retErr error) {
 		}
 		flattened := newDistinctHash(r.mp)
 		for len(flattened.maps) < expectedRows {
-			var frame distinctHash
-			frame = newDistinctHash(r.mp)
+			frame := newDistinctHash(r.mp)
 			if err = frame.unmarshalFromReader(reader, r.mp); err != nil {
 				frame.free()
 				flattened.free()

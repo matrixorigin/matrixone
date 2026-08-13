@@ -1052,7 +1052,7 @@ func (exec *minMaxExecFixed[T]) preflightFixedCandidates(
 			winner.present = true
 		}
 		mutation := false
-		switch cmp := -1; {
+		switch {
 		case !winner.present:
 			winner.value = value
 			winner.kind = kind
@@ -1060,7 +1060,7 @@ func (exec *minMaxExecFixed[T]) preflightFixedCandidates(
 			winner.changed = true
 			mutation = true
 		default:
-			cmp = exec.comp(value, winner.value)
+			cmp := exec.comp(value, winner.value)
 			switch {
 			case cmp < 0:
 				winner.value = value

@@ -258,14 +258,6 @@ func (s *quantileSketch[T]) preflightAdd(count int) error {
 	return nil
 }
 
-func (s *quantileSketch[T]) preflightMerge(other *quantileSketch[T]) error {
-	plan := newQuantileCapacityPlan(s)
-	if err := plan.merge(other); err != nil {
-		return err
-	}
-	return plan.reserve(s)
-}
-
 type quantileCapacityPlan[T quantileValue] struct {
 	lengths    [approxPercentileMaxLevels]int
 	capacities [approxPercentileMaxLevels]int
@@ -1025,14 +1017,6 @@ type approxPercentileExecBase[T quantileValue] struct {
 	arithmetic      percentileArithmeticScratch
 }
 
-type approxPercentileBaseCarrier[T quantileValue] interface {
-	approxPercentileBase() *approxPercentileExecBase[T]
-}
-
-func (exec *approxPercentileExecBase[T]) approxPercentileBase() *approxPercentileExecBase[T] {
-	return exec
-}
-
 func (exec *approxPercentileExecBase[T]) PreflightBatchFill(
 	offset int,
 	groups []uint64,
@@ -1088,20 +1072,15 @@ func (exec *approxPercentileExecBase[T]) PreflightBatchFill(
 	return nil
 }
 
-func (exec *approxPercentileExecBase[T]) PreflightBatchMerge(
-	next AggFuncExec,
+func (exec *approxPercentileExecBase[T]) preflightBatchMerge(
+	other *approxPercentileExecBase[T],
 	offset int,
 	groups []uint64,
 ) error {
 	if exec.allocation == nil {
 		return nil
 	}
-	carrier, ok := next.(approxPercentileBaseCarrier[T])
-	if !ok {
-		return mpool.ErrAllocationAccountInvalid
-	}
-	other := carrier.approxPercentileBase()
-	if !exec.mergeCompatible(other) ||
+	if other == nil || !exec.mergeCompatible(other) ||
 		len(groups) > hashmap.UnitLimit || offset < 0 ||
 		offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
@@ -1368,6 +1347,17 @@ type approxPercentileNumericExec[T numeric] struct {
 	approxPercentileExecBase[T]
 }
 
+func (exec *approxPercentileNumericExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*approxPercentileNumericExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return exec.preflightBatchMerge(
+		&other.approxPercentileExecBase, offset, groups)
+}
+
 func (exec *approxPercentileNumericExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.merge(&next.(*approxPercentileNumericExec[T]).approxPercentileExecBase, groupIdx1, groupIdx2)
 }
@@ -1425,6 +1415,17 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 
 type approxPercentileDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 	approxPercentileExecBase[T]
+}
+
+func (exec *approxPercentileDecimalExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*approxPercentileDecimalExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return exec.preflightBatchMerge(
+		&other.approxPercentileExecBase, offset, groups)
 }
 
 func (exec *approxPercentileDecimalExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {

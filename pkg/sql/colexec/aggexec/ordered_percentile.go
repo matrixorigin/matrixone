@@ -572,8 +572,8 @@ func (exec *orderedPercentileExec[T, R]) PreflightBatchMerge(
 		exec.descending != other.descending {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	return exec.medianColumnExecSelf.PreflightBatchMerge(
-		other, offset, groups)
+	return exec.medianColumnExecSelf.preflightBatchMerge(
+		&other.medianColumnExecSelf, offset, groups)
 }
 
 func (exec *orderedPercentileExec[T, R]) SaveIntermediateResultOfChunk(

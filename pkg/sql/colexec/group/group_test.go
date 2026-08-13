@@ -114,21 +114,6 @@ func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	)
 }
 
-func unorderedGroupConcatOrderAgg(distinct bool) aggexec.AggFuncExecExpression {
-	config := []byte{2}
-	config = binary.BigEndian.AppendUint32(config, 1) // concat args
-	config = binary.BigEndian.AppendUint32(config, 0) // no ORDER BY args
-	config = binary.BigEndian.AppendUint32(config, 1) // separator length
-	config = append(config, '|')
-	return aggexec.MakeAggFunctionExpression(
-		aggexec.AggIdOfGroupConcat,
-		distinct,
-		[]*plan.Expr{colExpr(1, types.T_varchar)},
-		config,
-		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
-	)
-}
-
 func orderedPercentileAgg(id int64, valueCol int32, percentile []byte, descending bool) aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		id,

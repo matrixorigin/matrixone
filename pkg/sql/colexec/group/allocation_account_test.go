@@ -999,7 +999,7 @@ func TestSpillReloadRetriesWholeRecordAfterCapacityRejection(t *testing.T) {
 	for _, count := range seen {
 		require.Equal(t, int64(1), count)
 	}
-	used, sawReadAhead, rejectedReload := controller.snapshot()
+	_, sawReadAhead, rejectedReload := controller.snapshot()
 	require.True(t, sawReadAhead)
 	require.True(t, rejectedReload)
 	require.Positive(t,
@@ -1009,7 +1009,7 @@ func TestSpillReloadRetriesWholeRecordAfterCapacityRejection(t *testing.T) {
 
 	g.Free(proc, false, nil)
 	require.Zero(t, allocation.account.Snapshot().Used)
-	used, _, _ = controller.snapshot()
+	used, _, _ := controller.snapshot()
 	require.Zero(t, used)
 	finalizeGroupTestAllocation(t, g, allocation)
 }
@@ -1824,13 +1824,13 @@ func TestAccountedGroupRetriesAggregateAreaPreflightBeforePublishingValues(t *te
 		require.Equal(t,
 			fmt.Sprintf("winner-%03d-%s", key, strings.Repeat("x", 64)), value)
 	}
-	used, rejected := controller.snapshot()
+	_, rejected := controller.snapshot()
 	require.True(t, rejected)
 	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 
 	g.Free(proc, false, nil)
 	require.Zero(t, account.Snapshot().Used)
-	used, _ = controller.snapshot()
+	used, _ := controller.snapshot()
 	require.Zero(t, used)
 	finalizeGroupTestAllocation(t, g, allocation)
 	first.Clean(proc.Mp())

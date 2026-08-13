@@ -956,30 +956,17 @@ func (exec *medianColumnExecSelf[T, R]) PreflightBatchFill(
 	return exec.accounted.PreflightBatchFill(offset, groups, vectors)
 }
 
-func (exec *medianColumnExecSelf[T, R]) PreflightBatchMerge(
-	next AggFuncExec, offset int, groups []uint64,
+func (exec *medianColumnExecSelf[T, R]) preflightBatchMerge(
+	next *medianColumnExecSelf[T, R], offset int, groups []uint64,
 ) error {
 	if exec.accounted == nil {
 		return nil
 	}
-	carrier, ok := next.(medianAccountedCarrier[T, R])
-	if !ok || !exec.mergeCompatible(carrier.medianAccountedSelf()) ||
-		carrier.medianAccountedSelf().accounted == nil {
+	if next == nil || !exec.mergeCompatible(next) || next.accounted == nil {
 		return mpool.ErrAllocationAccountMismatch
 	}
 	return exec.accounted.preflightBatchMergeArgs(
-		carrier.medianAccountedSelf().accounted, offset, groups)
-}
-
-type medianAccountedCarrier[
-	T numeric | types.Decimal64 | types.Decimal128,
-	R types.FixedSizeTExceptStrType,
-] interface {
-	medianAccountedSelf() *medianColumnExecSelf[T, R]
-}
-
-func (exec *medianColumnExecSelf[T, R]) medianAccountedSelf() *medianColumnExecSelf[T, R] {
-	return exec
+		next.accounted, offset, groups)
 }
 
 func (exec *medianColumnExecSelf[T, R]) SaveSpillIntermediateResult(
@@ -1045,6 +1032,17 @@ type medianColumnNumericExec[T numeric] struct {
 	medianColumnExecSelf[T, float64]
 }
 
+func (exec *medianColumnNumericExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*medianColumnNumericExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return exec.preflightBatchMerge(
+		&other.medianColumnExecSelf, offset, groups)
+}
+
 func newMedianColumnNumericExec[T numeric](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
 	return &medianColumnNumericExec[T]{
 		medianColumnExecSelf: newMedianColumnExecSelf[T, float64](mp, info, 0),
@@ -1053,6 +1051,17 @@ func newMedianColumnNumericExec[T numeric](mp *mpool.MPool, info singleAggInfo) 
 
 type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 	medianColumnExecSelf[T, types.Decimal128]
+}
+
+func (exec *medianColumnDecimalExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*medianColumnDecimalExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	return exec.preflightBatchMerge(
+		&other.medianColumnExecSelf, offset, groups)
 }
 
 func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
