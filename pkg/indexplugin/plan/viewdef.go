@@ -172,11 +172,20 @@ var MatchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
 // an algorithm does, but the body lives here rather than being copied and left to drift.
 //
 // SCOPE, and why it stops here. This guards the statements that CREATE a view definition:
-// CREATE VIEW, ALTER VIEW, CREATE OR REPLACE VIEW. It deliberately does NOT guard the
-// statements that can later invalidate one -- DROP INDEX above all, but equally ALTER TABLE
-// DROP COLUMN and DROP TABLE. So a persisted view can still become unrunnable; the
-// invariant established here is "view DDL does not CREATE something unrunnable", not "a
-// persisted view is always runnable".
+// CREATE VIEW, ALTER VIEW, CREATE OR REPLACE VIEW. What it establishes is narrow, and worth
+// stating precisely: "view DDL does not persist a definition that cannot run ON ITS OWN".
+// It is NOT "a persisted view is always runnable", for two independent reasons.
+//
+// One, the definition is validated in isolation, but a query through the view inlines it
+// into the surrounding statement and re-plans the whole thing, which can reach a shape the
+// rewrite does not cover. Measured: a view over `MATCH(body)` with the score projected is
+// accepted and works under an outer ORDER BY, a join, an aggregate, a window, a nested
+// view, a subquery and a union -- but `WHERE sc > 0` on the score column fails with the
+// runtime 20105. That is a planner gap, not a hole in this check: the same shape fails
+// identically as a bare derived table with no view involved.
+//
+// Two, it deliberately does not guard the statements that invalidate an existing view --
+// DROP INDEX above all, but equally ALTER TABLE DROP COLUMN and DROP TABLE.
 //
 // That is deliberate, for three reasons:
 //
