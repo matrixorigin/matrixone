@@ -133,6 +133,31 @@ func TestListExpressionExecutor(t *testing.T) {
 	require.Equal(t, curr, proc.Mp().CurrNB())
 }
 
+func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binary := vector.NewVec(types.T_varchar.ToType())
+	text := vector.NewVec(types.T_varchar.ToType())
+	result := vector.NewVec(types.T_varchar.ToType())
+	defer binary.Free(proc.Mp())
+	defer text.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(binary, []byte("binary"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(binary, []byte("inactive"), false, proc.Mp()))
+	require.NoError(t, binary.SetIsBinaryStringAt(0, true, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(text, []byte("inactive"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("binary"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
+
+	expr := &FunctionExpressionExecutor{}
+	expr.resetFlowControlPrepareParamKind()
+	expr.observeFlowControlPrepareParamKind(binary, []bool{true, false})
+	expr.observeFlowControlPrepareParamKind(text, []bool{false, true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 2, proc.Mp()))
+	require.True(t, result.GetBinaryStringMetadataAt(0))
+	require.False(t, result.GetBinaryStringMetadataAt(1))
+}
+
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)
@@ -367,7 +392,7 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("5.5"), false, proc.Mp()))
 	params.SetPrepareParamKind(vector.PrepareParamFloat)
-	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat}, []bool{true})
 	defer params.Free(proc.Mp())
 
 	column := &plan.Expr{
@@ -421,18 +446,22 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind())
 			require.Equal(t, "5.5", result.GetStringAt(0))
+			require.True(t, result.GetBinaryStringMetadataAt(0))
 			require.True(t, result.IsNull(1))
 
 			result, err = executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
 				"full selection must retain the active prepared branch")
+			require.True(t, result.GetBinaryStringMetadataAt(0))
+			require.True(t, result.GetBinaryStringMetadataAt(1))
 
 			result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true})
 			require.NoError(t, err)
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKind(),
 				"reused selection buffers must retain only the active branch lineage")
 			require.Equal(t, "5.5", result.GetStringAt(1))
+			require.True(t, result.GetBinaryStringMetadataAt(1))
 			require.True(t, result.IsNull(0))
 		})
 	}
@@ -453,6 +482,8 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, vector.PrepareParamNone, result.GetPrepareParamKind(),
 				"active branches with mixed source categories must be conservative")
+			require.True(t, result.GetBinaryStringMetadataAt(0))
+			require.False(t, result.GetBinaryStringMetadataAt(1))
 		})
 	}
 

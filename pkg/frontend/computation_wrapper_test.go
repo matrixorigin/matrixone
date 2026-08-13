@@ -434,6 +434,7 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericPrefixMax, wantWidth: 74, wantScale: 9},
 		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
+		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -490,6 +491,7 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "\f1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "123456789012345678901234567890123456", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericWide},
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 68, wantFull: true, wantBindingMode: preparedNumericApprox},
+		{value: "10000000000000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericWide},
 		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericPrefixMax},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
@@ -1472,7 +1474,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)

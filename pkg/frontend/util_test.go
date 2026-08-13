@@ -2790,3 +2790,20 @@ func Test_parseCmdCheckSnapshotFlushed_GoodPath(t *testing.T) {
 		convey.So(err.Error(), convey.ShouldContainSubstring, "invalid")
 	})
 }
+
+func TestGetValueFromVectorFormatsDecimalWithPhysicalScale(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_decimal128, 38, 10))
+	defer vec.Free(mp)
+	value, scale, err := types.Parse128("9007199254740992.0000000002")
+	require.NoError(t, err)
+	require.Equal(t, int32(10), scale)
+	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+
+	// Prepared SET may rebind the logical expression to a wider common type.
+	// The vector owns the physical decimal representation and its scale.
+	rebound := &plan2.Expr{Typ: plan2.Type{Id: int32(types.T_decimal128), Width: 65, Scale: 30}}
+	got, err := getValueFromVector(context.Background(), vec, nil, rebound)
+	require.NoError(t, err)
+	require.Equal(t, "9007199254740992.0000000002", got)
+}

@@ -1182,8 +1182,8 @@ func doSetVar(
 			}
 		}()
 
-		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(0, assign)
+		for index, assign := range sv.Assignments {
+			item, evalErr := evaluateAssignment(index, assign)
 			if evalErr != nil {
 				return evalErr
 			}

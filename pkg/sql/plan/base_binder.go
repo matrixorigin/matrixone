@@ -4015,9 +4015,10 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
-		})
+		sourceType := makeTypeByPlan2Expr(args[0])
+		targetType := types.T_datetime.ToType()
+		function.SetTargetScaleFromSource(&sourceType, &targetType)
+		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 		if err != nil {
 			return nil, err
 		}
@@ -5583,7 +5584,7 @@ func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
 	}
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion18
+	return ok && valid && version >= defines.MORPCVersion19
 }
 
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {

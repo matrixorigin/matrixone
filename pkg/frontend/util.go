@@ -541,13 +541,13 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[uint8](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
-		return val.Format(expr.Typ.Scale), nil
+		return val.Format(vec.GetType().Scale), nil
 	case types.T_decimal128:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
-		return val.Format(expr.Typ.Scale), nil
+		return val.Format(vec.GetType().Scale), nil
 	case types.T_decimal256:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0)
-		return val.Format(expr.Typ.Scale), nil
+		return val.Format(vec.GetType().Scale), nil
 	case types.T_json:
 		val := vec.GetBytesAt(0)
 		byteJson := types.DecodeJson(val)

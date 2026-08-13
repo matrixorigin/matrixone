@@ -776,7 +776,7 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	binding.Charset = preparedNumericTextBindingCharset
 	integral := max(width-scale, 0)
 	switch {
-	case full && exponent && integral > 76:
+	case full && integral > 76:
 		binding.Size = preparedNumericTextFloat
 	case integral <= 35 && scale <= 30:
 		binding.Size = preparedNumericTextPrefix
