@@ -76,4 +76,49 @@ order by pump;
 
 drop table boundary_readings;
 
+set time_zone = '+08:00';
+
+create table boundary_type_dt(k int, event_ts datetime, value int);
+insert into boundary_type_dt values (1, '2026-01-01 00:00:01', 1);
+
+select _wstart, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+
+select min(ws), max(ws)
+from (
+    select _wstart as ws, count(*) as c
+    from boundary_type_dt
+    group by k interval(event_ts, 1, minute)
+) as x;
+
+create table boundary_type_rollup_dt as
+select _wstart as ws, count(*) as c
+from boundary_type_dt
+group by k interval(event_ts, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_dt'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+
+select ws from boundary_type_rollup_dt;
+
+create table boundary_type_ts(k int, event_ts timestamp, value int);
+insert into boundary_type_ts values (1, '2026-01-01 00:00:01', 1);
+
+create table boundary_type_rollup_ts as
+select _wstart as ws, count(*) as c
+from boundary_type_ts
+group by k interval(event_ts, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_ts'
+and column_name in ('ws', 'c')
+order by ordinal_position;
+
+set time_zone = '+00:00';
+
 drop database time_window_gapfill_bvt;

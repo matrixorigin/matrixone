@@ -737,7 +737,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if ctr.startVec != nil {
 			ctr.startVec.CleanOnlyData()
 		} else {
-			ctr.startVec = vector.NewVec(types.T_datetime.ToType())
+			ctr.startVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 		}
 		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
 		if err != nil {
@@ -757,7 +757,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if ctr.endVec != nil {
 			ctr.endVec.CleanOnlyData()
 		} else {
-			ctr.endVec = vector.NewVec(types.T_datetime.ToType())
+			ctr.endVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 		}
 		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
 		if err != nil {

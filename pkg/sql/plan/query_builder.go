@@ -4830,6 +4830,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				return
 			}
 		}
+		if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
+			setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ)
+		}
 		if selectClause.Having != nil {
 			rollupFilter = selectClause.Having.RollupHaving
 		}
@@ -7594,6 +7597,8 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
+	boundaryType := timeWindowBoundaryType(ts.Typ)
+	setTimeWindowBoundaryType(ctx, boundaryType)
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7679,6 +7684,46 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+func timeWindowBoundaryType(tsType plan.Type) plan.Type {
+	typ := *DeepCopyType(&tsType)
+	if types.T(typ.Id) == types.T_date {
+		typ.Id = int32(types.T_datetime)
+	}
+	typ.NotNullable = true
+	return typ
+}
+
+func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type) {
+	typ.NotNullable = true
+	ctx.timeBoundaryType = DeepCopyType(&typ)
+	for _, expr := range ctx.times {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+	for _, expr := range ctx.projects {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+	for _, expr := range ctx.results {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+}
+
+func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
+	if ctx == nil || expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != ctx.timeTag {
+		return false
+	}
+	return col.Name == TimeWindowStart || col.Name == TimeWindowEnd
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set

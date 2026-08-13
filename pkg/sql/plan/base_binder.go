@@ -399,8 +399,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
+		typ := plan.Type{Id: int32(types.T_timestamp), NotNullable: true}
+		if b.ctx.timeBoundaryType != nil {
+			typ = *DeepCopyType(b.ctx.timeBoundaryType)
+			typ.NotNullable = true
+		}
 		expr = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_timestamp)},
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -3538,8 +3543,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
+		scale := args[0].Typ.Scale
 		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
+			Id:    int32(types.T_datetime),
+			Scale: scale,
 		})
 		if err != nil {
 			return nil, err
