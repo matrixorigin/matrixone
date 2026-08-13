@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -268,6 +269,179 @@ func TestBlockDataReadInnerScopedMaterialization(t *testing.T) {
 	require.Zero(t, queryMP.CurrNB())
 }
 
+func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	colTypes := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(len(colTypes))
+	for i := range colTypes {
+		input.Vecs[i] = vector.NewVec(colTypes[i])
+	}
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("payload-"+string(rune('0'+i))), false, writeMP))
+	}
+	input.SetRowCount(8)
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	info := stats.ConstructBlockInfo(0)
+	input.Clean(writeMP)
+	require.Zero(t, writeMP.CurrNB())
+	mpool.DeleteMPool(writeMP)
+
+	queryMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(queryMP)
+	output := batch.NewWithSize(len(colTypes))
+	for i := range colTypes {
+		output.Vecs[i] = vector.NewOffHeapVecWithType(colTypes[i])
+	}
+	cacheVectors := containers.NewVectors(len(colTypes) + 2)
+	ds := &blockReadTestDataSource{deleted: []uint64{3}}
+
+	read := func(filter engine.ReaderFilter) error {
+		_, err := BlockDataReadWithFilter(
+			ctx,
+			&info,
+			ds,
+			[]uint16{0, 1},
+			colTypes,
+			-1,
+			timestamp.Timestamp{},
+			nil,
+			nil,
+			objectio.BlockReadFilter{},
+			fileservice.Policy(0),
+			"late-read-test",
+			output,
+			cacheVectors,
+			queryMP,
+			fs,
+			[]int{0},
+			filter,
+		)
+		return err
+	}
+
+	t.Run("partial survivors map through tombstones", func(t *testing.T) {
+		require.NoError(t, read(func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{0}, loaded)
+			require.Zero(t, bat.Vecs[1].Length(), "payload must not be loaded before filtering")
+			values := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+			sels := make([]int64, 0, len(values))
+			for i, value := range values {
+				if value >= 5 {
+					sels = append(sels, int64(i))
+				}
+			}
+			bat.Vecs[0].Shrink(sels, false)
+			bat.SetRowCount(len(sels))
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		}))
+		require.Equal(t, 3, output.RowCount())
+		require.Equal(t, []int32{5, 6, 7}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-5", output.Vecs[1].GetStringAt(0))
+		require.Equal(t, "payload-6", output.Vecs[1].GetStringAt(1))
+		require.Equal(t, "payload-7", output.Vecs[1].GetStringAt(2))
+	})
+
+	t.Run("all survivors preserve tombstone mapping", func(t *testing.T) {
+		output.CleanOnlyData()
+		require.NoError(t, read(func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Zero(t, bat.Vecs[1].Length())
+			return engine.ReaderFilterResult{All: true}, nil
+		}))
+		require.Equal(t, []int32{0, 1, 2, 4, 5, 6, 7}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-4", output.Vecs[1].GetStringAt(3))
+	})
+
+	t.Run("zero survivors never materialize payload", func(t *testing.T) {
+		output.CleanOnlyData()
+		require.NoError(t, read(func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Zero(t, bat.Vecs[1].Length())
+			bat.Vecs[0].CleanOnlyData()
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{}, nil
+		}))
+		require.Zero(t, output.RowCount())
+		require.Zero(t, output.Vecs[0].Length())
+		require.Zero(t, output.Vecs[1].Length())
+	})
+
+	t.Run("rejects inconsistent filtered vector lengths", func(t *testing.T) {
+		output.CleanOnlyData()
+		err := read(func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{}, nil
+		})
+		require.ErrorContains(t, err, "left early column 0 with 7 rows")
+	})
+
+	t.Run("rejects mismatched column metadata", func(t *testing.T) {
+		output.CleanOnlyData()
+		_, err := BlockDataReadWithFilter(
+			ctx,
+			&info,
+			ds,
+			[]uint16{0, 1},
+			colTypes[:1],
+			-1,
+			timestamp.Timestamp{},
+			nil,
+			nil,
+			objectio.BlockReadFilter{},
+			fileservice.Policy(0),
+			"late-read-test",
+			output,
+			cacheVectors,
+			queryMP,
+			fs,
+			[]int{0},
+			func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+				return engine.ReaderFilterResult{All: true}, nil
+			},
+		)
+		require.ErrorContains(t, err, "column count 2 does not match type count 1")
+	})
+
+	t.Run("storage selections compose with residual selections", func(t *testing.T) {
+		output.CleanOnlyData()
+		require.NoError(t, blockDataReadWithFilter(
+			ctx,
+			&info,
+			nil,
+			[]uint16{0, 1},
+			colTypes,
+			-1,
+			types.TS{},
+			[]int64{1, 4, 7},
+			fileservice.Policy(0),
+			output,
+			cacheVectors,
+			queryMP,
+			fs,
+			[]int{0},
+			func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+				sels := []int64{1}
+				bat.Vecs[0].Shrink(sels, false)
+				bat.SetRowCount(1)
+				return engine.ReaderFilterResult{Sels: sels}, nil
+			},
+			nil,
+		))
+		require.Equal(t, []int32{4}, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+		require.Equal(t, "payload-4", output.Vecs[1].GetStringAt(0))
+	})
+
+	output.Clean(queryMP)
+	require.Zero(t, queryMP.CurrNB())
+}
+
 func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
@@ -395,6 +569,46 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	require.Equal(t, uint32(0), rowids[0].GetRowOffset())
 	require.Equal(t, uint32(2), rowids[1].GetRowOffset())
 	output.Clean(queryMP)
+
+	lateOutput := batch.NewWithSize(2)
+	lateOutput.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	lateOutput.Vecs[1] = vector.NewOffHeapVecWithType(objectio.RowidType)
+	_, err = BlockDataReadWithFilter(
+		ctx,
+		&info,
+		&blockReadTestDataSource{deleted: []uint64{1}},
+		[]uint16{0, objectio.SEQNUM_ROWID},
+		[]types.Type{types.T_varchar.ToType(), objectio.RowidType},
+		1,
+		timestamp.Timestamp{PhysicalTime: 7},
+		nil,
+		nil,
+		objectio.BlockReadFilter{},
+		fileservice.Policy(0),
+		"appendable-late-read-test",
+		lateOutput,
+		cacheVectors,
+		queryMP,
+		fs,
+		[]int{1},
+		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+			require.Zero(t, bat.Vecs[0].Length(), "payload must remain deferred")
+			visibleRowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.Vecs[1])
+			require.Equal(t, []uint32{0, 2}, []uint32{
+				visibleRowids[0].GetRowOffset(),
+				visibleRowids[1].GetRowOffset(),
+			})
+			sels := []int64{1}
+			bat.Vecs[1].Shrink(sels, false)
+			bat.SetRowCount(1)
+			return engine.ReaderFilterResult{Sels: sels}, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "k2", lateOutput.Vecs[0].GetStringAt(0))
+	lateRowid := vector.GetFixedAtNoTypeCheck[types.Rowid](lateOutput.Vecs[1], 0)
+	require.Equal(t, uint32(2), lateRowid.GetRowOffset())
+	lateOutput.Clean(queryMP)
 
 	rowidOnly := batch.NewWithSize(1)
 	rowidOnly.Vecs[0] = vector.NewOffHeapVecWithType(objectio.RowidType)
