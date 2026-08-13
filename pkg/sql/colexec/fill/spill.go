@@ -520,7 +520,7 @@ func (s *fillSpill) writeRecord(
 	bat *batch.Batch,
 ) (int64, error) {
 	if file == nil || file.writer == nil || bat == nil {
-		return 0, fmt.Errorf("fill spill write: %w", io.ErrClosedPipe)
+		return 0, io.ErrClosedPipe
 	}
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, err
@@ -569,7 +569,7 @@ func (s *fillSpill) readRecordReverse(
 	reuse *batch.Batch,
 ) (*batch.Batch, error) {
 	if file == nil || file.file == nil {
-		return nil, fmt.Errorf("fill spill reverse read: %w", io.ErrClosedPipe)
+		return nil, io.ErrClosedPipe
 	}
 	fd := file.file
 	if *pos < 0 {

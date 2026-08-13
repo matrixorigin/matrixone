@@ -17,8 +17,9 @@ package resource
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"math/bits"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // AllocationOwnerMaxID mirrors common/mpool.AllocationOwnerMax. This
@@ -345,11 +346,11 @@ func (l *allocationOwnerTotalsJSONList) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	if delimiter, ok := token.(json.Delim); !ok || delimiter != '[' {
-		return fmt.Errorf("allocation owners must be a JSON array")
+		return moerr.NewInvalidInputNoCtx("allocation owners must be a JSON array")
 	}
 	for decoder.More() {
 		if l.count >= uint8(len(l.values)) {
-			return fmt.Errorf(
+			return moerr.NewInvalidInputNoCtxf(
 				"allocation owners exceed bounded cardinality %d",
 				len(l.values),
 			)
@@ -377,7 +378,7 @@ type allocationAccountTotalsDecodeJSON struct {
 // ascending order.
 func (t AllocationAccountTotals) MarshalJSON() ([]byte, error) {
 	if !t.owners.validShape() {
-		return nil, fmt.Errorf("invalid allocation owner storage")
+		return nil, moerr.NewInternalErrorNoCtx("invalid allocation owner storage")
 	}
 	wire := allocationAccountTotalsJSON{
 		GenerationCount:       t.GenerationCount,
@@ -438,14 +439,14 @@ func (t *AllocationAccountTotals) UnmarshalJSON(data []byte) error {
 		}
 		for index, owner := range owners {
 			if owner.Owner == 0 || owner.Owner > AllocationOwnerMaxID {
-				return fmt.Errorf(
+				return moerr.NewInvalidInputNoCtxf(
 					"allocation owner ID %d is out of range",
 					owner.Owner,
 				)
 			}
 			bit := uint64(1) << owner.Owner
 			if set.mask&bit != 0 {
-				return fmt.Errorf(
+				return moerr.NewInvalidInputNoCtxf(
 					"allocation owner ID %d is duplicated",
 					owner.Owner,
 				)

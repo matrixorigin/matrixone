@@ -17,13 +17,13 @@ package aggexec
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"math/bits"
 	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -297,7 +297,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 		}
 		rawCount := binary.LittleEndian.Uint32(data[4:8])
 		if rawCount > 1<<16 {
-			return 0, fmt.Errorf(
+			return 0, moerr.NewInternalErrorNoCtxf(
 				"invalid roaring bitmap container count %d", rawCount)
 		}
 		count = int(rawCount)
@@ -307,7 +307,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 		runMapStart = 4
 		headerStart = runMapStart + (count+7)/8
 	default:
-		return 0, fmt.Errorf("invalid roaring bitmap cookie %d", cookie)
+		return 0, moerr.NewInternalErrorNoCtxf("invalid roaring bitmap cookie %d", cookie)
 	}
 	descriptorBytes := count * 4
 	if headerStart > len(data) || descriptorBytes > len(data)-headerStart {
@@ -330,7 +330,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 		descriptor := data[headerStart+i*4 : headerStart+(i+1)*4]
 		key := int(binary.LittleEndian.Uint16(descriptor[:2]))
 		if key <= previousKey {
-			return 0, fmt.Errorf("roaring bitmap container keys are not increasing")
+			return 0, moerr.NewInternalErrorNoCtx("roaring bitmap container keys are not increasing")
 		}
 		previousKey = key
 		total += uint64(binary.LittleEndian.Uint16(descriptor[2:4])) + 1
@@ -349,7 +349,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 			offset := binary.LittleEndian.Uint32(
 				data[offsetStart+i*4 : offsetStart+(i+1)*4])
 			if uint64(position) != uint64(offset) {
-				return 0, fmt.Errorf("invalid roaring bitmap container offset")
+				return 0, moerr.NewInternalErrorNoCtx("invalid roaring bitmap container offset")
 			}
 		}
 		descriptor := data[headerStart+i*4 : headerStart+(i+1)*4]
@@ -377,7 +377,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 				length := int(binary.LittleEndian.Uint16(entry[2:4])) + 1
 				if start <= previousEnd || length > 1<<16-start ||
 					produced > cardinality-length {
-					return 0, fmt.Errorf("invalid roaring run container")
+					return 0, moerr.NewInternalErrorNoCtx("invalid roaring run container")
 				}
 				if output != nil {
 					for value := start; value < start+length; value++ {
@@ -389,7 +389,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 				previousEnd = start + length - 1
 			}
 			if produced != cardinality {
-				return 0, fmt.Errorf("roaring run cardinality mismatch")
+				return 0, moerr.NewInternalErrorNoCtx("roaring run cardinality mismatch")
 			}
 			if output == nil {
 				written += produced
@@ -405,7 +405,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 					data[position : position+2]))
 				position += 2
 				if value <= previousValue {
-					return 0, fmt.Errorf("roaring array values are not increasing")
+					return 0, moerr.NewInternalErrorNoCtx("roaring array values are not increasing")
 				}
 				if output != nil {
 					output[written] = prefix | uint32(value)
@@ -434,7 +434,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 				}
 			}
 			if produced != cardinality {
-				return 0, fmt.Errorf("roaring bitmap cardinality mismatch")
+				return 0, moerr.NewInternalErrorNoCtx("roaring bitmap cardinality mismatch")
 			}
 			if output == nil {
 				written += produced
@@ -442,7 +442,7 @@ func scanAccountedBitmapWire(data []byte, output []uint32) (int, error) {
 		}
 	}
 	if position != len(data) || written != int(total) {
-		return 0, fmt.Errorf("roaring bitmap decoded cardinality mismatch")
+		return 0, moerr.NewInternalErrorNoCtx("roaring bitmap decoded cardinality mismatch")
 	}
 	return int(total), nil
 }
@@ -488,10 +488,10 @@ func decodeAccountedBitmap(
 			}
 		}
 	default:
-		return nil, fmt.Errorf("invalid roaring bitmap cookie %d", cookie)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid roaring bitmap cookie %d", cookie)
 	}
 	if count > 1<<16 {
-		return nil, fmt.Errorf("invalid roaring bitmap container count %d", count)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid roaring bitmap container count %d", count)
 	}
 	descriptors, err := makeAccountedScratch[bitmapContainerDescriptor](
 		allocation, mp, int(count))
@@ -514,7 +514,7 @@ func decodeAccountedBitmap(
 			run:         runMap != nil && runMap[i/8]&(1<<uint(i%8)) != 0,
 		}
 		if i > 0 && descriptors[i].key <= previous {
-			return nil, fmt.Errorf("roaring bitmap container keys are not increasing")
+			return nil, moerr.NewInternalErrorNoCtx("roaring bitmap container keys are not increasing")
 		}
 		previous = descriptors[i].key
 		total += uint64(descriptors[i].cardinality)
@@ -559,7 +559,7 @@ func decodeAccountedBitmap(
 				start := int(binary.LittleEndian.Uint16(word[:2]))
 				length := int(binary.LittleEndian.Uint16(word[2:4])) + 1
 				if start <= previousEnd || produced > int(descriptor.cardinality)-length {
-					return nil, fmt.Errorf("invalid roaring run container")
+					return nil, moerr.NewInternalErrorNoCtx("invalid roaring run container")
 				}
 				for value := start; value < start+length; value++ {
 					values[position] = prefix | uint32(value)
@@ -569,7 +569,7 @@ func decodeAccountedBitmap(
 				previousEnd = start + length - 1
 			}
 			if produced != int(descriptor.cardinality) {
-				return nil, fmt.Errorf("roaring run cardinality mismatch")
+				return nil, moerr.NewInternalErrorNoCtx("roaring run cardinality mismatch")
 			}
 		case descriptor.cardinality <= 4096:
 			previousValue := -1
@@ -580,7 +580,7 @@ func decodeAccountedBitmap(
 				}
 				value := int(binary.LittleEndian.Uint16(word[:2]))
 				if value <= previousValue {
-					return nil, fmt.Errorf("roaring array values are not increasing")
+					return nil, moerr.NewInternalErrorNoCtx("roaring array values are not increasing")
 				}
 				values[position] = prefix | uint32(value)
 				position++
@@ -603,12 +603,12 @@ func decodeAccountedBitmap(
 				}
 			}
 			if produced != descriptor.cardinality {
-				return nil, fmt.Errorf("roaring bitmap cardinality mismatch")
+				return nil, moerr.NewInternalErrorNoCtx("roaring bitmap cardinality mismatch")
 			}
 		}
 	}
 	if position != len(values) {
-		return nil, fmt.Errorf("roaring bitmap decoded cardinality mismatch")
+		return nil, moerr.NewInternalErrorNoCtx("roaring bitmap decoded cardinality mismatch")
 	}
 	success = true
 	return values, nil
