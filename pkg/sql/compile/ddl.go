@@ -2545,7 +2545,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		); err != nil {
 			return err
 		}
-		var sourceDB, sourceTable, sourceSQL, refreshSQL string
+		var sourceDB, sourceTable, sourceSQL, refreshSQL, incrementalSpec string
 		for _, def := range qry.GetTableDef().GetDefs() {
 			props := def.GetProperties()
 			if props == nil {
@@ -2559,6 +2559,8 @@ func (s *Scope) CreateView(c *Compile) error {
 					sourceTable = prop.GetValue()
 				case "mv_refresh_sql":
 					refreshSQL = prop.GetValue()
+				case "mv_incremental_spec":
+					incrementalSpec = prop.GetValue()
 				case "mv_source_sql":
 					sourceSQL = prop.GetValue()
 				}
@@ -2575,7 +2577,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		}
 		spec := &iscp.JobSpec{ConsumerInfo: iscp.ConsumerInfo{
 			ConsumerType: int8(iscp.ConsumerType_MaterializedView),
-			DBName:       dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, SourceSQL: sourceSQL,
+			DBName:       dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, SourceSQL: sourceSQL, IncrementalSpec: incrementalSpec,
 		}}
 		job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
 		if _, err = CreateCdcTask(c, spec, job, false); err != nil {

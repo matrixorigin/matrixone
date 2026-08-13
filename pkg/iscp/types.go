@@ -257,6 +257,9 @@ type ConsumerInfo struct {
 	InitSQL      string
 	RefreshSQL   string
 	SourceSQL    string
+	// IncrementalSpec is a planner-produced JSON description for the
+	// supported direct-column aggregate subset. Empty means full refresh.
+	IncrementalSpec string
 }
 
 type TableInfo struct {

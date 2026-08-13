@@ -237,7 +237,16 @@ func ExecuteIterationWithRuntime(
 		}
 		statuses[i].StartAt = startAt
 	}
-	changes, err := CollectChanges(ctxWithoutTimeout, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	// MV consumers need the tombstone rowid to recover the deleted row at the
+	// iteration's fromTS. Other consumers keep the historical batch shape.
+	collectCtx := ctxWithoutTimeout
+	for _, spec := range jobSpecs {
+		if spec.ConsumerType == int8(ConsumerType_MaterializedView) {
+			collectCtx = engine.WithRetainRowID(collectCtx, true)
+			break
+		}
+	}
+	changes, err := CollectChanges(collectCtx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
 	if err != nil {
 		return
 	}
@@ -275,10 +284,19 @@ func ExecuteIterationWithRuntime(
 		}
 	}
 
+	retainRowID := engine.RetainRowIDFromContext(collectCtx)
 	insTSColIdx := len(tableDef.Cols) - 1
 	insCompositedPkColIdx := len(tableDef.Cols) - 2
+	if retainRowID {
+		insTSColIdx++
+		insCompositedPkColIdx++
+	}
 	delTSColIdx := 1
 	delCompositedPkColIdx := 0
+	if retainRowID {
+		delTSColIdx = 2
+		delCompositedPkColIdx = 1
+	}
 	if len(tableDef.Pkey.Names) == 1 {
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}

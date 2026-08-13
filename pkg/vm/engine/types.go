@@ -1179,6 +1179,13 @@ type Relation interface {
 	Reset(op client.TxnOperator) error
 }
 
+// RowIDReader reads source rows at a historical snapshot. CDC consumers use
+// this for tombstones, whose public batch contains the rowid and primary key
+// but not the deleted row values.
+type RowIDReader interface {
+	ReadRowsByRowID(context.Context, []types.Rowid, types.TS, []string, *mpool.MPool) ([][]any, error)
+}
+
 // RelationHandleFactory is implemented by engines whose cached relations are
 // shared and therefore cannot be reset directly. NewRelationHandle returns an
 // exclusively owned, reusable handle over the shared relation.

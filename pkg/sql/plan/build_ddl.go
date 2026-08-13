@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -1544,6 +1545,13 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
 				&plan.Property{Key: "mv_refresh_sql", Value: tree.String(stmt.AsSource, dialect.MYSQL)},
 			)
+			visibleOutputCols := createView.TableDef.Cols
+			if len(visibleOutputCols) > 0 && visibleOutputCols[len(visibleOutputCols)-1].Name == catalog.FakePrimaryKeyColName {
+				visibleOutputCols = visibleOutputCols[:len(visibleOutputCols)-1]
+			}
+			if incrementalSpec := materializedViewIncrementalSpec(clause, visibleOutputCols); incrementalSpec != "" {
+				props.Properties = append(props.Properties, &plan.Property{Key: "mv_incremental_spec", Value: incrementalSpec})
+			}
 		}
 	}
 
@@ -1594,6 +1602,132 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 }
 
 const materializedViewMarkerComment = "matrixone materialized view"
+
+type materializedViewIncrementalAggregate struct {
+	Kind         string `json:"kind"`
+	InputColumn  string `json:"input_column,omitempty"`
+	OutputColumn string `json:"output_column"`
+}
+
+type materializedViewIncrementalDescription struct {
+	GroupColumns []string                               `json:"group_columns"`
+	GroupOutputs []string                               `json:"group_outputs"`
+	Aggregates   []materializedViewIncrementalAggregate `json:"aggregates"`
+}
+
+func materializedViewIncrementalSpec(clause *tree.SelectClause, outputCols []*ColDef) string {
+	if clause == nil || clause.GroupBy == nil || clause.GroupBy.Cube || clause.GroupBy.Rollup || clause.GroupBy.GroupingSets || clause.GroupBy.Apart {
+		return ""
+	}
+	groupColumns := make([]string, 0)
+	for _, exprs := range clause.GroupBy.GroupByExprsList {
+		for _, expr := range exprs {
+			name, ok := materializedViewDirectColumn(expr)
+			if !ok {
+				return ""
+			}
+			groupColumns = append(groupColumns, name)
+		}
+	}
+	if len(groupColumns) == 0 || len(clause.Exprs) != len(outputCols) {
+		return ""
+	}
+
+	groupOutputs := make(map[string]string, len(groupColumns))
+	spec := materializedViewIncrementalDescription{GroupColumns: groupColumns, GroupOutputs: make([]string, len(groupColumns))}
+	for i, selectExpr := range clause.Exprs {
+		outputName := outputCols[i].Name
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			outputName = selectExpr.As.Origin()
+		}
+		if col, ok := materializedViewDirectColumn(selectExpr.Expr); ok {
+			found := false
+			for _, groupColumn := range groupColumns {
+				if strings.EqualFold(groupColumn, col) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return ""
+			}
+			groupOutputs[strings.ToLower(col)] = outputName
+			continue
+		}
+		fn, ok := selectExpr.Expr.(*tree.FuncExpr)
+		if !ok {
+			return ""
+		}
+		name := ""
+		if fn.FuncName != nil {
+			name = fn.FuncName.Origin()
+		} else if fn.Func.FunctionReference != nil {
+			name = fn.Func.FunctionReference.(*tree.UnresolvedName).ColName()
+		}
+		name = strings.ToLower(name)
+		if name != "count" && name != "sum" {
+			return ""
+		}
+		if fn.Type == tree.FUNC_TYPE_DISTINCT {
+			return ""
+		}
+		if name == "count" && (len(fn.Exprs) == 0 || (len(fn.Exprs) == 1 && isMaterializedViewStar(fn.Exprs[0]))) {
+			spec.Aggregates = append(spec.Aggregates, materializedViewIncrementalAggregate{Kind: "count_star", OutputColumn: outputName})
+			continue
+		}
+		if len(fn.Exprs) != 1 {
+			return ""
+		}
+		input, ok := materializedViewDirectColumn(fn.Exprs[0])
+		if !ok {
+			return ""
+		}
+		kind := name
+		if name == "count" {
+			kind = "count_column"
+		}
+		spec.Aggregates = append(spec.Aggregates, materializedViewIncrementalAggregate{Kind: kind, InputColumn: input, OutputColumn: outputName})
+	}
+	for i, groupColumn := range groupColumns {
+		output, ok := groupOutputs[strings.ToLower(groupColumn)]
+		if !ok {
+			return ""
+		}
+		spec.GroupOutputs[i] = output
+	}
+	hasCount := false
+	for _, agg := range spec.Aggregates {
+		if agg.Kind == "count_star" || agg.Kind == "count_column" {
+			hasCount = true
+			break
+		}
+	}
+	if len(spec.Aggregates) == 0 || !hasCount {
+		return ""
+	}
+	b, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func materializedViewDirectColumn(expr tree.Expr) (string, bool) {
+	name, ok := expr.(*tree.UnresolvedName)
+	if !ok || name.Star || name.NumParts < 1 {
+		return "", false
+	}
+	return name.ColName(), true
+}
+
+func isMaterializedViewStar(expr tree.Expr) bool {
+	name, ok := expr.(*tree.UnresolvedName)
+	if ok {
+		return name.Star
+	}
+	num, ok := expr.(*tree.NumVal)
+	return ok && num.ValType == tree.P_star
+}
 
 func materializedViewSourceTable(expr tree.TableExpr) *tree.TableName {
 	switch table := expr.(type) {
