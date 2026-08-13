@@ -1166,6 +1166,41 @@ func Test_BuiltIn_Serial(t *testing.T) {
 
 }
 
+func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	parameters := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{-1, 0, 42}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "b\x00c", "世界"}, nil),
+	}
+	for _, parameter := range parameters {
+		defer parameter.Free(proc.Mp())
+	}
+
+	serialResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialResult.Free()
+	serialFullResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialFullResult.Free()
+	require.NoError(t, serialResult.PreExtendAndReset(3))
+	require.NoError(t, serialFullResult.PreExtendAndReset(3))
+
+	serialOp := newOpSerial()
+	defer serialOp.Close()
+	serialFullOp := newOpSerial()
+	defer serialFullOp.Close()
+	require.NoError(t, serialOp.BuiltInSerial(parameters, serialResult, proc, 3, nil))
+	require.NoError(t, serialFullOp.BuiltInSerialFull(parameters, serialFullResult, proc, 3, nil))
+
+	for row := 0; row < 3; row++ {
+		require.False(t, serialResult.GetResultVector().IsNull(uint64(row)))
+		require.False(t, serialFullResult.GetResultVector().IsNull(uint64(row)))
+		require.Equal(t,
+			serialResult.GetResultVector().GetBytesAt(row),
+			serialFullResult.GetResultVector().GetBytesAt(row),
+			"non-NULL comparison bounds must be byte-compatible with stored keys",
+		)
+	}
+}
+
 func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

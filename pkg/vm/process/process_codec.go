@@ -79,6 +79,11 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
+			if err != nil {
+				return procInfo, err
+			}
 			procInfo.PrepareParams.Length = int64(vec.Length())
 			procInfo.PrepareParams.Data = make([]byte, 0, len(vec.GetData()))
 			procInfo.PrepareParams.Data = append(procInfo.PrepareParams.Data, vec.GetData()...)
@@ -97,6 +102,9 @@ func (proc *Process) BuildProcessInfo(
 				return procInfo, err
 			}
 			procInfo.PrepareParams.IsBin = metadata
+			if binaryStringMetadata != nil {
+				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
+			}
 		}
 	}
 	{ // session info
@@ -228,6 +236,14 @@ func (c *codecService) Decode(
 	if err != nil {
 		return nil, err
 	}
+	binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
 	txnOp, err := c.txnClient.NewWithSnapshot(ctx, value.Snapshot)
 	if err != nil {
 		return nil, err
@@ -282,7 +298,11 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			binaryStringMetadata,
+		)
 	}
 	return proc, nil
 }

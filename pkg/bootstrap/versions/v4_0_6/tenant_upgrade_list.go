@@ -36,6 +36,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaColumns(),
 	upgradeInformationSchemaCheckConstraints(),
 	upgradeInformationSchemaTableConstraints(),
+	upgradeInformationSchemaColumnsHideInternalColumns(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -55,6 +56,12 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		},
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
 	}
+}
+
+// Keep a separate entry so tenants that already completed v4.0.6 rerun the
+// COLUMNS upgrade after the view starts filtering att_is_hidden columns.
+func upgradeInformationSchemaColumnsHideInternalColumns() versions.UpgradeEntry {
+	return upgradeInformationSchemaColumns()
 }
 
 func addForeignKeyMetadataColumn(column, definition, after string) versions.UpgradeEntry {
