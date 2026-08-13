@@ -2893,6 +2893,12 @@ var (
 			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
 			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
 		}, {
+			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
+			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+		}, {
 			input: "create index idx1 on a (a)",
 		}, {
 			input:  "create index idx using master on A (a,b,c)",
@@ -4864,6 +4870,64 @@ func TestGroupConcatDeparseRoundTrip(t *testing.T) {
 		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		roundTripped.Format(roundTripFmtCtx)
 		require.Equal(t, formatted, roundTripFmtCtx.String())
+	}
+}
+
+func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select group_concat(v) within group (order by k desc) from t",
+		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select percentile_cont(0.95) within group (order by v) from t",
+		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
+		"select percentile_disc(1) within group (order by v desc) from t",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		roundTripped, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		roundTripFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		roundTripped.Format(roundTripFmtCtx)
+		require.Equal(t, formatted, roundTripFmtCtx.String())
+		require.Contains(t, strings.ToLower(formatted), "within group (order by")
+	}
+}
+
+func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
+	_, err := ParseOne(context.Background(),
+		"select group_concat(v order by v) within group (order by k) from t", 1)
+	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestWithinRemainsIdentifierCompatible(t *testing.T) {
+	for _, sql := range []string{
+		"select within from t",
+		"select 1 as within group by 1",
+		"create table t (within int)",
+	} {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOrderedSetPercentileWithoutWithinGroupParses(t *testing.T) {
+	for _, sql := range []string{
+		"select percentile_cont(0.95) from t",
+		"select percentile_disc(0.95) from t",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok, sql)
+		fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+		require.True(t, ok, sql)
+		require.False(t, fn.WithinGroup, sql)
+		require.Nil(t, fn.OrderBy, sql)
 	}
 }
 

@@ -10501,7 +10501,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeToTime
@@ -10571,7 +10571,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 9,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return types.T_time.ToTypeWithScale(parameters[0].Scale)
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampToTime
@@ -13565,6 +13565,53 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `load_text`
+	// Like load_file but returns the datalink's EXTRACTED plain text (PDF/DOCX
+	// parsed via GetPlainText), not the raw bytes — so it yields the same text the
+	// fulltext index build indexes. Used by fulltext2 CDC datalink resolution.
+	{
+		functionId: LOAD_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+		},
+	},
+
 	// function `save_file`
 	// confused function.
 	{
@@ -14287,6 +14334,176 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUUID
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDBoundary(7)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDShifted(7)
+				},
+			},
+		},
+	},
+
+	// function `uuid_v1`
+	{
+		functionId: UUID_V1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDV1
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDBoundary(1)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDShifted(1)
+				},
+			},
+		},
+	},
+
+	// function `uuid_v4`
+	{
+		functionId: UUID_V4,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDV4
+				},
+			},
+		},
+	},
+
+	// function `uuid_v6`
+	{
+		functionId: UUID_V6,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDV6
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDBoundary(6)
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uuid.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return makeBuiltInUUIDShifted(6)
+				},
+			},
+		},
+	},
+
+	// function `uuid_extract_version`
+	{
+		functionId: UUID_EXTRACT_VERSION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uuid},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int16.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDExtractVersion
+				},
+			},
+		},
+	},
+
+	// function `uuid_extract_timestamp`
+	{
+		functionId: UUID_EXTRACT_TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uuid},
+				retType: func(parameters []types.Type) types.Type {
+					t := types.T_timestamp.ToType()
+					t.Scale = 6
+					return t
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUUIDExtractTimestamp
 				},
 			},
 		},

@@ -4514,6 +4514,49 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// LoadText reads a file via the datalink resolver and returns its EXTRACTED plain
+// text: a PDF/DOCX is parsed to text (GetPlainText), any other file is returned as-is.
+// Unlike load_file (raw bytes), this yields the same text the fulltext index build
+// extracts, so it is the datalink resolver used by fulltext2 CDC maintenance to keep
+// CDC parity with the synchronous build.
+func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		_filePath, null1 := filePathVec.GetStrValue(i)
+		if null1 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath := util.UnsafeBytesToString(_filePath)
+
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+		fileBytes, err := dl.GetPlainText(proc)
+		if err != nil {
+			return err
+		}
+		if len(fileBytes) > types.MaxBlobLen {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
+		if len(fileBytes) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendBytes(fileBytes, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // WriteFileDatalink write content to file service and return number of byte written
 func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
@@ -4710,6 +4753,7 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
@@ -4717,8 +4761,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
+	loc := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
 	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
-		return v.ToDatetime(time.Local).ToTime(scale)
+		return v.ToDatetime(loc).ToTime(scale)
 	}, selectList)
 }
 

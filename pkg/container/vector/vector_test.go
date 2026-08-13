@@ -1661,6 +1661,31 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCopyPreallocatedNullVectorKeepsScalarMetadata(t *testing.T) {
+	const rows = 1024
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	destination := NewVec(types.T_int64.ToType())
+	require.NoError(t, destination.PreExtend(rows, mp))
+	destination.SetLength(rows)
+	destination.SetAllNulls(rows)
+	defer destination.Free(mp)
+
+	for row := rows - 1; row >= 0; row-- {
+		require.NoError(t, destination.Copy(source, int64(row), 0, mp))
+	}
+	require.False(t, destination.HasNull())
+	require.False(t, destination.HasBinaryStringRows())
+	require.False(t, destination.GetIsBinaryString())
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[0])
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[rows-1])
+}
+
 func TestCloneWindow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v1 := NewConstNull(types.T_int32.ToType(), 10, mp)
@@ -1777,6 +1802,65 @@ func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
 	require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
 	assertRows(t, destination, []bool{true, false, true})
 	destination.Free(mp)
+
+	t.Run("sparse-flags", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			source     func() *Vector
+			flags      []uint8
+			cnt        int
+			wantBinary []bool
+			wantNull   []bool
+		}{
+			{
+				name: "high-row",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("match")}, nil, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(3, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+			{
+				name: "selected-null",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), nil, []byte("match")}, []bool{false, true, false}, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 1, 1}, cnt: 2, wantBinary: []bool{false, true}, wantNull: []bool{true, false},
+			},
+			{
+				name: "const",
+				source: func() *Vector {
+					vec, err := NewConstBytes(types.T_text.ToType(), []byte("match"), 4, mp)
+					require.NoError(t, err)
+					vec.SetIsBinaryString(true)
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				source := tc.source()
+				defer source.Free(mp)
+				destination := NewVec(types.T_text.ToType())
+				require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+				require.NoError(t, destination.UnionBatch(source, 0, tc.cnt, tc.flags, mp))
+				for row, want := range tc.wantBinary {
+					require.Equal(t, want, destination.GetBinaryStringMetadataAt(row+1))
+					require.Equal(t, tc.wantNull[row], destination.IsNull(uint64(row+1)))
+				}
+				require.Equal(t, "match", destination.GetStringAt(destination.Length()-1))
+				destination.Free(mp)
+			})
+		}
+	})
 
 	shrunk, err := source.Dup(mp)
 	require.NoError(t, err)
@@ -1930,6 +2014,61 @@ func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
 	require.False(t, bulkNull.GetIsBinaryString())
 	require.False(t, bulkNull.HasBinaryStringRows())
 	bulkNull.Free(mp)
+}
+
+func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(vec, []string{"a", "b"}, nil, mp))
+	defer vec.Free(mp)
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("c"), false, mp))
+	source.SetIsBinaryString(true)
+	defer source.Free(mp)
+	require.NoError(t, vec.UnionBatch(source, 0, 1, nil, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.True(t, vec.GetIsBinaryString())
+
+	require.NotPanics(t, func() { vec.RollbackAppend(checkpoint, 1) })
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+}
+
+func TestRollbackAppendIgnoresStaleNullExtent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	vec := NewVec(types.T_text.ToType())
+	for row := 0; row < 130; row++ {
+		require.NoError(t, AppendBytes(vec, []byte("v"), row == 129, mp))
+	}
+	defer vec.Free(mp)
+	vec.SetLength(2)
+	require.True(t, vec.GetNulls().Contains(129), "SetLength preserves stale bitmap extent")
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	defer source.Free(mp)
+	require.NoError(t, vec.UnionBatch(source, 0, 1, nil, mp))
+	require.False(t, vec.HasBinaryStringRows())
+
+	require.NotPanics(t, func() { vec.RollbackAppend(checkpoint, 1) })
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
 }
 
 func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
@@ -5415,6 +5554,99 @@ func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
+	}
+}
+
+func BenchmarkUnionOneBinaryStringProvenanceScale(b *testing.B) {
+	for _, rows := range []int{8 << 10, 32 << 10, 128 << 10, 512 << 10} {
+		for _, mixed := range []bool{false, true} {
+			name := fmt.Sprintf("rows=%d/mixed=%t", rows, mixed)
+			b.Run(name, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				source := NewVec(types.T_text.ToType())
+				destination := NewVec(types.T_text.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				values := make([][]byte, rows)
+				for row := range values {
+					values[row] = []byte("v")
+				}
+				require.NoError(b, AppendBytesList(source, values, nil, mp))
+				if mixed {
+					provenance := make([]bool, rows)
+					for row := range provenance {
+						provenance[row] = row&1 == 0
+					}
+					require.NoError(b, source.SetBinaryStringRowsWithMP(provenance, mp))
+				}
+				b.ReportAllocs()
+				b.ReportMetric(float64(rows), "rows/op")
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					for row := range rows {
+						if err := destination.UnionOne(source, int64(row), mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUnionOneBinaryStringBitmapGrowthIsGeometric(t *testing.T) {
+	const rows = 512 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	values := make([][]byte, rows)
+	provenance := make([]bool, rows)
+	for row := range rows {
+		values[row] = []byte("v")
+		provenance[row] = row&1 == 0
+	}
+	require.NoError(t, AppendBytesList(source, values, nil, mp))
+	require.NoError(t, source.SetBinaryStringRowsWithMP(provenance, mp))
+	defer source.Free(mp)
+
+	allocations := testing.AllocsPerRun(1, func() {
+		destination := NewVec(types.T_text.ToType())
+		for row := range rows {
+			require.NoError(t, destination.UnionOne(source, int64(row), mp))
+		}
+		destination.Free(mp)
+	})
+	// Exact-per-word growth used more than 8,000 allocations at this size.
+	// Geometric payload and metadata growth should remain logarithmic.
+	require.Less(t, allocations, float64(128))
+	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkCopyPreallocatedNullVectorReverseFill(b *testing.B) {
+	const rows = 16 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(b, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	b.ReportMetric(float64(rows), "rows/op")
+	for b.Loop() {
+		b.StopTimer()
+		destination := NewVec(types.T_int64.ToType())
+		if err := destination.PreExtend(rows, mp); err != nil {
+			b.Fatal(err)
+		}
+		destination.SetLength(rows)
+		destination.SetAllNulls(rows)
+		b.StartTimer()
+		for row := rows - 1; row >= 0; row-- {
+			if err := destination.Copy(source, int64(row), 0, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		destination.Free(mp)
+		b.StartTimer()
 	}
 }
 

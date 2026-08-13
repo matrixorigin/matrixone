@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -221,6 +223,125 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 		require.Equal(t, "AB\x00\x00", copiedLiteral.GetSval())
 		require.NotSame(t, source, copiedLiteral.GetSrc())
 		require.NotNil(t, binaryLiteral.GetLit().GetSrc().GetP())
+	}
+}
+
+func TestPreparedNthValueParamPosition(t *testing.T) {
+	param := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+	function := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+	literal := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: 1},
+	}}}
+
+	tests := []struct {
+		name    string
+		expr    *plan.Expr
+		wantPos int32
+		wantOK  bool
+	}{
+		{name: "direct parameter", expr: param(3), wantPos: 3, wantOK: true},
+		{name: "literal", expr: literal},
+		{name: "non-cast function", expr: function("abs", param(4))},
+		{name: "cast without arguments", expr: function("cast")},
+		{name: "cast literal", expr: function("cast", literal)},
+		{name: "cast parameter", expr: function("cast", param(5)), wantPos: 5, wantOK: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pos, ok := preparedNthValueParamPosition(test.expr)
+			require.Equal(t, test.wantOK, ok)
+			require.Equal(t, test.wantPos, pos)
+		})
+	}
+}
+
+func TestIsPositivePreparedInteger(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  bool
+	}{
+		{name: "nil", value: nil},
+		{name: "int positive", value: int(1), want: true},
+		{name: "int zero", value: int(0)},
+		{name: "int8 positive", value: int8(1), want: true},
+		{name: "int8 negative", value: int8(-1)},
+		{name: "int16 positive", value: int16(1), want: true},
+		{name: "int16 zero", value: int16(0)},
+		{name: "int32 positive", value: int32(1), want: true},
+		{name: "int32 negative", value: int32(-1)},
+		{name: "int64 positive", value: int64(1), want: true},
+		{name: "int64 zero", value: int64(0)},
+		{name: "uint positive", value: uint(1), want: true},
+		{name: "uint zero", value: uint(0)},
+		{name: "uint8 positive", value: uint8(1), want: true},
+		{name: "uint8 zero", value: uint8(0)},
+		{name: "uint16 positive", value: uint16(1), want: true},
+		{name: "uint16 zero", value: uint16(0)},
+		{name: "uint32 positive", value: uint32(1), want: true},
+		{name: "uint32 zero", value: uint32(0)},
+		{name: "uint64 max int64", value: uint64(math.MaxInt64), want: true},
+		{name: "uint64 over int64", value: uint64(math.MaxInt64) + 1},
+		{name: "year positive", value: types.MoYear(1), want: true},
+		{name: "year zero", value: types.MoYear(0)},
+		{
+			name: "binary integer string",
+			value: ParamValue{
+				Value:            "2",
+				PrepareParamKind: vector.PrepareParamInteger,
+			},
+			want: true,
+		},
+		{
+			name: "binary integer zero",
+			value: ParamValue{
+				Value:            "0",
+				PrepareParamKind: vector.PrepareParamInteger,
+			},
+		},
+		{
+			name: "binary integer negative",
+			value: ParamValue{
+				Value:            "-1",
+				PrepareParamKind: vector.PrepareParamInteger,
+			},
+		},
+		{
+			name: "binary integer overflow",
+			value: ParamValue{
+				Value:            "9223372036854775808",
+				PrepareParamKind: vector.PrepareParamInteger,
+			},
+		},
+		{
+			name: "binary integer malformed",
+			value: ParamValue{
+				Value:            "2.5",
+				PrepareParamKind: vector.PrepareParamInteger,
+			},
+		},
+		{name: "ordinary string", value: "2"},
+		{
+			name: "float provenance",
+			value: ParamValue{
+				Value:            int64(2),
+				PrepareParamKind: vector.PrepareParamFloat,
+			},
+		},
+		{name: "float value", value: float64(2)},
+		{name: "boolean value", value: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, isPositivePreparedInteger(test.value))
+		})
 	}
 }
 

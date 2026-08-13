@@ -281,20 +281,30 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, err
 	}
+	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
+	for i := range outputColumnProvenance {
+		outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
+	}
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
-	rootNode := builder.qry.Nodes[rootId]
+	// CTAS metadata must reflect the final query output: outer joins and scalar
+	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, nil, err
+	}
+	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
-		typ := &expr.Typ
-		if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, builder.qry, expr, nil); ok {
-			planType := makePlan2Type(&binaryType)
-			typ = &planType
+		typ := expr.Typ
+		if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, query, expr, nil); ok {
+			typ = makePlan2Type(&binaryType)
 		}
-		provenance := bindCtx.outputColumnProvenanceForProject(int32(i))
+		provenance := outputColumnProvenance[i]
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			if isEnumOrSetPlanType(&provenance.Source.Metadata.Typ) {
-				typ = &provenance.Source.Metadata.Typ
+				typ = provenance.Source.Metadata.Typ
+				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
@@ -307,14 +317,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, *typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
 							return nil, nil, err
 						}
 					}
 				}
 			case CTASDefaultUseTypeDefault:
-				defaultDef, err = buildCTASDefaultForView(ctx, *typ, nullAbility)
+				defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -324,11 +334,11 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		cols[i] = &plan.ColDef{
 			Name:    strings.ToLower(bindCtx.headings[i]),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *typ,
+			Typ:     typ,
 			Default: defaultDef,
 		}
 	}
-	return cols, builder.qry, nil
+	return cols, query, nil
 }
 
 func ctasBinaryStringTypeInQuery(
@@ -1224,6 +1234,9 @@ func buildCreateTable(
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
 		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
@@ -2667,20 +2680,94 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 // lives at pkg/fulltext/plugin/plan/schema.go). It keeps the
 // batched, in-place-append signature the legacy callers used.
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
-	p, ok := indexplugin.Get(catalog.MOIndexFullTextAlgo.ToString())
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("fulltext plugin not registered")
+	if err := checkFulltextEngineConflict(indexInfos, existedIndexes, ctx); err != nil {
+		return err
 	}
 	for _, indexInfo := range indexInfos {
+		// CREATE FULLTEXT2 INDEX (IsV2) routes to the distinct fulltext2 plugin;
+		// classic CREATE FULLTEXT INDEX to the fulltext plugin.
+		algo := catalog.MOIndexFullTextAlgo.ToString()
+		if indexInfo.IsV2 {
+			algo = catalog.MoIndexFullText2Algo.ToString()
+		}
+		p, ok := indexplugin.Get(algo)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(algo + " plugin not registered")
+		}
 		idxDefs, tblDefs, err := p.Plan().BuildFullTextIndexDefs(
 			ctx, indexInfo, colMap, existedIndexes, pkeyName,
 		)
 		if err != nil {
 			return err
 		}
-		setIndexDefsVisibility(idxDefs, indexInfo.IndexOption)
+		// Capture the plugin's build-time session vars (BuildSessionVars) into each
+		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
+		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
+		// reproduce the create-time config. fulltext2 pins lower_case_table_names;
+		// classic fulltext's BuildSessionVars returns nil, so this is a no-op there.
+		if ctx != nil {
+			if names := p.Catalog().BuildSessionVars(); len(names) > 0 {
+				sv, cerr := compileplugin.CaptureVars(ctx.ResolveVariable, names)
+				if cerr != nil {
+					return cerr
+				}
+				if len(sv) > 0 {
+					for _, idxDef := range idxDefs {
+						flat := map[string]string{}
+						if idxDef.IndexAlgoParams != "" {
+							if flat, err = catalog.IndexParamsStringToMap(idxDef.IndexAlgoParams); err != nil {
+								return err
+							}
+						}
+						if idxDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
 		createTable.IndexTables = append(createTable.IndexTables, tblDefs...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, idxDefs...)
+	}
+	return nil
+}
+
+// ftColSetKey is an order-independent key for a fulltext index's column set, so
+// MATCH(a,b) and MATCH(b,a) map to the same key.
+func ftColSetKey(cols []string) string {
+	c := append([]string(nil), cols...)
+	slices.Sort(c)
+	return strings.Join(c, "\x00")
+}
+
+// checkFulltextEngineConflict rejects creating a classic FULLTEXT and a FULLTEXT2
+// index over the SAME column set — on the same table they would both resolve the same
+// MATCH(...) verb, so the engine (classic SQL fulltext vs WAND positional) that answers
+// the query would depend on index enumeration order and could flip across DDL/catalog
+// reloads, giving inconsistent scores/rows. This covers CREATE TABLE (all indexes in
+// indexInfos, existedIndexes nil) and CREATE INDEX / ALTER ADD (one new index vs the
+// table's existing indexes) since every fulltext creation routes through here.
+func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexes []*plan.IndexDef, ctx CompilerContext) error {
+	// colSet -> the fulltext engine (isV2) already claiming it (existing indexes).
+	engine := make(map[string]bool)
+	for _, idx := range existedIndexes {
+		v2 := catalog.IsFullText2IndexAlgo(idx.IndexAlgo)
+		if !v2 && !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		engine[ftColSetKey(idx.Parts)] = v2
+	}
+	for _, info := range indexInfos {
+		cols := make([]string, 0, len(info.KeyParts))
+		for _, kp := range info.KeyParts {
+			cols = append(cols, kp.ColName.ColName())
+		}
+		key := ftColSetKey(cols)
+		if prev, ok := engine[key]; ok && prev != info.IsV2 {
+			return moerr.NewInvalidInput(ctx.GetContext(),
+				"cannot create both a FULLTEXT and a FULLTEXT2 index on the same column(s); drop the existing one first")
+		}
+		engine[key] = info.IsV2 // also catches two conflicting indexes in one CREATE TABLE
 	}
 	return nil
 }
@@ -2789,7 +2876,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		indexDef.IndexTableName = indexTableName
 		indexDef.Parts = indexParts
 		indexDef.TableExist = true
-		setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 		if indexInfo.IndexOption != nil {
 			indexDef.Comment = indexInfo.IndexOption.Comment
 		} else {
@@ -2872,23 +2958,11 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
-		setIndexDefsVisibility(indexDef, indexInfo.IndexOption)
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
-}
-
-func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption) {
-	for _, indexDef := range indexDefs {
-		setIndexDefVisibility(indexDef, option)
-	}
-}
-
-func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
-	visible := option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
-	catalog.SetIndexVisibility(indexDef, visible)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -3320,9 +3394,13 @@ func validateIncludeColumns(ctx CompilerContext,
 			}
 		}
 		if !supported {
+			names := make([]string, 0, len(supportedTypes))
+			for _, st := range supportedTypes {
+				names = append(names, st.String())
+			}
 			return moerr.NewNotSupportedf(ctx.GetContext(),
-				"INCLUDE column '%s' has unsupported type %s (supported: int32, int64, float32, float64)",
-				origin, colType.String())
+				"INCLUDE column '%s' has unsupported type %s (supported: %s)",
+				origin, colType.String(), strings.Join(names, ", "))
 		}
 	}
 	return nil
@@ -3354,7 +3432,6 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
-	setIndexDefVisibility(indexDef, indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
@@ -3448,6 +3525,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
+		}
 		// Temporary tables shadow same-named permanent tables, but TRUNCATE is
 		// not supported for temporary tables. Reject the visible temporary table
 		// here so execution can never fall through to the hidden permanent table.
@@ -3624,6 +3704,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
 	}
 
 	if obj.PubInfo != nil {
@@ -3864,6 +3947,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 	if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
 		return nil, err
 	}
@@ -3900,6 +3986,15 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 			Name:        indexName,
 			KeyParts:    stmt.KeyParts,
 			IndexOption: stmt.IndexOption,
+		}
+	case tree.INDEX_CATEGORY_FULLTEXT2:
+		// CREATE FULLTEXT2 INDEX — the distinct WAND positional engine; routed to
+		// the fulltext2 plugin by buildFullTextIndexTable via IsV2.
+		ftIdx = &tree.FullTextIndex{
+			Name:        indexName,
+			KeyParts:    stmt.KeyParts,
+			IndexOption: stmt.IndexOption,
+			IsV2:        true,
 		}
 	case tree.INDEX_CATEGORY_SPATIAL:
 		keyType := tree.INDEX_TYPE_RTREE
@@ -4098,6 +4193,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, err
+	}
 
 	if obj.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
@@ -4238,6 +4336,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		}
+		if err := validateTableIndexDefinitions(tableDef); err != nil {
+			return nil, err
 		}
 
 		if tableDef.IsTemporary {
@@ -4384,6 +4485,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
+	// Index defs added by EARLIER ADD actions in this same ALTER statement, so a later
+	// action's fulltext engine-conflict (⑤) and duplicate-name checks can see them. This
+	// is kept SEPARATE from tableDef.Indexes on purpose: tableDef is the plan's execution
+	// TableDef, and its Indexes drive the pre-create index-table lock loop in the executor
+	// (compile/ddl.go). A not-yet-created hidden table appended there is locked before
+	// HandleCreateIndex builds it → "no such table". So accumulate here, never in tableDef.
+	var addedIdxDefs []*plan.IndexDef
 	droppedForeignKeys := make(map[string]struct{})
 	for _, option := range stmt.Options {
 		if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropForeignKey {
@@ -4595,10 +4703,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				indexName := def.Name
 				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
+				// Check not empty constraint name whether is duplicated — against both the
+				// table's existing indexes AND those added by earlier actions in this ALTER.
 				for _, idx := range tableDef.Indexes {
 					nameLower := strings.ToLower(idx.IndexName)
 					constrNames[nameLower] = true
+				}
+				for _, idx := range addedIdxDefs {
+					constrNames[strings.ToLower(idx.IndexName)] = true
 				}
 
 				if err := checkDuplicateConstraint(
@@ -4617,16 +4729,31 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+				// The engine-conflict check (⑤) must see earlier-added indexes too, so pass
+				// tableDef.Indexes + addedIdxDefs as the "existing" set — WITHOUT mutating
+				// tableDef.Indexes (see addedIdxDefs's declaration: doing so makes the
+				// executor lock the new index's not-yet-created hidden table).
+				existed := tableDef.Indexes
+				if len(addedIdxDefs) > 0 {
+					existed = append(append([]*plan.IndexDef{}, tableDef.Indexes...), addedIdxDefs...)
+				}
 				if err := buildFullTextIndexTable(
 					indexInfo,
 					[]*tree.FullTextIndex{def},
 					colMap,
-					tableDef.Indexes,
+					existed,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
+
+				// Make this action's new index visible to LATER ADD actions in the SAME
+				// ALTER statement (their ⑤ conflict + duplicate-name checks above), but keep
+				// it OUT of tableDef.Indexes so the executor doesn't lock its hidden table
+				// before HandleCreateIndex creates it (`ALTER … ADD FULLTEXT ft1(a), ADD
+				// FULLTEXT2 ft2(a)` is still rejected via addedIdxDefs).
+				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4744,6 +4871,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// merge + reject happens at compile in Compile.ValidateReindexParams,
 			// reading the options straight off the parse tree.
 			alterTableReIndex.ForceSync = opt.ForceSync
+			alterTableReIndex.Merge = opt.Merge
 
 			name_not_found := true
 			// check index
@@ -5261,6 +5389,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 
 	_, parentTableDef, err := ctx.Resolve(parentDbName, parentTableName, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 		return nil, err
 	}
 	if parentTableDef == nil {

@@ -173,7 +173,8 @@ func TestApplyIndicesForProjectPreparedIvfIndexOnlyKeepsCatalogDependencies(t *t
 				{
 					Typ: vectorType,
 					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-						Value: &plan.Literal_VecVal{VecVal: "[1,1,1]"},
+						// Raw element bytes, as a constant-folded vecf32 literal carries them.
+						Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))},
 					}},
 				},
 			},

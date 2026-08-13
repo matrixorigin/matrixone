@@ -212,6 +212,20 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
+func sourceNodeForRemoteRun(source *Source) *plan.Node {
+	if source == nil || source.node == nil {
+		return nil
+	}
+	// pipeline.Source does not have wire fields for the execution-time filter
+	// lists. Carry them in a per-message node copy so the reusable plan node is
+	// not mutated and the remote ranges phase sees the same predicates.
+	node := *source.node
+	if source.BlockFilterList != nil {
+		node.BlockFilterList = source.BlockFilterList
+	}
+	return &node
+}
+
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
 // according to source scope.
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
@@ -265,7 +279,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
-			Node:                   s.DataSource.node,
+			Node:                   sourceNodeForRemoteRun(s.DataSource),
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -404,8 +418,10 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RecvMsgList:           dsc.RecvMsgList,
 			MembershipFilterBytes: dsc.MembershipFilter,
 		}
-		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {
+			if isRemote {
+				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
+			}
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -1490,6 +1506,14 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
+			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
+			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered-set percentile remote execution requires MORPC protocol version 17",
+				)
+			}
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(

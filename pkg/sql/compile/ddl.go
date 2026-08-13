@@ -519,7 +519,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	addInt(catalog.IndexAlgoParamMaxPostingsCapacity, opt.MaxPostingsCapacity)
 	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
+	// position_free is emitted as an explicit true/false when specified (tri-state:
+	// absence ⇒ "keep current"), so a fulltext2 REINDEX can turn it on OR off.
+	if opt.PositionFreeSet {
+		m[catalog.IndexAlgoParamPositionFree] = strconv.FormatBool(opt.PositionFree)
+	}
 	// quantization is normalized to lowercase here (matching the CREATE INDEX
 	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
 	// identically; the per-backend VALUE check (which names a given algorithm
@@ -927,8 +933,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for i, indexdef := range oTableDef.Indexes {
 				if indexdef.IndexName == constraintName {
 					alterIndex = indexdef
-					catalog.SetIndexVisibility(alterIndex, tableAlterIndex.Visible)
-					catalog.SetIndexVisibility(oTableDef.Indexes[i], tableAlterIndex.Visible)
+					alterIndex.Visible = tableAlterIndex.Visible
+					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1045,7 +1051,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !indexplugin.IsVectorIndexAlgo(indexAlgo) {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
@@ -1067,6 +1073,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
 							Params: reindexSpecifiedParams(c.stmt, constraintName),
+							Merge:  tableAlterIndex.Merge,
 						})
 					if err != nil {
 						return err
@@ -1118,7 +1125,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {
@@ -1211,7 +1218,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						catalog.SetIndexVisibility(t.Indexes[i], alterIndex.Visible)
+						t.Indexes[i].Visible = alterIndex.Visible
 						// NOTE: algo param is same for all the indexDefs of the same indexName.
 						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
 						// so we don't need multiple `alterIndex`.

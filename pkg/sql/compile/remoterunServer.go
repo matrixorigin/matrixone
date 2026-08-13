@@ -1071,9 +1071,9 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			version, _ = value.(int64)
 		}
 	}
-	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion17 {
+	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion18 {
 		return moerr.NewInvalidStateNoCtx(
-			"binary-string provenance requires MORPCVersion17 for remote results")
+			"binary-string provenance requires MORPCVersion18 for remote results")
 	}
 	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
 		return moerr.NewInvalidStateNoCtx(

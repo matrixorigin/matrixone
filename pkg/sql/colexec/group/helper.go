@@ -137,6 +137,27 @@ func (ctr *container) configureOrderedAggSpill(
 				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
 			},
 		)
+		aggexec.ConfigureOrderedPercentileSpill(
+			agg,
+			ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("ordered_percentile_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows, retainedMemory int64) {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
+			},
+		)
 	}
 }
 
@@ -484,6 +505,8 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			}
 			prepareParamKinds := make([][]vector.PrepareParamKind, len(ctr.aggList))
 			prepareParamKindSummaries := make([]prepareParamKindSummary, len(ctr.aggList))
+			var binaryStringRows [][]bool
+			var binaryStringSummaries []bool
 			hasPrepareParamKinds := false
 			for j, ag := range ctr.aggList {
 				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
@@ -495,11 +518,22 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 					prepareParamKindSummaries[j].kind, prepareParamKindSummaries[j].seen =
 						accessor.PrepareParamKindSummaryForSelection(fullFlags)
 					hasPrepareParamKinds = hasPrepareParamKinds || prepareParamKindSummaries[j].seen
+					rows := accessor.BinaryStringRowsForSelection(fullFlags)
+					summary := accessor.BinaryStringSummaryForSelection(fullFlags)
+					if len(rows) != 0 || summary {
+						if binaryStringRows == nil {
+							binaryStringRows = make([][]bool, len(ctr.aggList))
+							binaryStringSummaries = make([]bool, len(ctr.aggList))
+						}
+						binaryStringRows[j], binaryStringSummaries[j] = rows, summary
+						hasPrepareParamKinds = true
+					}
 				}
 			}
 			if hasPrepareParamKinds {
 				if err := writePrepareParamKindTrailer(proc.Ctx, buf, ctr.aggExprs,
-					&ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+					&ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries,
+					binaryStringRows, binaryStringSummaries); err != nil {
 					return 0, 0, err
 				}
 			}
@@ -743,8 +777,8 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					expectedRows[i] = accessor.PrepareParamKindRowCountFlat()
 				}
 			}
-			prepareParamKinds, prepareParamKindSummaries, err := readPrepareParamKindTrailer(proc.Ctx, bufferedFile,
-				int32(len(ctr.spillAggList)), &spillPrepareParamKind, expectedRows)
+			prepareParamKinds, prepareParamKindSummaries, binaryStringRows, binaryStringSummaries, err := readPrepareParamKindTrailer(proc.Ctx, bufferedFile,
+				int32(len(ctr.spillAggList)), &spillPrepareParamKind, expectedRows, true)
 			if err != nil {
 				return false, err
 			}
@@ -752,12 +786,12 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
 					continue
 				}
+				accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor)
+				if !ok {
+					return false, moerr.NewInternalErrorNoCtx(
+						"aggregate spill state cannot restore provenance")
+				}
 				if i < len(prepareParamKinds) && len(prepareParamKinds[i]) != 0 {
-					accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor)
-					if !ok {
-						return false, moerr.NewInternalErrorNoCtx(
-							"aggregate spill state cannot restore prepared parameter rows")
-					}
 					if err := accessor.RestorePrepareParamKindsFlat(
 						prepareParamKinds[i], ctr.mp); err != nil {
 						return false, err
@@ -768,6 +802,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					if i < len(prepareParamKindSummaries) && prepareParamKindSummaries[i].seen {
 						setter.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
 					}
+				}
+				if i < len(binaryStringRows) && len(binaryStringRows[i]) != 0 {
+					if err := accessor.RestoreBinaryStringRowsFlat(binaryStringRows[i], ctr.mp); err != nil {
+						return false, err
+					}
+				} else if i < len(binaryStringSummaries) {
+					accessor.SetBinaryStringSummary(binaryStringSummaries[i])
 				}
 			}
 		}

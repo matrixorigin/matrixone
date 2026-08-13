@@ -105,7 +105,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
-				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
+				if indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
 					rule.indexDependencies = append(rule.indexDependencies, prepareIndexDependency{
 						baseRef:   node.ObjRef,
 						snapshot:  node.ScanSnapshot,
@@ -135,7 +135,7 @@ func (builder *QueryBuilder) recordPreparedPluginDependencies(scanNode *Node) er
 		prepareSchemaRefWithSnapshot(scanNode.ObjRef, scanNode.TableDef, scanNode.ScanSnapshot),
 	}
 	for _, indexDef := range scanNode.TableDef.Indexes {
-		if !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
+		if indexDef == nil || !indexplugin.IsPluginAlgo(indexDef.IndexAlgo) || indexDef.IndexTableName == "" {
 			continue
 		}
 		objRef, tableDef, err := builder.compCtx.ResolveIndexTableByRef(
@@ -390,9 +390,10 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx      context.Context
-	params   []*Expr
-	exprMemo map[*plan.Expr]*plan.Expr
+	ctx                  context.Context
+	params               []*Expr
+	exprMemo             map[*plan.Expr]*plan.Expr
+	validateFunctionArgs func(string, []*Expr) error
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -436,6 +437,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		if rule.validateFunctionArgs != nil {
+			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
+				return nil, err
+			}
+		}
 		needResetFunction := false
 		for i, arg := range exprImpl.F.Args {
 			if _, ok := arg.Expr.(*plan.Expr_P); ok {

@@ -690,8 +690,8 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		mrs := ses.GetMysqlResultSet()
 		for idx, expectedType := range []defines.MysqlType{
 			defines.MYSQL_TYPE_BIT,
-			defines.MYSQL_TYPE_VARCHAR,
-			defines.MYSQL_TYPE_VARCHAR,
+			defines.MYSQL_TYPE_STRING,
+			defines.MYSQL_TYPE_VAR_STRING,
 			defines.MYSQL_TYPE_VAR_STRING,
 		} {
 			col, err := mrs.GetColumn(ctx, uint64(idx+2))
@@ -701,7 +701,13 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 			if idx == 3 {
 				expectedCharset = uint16(Utf8mb4CollationID)
 			}
-			require.Equal(t, expectedCharset, col.(*MysqlColumn).Charset())
+			mysqlCol := col.(*MysqlColumn)
+			require.Equal(t, expectedCharset, mysqlCol.Charset())
+			if idx == 1 || idx == 2 {
+				require.NotZero(t, mysqlCol.Flag()&uint16(defines.BINARY_FLAG))
+			} else {
+				require.Zero(t, mysqlCol.Flag()&uint16(defines.BINARY_FLAG))
+			}
 		}
 	})
 
