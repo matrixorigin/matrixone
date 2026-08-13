@@ -27,8 +27,8 @@ insert into src values
   (1,'alpha keyword'),(2,'beta keyword'),
   (3,'gamma topic'),(4,'delta topic');
 
--- let the async CDC build finish, then confirm the source index answers MATCH
-select sleep(30);
+-- wait for the async CDC build, then confirm the source index answers MATCH
+-- @wait_expect(2, 30)
 select id from src where match(body) against('alpha' in boolean mode) order by id;
 
 -- ================= CLONE (gate auto-skipped: flag toggled OFF) =================
@@ -46,14 +46,13 @@ show create table dst;
 -- 'epsilon' query would read it stale on multi-CN.
 insert into dst values (5,'epsilon fresh');
 
--- let RestoreInitSQL's re-registered CDC + the post-clone insert settle on the clone
-select sleep(45);
-
+-- Make the post-clone row the first dst MATCH so wait_expect also preserves the
+-- per-CN cache ordering described above.
+-- @wait_expect(2, 45)
+select id from dst where match(body) against('epsilon' in boolean mode) order by id;
 -- (b) the cloned index answers MATCH on the copied rows ...
 select id from dst where match(body) against('beta' in boolean mode) order by id;
 select id from dst where match(body) against('topic' in boolean mode) order by id;
--- (c) ... and on the row inserted after the clone
-select id from dst where match(body) against('epsilon' in boolean mode) order by id;
 -- pre-existing cloned rows remain matchable too
 select id from dst where match(body) against('alpha' in boolean mode) order by id;
 
@@ -67,8 +66,8 @@ drop table src;
 -- restored rows (flag is OFF, but restore replays the existing index)
 restore database sys.ft2_restore {snapshot="ft2_sp"};
 
--- the restored index answers MATCH
-select sleep(30);
+-- wait for the restored index to answer MATCH
+-- @wait_expect(2, 30)
 select id from src where match(body) against('alpha' in boolean mode) order by id;
 select id from src where match(body) against('keyword' in boolean mode) order by id;
 
