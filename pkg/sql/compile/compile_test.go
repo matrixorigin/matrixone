@@ -53,8 +53,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -1100,6 +1102,67 @@ func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testin
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.True(t, c.supportsRemoteOrderedSetAggregates())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+	require.True(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
+}
+
+func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
+	newNode := func() *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_PARTITION,
+			OrderBy: []*plan.OrderBySpec{
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}},
+			},
+			Limit:            plan2.MakePlan2Uint64ConstExprWithType(1),
+			PartitionByCount: 1,
+		}
+	}
+
+	t.Run("v18 coalesces candidates for window", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		require.Len(t, partitionScopes, 1)
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, physicalPartition.Limit)
+		require.True(t, physicalPartition.PreReduce)
+		partitionScopes[0].setRootOperator(projection.NewArgument())
+
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.True(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("v17 keeps legacy window contract", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, physicalPartition.Limit)
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.False(t, physicalWindow.PartitionTopN)
+	})
 }
 
 func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
