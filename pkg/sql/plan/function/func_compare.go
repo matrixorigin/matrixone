@@ -27,6 +27,9 @@ import (
 )
 
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
+	if isDatetimeTimestampComparison(typ1, typ2) {
+		return true
+	}
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
@@ -66,6 +69,9 @@ func jsonOrderingWithStringNotSupported(inputs []types.Type) bool {
 }
 
 func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
+	if isDatetimeTimestampComparison(typ1, typ2) {
+		return true
+	}
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
@@ -92,6 +98,31 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	return true
+}
+
+func compareDatetimeAndTimestamp(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	cmp func(left, right types.Timestamp) bool,
+	selectList *FunctionSelectList,
+) error {
+	zone := proc.GetSessionInfo().TimeZone
+	if parameters[0].GetType().Oid == types.T_datetime {
+		timestampScale := parameters[1].GetType().Scale
+		return opBinaryFixedFixedToFixed[types.Datetime, types.Timestamp, bool](
+			parameters, result, proc, length,
+			func(left types.Datetime, right types.Timestamp) bool {
+				return cmp(left.ToTimestamp(zone).TruncateToScale(timestampScale), right)
+			}, selectList)
+	}
+	timestampScale := parameters[0].GetType().Scale
+	return opBinaryFixedFixedToFixed[types.Timestamp, types.Datetime, bool](
+		parameters, result, proc, length,
+		func(left types.Timestamp, right types.Datetime) bool {
+			return cmp(left, right.ToTimestamp(zone).TruncateToScale(timestampScale))
+		}, selectList)
 }
 
 func opBinaryFixedFixedToFixedNullSafe[T types.FixedSizeTExceptStrType](
@@ -337,6 +368,11 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left == right
+		}, selectList)
+	}
 
 	switch paramType.Oid {
 	case types.T_bool:
@@ -751,6 +787,11 @@ func valueDec256Compare(
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left > right
+		}, selectList)
+	}
 	switch paramType.Oid {
 	case types.T_bit:
 		return opBinaryFixedFixedToFixed[uint64, uint64, bool](parameters, rs, proc, length, func(a, b uint64) bool {
@@ -908,6 +949,11 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left >= right
+		}, selectList)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
@@ -1065,6 +1111,11 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left != right
+		}, selectList)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(a, b bool) bool {
@@ -1222,6 +1273,11 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left < right
+		}, selectList)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
@@ -1379,6 +1435,11 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
+		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
+			return left <= right
+		}, selectList)
+	}
 	switch paramType.Oid {
 	case types.T_bool:
 		return opBinaryFixedFixedToFixed[bool, bool, bool](parameters, rs, proc, length, func(x, y bool) bool {
