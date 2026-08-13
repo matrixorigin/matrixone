@@ -27,10 +27,21 @@ func indexTableStoresSerializedKey(idxDef *planpb.IndexDef) bool {
 	return idxDef != nil && !isSpatialIndexDef(idxDef) && len(idxDef.Parts) > 1
 }
 
-func indexTableLookupSerialFunc(idxDef *planpb.IndexDef) string {
+// indexTableStoredKeySerialFunc identifies the serializer used to materialize
+// an index-table key. Non-unique serialized keys retain NULL components so the
+// hidden table can represent every base-table row.
+func indexTableStoredKeySerialFunc(idxDef *planpb.IndexDef) string {
 	if idxDef != nil && !idxDef.Unique && indexTableStoresSerializedKey(idxDef) {
 		return "serial_full"
 	}
+	return "serial"
+}
+
+// indexTableComparisonSerialFunc identifies the serializer for SQL comparison
+// operands. serial and serial_full encode non-NULL components identically, but
+// serial propagates NULL. That distinction lets the access predicate preserve
+// SQL three-valued comparison semantics without a decoded row-by-row recheck.
+func indexTableComparisonSerialFunc() string {
 	return "serial"
 }
 

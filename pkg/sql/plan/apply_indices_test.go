@@ -2926,7 +2926,7 @@ func TestTryIndexOnlyScanEncodedCostControls(t *testing.T) {
 	}
 }
 
-func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
+func TestTryIndexOnlyScanUsesNullRejectingComparisonBounds(t *testing.T) {
 	parts := []string{"tenant_id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
 	tests := []struct {
 		name             string
@@ -2935,7 +2935,8 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 		runtimeWantIndex bool
 	}{
 		{
-			name: "equality",
+			name:             "equality",
+			runtimeWantIndex: true,
 			makeLiteral: func(relPos int32) *planpb.Expr {
 				return makeRangeFilterExpr(relPos, 0, "=", 7)
 			},
@@ -2944,7 +2945,8 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 			},
 		},
 		{
-			name: "in",
+			name:             "in",
+			runtimeWantIndex: true,
 			makeLiteral: func(relPos int32) *planpb.Expr {
 				return makeIntInFilterExpr(relPos, 0, 7, 8)
 			},
@@ -2966,10 +2968,6 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			runtimeName := "nullable runtime value crosses"
-			if test.runtimeWantIndex {
-				runtimeName = "unknown runtime bounds fail open"
-			}
 			for _, variant := range []struct {
 				name         string
 				makeFilter   func(int32) *planpb.Expr
@@ -2978,8 +2976,8 @@ func TestTryIndexOnlyScanChargesNullableLeadingResiduals(t *testing.T) {
 			}{
 				{name: "non-null literal stays below crossover", makeFilter: test.makeLiteral, wantIndex: true},
 				{
-					name: runtimeName, makeFilter: test.makeRuntime,
-					wantResidual: true, wantIndex: test.runtimeWantIndex,
+					name: "runtime bounds preserve NULL semantics in the lookup", makeFilter: test.makeRuntime,
+					wantIndex: test.runtimeWantIndex,
 				},
 			} {
 				t.Run(variant.name, func(t *testing.T) {
@@ -3930,11 +3928,45 @@ func TestEncodedIndexCostPreparedRangesUseUncertaintyFromPublicPlan(t *testing.T
 	require.NotNil(t, preparedIndex,
 		"overlapping cost intervals retain the ranked index candidate")
 	require.Equal(t, "idx_amount_pk", preparedIndex.IndexScanInfo.IndexName)
+	require.False(t, planHasIndexJoin(preparedPlan),
+		"a covering candidate must not backfill through the same index")
+	require.Len(t, preparedIndex.FilterList, 1,
+		"runtime NULL bounds must not require decoded row residuals")
+	require.Equal(t, 6, countExprFunctionCalls(preparedIndex.FilterList, "serial"))
+	require.Zero(t, countExprFunctionCalls(preparedIndex.FilterList, "serial_full"))
+	require.Zero(t, countExprFunctionCalls(preparedIndex.FilterList, "isnotnull"))
+	require.Zero(t, countExprFunctionCalls(preparedIndex.FilterList, "serial_extract"))
 	hasParamRef := false
 	for _, filter := range preparedIndex.FilterList {
 		hasParamRef = hasParamRef || containsDynamicParam(filter)
 	}
 	require.True(t, hasParamRef, "the prepared public plan must retain ParamRefs")
+}
+
+func TestEncodedIndexCostPreparedRangeStillUsesNonCoveringIndex(t *testing.T) {
+	const tableCnt = 2_000_000
+	ctx := newEncodedExistsPlanTestContext(10)
+	activity := ctx.tables["cost_activity"]
+	activity.Indexes = nil
+	stats := ctx.statsByID[activity.TblId]
+	stats.TableCnt = tableCnt
+	stats.BlockNumber = 240
+	stats.NdvMap["amount"] = tableCnt
+	stats.MinValMap["amount"] = 0
+	stats.MaxValMap["amount"] = tableCnt
+	addCostActivityRegularIndex(t, ctx, "idx_amount_pk", []string{
+		"amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	preparePlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t, `
+		prepare cost_noncovering_range from '
+			select state from cost_activity
+			where amount between ? and ?'`)
+	require.NoError(t, err)
+	preparedPlan := resolveQueryPlan(preparePlan)
+	require.Equal(t, "idx_amount_pk", findFirstIndexScanName(preparedPlan))
+	require.True(t, planHasIndexJoin(preparedPlan),
+		"uncertainty must not disable a required non-covering range access")
 }
 
 func TestEncodedIndexCostPreparedMixedOrPreservesKnownWorkFromPublicPlan(t *testing.T) {
@@ -3948,6 +3980,10 @@ func TestEncodedIndexCostPreparedMixedOrPreservesKnownWorkFromPublicPlan(t *test
 	stats.NdvMap["amount"] = tableCnt
 	stats.MinValMap["amount"] = 0
 	stats.MaxValMap["amount"] = tableCnt
+	// Comparison-bound serialization removes the old NULL residual charge.
+	// Keep this control decisively above the rejection crossover so it still
+	// proves that stable OR-branch output work is present in the lower bound.
+	stats.SizeMap["state"] = tableCnt * 8
 	addCostActivityRegularIndex(t, ctx, "idx_amount_wide", []string{
 		"amount", "state", "created_at", "tenant_id", "activity_id",
 		catalog.CreateAlias(catalog.CPrimaryKeyColName),
@@ -4138,11 +4174,13 @@ func TestEncodedIndexDuplicatePartsUseCanonicalFilterMapping(t *testing.T) {
 	idxNode := findFirstIndexScanNode(queryPlan)
 	require.NotNil(t, idxNode)
 	require.Equal(t, "idx_state_repeated", idxNode.IndexScanInfo.IndexName)
-	require.Len(t, idxNode.FilterList, 2, "lookup plus one canonical nullable residual")
+	require.Len(t, idxNode.FilterList, 2,
+		"the string prefix lookup still requires an exact decoded residual")
 	assert.InDelta(t, 0.001, idxNode.FilterList[0].Selectivity, 1e-12)
 	assert.InDelta(t, 1.0, idxNode.FilterList[1].Selectivity, 1e-12,
 		"a semantic recheck must not reduce candidate cardinality a second time")
 	assert.InDelta(t, 600.0, idxNode.Stats.Outcnt, 1e-9)
+	assert.Zero(t, countExprFunctionCalls(idxNode.FilterList, "isnotnull"))
 	assert.Equal(t, 1, countExprFunctionCalls(idxNode.FilterList, "serial_extract"))
 	assert.Equal(t, 2, firstIndexLookupSerialArgCount(queryPlan),
 		"duplicate physical parts still require duplicate encoded lookup arguments")
@@ -4565,17 +4603,29 @@ func countIndexFilterSerialExtractsFromPhysicalPK(queryPlan *Plan) int {
 }
 
 func firstIndexLookupSerialArgCount(queryPlan *Plan) int {
+	var serialArgCount func(*planpb.Expr) int
+	serialArgCount = func(expr *planpb.Expr) int {
+		if expr == nil || expr.GetF() == nil {
+			return 0
+		}
+		fn := expr.GetF()
+		for _, arg := range fn.Args {
+			if serial := arg.GetF(); serial != nil && serial.Func != nil &&
+				(serial.Func.ObjName == "serial" || serial.Func.ObjName == "serial_full") {
+				return len(serial.Args)
+			}
+			if count := serialArgCount(arg); count > 0 {
+				return count
+			}
+		}
+		return 0
+	}
 	for _, node := range queryPlan.GetQuery().Nodes {
 		if !node.IndexScanInfo.GetIsIndexScan() || len(node.FilterList) == 0 {
 			continue
 		}
-		lookup := node.FilterList[0].GetF()
-		if lookup == nil || len(lookup.Args) < 2 {
-			continue
-		}
-		serial := lookup.Args[1].GetF()
-		if serial != nil && serial.Func != nil && (serial.Func.ObjName == "serial" || serial.Func.ObjName == "serial_full") {
-			return len(serial.Args)
+		if count := serialArgCount(node.FilterList[0]); count > 0 {
+			return count
 		}
 	}
 	return 0
@@ -5819,7 +5869,7 @@ func TestCalculateFilteredPostModeOverFetchFactor_ActualValues(t *testing.T) {
 }
 
 func makeTestRegularIndexPrefixEq(t *testing.T, numArgs int) *planpb.Expr {
-	return makeTestRegularIndexPrefixEqWithSerialFunc(t, numArgs, "serial_full")
+	return makeTestRegularIndexPrefixEqWithSerialFunc(t, numArgs, "serial")
 }
 
 func makeTestRegularIndexPrefixEqWithSerialFunc(t *testing.T, numArgs int, serialFunc string) *planpb.Expr {
@@ -5880,8 +5930,8 @@ func requireTestRegularIndexCursorRange(t *testing.T, expr *planpb.Expr, numKeyP
 	rightSerial := fn.Args[2].GetF()
 	require.NotNil(t, leftSerial)
 	require.NotNil(t, rightSerial)
-	require.Equal(t, "serial_full", leftSerial.Func.ObjName)
-	require.Equal(t, "serial_full", rightSerial.Func.ObjName)
+	require.Equal(t, "serial", leftSerial.Func.ObjName)
+	require.Equal(t, "serial", rightSerial.Func.ObjName)
 
 	var prefixArgs, fullArgs []*planpb.Expr
 	switch op {
@@ -6493,9 +6543,9 @@ func TestHandleMessageFromTopToScanKeepsPKOrderWhenPrefixIncomplete(t *testing.T
 	assert.Equal(t, catalog.IndexTablePrimaryColName, scanOrderCol.Name)
 }
 
-func TestRegularIndexFullPrefixEqualityRequiresSerialFull(t *testing.T) {
+func TestRegularIndexFullPrefixEqualityRequiresComparisonSerial(t *testing.T) {
 	assert.True(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEq(t, 2), 2))
-	assert.False(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEqWithSerialFunc(t, 2, "serial"), 2))
+	assert.False(t, isRegularIndexFullPrefixEquality(makeTestRegularIndexPrefixEqWithSerialFunc(t, 2, "serial_full"), 2))
 }
 
 func TestRewriteRegularIndexCursorRangeFilter(t *testing.T) {
@@ -7081,19 +7131,20 @@ func TestGetIndexForNonEquiCond_SkipsLargePairedRangeByStats(t *testing.T) {
 	require.Nil(t, filterIdx)
 }
 
-func TestIndexTableLookupSerialFunc(t *testing.T) {
-	assert.Equal(t, "serial_full", indexTableLookupSerialFunc(&planpb.IndexDef{
+func TestIndexTableSerialFunctionsSeparateStorageFromComparison(t *testing.T) {
+	assert.Equal(t, "serial_full", indexTableStoredKeySerialFunc(&planpb.IndexDef{
 		Parts:  []string{"status", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
 	}))
-	assert.Equal(t, "serial", indexTableLookupSerialFunc(&planpb.IndexDef{
+	assert.Equal(t, "serial", indexTableStoredKeySerialFunc(&planpb.IndexDef{
 		Parts:  []string{"status", "due"},
 		Unique: true,
 	}))
-	assert.Equal(t, "serial", indexTableLookupSerialFunc(&planpb.IndexDef{
+	assert.Equal(t, "serial", indexTableStoredKeySerialFunc(&planpb.IndexDef{
 		Parts:  []string{"status"},
 		Unique: false,
 	}))
+	assert.Equal(t, "serial", indexTableComparisonSerialFunc())
 }
 
 func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
@@ -7197,7 +7248,7 @@ func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
 	require.Nil(t, expr)
 }
 
-func TestReplaceEqualConditionUsesSerialFullForNonUniqueCompositeIndex(t *testing.T) {
+func TestReplaceEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeIndex(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
@@ -7211,7 +7262,7 @@ func TestReplaceEqualConditionUsesSerialFullForNonUniqueCompositeIndex(t *testin
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_eq", expr.GetF().Func.ObjName)
-	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
 }
 
 func TestReplaceEqualConditionKeepsSerialForUniqueCompositeIndex(t *testing.T) {
@@ -7374,32 +7425,34 @@ func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
 	}
 }
 
-func TestReplaceNonEqualConditionUsesSerialFullForNonUniqueCompositeIndexIn(t *testing.T) {
+func TestReplaceNonEqualConditionUsesNullPropagatingSerialForNonUniqueCompositeIndexIn(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"status", "due", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
 	}
 
-	expr := builder.replaceNonEqualCondition(idxDef, makeStringInFilterExpr(0, 3, "active", "expiring"), 42, makeTestIndexTableDef())
+	expr, err := builder.replaceNonEqualCondition(idxDef, makeStringInFilterExpr(0, 3, "active", "expiring"), 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
-	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 2)
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial", 2)
 }
 
-func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerialFull(t *testing.T) {
+func TestReplaceNonEqualConditionWrapsEachPreparedInListItemWithSerial(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	idxDef := &planpb.IndexDef{
 		Parts:  []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)},
 		Unique: false,
 	}
 
-	expr := builder.replaceNonEqualCondition(idxDef, makeParamInFilterExpr(0, 1, 10), 42, makeTestIndexTableDef())
+	expr, err := builder.replaceNonEqualCondition(idxDef, makeParamInFilterExpr(0, 1, 10), 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_in", expr.GetF().Func.ObjName)
-	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial_full", 10)
+	assertListItemsWrappedBySerialFunc(t, expr.GetF().Args[1], "serial", 10)
 	for i, item := range expr.GetF().Args[1].GetList().List {
 		args := item.GetF().Args
 		require.Len(t, args, 1)
@@ -7422,7 +7475,8 @@ func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	}
 	original := makeStringInRangeFilterExpr(0, 1, "a", "b", 3)
 	setIndexRangeArgumentType(original, tableDef.Cols[1].Typ)
-	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+	lookup, err := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 
 	require.Equal(t, uint32(3), original.GetF().Args[3].GetLit().GetU8Val())
 	require.Equal(t, "prefix_in_range", lookup.GetF().Func.ObjName)
@@ -7432,7 +7486,8 @@ func TestReplaceNonEqualConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	))
 
 	fixedWidth := makeIntInRangeFilterExpr(0, 1, 1, 2, 3)
-	fixedLookup := builder.replaceNonEqualCondition(idxDef, fixedWidth, 42, makeTestIndexTableDef())
+	fixedLookup, err := builder.replaceNonEqualCondition(idxDef, fixedWidth, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 	require.Equal(t, "prefix_in_range", fixedLookup.GetF().Func.ObjName)
 	require.Equal(t, uint32(3), fixedLookup.GetF().Args[3].GetLit().GetU8Val())
 }
@@ -7455,7 +7510,8 @@ func TestIndexOnlyResidualDetectsNestedByteStringPrefixLookup(t *testing.T) {
 	)
 	setIndexFilterArgumentType(original.GetF().Args[0], tableDef.Cols[1].Typ)
 	setIndexFilterArgumentType(original.GetF().Args[1], tableDef.Cols[1].Typ)
-	lookup := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+	lookup, err := builder.replaceNonEqualCondition(idxDef, original, 42, makeTestIndexTableDef())
+	require.NoError(t, err)
 
 	require.Equal(t, "or", lookup.GetF().Func.ObjName)
 	require.Equal(t, "prefix_between", lookup.GetF().Args[0].GetF().Func.ObjName)
@@ -7494,7 +7550,7 @@ func TestIndexOnlyResidualLeadingFilterPositionsAreMinimal(t *testing.T) {
 	filters[0] = firstPrepared
 	lookup, err = builder.replaceEqualCondition(idxDef, filters, []int32{0, 1}, 42, makeTestIndexTableDef())
 	require.NoError(t, err)
-	require.Equal(t, []int32{0, 1}, indexOnlyResidualLeadingFilterPositions(
+	require.Equal(t, []int32{1}, indexOnlyResidualLeadingFilterPositions(
 		idxDef, tableDef, filters, []int32{0, 1}, lookup,
 	))
 
@@ -7659,7 +7715,7 @@ func TestApplyIndicesForFiltersIgnoresVisibilityMetadata(t *testing.T) {
 	require.NotEqual(t, scanID, resultID)
 }
 
-func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testing.T) {
+func TestTryIndexOnlyScanUsesComparisonNullSemanticsAndMinimalResiduals(t *testing.T) {
 	tests := []struct {
 		name         string
 		makeFilter   func(relPos int32) *planpb.Expr
@@ -7671,40 +7727,35 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeParamEqFilterExpr(relPos, 1, 0)
 			},
-			lookupFunc:   "prefix_eq",
-			residualFunc: "=",
+			lookupFunc: "prefix_eq",
 		},
 		{
 			name: "prepared in list",
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeParamInFilterExpr(relPos, 1, 2)
 			},
-			lookupFunc:   "prefix_in",
-			residualFunc: "in",
+			lookupFunc: "prefix_in",
 		},
 		{
 			name: "literal null equality",
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeNullEqFilterExpr(relPos, 1)
 			},
-			lookupFunc:   "prefix_eq",
-			residualFunc: "=",
+			lookupFunc: "prefix_eq",
 		},
 		{
 			name: "literal null in list",
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeIntInFilterExprWithNull(relPos, 1)
 			},
-			lookupFunc:   "prefix_in",
-			residualFunc: "in",
+			lookupFunc: "prefix_in",
 		},
 		{
 			name: "prepared between",
 			makeFilter: func(relPos int32) *planpb.Expr {
 				return makeParamBetweenFilterExpr(relPos, 1, 0, 1)
 			},
-			lookupFunc:   "prefix_between",
-			residualFunc: "between",
+			lookupFunc: "prefix_between",
 		},
 		{
 			name: "nullable strict upper bound literal",
@@ -7767,9 +7818,15 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 			require.NotEqual(t, int32(-1), idxNodeID)
 
 			idxNode := builder.qry.Nodes[idxNodeID]
+			require.Equal(t, 1, countExprFunctionCalls(idxNode.FilterList[:1], tt.lookupFunc))
+			require.Zero(t, countExprFunctionCalls(idxNode.FilterList[:1], "isnotnull"))
+			require.NotZero(t, countExprFunctionCalls(idxNode.FilterList[:1], "serial"))
+			require.Zero(t, countExprFunctionCalls(idxNode.FilterList[:1], "serial_full"))
+			if tt.residualFunc == "" {
+				require.Len(t, idxNode.FilterList, 1)
+				return
+			}
 			require.Len(t, idxNode.FilterList, 2)
-			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
-
 			residual := idxNode.FilterList[1].GetF()
 			require.NotNil(t, residual)
 			require.Equal(t, tt.residualFunc, residual.Func.ObjName)
@@ -7778,7 +7835,7 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestIndexFilterMayCompareNullAtRuntimeForStrictUpperBounds(t *testing.T) {
+func TestIndexFilterNeedsDecodedNullResidual(t *testing.T) {
 	makeLiteralRange := func(op string, constOnLeft, notNullable bool) *planpb.Expr {
 		filter := makeRangeFilterExpr(7, 1, op, 10)
 		filter.Typ = planpb.Type{Id: int32(types.T_bool)}
@@ -7809,6 +7866,9 @@ func TestIndexFilterMayCompareNullAtRuntimeForStrictUpperBounds(t *testing.T) {
 		{name: "non-null column strict upper bound", expr: makeLiteralRange("<", false, true)},
 		{name: "nullable column inclusive lower bound", expr: makeLiteralRange(">=", false, false)},
 		{name: "prepared bound", expr: makeParamRangeFilterExpr(7, 1, "<", 0), want: true},
+		{name: "prepared equality uses NULL-propagating serialization", expr: makeParamEqFilterExpr(7, 1, 0)},
+		{name: "prepared between uses NULL-propagating serialization", expr: makeParamBetweenFilterExpr(7, 1, 0, 1)},
+		{name: "prepared IN ignores NULL access needles", expr: makeParamInFilterExpr(7, 1, 2)},
 		{
 			name: "or with strict upper arm",
 			expr: makeOr(
@@ -7828,7 +7888,7 @@ func TestIndexFilterMayCompareNullAtRuntimeForStrictUpperBounds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, indexFilterMayCompareNullAtRuntime(tt.expr))
+			assert.Equal(t, tt.want, indexFilterNeedsDecodedNullResidual(tt.expr))
 		})
 	}
 }
@@ -8231,11 +8291,12 @@ func TestReplaceRangePairCondition_UsesPrefixBetweenForSecondaryIndex(t *testing
 		},
 	}
 
-	expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+	expr, err := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+	require.NoError(t, err)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
-	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[1]))
-	assert.Equal(t, "serial_full", wrappedSerialFuncName(t, expr.GetF().Args[2]))
+	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[1]))
+	assert.Equal(t, "serial", wrappedSerialFuncName(t, expr.GetF().Args[2]))
 	require.InDelta(t, 0.12, expr.Selectivity, 1e-9)
 }
 
@@ -8253,7 +8314,8 @@ func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 	setIndexRangeArgumentType(byteStringFilters[0], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
 	setIndexRangeArgumentType(byteStringFilters[1], planpb.Type{Id: int32(types.T_varbinary), Width: 8})
 
-	byteStringLookup := builder.replaceRangePairCondition(idxDef, byteStringFilters, []int32{0, 1}, 42, idxTableDef)
+	byteStringLookup, err := builder.replaceRangePairCondition(idxDef, byteStringFilters, []int32{0, 1}, 42, idxTableDef)
+	require.NoError(t, err)
 	require.Equal(t, "prefix_in_range", byteStringLookup.GetF().Func.ObjName)
 	require.Equal(t, uint32(0), byteStringLookup.GetF().Args[3].GetLit().GetU8Val())
 
@@ -8261,7 +8323,8 @@ func TestReplaceRangePairConditionWidensByteStringOpenLowerBound(t *testing.T) {
 		makeRangeFilterExpr(0, 1, ">", 1),
 		makeRangeFilterExpr(0, 1, "<=", 2),
 	}
-	fixedWidthLookup := builder.replaceRangePairCondition(idxDef, fixedWidthFilters, []int32{0, 1}, 42, idxTableDef)
+	fixedWidthLookup, err := builder.replaceRangePairCondition(idxDef, fixedWidthFilters, []int32{0, 1}, 42, idxTableDef)
+	require.NoError(t, err)
 	require.Equal(t, "prefix_in_range", fixedWidthLookup.GetF().Func.ObjName)
 	require.Equal(t, uint32(1), fixedWidthLookup.GetF().Args[3].GetLit().GetU8Val())
 }
@@ -8283,7 +8346,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.750000", columnType, higherScaleType),
 		}
 
-		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		expr, err := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "prefix_between", expr.GetF().Func.ObjName)
 		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
@@ -8296,7 +8360,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			makeDecimalRangeFilterExpr(t, bindTag, 1, "<", "15.750000", columnType, higherScaleType),
 		}
 
-		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		expr, err := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
 		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
@@ -8313,7 +8378,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, tc.op, "10.250000", columnType, higherScaleType)
 
-			expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+			expr, err := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+			require.NoError(t, err)
 
 			require.Equal(t, tc.op, expr.GetF().Func.ObjName)
 			requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
@@ -8336,7 +8402,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			}},
 		}
 
-		expr := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+		expr, err := builder.replaceNonEqualCondition(idxDef, filter, 42, idxTableDef)
+		require.NoError(t, err)
 
 		require.Equal(t, "prefix_in_range", expr.GetF().Func.ObjName)
 		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, true)
@@ -8349,7 +8416,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			makeDecimalRangeFilterExpr(t, bindTag, 1, "<=", "15.75", columnType, columnType),
 		}
 
-		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		expr, err := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		require.NoError(t, err)
 
 		requireSerializedRangeBoundType(t, expr.GetF().Args[1], columnType, false)
 		requireSerializedRangeBoundType(t, expr.GetF().Args[2], columnType, false)
@@ -8362,7 +8430,8 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			makeTypedInt64RangeFilterExpr(bindTag, 1, "<=", 15, intType),
 		}
 
-		expr := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		expr, err := builder.replaceRangePairCondition(idxDef, filters, []int32{0, 1}, 42, idxTableDef)
+		require.NoError(t, err)
 
 		requireSerializedRangeBoundType(t, expr.GetF().Args[1], intType, false)
 		requireSerializedRangeBoundType(t, expr.GetF().Args[2], intType, false)
@@ -9140,7 +9209,7 @@ func requireSerializedRangeBoundType(t *testing.T, expr *planpb.Expr, want planp
 	t.Helper()
 	serial := expr.GetF()
 	require.NotNil(t, serial)
-	require.Equal(t, "serial_full", serial.Func.ObjName)
+	require.Equal(t, "serial", serial.Func.ObjName)
 	require.Len(t, serial.Args, 1)
 	bound := serial.Args[0]
 	require.Equal(t, want.Id, bound.Typ.Id)
