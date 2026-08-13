@@ -42,7 +42,7 @@ select * from generate_series(5) g;
 # Test split
 create table t(a int, b text);
 insert into t select result, repeat('foobarzoo', 500) t from generate_series(1, 200000) t;
-select count(*) as ttl from t;
+select count(*) as ttl, min(a) as min_value, max(a) as max_value, count(distinct a) as unique_values from t;
 drop table t;
 
 # Test cross apply
