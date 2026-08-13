@@ -772,6 +772,57 @@ func TestMergeTxnWorkspaceDoesNotCompactAcrossStatementAttempts(t *testing.T) {
 	require.Equal(t, 15, entries.entries[1].bat.RowCount())
 }
 
+func TestIncrStatementIDCompactsCompletedAttemptDuringRetryPreparation(t *testing.T) {
+	proc := testutil.NewProc(t)
+	op := newTxnOperatorForTest(t)
+	op.EXPECT().EnterRollbackStmt()
+	op.EXPECT().ExitRollbackStmt()
+	op.EXPECT().EnterIncrStmt()
+	op.EXPECT().ExitIncrStmt()
+	txn := &Transaction{
+		op:                      op,
+		proc:                    proc,
+		workspace:               newTxnWorkspace(),
+		tableCache:              new(sync.Map),
+		isCCPRTxn:               true,
+		writeWorkspaceThreshold: math.MaxUint64,
+	}
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+	defer closeWorkspaceForTest(t, txn)
+
+	// Leave enough small batches in a completed statement to trigger the
+	// transaction-level compaction performed by IncrStatementID. The current
+	// statement then fails without adding its own writes.
+	for i := 0; i < 30; i++ {
+		txn.appendWorkspaceEntryLocked(Entry{
+			typ: INSERT, databaseId: 7, tableId: 42,
+			bat: newInsertBatchWithRowIDForTest(t, proc, []int64{int64(i)}),
+		})
+	}
+	_, err := txn.workspace.advanceStatement()
+	require.NoError(t, err)
+	txn.StartStatement()
+	require.NoError(t, txn.RollbackLastStatement(context.Background()))
+	require.Equal(t, statementAttemptRolledBack, txn.workspace.journal.current.state)
+	require.True(t, txn.workspace.journal.retryPending)
+
+	// Retry preparation compacts the completed statement before opening the
+	// next attempt. This is the exact ordering used by compile retry handling.
+	require.NoError(t, txn.IncrStatementID(context.Background(), false))
+	require.Equal(t, uint64(1), txn.workspace.journal.current.statementID)
+	require.Equal(t, uint64(2), txn.workspace.journal.current.attemptID)
+	require.Equal(t, statementAttemptOpen, txn.workspace.journal.current.state)
+
+	entries, err := txn.workspace.commitEntries()
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, 30, entries.entries[0].bat.RowCount())
+	require.Equal(t, uint64(0), entries.entries[0].statementID)
+	require.Equal(t, uint64(1), entries.entries[0].attemptID)
+	entries.Close()
+	txn.EndStatement()
+}
+
 func TestMergeTxnWorkspaceKeepsOlderMutationRollbackable(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newInsertBatchWithRowIDForTest(t, proc, []int64{10, 20, 30, 40})

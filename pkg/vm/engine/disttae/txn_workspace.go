@@ -732,6 +732,38 @@ func (j *statementJournal) validateMutationReplacement(
 	return j.validateMutationOwnership(owner, sourceIDs)
 }
 
+// validatePhysicalMutationReplacement permits an owner-preserving payload
+// replacement while a statement retry is between attempts. IncrStatementID
+// compacts and spills transaction-level workspace payload before it advances
+// a rolled-back attempt to its retry attempt; completed statements remain
+// transaction-visible during that preparation. Their physical representation
+// may therefore change without becoming a write of either the failed attempt
+// or its successor.
+//
+// The exception is deliberately narrower than an ordinary rewrite: the owner
+// must be an earlier completed attempt and every source must remain outside the
+// rolled-back attempt's ownership set. Logical rewrites still require an open
+// attempt through validateMutationReplacement, so retry rollback cannot
+// resurrect failed writes or absorb completed writes into the retry attempt.
+func (j *statementJournal) validatePhysicalMutationReplacement(
+	owner statementAttemptKey,
+	sourceIDs []workspaceMutationID,
+) error {
+	if j.current == nil {
+		return moerr.NewInternalErrorNoCtx(
+			"workspace physical mutation replacement has no statement attempt")
+	}
+	if j.current.state == statementAttemptOpen {
+		return j.validateMutationOwnership(owner, sourceIDs)
+	}
+	if j.current.state == statementAttemptRolledBack && j.retryPending &&
+		owner != j.current.key() {
+		return j.validateMutationOwnership(owner, sourceIDs)
+	}
+	return moerr.NewInternalErrorNoCtx(
+		"workspace physical mutation replacement belongs to an invalid statement attempt")
+}
+
 // validateBoundaryMutationReplacement validates source ownership before an
 // atomic statement-boundary transition publishes its target attempt. A retry
 // boundary is the one legal transition whose source journal is already
@@ -2725,7 +2757,7 @@ func (w *txnWorkspace) commitSpill(
 				earliest = commitOrder
 			}
 		}
-		if err := w.journal.validateMutationReplacement(
+		if err := w.journal.validatePhysicalMutationReplacement(
 			statementAttemptKey{
 				statementID: object.statementID,
 				attemptID:   object.attemptID,
@@ -2762,7 +2794,7 @@ func (w *txnWorkspace) commitSpill(
 			unclaimedByOwner[owner], source.mutationID)
 	}
 	for owner, sourceIDs := range unclaimedByOwner {
-		if err := w.journal.validateMutationReplacement(
+		if err := w.journal.validatePhysicalMutationReplacement(
 			owner, sourceIDs,
 		); err != nil {
 			return nil, err
@@ -3341,7 +3373,7 @@ func (w *txnWorkspace) compactMemoryMany(compactions []workspaceMutationCompacti
 			statementID: dst.statementID,
 			attemptID:   dst.attemptID,
 		}
-		if err := w.journal.validateMutationReplacement(
+		if err := w.journal.validatePhysicalMutationReplacement(
 			owner, []workspaceMutationID{dst.id},
 		); err != nil {
 			return err
@@ -3366,7 +3398,7 @@ func (w *txnWorkspace) compactMemoryMany(compactions []workspaceMutationCompacti
 				return moerr.NewInternalErrorNoCtx(
 					"workspace merge crosses statement attempts")
 			}
-			if err := w.journal.validateMutationReplacement(
+			if err := w.journal.validatePhysicalMutationReplacement(
 				owner, []workspaceMutationID{src.id},
 			); err != nil {
 				return err

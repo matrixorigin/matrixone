@@ -1853,6 +1853,63 @@ func TestTxnWorkspaceSpillPublishesOneAtomicRevision(t *testing.T) {
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
+func TestTxnWorkspaceRetryPreparationSpillsCompletedAttempt(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	sourceBat := newInt64BatchForTest(
+		t, proc, []string{"pk"}, []int64{11, 22})
+	sourceID := workspace.append(Entry{
+		accountId: 1, databaseId: 2, tableId: 3, bat: sourceBat,
+	})
+	_, err := workspace.advanceStatement()
+	require.NoError(t, err)
+
+	failed, err := workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	failed.Close()
+	require.Equal(t, statementAttemptRolledBack, workspace.journal.current.state)
+	require.True(t, workspace.journal.retryPending)
+
+	attempt, err := workspace.beginSpill([]workspaceMutationID{sourceID})
+	require.NoError(t, err)
+	objectBat := newInt64BatchForTest(
+		t, proc, []string{"object"}, []int64{33})
+	objectIDs, err := workspace.commitSpill(attempt, []workspaceSpillObject{{
+		statementID:       attempt.sources[0].statementID,
+		attemptID:         attempt.sources[0].attemptID,
+		sourceMutationIDs: []workspaceMutationID{sourceID},
+		entry: Entry{
+			accountId: 1, databaseId: 2, tableId: 3,
+			fileName: "object", bat: objectBat,
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, objectIDs, 1)
+	attempt.Close()
+	require.Equal(t, statementAttemptRolledBack, workspace.journal.current.state)
+	require.True(t, workspace.journal.retryPending)
+	require.Equal(t, uint64(0), workspace.mutations[objectIDs[0]].statementID)
+	require.Equal(t, uint64(1), workspace.mutations[objectIDs[0]].attemptID)
+
+	retry, err := workspace.advanceStatement()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), retry.statementID)
+	require.Equal(t, uint64(2), retry.attemptID)
+	retryRollback, err := workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	require.Empty(t, retryRollback.mutationIDs)
+	retryRollback.Close()
+
+	entries, err := workspace.tableEntries(
+		workspace.currentReadView(), 1, 2, 3)
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 1)
+	require.Same(t, objectBat, entries.entries[0].bat)
+	require.Equal(t, "object", entries.entries[0].fileName)
+	entries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
 func TestTxnWorkspaceSpillPublishesZeroTargetForFullySelectedSource(t *testing.T) {
 	proc := testutil.NewProc(t)
 	workspace := newTxnWorkspace()
@@ -2385,6 +2442,60 @@ func TestTxnWorkspaceMergeMemoryManyPublishesOneRevision(t *testing.T) {
 
 	oldEntries.Close()
 	newEntries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceRetryPreparationCompactsCompletedAttempt(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	dstBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11})
+	srcBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{22})
+	dstID := workspace.append(Entry{
+		accountId: 1, databaseId: 2, tableId: 3, bat: dstBat,
+	})
+	srcID := workspace.append(Entry{
+		accountId: 1, databaseId: 2, tableId: 3, bat: srcBat,
+	})
+	_, err := workspace.advanceStatement()
+	require.NoError(t, err)
+
+	failed, err := workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	failed.Close()
+	require.Equal(t, statementAttemptRolledBack, workspace.journal.current.state)
+	require.True(t, workspace.journal.retryPending)
+
+	mergedBat := newInt64BatchForTest(
+		t, proc, []string{"pk"}, []int64{11, 22})
+	require.NoError(t, workspace.compactMemoryMany(
+		[]workspaceMutationCompaction{{
+			dstMutationID:  dstID,
+			dstOldBat:      dstBat,
+			dstNewBat:      mergedBat,
+			srcMutationIDs: []workspaceMutationID{srcID},
+			srcOldBats:     []*batch.Batch{srcBat},
+		}},
+	))
+	require.Equal(t, statementAttemptRolledBack, workspace.journal.current.state)
+	require.True(t, workspace.journal.retryPending)
+	require.Equal(t, uint64(0), workspace.mutations[dstID].statementID)
+	require.Equal(t, uint64(1), workspace.mutations[dstID].attemptID)
+
+	retry, err := workspace.advanceStatement()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), retry.statementID)
+	require.Equal(t, uint64(2), retry.attemptID)
+	retryRollback, err := workspace.rollbackCurrentAttempt()
+	require.NoError(t, err)
+	require.Empty(t, retryRollback.mutationIDs)
+	retryRollback.Close()
+
+	entries, err := workspace.tableEntries(
+		workspace.currentReadView(), 1, 2, 3)
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 1)
+	require.Same(t, mergedBat, entries.entries[0].bat)
+	entries.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 

@@ -328,6 +328,9 @@ retry after failed execution
        -> transfer rollback entries/actions/LOAD files to workspaceRollback
        -> perform object/file IO and callbacks outside Workspace lock
   -> IncrStatementID(commit=false)
+       -> owner-preserving compaction / spill of completed Attempts is allowed
+          while the failed Attempt remains rolled back and retry pending
+       -> logical rewrites remain forbidden until the retry Attempt is open
        -> keep StatementID, increment AttemptID, open retry Attempt
 
 commit
@@ -340,6 +343,15 @@ commit
   -> TN commit
   -> FinalizeCommit / FinalizeCommitWithUnknownResult releases CN-local state
 ```
+
+Retry preparation deliberately separates physical payload maintenance from
+logical mutation ownership. `IncrStatementID` may compact or spill mutations
+owned by an earlier completed Attempt before it opens the successor retry
+Attempt. Such a replacement must preserve the original
+`StatementID`/`AttemptID`, commit order and visibility, and it must not register
+rollback state in either the failed Attempt or its successor. Mutations owned
+by the failed Attempt have already been retired and cannot participate.
+Ordinary logical rewrite APIs continue to require an open Attempt.
 
 CommitBuilder 只活到现有 TN precommit request 编码完成：protobuf request 已拥有编码后的数据，随后
 不再依赖 Workspace payload。它必须在请求交给 TxnOperator 提交前释放冻结 EntrySet；TN commit 和
