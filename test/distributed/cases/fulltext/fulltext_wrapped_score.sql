@@ -138,6 +138,24 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 
+-- ---------------- wrapped MATCH on a join child ----------------------------------
+-- Filters on either input of an INNER/SEMI join are rewritten per scan by
+-- applyFullTextFiltersForScanInJoin, which also looked for bare matches only -- so this shape
+-- threw even though the same predicate works without the join. There is no project node on
+-- that path, so the predicate itself is what has to be discovered.
+create table jb(id int primary key, note varchar(20));
+insert into jb values (1,'x'),(2,'y'),(3,'z');
+select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
+
+select t.id, jb.note from two t join jb on t.id=jb.id
+ where match(t.body) against('hello') > 0.015 order by t.id;
+select t.id from two t join jb on t.id=jb.id
+ where match(t.body) against('hello') < 0.015 order by t.id;
+select t.id from two t join jb on t.id=jb.id
+ where match(t.body) against('hello') > 0.9 order by t.id;
+-- IN subqueries are flattened to SEMI joins and take the same path
+select id from two where match(body) against('hello') > 0.015 and id in (select id from jb) order by id;
+
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------
 -- Lifting a wrapped predicate off the scan empties FilterList, which used to re-enable the
 -- LIMIT pushdown into the fulltext TVF. The predicate runs ABOVE the join, so a capped stream

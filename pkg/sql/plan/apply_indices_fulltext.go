@@ -1168,9 +1168,21 @@ func remapCoveredBaseColRefs(expr *plan.Expr, scanTag, ftTag, pkColPos int32,
 	return expr
 }
 
+// scanHasMatchedFullTextFilter reports whether this scan's filters will be rewritten by the
+// fulltext path. Two guards depend on it: applyIndicesForFilters leaves such a scan to that
+// path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary.
+//
+// It must therefore cover everything the rewrite now drives from, wrapped MATCHes included --
+// a scan filtered only by `match(...) > 0.5` is just as much a fulltext scan as one filtered
+// by a bare MATCH, and dropping its PROJECT boundary can expose it under a WINDOW or outer
+// JOIN where the scan-local rewrite cannot run.
 func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool {
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(node)
-	return len(filterids) > 0
+	if len(filterids) > 0 {
+		return true
+	}
+	wrapped, _ := builder.getWrappedFullTextMatches(nil, node, filterids, nil)
+	return len(wrapped) > 0
 }
 
 func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
@@ -1205,7 +1217,14 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, bool, error) {
 	filterids, filterIndexDefs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
-	if len(filterids) == 0 {
+
+	// A join child's scan carries wrapped MATCH predicates too -- `a join b on ... where
+	// match(a.body) against('x') > 0.01` has no bare match anywhere, so without this the scan
+	// keeps the predicate and throws. There is no project node on this path, so only the
+	// scan's own filters are searched.
+	wrappedExprs, wrappedIndexDefs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
+
+	if len(filterids) == 0 && len(wrappedExprs) == 0 {
 		return scanNode.NodeId, false, nil
 	}
 
@@ -1220,8 +1239,8 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		filterIndexDefs,
 		nil,
 		nil,
-		nil, // no project node here, so no wrapped-match drivers to add
-		nil,
+		wrappedExprs,
+		wrappedIndexDefs,
 		map[int32]int32{},
 		colRefCnt,
 		idxColMap,

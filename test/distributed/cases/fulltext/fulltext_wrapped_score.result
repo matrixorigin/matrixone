@@ -182,6 +182,30 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table jb(id int primary key, note varchar(20));
+insert into jb values (1,'x'),(2,'y'),(3,'z');
+select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.009391551  𝄀
+2  ¦  0.018783102  𝄀
+3  ¦  0.028174654  𝄀
+5  ¦  0.018783102
+select t.id, jb.note from two t join jb on t.id=jb.id
+where match(t.body) against('hello') > 0.015 order by t.id;
+➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
+2  ¦  y  𝄀
+3  ¦  z
+select t.id from two t join jb on t.id=jb.id
+where match(t.body) against('hello') < 0.015 order by t.id;
+➤ id[4,32,0]  𝄀
+1
+select t.id from two t join jb on t.id=jb.id
+where match(t.body) against('hello') > 0.9 order by t.id;
+➤ id[4,32,0]
+select id from two where match(body) against('hello') > 0.015 and id in (select id from jb) order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 limit 1;
 ➤ id[4,32,0]  𝄀
 1
