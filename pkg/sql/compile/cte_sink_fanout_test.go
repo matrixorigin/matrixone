@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -34,11 +35,20 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 	proc.Base.Lim.SpillSize = 128
 	budget := newMaterializedSpillBudget(proc)
 
-	disk, err := budget.ReserveDisk(128)
+	disk, err := budget.ReserveDisk(64)
 	require.NoError(t, err)
-	_, err = budget.ReserveDisk(1)
-	require.Error(t, err, "materialized spill must honor the query SpillSize limit")
+	err = disk.Grow(65)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Contains(t, err.Error(), "spill disk")
+	require.Contains(t, err.Error(), "requested=65")
+	require.Contains(t, err.Error(), "used=64")
+	require.Contains(t, err.Error(), "limit=128")
 	require.True(t, disk.Release())
+
+	_, err = budget.ReserveDisk(129)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
 
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
