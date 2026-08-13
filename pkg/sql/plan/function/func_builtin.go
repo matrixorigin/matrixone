@@ -2346,8 +2346,8 @@ func unswapUUIDTimeParts(u types.Uuid) types.Uuid {
 }
 
 func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[int64](result)
 	if len(parameters) == 0 {
+		rs := vector.MustFunctionResult[int64](result)
 		val := types.CurrentTimestamp().Unix()
 		for i := uint64(0); i < uint64(length); i++ {
 			if err := rs.Append(val, false); err != nil {
@@ -2358,6 +2358,27 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	}
 
 	p1 := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](parameters[0])
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		var zero types.Decimal128
+		for i := uint64(0); i < uint64(length); i++ {
+			v1, null1 := p1.GetValue(i)
+			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
+			if v1 == types.ZeroTimestamp || unixMicro < 0 || null1 {
+				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else {
+				val := types.Decimal128{B0_63: uint64(unixMicro), B64_127: 0}
+				if err := rs.Append(val, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
