@@ -5758,6 +5758,7 @@ func TestReadCheckpoint(t *testing.T) {
 
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	require.NotEmpty(t, entries)
+	finishedReadCount := 0
 	for _, entry := range entries {
 		if !entry.IsFinished() {
 			t.Logf("skipping unfinished checkpoint entry: %s", entry.String())
@@ -5766,7 +5767,9 @@ func TestReadCheckpoint(t *testing.T) {
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
 		readCheckpoint(entry)
+		finishedReadCount++
 	}
+	require.Positive(t, finishedReadCount, "no finished checkpoint entry was read")
 
 	tae.Restart(ctx)
 	replayed := tae.BGCheckpointRunner.MaxGlobalCheckpoint()
