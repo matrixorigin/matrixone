@@ -39,6 +39,18 @@ type fillTestCase struct {
 	proc *process.Process
 }
 
+func TestAppendValuePreservesBinaryStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := vector.NewVec(types.T_text.ToType())
+	target := vector.NewVec(types.T_text.ToType())
+	defer source.Free(proc.Mp())
+	defer target.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("value"), false, proc.Mp()))
+	source.SetIsBinaryString(true)
+	require.NoError(t, appendValue(target, source, 0, proc))
+	require.True(t, target.GetBinaryStringMetadataAt(0))
+}
+
 func makeTestCases(t *testing.T) []fillTestCase {
 	return []fillTestCase{
 		{

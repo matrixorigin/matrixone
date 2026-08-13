@@ -1090,64 +1090,10 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer pr
 }
 
 func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
-	var err error
-	switch v.GetType().Oid {
-	case types.T_bool:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[bool](w, j), false, proc.Mp())
-	case types.T_bit:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
-	case types.T_int8:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int8](w, j), false, proc.Mp())
-	case types.T_int16:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int16](w, j), false, proc.Mp())
-	case types.T_int32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int32](w, j), false, proc.Mp())
-	case types.T_int64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int64](w, j), false, proc.Mp())
-	case types.T_uint8:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint8](w, j), false, proc.Mp())
-	case types.T_uint16:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint16](w, j), false, proc.Mp())
-	case types.T_uint32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint32](w, j), false, proc.Mp())
-	case types.T_uint64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
-	case types.T_float32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[float32](w, j), false, proc.Mp())
-	case types.T_float64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[float64](w, j), false, proc.Mp())
-	case types.T_date:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Date](w, j), false, proc.Mp())
-	case types.T_datetime:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Datetime](w, j), false, proc.Mp())
-	case types.T_time:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Time](w, j), false, proc.Mp())
-	case types.T_timestamp:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Timestamp](w, j), false, proc.Mp())
-	case types.T_enum:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Enum](w, j), false, proc.Mp())
-	case types.T_decimal64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), false, proc.Mp())
-	case types.T_decimal128:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j), false, proc.Mp())
-	case types.T_decimal256:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal256](w, j), false, proc.Mp())
-	case types.T_uuid:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j), false, proc.Mp())
-	case types.T_TS:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.TS](w, j), false, proc.Mp())
-	case types.T_Rowid:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j), false, proc.Mp())
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		err = vector.AppendBytes(v, w.GetBytesAt(j), false, proc.Mp())
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
+	if w.IsNull(uint64(j)) {
+		return vector.AppendNull(v, proc.Mp())
 	}
-	return err
+	return v.UnionOne(w, int64(j), proc.Mp())
 }
 
 func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
@@ -1207,7 +1153,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
+		err = vector.SetBytesAtFrom(v, i, w, j, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}
