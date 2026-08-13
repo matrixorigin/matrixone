@@ -34,6 +34,7 @@ import (
 	groupop "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -63,6 +64,11 @@ func TestRetainingOperatorsActivateAllocationLifecycle(t *testing.T) {
 	topN := top.NewArgument()
 	defer topN.Release()
 	_, ownsAllocation = any(topN).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+
+	mergeTopN := mergetop.NewArgument()
+	defer mergeTopN.Release()
+	_, ownsAllocation = any(mergeTopN).(executionAllocationAccountOwner)
 	require.True(t, ownsAllocation)
 }
 

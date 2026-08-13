@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -39,26 +40,6 @@ var _ interface {
 } = new(Top)
 
 const topSpillThreshold uint64 = 8192 * 2
-
-const (
-	// Sites 32-43 and 60 are shared spillutil sites. Top-specific storage uses
-	// a disjoint range under the Top owner.
-	topAllocationSiteRetainedData mpool.AllocationSite = iota + 64
-	topAllocationSiteRetainedArea
-	topAllocationSiteRetainedNulls
-	topAllocationSiteRetainedGrouping
-	topAllocationSiteExpressionData
-	topAllocationSiteExpressionArea
-	topAllocationSiteExpressionNulls
-	topAllocationSiteExpressionGrouping
-	topAllocationSiteOutputData
-	topAllocationSiteOutputArea
-	topAllocationSiteOutputNulls
-	topAllocationSiteOutputGrouping
-	topAllocationSiteSelections
-	topAllocationSiteRowReferences
-	topAllocationSiteSpillWriteBuffer
-)
 
 type rowRef struct {
 	offset int64
@@ -214,10 +195,10 @@ func (ctr *container) setAllocationAccount(
 	retained, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerTop,
-		topAllocationSiteRetainedData,
-		topAllocationSiteRetainedArea,
-		topAllocationSiteRetainedNulls,
-		topAllocationSiteRetainedGrouping,
+		topsites.TopRetainedData,
+		topsites.TopRetainedArea,
+		topsites.TopRetainedNulls,
+		topsites.TopRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -225,10 +206,10 @@ func (ctr *container) setAllocationAccount(
 	expression, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerTop,
-		topAllocationSiteExpressionData,
-		topAllocationSiteExpressionArea,
-		topAllocationSiteExpressionNulls,
-		topAllocationSiteExpressionGrouping,
+		topsites.TopExpressionData,
+		topsites.TopExpressionArea,
+		topsites.TopExpressionNulls,
+		topsites.TopExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -236,10 +217,10 @@ func (ctr *container) setAllocationAccount(
 	output, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerTop,
-		topAllocationSiteOutputData,
-		topAllocationSiteOutputArea,
-		topAllocationSiteOutputNulls,
-		topAllocationSiteOutputGrouping,
+		topsites.TopOutputData,
+		topsites.TopOutputArea,
+		topsites.TopOutputNulls,
+		topsites.TopOutputGrouping,
 	)
 	if err != nil {
 		return err

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -383,7 +384,7 @@ func TestAccountedTopCorruptSpillFailsClosed(t *testing.T) {
 		1,
 		proc,
 		op.ctr.spillAllocation,
-		topAllocationSiteSelections,
+		topsites.TopSelections,
 	)
 	require.NoError(t, err)
 	op.ctr.rowRefs, err = growTopSlice(
@@ -391,7 +392,7 @@ func TestAccountedTopCorruptSpillFailsClosed(t *testing.T) {
 		1,
 		proc,
 		op.ctr.spillAllocation,
-		topAllocationSiteRowReferences,
+		topsites.TopRowReferences,
 	)
 	require.NoError(t, err)
 	op.ctr.sels[0] = 0

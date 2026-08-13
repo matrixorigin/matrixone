@@ -573,6 +573,15 @@ codec preserves prepared provenance while rejecting spill Attrs/ExtraBuf; and
 the output-chunk map is bounded at 8,192 rows. Resident performance remains
 inside the 2% gate.
 
+MergeTop, used as the final Top stage for multi-scope plans, now shares the
+same `top` owner without inheriting an unaccounted resident bypass. Retained
+rows, computed order expressions, heap selections, append rollback scratch,
+and final Shuffle replacement capacity are admitted by their physical
+allocations. The duplicate final permutation slice is removed by draining the
+heap into its own selection backing. MergeTop has no external algorithm, so
+unsupported pressure returns one controlled resource error and Reset closes
+the prepared-statement allocation generation.
+
 Fill:
 
 - account replay/linear state and partition snapshots;
