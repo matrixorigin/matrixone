@@ -876,6 +876,10 @@ func (ctr *container) findAsofPredecessor(
 	}
 	ordered, ok := ctr.asofIndexes[groupKey]
 	if !ok {
+		// Each probe scope owns at most one ordered copy per equality group.
+		// The row-index backing storage is charged to the build allocation
+		// account, so this bounded per-scope cache participates in spill and
+		// memory-limit decisions and is released when the scope is reset.
 		ordered, err = mpool.MakeSliceAccounted[int32](
 			len(candidates), proc.Mp(), hashJoin.allocationAccount,
 			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
@@ -942,6 +946,14 @@ func asofTemporalMetadata(expr *plan.Expr) (leftCol int, strict bool) {
 		return
 	}
 	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			for _, arg := range fn.Args {
+				if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+					return col, isStrict
+				}
+			}
+			return
+		}
 		if strings.EqualFold(fn.Func.ObjName, "and") {
 			for _, arg := range fn.Args {
 				if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
