@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,11 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 	proc.Base.Lim.SpillSize = 128
 	budget := newMaterializedSpillBudget(proc)
 
+	growingDisk, err := budget.ReserveDisk(1)
+	require.NoError(t, err)
+	require.NoError(t, growingDisk.Grow(1))
+	require.True(t, growingDisk.Release())
+
 	disk, err := budget.ReserveDisk(64)
 	require.NoError(t, err)
 	err = disk.Grow(65)
@@ -53,10 +59,30 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
 	require.True(t, memory.Release())
+
+	processBudget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	fdLimit := processBudget.SpillFDCap()
+	require.NotZero(t, fdLimit)
+	_, err = budget.ReserveFD(fdLimit + 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Contains(t, err.Error(), "spill file descriptor")
+	require.Contains(t, err.Error(), "requested=")
+	require.Contains(t, err.Error(), "limit=")
+
 	fd, err := budget.ReserveFD(1)
 	require.NoError(t, err)
 	require.True(t, fd.Release())
 	proc.SetStmtProfile(nil)
+
+	invalidBudget := newMaterializedSpillBudget(&process.Process{Ctx: context.Background()})
+	_, err = invalidBudget.ReserveDisk(1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	_, err = invalidBudget.ReserveFD(1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 }
 
 func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
