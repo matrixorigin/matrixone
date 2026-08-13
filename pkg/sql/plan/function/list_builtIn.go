@@ -10929,6 +10929,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 && parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
