@@ -15,10 +15,12 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -34,19 +36,53 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 	proc.Base.Lim.SpillSize = 128
 	budget := newMaterializedSpillBudget(proc)
 
-	disk, err := budget.ReserveDisk(128)
+	growingDisk, err := budget.ReserveDisk(1)
 	require.NoError(t, err)
-	_, err = budget.ReserveDisk(1)
-	require.Error(t, err, "materialized spill must honor the query SpillSize limit")
+	require.NoError(t, growingDisk.Grow(1))
+	require.True(t, growingDisk.Release())
+
+	disk, err := budget.ReserveDisk(64)
+	require.NoError(t, err)
+	err = disk.Grow(65)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Contains(t, err.Error(), "spill disk")
+	require.Contains(t, err.Error(), "requested=65")
+	require.Contains(t, err.Error(), "used=64")
+	require.Contains(t, err.Error(), "limit=128")
 	require.True(t, disk.Release())
+
+	_, err = budget.ReserveDisk(129)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
 
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
 	require.True(t, memory.Release())
+
+	processBudget, err := proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	fdLimit := processBudget.SpillFDCap()
+	require.NotZero(t, fdLimit)
+	_, err = budget.ReserveFD(fdLimit + 1)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Contains(t, err.Error(), "spill file descriptor")
+	require.Contains(t, err.Error(), "requested=")
+	require.Contains(t, err.Error(), "limit=")
+
 	fd, err := budget.ReserveFD(1)
 	require.NoError(t, err)
 	require.True(t, fd.Release())
 	proc.SetStmtProfile(nil)
+
+	invalidBudget := newMaterializedSpillBudget(&process.Process{Ctx: context.Background()})
+	_, err = invalidBudget.ReserveDisk(1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+	_, err = invalidBudget.ReserveFD(1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 }
 
 func TestCTESinkFanoutRegistersEveryConsumer(t *testing.T) {
