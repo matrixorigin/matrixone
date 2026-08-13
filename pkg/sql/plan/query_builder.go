@@ -10201,9 +10201,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			return 0, moerr.NewNotSupportedf(builder.GetContext(), "source table %s.%s", schema, table)
 		} else if tableDef.TableType == catalog.SystemViewRel {
-			if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-				if dbOfView == schema && nameOfView == table {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+			// CREATE OR REPLACE VIEW and ALTER VIEW change the current catalog
+			// object. A same-named View resolved from an explicit historical
+			// snapshot belongs to a different catalog domain and is a valid source.
+			if !IsSnapshotValid(snapshot) {
+				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
+					if dbOfView == schema && nameOfView == table {
+						return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
+					}
 				}
 			}
 

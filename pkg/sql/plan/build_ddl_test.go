@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -53,9 +54,10 @@ type rootSQLCompilerContext struct {
 
 type viewReplacementCompilerContext struct {
 	*rootSQLCompilerContext
-	building bool
-	database string
-	view     string
+	building           bool
+	database           string
+	view               string
+	historicalSnapshot *Snapshot
 }
 
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {
@@ -66,6 +68,14 @@ func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, dat
 
 func (c *viewReplacementCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return c.building, c.database, c.view
+}
+
+func (c *viewReplacementCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
+	return c.historicalSnapshot, nil
+}
+
+func (c *viewReplacementCompilerContext) CheckTimeStampValid(int64) (bool, error) {
+	return true, nil
 }
 
 type autoIncrementOffsetCompilerContext struct {
@@ -626,16 +636,33 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name string
-		sql  string
+		name            string
+		sql             string
+		wantErr         bool
+		wantIfNotExists bool
 	}{
 		{
-			name: "direct reference",
-			sql:  "create or replace view v as select n_nationkey from v",
+			name:    "direct reference",
+			sql:     "create or replace view v as select n_nationkey from v",
+			wantErr: true,
 		},
 		{
-			name: "indirect reference",
-			sql:  "create or replace view v as select n_nationkey from v2",
+			name:    "indirect reference",
+			sql:     "create or replace view v as select n_nationkey from v2",
+			wantErr: true,
+		},
+		{
+			name: "historical snapshot reference",
+			sql:  "create or replace view v as select n_nationkey from v {snapshot = 'sp'}",
+		},
+		{
+			name: "historical timestamp reference",
+			sql:  "create or replace view v as select n_nationkey from v {timestamp = '2020-01-01 00:00:00'}",
+		},
+		{
+			name:            "if not exists keeps body as no-op",
+			sql:             "create or replace view if not exists v as select n_nationkey from v",
+			wantIfNotExists: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -649,14 +676,25 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 					MockCompilerContext: mock,
 					rootSQL:             test.sql,
 				},
+				historicalSnapshot: &Snapshot{
+					TS: &timestamp.Timestamp{PhysicalTime: 1},
+				},
 			}
 
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 
-			_, err = BuildPlan(ctx, stmt, false)
-			require.EqualError(t, err, "internal error: there is a recursive reference to the view v")
+			p, err := BuildPlan(ctx, stmt, false)
+			if test.wantErr {
+				require.EqualError(t, err, "internal error: there is a recursive reference to the view v")
+			} else {
+				require.NoError(t, err)
+				createView := p.GetDdl().GetCreateView()
+				require.NotNil(t, createView)
+				require.True(t, createView.GetReplace())
+				require.Equal(t, test.wantIfNotExists, createView.GetIfNotExists())
+			}
 			require.False(t, ctx.building)
 			require.Empty(t, ctx.database)
 			require.Empty(t, ctx.view)

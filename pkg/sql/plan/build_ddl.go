@@ -467,7 +467,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
-	if stmt.Replace {
+	if stmt.Replace && !stmt.IfNotExists {
 		ctx.SetBuildingAlterView(true, createView.Database, string(viewName))
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
