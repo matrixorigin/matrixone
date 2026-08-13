@@ -98,6 +98,7 @@ type container struct {
 	asofCompare            compare.Compare
 	asofIndexes            map[uint64][]int32
 	asofIndexValues        [][]int32
+	asofIndexCharges       [][]byte
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -314,9 +315,13 @@ func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 		for _, values := range ctr.asofIndexValues {
 			mpool.FreeSlice(proc.Mp(), values)
 		}
+		for _, charge := range ctr.asofIndexCharges {
+			proc.Mp().Free(charge)
+		}
 	}
 	ctr.asofIndexes = nil
 	ctr.asofIndexValues = nil
+	ctr.asofIndexCharges = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

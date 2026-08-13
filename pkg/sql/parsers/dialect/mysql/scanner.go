@@ -953,6 +953,23 @@ func (s *Scanner) previousSignificantPos(pos int) int {
 				continue
 			}
 		}
+		lineStart := pos
+		for lineStart >= 0 && s.buf[lineStart] != '\n' {
+			lineStart--
+		}
+		line := s.buf[lineStart+1 : pos+1]
+		if i := strings.Index(line, "//"); i >= 0 {
+			pos = lineStart + i - 1
+			continue
+		}
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			pos = lineStart + i - 1
+			continue
+		}
+		if i := strings.Index(line, "--"); i >= 0 && (i+2 == len(line) || isMySQLDashCommentBlank(line[i+2])) {
+			pos = lineStart + i - 1
+			continue
+		}
 		return pos
 	}
 	return -1

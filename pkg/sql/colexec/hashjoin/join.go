@@ -907,6 +907,17 @@ func (ctr *container) findAsofPredecessor(
 			return -1, false, err
 		}
 		copy(ordered, candidates)
+		// Charge the Go-heap map entry and slice-header bookkeeping. The
+		// backing []int32 is accounted separately above; this fixed charge
+		// bounds container overhead for every retained multi-row group.
+		charge, chargeErr := proc.Mp().AllocAccounted(
+			64, hashJoin.allocationAccount,
+			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
+		)
+		if chargeErr != nil {
+			mpool.FreeSlice(proc.Mp(), ordered)
+			return -1, false, chargeErr
+		}
 		// Equal timestamps are arbitrary by the ASOF contract; choosing the
 		// lowest materialized row ordinal makes the result repeatable for one
 		// materialized build map without promising producer-arrival ordering.
@@ -927,6 +938,7 @@ func (ctr *container) findAsofPredecessor(
 		})
 		ctr.asofIndexes[groupKey] = ordered
 		ctr.asofIndexValues = append(ctr.asofIndexValues, ordered)
+		ctr.asofIndexCharges = append(ctr.asofIndexCharges, charge)
 	}
 
 	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)

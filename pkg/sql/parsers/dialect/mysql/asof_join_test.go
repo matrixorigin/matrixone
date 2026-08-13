@@ -55,6 +55,9 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 		"select * from t as asof join u on asof.k = u.k",
 		"select * from db.asof join u on asof.k = u.k",
 		"select * from /* c */ asof join u on asof.k = u.k",
+		"select * from -- c\n  asof join u on asof.k = u.k",
+		"select * from # c\n  asof join u on asof.k = u.k",
+		"select * from // c\n  asof join u on asof.k = u.k",
 		"select * from t, asof join u on asof.k = u.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
