@@ -41,13 +41,20 @@ jobs:
       - name: Resolve Go module cache metadata
         id: go-module-cache-metadata
         run: |
-          echo "path=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          cache_dir="$GITHUB_WORKSPACE/.sca-go-module-cache"
+          # Self-hosted runner workspaces can outlive a job. Start from only the
+          # trusted cache archive, not files left by a previous PR.
+          GOMODCACHE="$cache_dir" go clean -modcache
+          echo "GOMODCACHE=$cache_dir" >> "$GITHUB_ENV"
           echo "version=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
       - name: Restore Go module cache
         id: go-module-cache
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          path: ${{ steps.go-module-cache-metadata.outputs.path }}
+          # A relative path keeps both the hidden cache version and tar entries
+          # identical to the reusable-workflow consumer across runner layouts.
+          path: .sca-go-module-cache
           key: matrixone-go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-module-cache-metadata.outputs.version }}-${{ hashFiles('go.mod', 'go.sum') }}
           restore-keys: |
             matrixone-go-mod-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-module-cache-metadata.outputs.version }}-
@@ -58,5 +65,5 @@ jobs:
         if: steps.go-module-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          path: ${{ steps.go-module-cache-metadata.outputs.path }}
+          path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
