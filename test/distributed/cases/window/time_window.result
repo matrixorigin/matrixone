@@ -1,6 +1,17 @@
 drop database if exists time_window;
 create database time_window;
 use time_window;
+drop table if exists time_window_null_ts;
+create table time_window_null_ts (event_ts timestamp(6), device varchar(20), value double);
+insert into time_window_null_ts values
+('2026-01-01 00:01:00', 'd1', 10),
+('2026-01-01 00:02:00', 'd1', 20),
+(null, 'd1', 999);
+select _wstart, _wend, count(*) as n from time_window_null_ts interval(event_ts, 1, minute) order by _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  n[-5,64,0]  𝄀
+2026-01-01 00:01:00  ¦  2026-01-01 00:02:00  ¦  1  𝄀
+2026-01-01 00:02:00  ¦  2026-01-01 00:03:00  ¦  1
+drop table time_window_null_ts;
 drop table if exists time_window01;
 create table time_window01 (ts timestamp, col2 int);
 insert into time_window01 values ('2021-01-12 00:00:00.000', 12);
@@ -811,12 +822,12 @@ select _wstart, _wend, avg(col2), count(col4) from temporary02 where ts >= '2023
 2023-11-01 00:13:14  ¦  2023-11-01 00:13:16  ¦  null  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 1, minute);
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
-2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  1  𝄀
+2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  7  𝄀
 2023-11-01 00:01:00  ¦  2023-11-01 00:02:00  ¦  328903.32334  ¦  1  𝄀
 2023-11-01 00:13:00  ¦  2023-11-01 00:14:00  ¦  392432.4324  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 60, second);
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  sum(col3)[8,53,31]  ¦  count(col4)[-5,64,0]  𝄀
-2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  1  𝄀
+2023-11-01 00:00:00  ¦  2023-11-01 00:01:00  ¦  516674.7964434  ¦  7  𝄀
 2023-11-01 00:01:00  ¦  2023-11-01 00:02:00  ¦  328903.32334  ¦  1  𝄀
 2023-11-01 00:13:00  ¦  2023-11-01 00:14:00  ¦  392432.4324  ¦  1
 select _wstart, _wend, sum(col3), count(col4) from temporary02 where ts >= '2023-11-01 00:00:01.000' and ts <= '2023-11-01 00:13:14.000' interval(ts, 5, second) sliding(4, second) fill(value, 2190);
@@ -855,6 +866,10 @@ select max(a) as enable, min(a) as collation from tt1 interval(ts, 1, minute);
 ➤ enable[4,32,0]  ¦  collation[4,32,0]
 drop table if exists tw_interval_bad_unit;
 create table tw_interval_bad_unit(ts timestamp(6), v int);
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 0, minute);
+invalid input: time window interval must be greater than zero
+select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 5, minute) sliding(0, minute);
+invalid input: time window sliding value must be greater than zero
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, month);
 not supported: Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, week);

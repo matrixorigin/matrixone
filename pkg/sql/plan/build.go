@@ -790,6 +790,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 
 			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				if columns[idx].TblName == "" {
+					columns[idx].TblName = source.tableName
+				}
+				if columns[idx].DbName == "" {
+					columns[idx].DbName = source.dbName
+				}
+				columns[idx].OriginTblName = source.tableName
+				columns[idx].OriginName = source.columnName
 				columns[idx].Primary = source.primary
 				columns[idx].Unique = source.unique
 				columns[idx].NotNull = source.notNull
@@ -845,6 +853,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 }
 
 type resultColumnSource struct {
+	dbName       string
+	tableName    string
+	columnName   string
 	primary      bool
 	unique       bool
 	notNull      bool
@@ -1186,11 +1197,18 @@ func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resu
 			}
 		}
 	}
+	tableName := tableDef.OriginalName
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
 	return &resultColumnSource{
-		primary:  primary,
-		unique:   unique,
-		notNull:  primary || col.NotNull || col.Typ.NotNullable,
-		autoIncr: col.Typ.AutoIncr,
+		dbName:     tableDef.DbName,
+		tableName:  tableName,
+		columnName: col.GetOriginCaseName(),
+		primary:    primary,
+		unique:     unique,
+		notNull:    primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr:   col.Typ.AutoIncr,
 	}
 }
 

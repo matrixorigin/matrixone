@@ -216,6 +216,9 @@ func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) err
 		return err
 	}
 	val1 := interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+	if val1 <= 0 {
+		return moerr.NewInvalidInputNoCtx("time window interval must be greater than zero")
+	}
 	timeWin.Interval, err = calcDatetime(val1, typ)
 	if err != nil {
 		return err
@@ -228,6 +231,9 @@ func (timeWin *TimeWin) MakeIntervalAndSliding(interval, sliding *plan.Expr) err
 			return err
 		}
 		val2 := sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
+		if val2 <= 0 {
+			return moerr.NewInvalidInputNoCtx("time window sliding value must be greater than zero")
+		}
 		timeWin.Sliding, err = calcDatetime(val2, typ)
 		if err != nil {
 			return err

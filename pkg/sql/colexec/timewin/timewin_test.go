@@ -162,6 +162,102 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: makeInterval(),
+	}
+	require.NoError(t, arg.Prepare(proc))
+
+	bat := batch.New([]string{"ts", "v"})
+	bat.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:01:00",
+			"2026-01-01 00:02:00",
+			"2026-01-01 00:03:00",
+		}, []uint64{1}, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp()),
+	}
+	bat.SetRowCount(3)
+
+	ok, err := arg.ctr.evalVector(bat, proc)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, bat.RowCount())
+	require.Equal(t, 2, arg.ctr.tsVec[0].Length())
+	require.Equal(t, []int32{10, 30}, vector.MustFixedColWithTypeCheck[int32](arg.ctr.aggVec[0][0][0]))
+
+	bat.Clean(proc.Mp())
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinCallSkipsAllNullTimeBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  nil,
+		Interval: types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
+		Sliding:  types.Datetime(types.SecsPerMinute * types.MicroSecsPerSec),
+	}
+
+	nullBatch := batch.New([]string{"ts", "v"})
+	nullBatch.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:00:00",
+			"2026-01-01 00:01:00",
+		}, []uint64{0, 1}, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{999, 999}, nil, proc.Mp()),
+	}
+	nullBatch.SetRowCount(2)
+
+	validBatch := batch.New([]string{"ts", "v"})
+	validBatch.Vecs = []*vector.Vector{
+		testutil.MakeDatetimeVector([]string{
+			"2026-01-01 00:01:00",
+			"2026-01-01 00:02:00",
+		}, nil, proc.Mp()),
+		testutil.MakeInt32Vector([]int32{10, 20}, nil, proc.Mp()),
+	}
+	validBatch.SetRowCount(2)
+
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{nullBatch, validBatch})
+	arg.AppendChild(op)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{10, 20}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	first, err := types.ParseDatetime("2026-01-01 00:01:00", 6)
+	require.NoError(t, err)
+	second, err := types.ParseDatetime("2026-01-01 00:02:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, []types.Datetime{
+		first,
+		second,
+	}, vector.MustFixedColWithTypeCheck[types.Datetime](result.Batch.Vecs[1]))
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
