@@ -16,9 +16,11 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -86,6 +88,25 @@ func TestValidateCloneDatabaseAccounts(t *testing.T) {
 			require.ErrorContains(t, err, test.wantErr)
 		})
 	}
+}
+
+func TestValidateCloneDatabaseSourceAccess(t *testing.T) {
+	for _, database := range catalog.SystemDatabases {
+		t.Run("non sys cannot clone "+database, func(t *testing.T) {
+			err := validateCloneDatabaseSourceAccess(1, database)
+			require.EqualError(t, err, "internal error: non-sys account cannot clone data from system database")
+		})
+	}
+	t.Run("system database matching is case insensitive", func(t *testing.T) {
+		err := validateCloneDatabaseSourceAccess(1, strings.ToUpper(catalog.MO_CATALOG))
+		require.EqualError(t, err, "internal error: non-sys account cannot clone data from system database")
+	})
+	t.Run("sys can clone system catalog", func(t *testing.T) {
+		require.NoError(t, validateCloneDatabaseSourceAccess(sysAccountID, catalog.MO_CATALOG))
+	})
+	t.Run("non sys can clone user database", func(t *testing.T) {
+		require.NoError(t, validateCloneDatabaseSourceAccess(1, "user_database"))
+	})
 }
 
 func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.T) {

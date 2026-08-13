@@ -16,8 +16,11 @@ package frontend
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -64,7 +67,7 @@ func collectCloneDatabaseSource(
 		viewMap:            make(map[string]*tableInfo),
 	}
 
-	accounts := cloneDatabaseAccountResolution{}
+	var accounts cloneDatabaseAccountResolution
 	if resolvedAccounts != nil {
 		accounts = *resolvedAccounts
 	} else {
@@ -92,6 +95,9 @@ func collectCloneDatabaseSource(
 				Tenant: &plan.SnapshotTenant{TenantID: uint32(subMeta.AccountId)},
 			}
 		}
+	}
+	if err := validateCloneDatabaseSourceAccess(accounts.opAccountId, srcDBName); err != nil {
+		return source, err
 	}
 
 	sourceExists, err := checkDatabaseExistsAtSnapshot(ctx, bh, snapshot, srcDBName)
@@ -136,6 +142,17 @@ func collectCloneDatabaseSource(
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil
+}
+
+// validateCloneDatabaseSourceAccess preserves the clone privilege contract
+// before source metadata lookup. System databases are only clone sources for
+// sys; checking their existence first would expose them as missing to tenants.
+func validateCloneDatabaseSourceAccess(opAccountID uint32, sourceDatabase string) error {
+	if opAccountID != sysAccountID &&
+		slices.Contains(catalog.SystemDatabases, strings.ToLower(sourceDatabase)) {
+		return moerr.NewInternalErrorNoCtx("non-sys account cannot clone data from system database")
+	}
+	return nil
 }
 
 func resolveCloneDatabaseAccounts(
