@@ -232,12 +232,12 @@ func TestMemCacheAllocatorMetricsAggregateSameComponent(t *testing.T) {
 func TestMemCacheAllocatorMetricsSeparateServiceScopes(t *testing.T) {
 	ctx := context.Background()
 	name := t.Name()
-	cn := newMemCacheWithMetricScope(fscache.ConstCapacity(2<<20), nil, nil, name, "CN/cn-1")
-	defer cn.Close(ctx)
-	tn := newMemCacheWithMetricScope(fscache.ConstCapacity(4<<20), nil, nil, name, "TN/tn-1")
-	defer tn.Close(ctx)
+	firstCN := newMemCacheWithMetricScope(fscache.ConstCapacity(2<<20), nil, nil, name, "CN/cn-1")
+	defer firstCN.Close(ctx)
+	secondCN := newMemCacheWithMetricScope(fscache.ConstCapacity(4<<20), nil, nil, name, "CN/cn-2")
+	defer secondCN.Close(ctx)
 
-	for index, cache := range []*MemCache{cn, tn} {
+	for index, cache := range []*MemCache{firstCN, secondCN} {
 		vector := &IOVector{
 			FilePath: "shared:/object",
 			Entries: []IOEntry{{
@@ -251,18 +251,18 @@ func TestMemCacheAllocatorMetricsSeparateServiceScopes(t *testing.T) {
 		cache.refreshAllocatorMetrics(true)
 	}
 
-	cnInuse, cnCap := metric.GetFsCacheBytesGaugeWithScope("CN/cn-1", name, "mem")
-	tnInuse, tnCap := metric.GetFsCacheBytesGaugeWithScope("TN/tn-1", name, "mem")
-	cnAllocator := metric.GetFsCacheAllocatorStatsGaugesWithScope("CN/cn-1", name, "mem")
-	tnAllocator := metric.GetFsCacheAllocatorStatsGaugesWithScope("TN/tn-1", name, "mem")
-	require.Equal(t, float64(cn.cache.Used()), testutil.ToFloat64(cnInuse))
-	require.Equal(t, float64(tn.cache.Used()), testutil.ToFloat64(tnInuse))
-	require.Equal(t, float64(2<<20), testutil.ToFloat64(cnCap))
-	require.Equal(t, float64(4<<20), testutil.ToFloat64(tnCap))
-	require.Equal(t, float64(1), testutil.ToFloat64(cnAllocator.Arenas))
-	require.Equal(t, float64(1), testutil.ToFloat64(tnAllocator.Arenas))
-	require.GreaterOrEqual(t, testutil.ToFloat64(cnAllocator.Allocated), float64(cn.cache.Used()))
-	require.GreaterOrEqual(t, testutil.ToFloat64(tnAllocator.Allocated), float64(tn.cache.Used()))
+	firstInuse, firstCap := metric.GetFsCacheBytesGaugeWithScope("CN/cn-1", name, "mem")
+	secondInuse, secondCap := metric.GetFsCacheBytesGaugeWithScope("CN/cn-2", name, "mem")
+	firstAllocator := metric.GetFsCacheAllocatorStatsGaugesWithScope("CN/cn-1", name, "mem")
+	secondAllocator := metric.GetFsCacheAllocatorStatsGaugesWithScope("CN/cn-2", name, "mem")
+	require.Equal(t, float64(firstCN.cache.Used()), testutil.ToFloat64(firstInuse))
+	require.Equal(t, float64(secondCN.cache.Used()), testutil.ToFloat64(secondInuse))
+	require.Equal(t, float64(2<<20), testutil.ToFloat64(firstCap))
+	require.Equal(t, float64(4<<20), testutil.ToFloat64(secondCap))
+	require.Equal(t, float64(1), testutil.ToFloat64(firstAllocator.Arenas))
+	require.Equal(t, float64(1), testutil.ToFloat64(secondAllocator.Arenas))
+	require.GreaterOrEqual(t, testutil.ToFloat64(firstAllocator.Allocated), float64(firstCN.cache.Used()))
+	require.GreaterOrEqual(t, testutil.ToFloat64(secondAllocator.Allocated), float64(secondCN.cache.Used()))
 }
 
 func TestMemCacheSeparatesPhysicalAndLogicalBytesMetrics(t *testing.T) {
