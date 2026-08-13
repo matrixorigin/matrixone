@@ -742,22 +742,24 @@ func binaryProtocolPrepareParamKind(
 const preparedNumericTextBindingCharset = uint8(255)
 
 const (
-	preparedNumericTextPrefix int32 = 2
-	preparedNumericTextFloat  int32 = 3
-	preparedNumericWide       int32 = 4
-	preparedNumericFallback   int32 = 5
-	preparedNumericPrefixMax  int32 = 6
-	preparedNumericApprox     int32 = 7
-	preparedNumericExact      int32 = 8
+	preparedNumericTextPrefix    int32 = 2
+	preparedNumericTextFloat     int32 = 3
+	preparedNumericWide          int32 = 4
+	preparedNumericFallback      int32 = 5
+	preparedNumericPrefixMax     int32 = 6
+	preparedNumericApprox        int32 = 7
+	preparedNumericExact         int32 = 8
+	preparedNumericProtocolExact int32 = 9
 )
 
 func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
 	switch kind {
 	case vector.PrepareParamInteger:
-		if len(value) > 0 && value[0] == '-' {
-			return types.T_int64.ToType()
-		}
-		return types.T_uint64.ToType()
+		// MySQL resolves a prepared integer parameter against a DECIMAL peer in
+		// the stable DECIMAL(65,30) domain. Keep the protocol source kind in the
+		// execution metadata, but expose the same numeric envelope to the binder
+		// instead of letting the physical signedness narrow result metadata.
+		return preparedProtocolExactBindingType()
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
@@ -765,11 +767,21 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 		width, scale := preparedNativeDecimalDomain(value)
 		return preparedDecimalBindingType(width, scale, true, false)
 	case vector.PrepareParamBoolean:
-		return types.T_bool.ToType()
+		// Binary-protocol BOOL is transported as TINYINT(1), but its prepared
+		// common-type contract with DECIMAL is the same DECIMAL(65,30) envelope.
+		return preparedProtocolExactBindingType()
 	}
 
 	width, scale, full, exponent := preparedNumericTextDomain(value)
 	return preparedDecimalBindingType(width, scale, full, exponent)
+}
+
+func preparedProtocolExactBindingType() types.Type {
+	binding := types.T_text.ToType()
+	binding.Charset = preparedNumericTextBindingCharset
+	binding.Size = preparedNumericProtocolExact
+	binding.Width, binding.Scale = 65, 30
+	return binding
 }
 
 func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.Type {
@@ -782,6 +794,13 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	case integral <= 35:
 		binding.Size = preparedNumericTextPrefix
 		binding.Width, binding.Scale = 65, 30
+	case full && scale > 0 && integral > 35 && width <= 76:
+		// Preserve the actual domain once a complete payload crosses the ordinary
+		// 35-integral-digit envelope and carries meaningful fractional digits.
+		// Inflating 36+9 to DECIMAL(76,9) would falsely overflow when a peer adds
+		// one scale digit, even though DECIMAL(46,10) represents both values.
+		binding.Size = preparedNumericExact
+		binding.Width, binding.Scale = max(width, 1), scale
 	case integral <= 67 && scale <= 9:
 		binding.Size = preparedNumericWide
 		binding.Width, binding.Scale = 76, 9
@@ -1127,19 +1146,11 @@ func (state *preparedExecuteParamState) bindingTypesFor(dependencies []bool, cou
 	if state == nil || state.params == nil {
 		return nil
 	}
-	bindingTypes := preparedParamBindingTypes(state.params, state.paramKinds, dependencies, count)
-	for i := 0; i < count && i*2+1 < len(state.paramTypes); i++ {
-		if bindingTypes == nil || i >= len(state.paramKinds) ||
-			state.paramKinds[i] != vector.PrepareParamInteger {
-			continue
-		}
-		if state.paramTypes[i*2+1]&0x80 != 0 {
-			bindingTypes[i] = types.T_uint64.ToType()
-		} else {
-			bindingTypes[i] = types.T_int64.ToType()
-		}
-	}
-	return bindingTypes
+	// Signedness remains part of the binary parameter payload and execution
+	// metadata. It must not replace the prepared protocol category used by the
+	// DECIMAL common-type resolver, where signed/unsigned integer parameters
+	// share MySQL's stable DECIMAL(65,30) result domain.
+	return preparedParamBindingTypes(state.params, state.paramKinds, dependencies, count)
 }
 
 func (state *preparedExecuteParamState) apply(proc *process.Process) {

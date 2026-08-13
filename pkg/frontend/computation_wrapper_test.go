@@ -334,10 +334,10 @@ func TestPreparedParamBindingType(t *testing.T) {
 		{name: "native float small", kind: vector.PrepareParamFloat, value: []byte("1e-40"), want: types.T_float64},
 		{name: "numeric text", value: []byte("1.234567"), want: types.T_text},
 		{name: "numeric text range", value: []byte("1e1000"), want: types.T_text},
-		{name: "integer", kind: vector.PrepareParamInteger, value: []byte("42"), want: types.T_uint64},
-		{name: "signed integer", kind: vector.PrepareParamInteger, value: []byte("-42"), want: types.T_int64},
+		{name: "integer", kind: vector.PrepareParamInteger, value: []byte("42"), want: types.T_text},
+		{name: "signed integer", kind: vector.PrepareParamInteger, value: []byte("-42"), want: types.T_text},
 		{name: "decimal", kind: vector.PrepareParamDecimal, value: []byte("1.2"), want: types.T_text},
-		{name: "boolean", kind: vector.PrepareParamBoolean, value: []byte("1"), want: types.T_bool},
+		{name: "boolean", kind: vector.PrepareParamBoolean, value: []byte("1"), want: types.T_text},
 		{name: "time value", value: []byte("2026-08-10 12:34:56"), want: types.T_text},
 		{name: "ordinary string", value: []byte("matrixone"), want: types.T_text},
 		{name: "nan string", value: []byte("NaN"), want: types.T_text},
@@ -349,6 +349,16 @@ func TestPreparedParamBindingType(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, preparedParamBindingType(test.kind, test.value).Oid)
 		})
+	}
+	for _, kind := range []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamBoolean,
+	} {
+		binding := preparedParamBindingType(kind, []byte("1"))
+		require.Equal(t, preparedNumericTextBindingCharset, binding.Charset)
+		require.Equal(t, preparedNumericProtocolExact, binding.Size)
+		require.Equal(t, int32(65), binding.Width)
+		require.Equal(t, int32(30), binding.Scale)
 	}
 }
 
@@ -438,13 +448,14 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		wantScale int32
 	}{
 		{name: "ordinary", width: 13, scale: 2, full: true, wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
-		{name: "wide 67 plus 9", width: 76, scale: 9, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
+		{name: "wide 67 plus 9", width: 76, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 76, wantScale: 9},
 		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericPrefixMax, wantWidth: 74, wantScale: 9},
 		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericTextFloat},
 		{name: "36 integral plus 10 scale", width: 46, scale: 10, full: true, wantMode: preparedNumericExact, wantWidth: 46, wantScale: 10},
+		{name: "36 integral plus 9 scale", width: 45, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 45, wantScale: 9},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1493,6 +1504,49 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	require.Len(t, columns, 1)
 	require.Equal(t, int32(types.T_float64), columns[0].Typ.Id)
 	require.Equal(t, []bool{true}, prepareStmt.paramBindingDependencies)
+}
+
+func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+
+	for _, tc := range []struct {
+		name      string
+		mysqlType defines.MysqlType
+		value     string
+	}{
+		{name: "signed", mysqlType: defines.MYSQL_TYPE_LONGLONG, value: "-42"},
+		{name: "unsigned", mysqlType: defines.MYSQL_TYPE_LONGLONG, value: "18446744073709551615"},
+		{name: "boolean", mysqlType: defines.MYSQL_TYPE_TINY, value: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 200,
+				"select coalesce(?, cast(2 as decimal(10,2)))")
+			defer prepareStmt.Close()
+			serviceRuntime := moruntime.ServiceRuntime(cw.proc.GetService())
+			oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			defer func() {
+				if hadVersion {
+					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+				} else {
+					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				}
+			}()
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0}
+
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+			require.Equal(t, int32(65), columns[0].Typ.Width)
+			require.Equal(t, int32(30), columns[0].Typ.Scale)
+		})
+	}
 }
 
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {

@@ -115,15 +115,32 @@ EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 1.0E100  ¦  1.0E100  ¦  2.0
 SET @p='1e-40';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
-➤ COALESCE(?, d)[3,65,30]  ¦  GREATEST(?, d)[3,65,30]  ¦  LEAST(?, d)[3,65,30]  𝄀
+➤ COALESCE(?, common_peers.d)[3,65,30]  ¦  GREATEST(?, common_peers.d)[3,65,30]  ¦  LEAST(?, common_peers.d)[3,65,30]  𝄀
 0E-30  ¦  2.000000000000000000000000000000  ¦  0E-30
 PREPARE p_exact_dynamic_domain FROM
-  'SELECT COALESCE(?,CAST(2.0000000000 AS DECIMAL(46,10))),GREATEST(?,CAST(2.0000000000 AS DECIMAL(46,10))),LEAST(?,CAST(2.0000000000 AS DECIMAL(46,10)))';
+'SELECT COALESCE(?,CAST(2.0000000000 AS DECIMAL(46,10))),GREATEST(?,CAST(2.0000000000 AS DECIMAL(46,10))),LEAST(?,CAST(2.0000000000 AS DECIMAL(46,10)))';
 SET @p='999999999999999999999999999999999999.1234567890';
 EXECUTE p_exact_dynamic_domain USING @p,@p,@p;
 ➤ COALESCE(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  ¦  GREATEST(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  ¦  LEAST(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  𝄀
 999999999999999999999999999999999999.1234567890  ¦  999999999999999999999999999999999999.1234567890  ¦  2.0000000000
 DEALLOCATE PREPARE p_exact_dynamic_domain;
+SET @p=42;
+PREPARE p_integer_decimal_domain FROM
+'SELECT COALESCE(?,CAST(2 AS DECIMAL(10,2)))';
+EXECUTE p_integer_decimal_domain USING @p;
+➤ COALESCE(?, cast(2 as decimal(10, 2)))[3,65,30]  𝄀
+42.000000000000000000000000000000
+DEALLOCATE PREPARE p_integer_decimal_domain;
+PREPARE p_integer_decimal_ctas FROM
+'CREATE TABLE integer_decimal_ctas AS SELECT COALESCE(?,CAST(2 AS DECIMAL(10,2))) AS v';
+EXECUTE p_integer_decimal_ctas USING @p;
+DEALLOCATE PREPARE p_integer_decimal_ctas;
+SHOW CREATE TABLE integer_decimal_ctas;
+➤ Table[12,15,0]  ¦  Create Table[12,51,0]  𝄀
+integer_decimal_ctas  ¦  CREATE TABLE `integer_decimal_ctas` (
+  `v` decimal(65,30) NOT NULL
+)
+DROP TABLE integer_decimal_ctas;
 SET @p='1e100tail';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 ➤ COALESCE(?, common_peers.d)[3,74,9]  ¦  GREATEST(?, common_peers.d)[3,74,9]  ¦  LEAST(?, common_peers.d)[3,74,9]  𝄀

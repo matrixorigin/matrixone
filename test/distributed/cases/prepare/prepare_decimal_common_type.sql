@@ -93,6 +93,21 @@ PREPARE p_exact_dynamic_domain FROM
 SET @p='999999999999999999999999999999999999.1234567890';
 EXECUTE p_exact_dynamic_domain USING @p,@p,@p;
 DEALLOCATE PREPARE p_exact_dynamic_domain;
+
+-- Integer-valued SQL PREPARE parameters use MySQL's stable DECIMAL result
+-- domain, including when CREATE TABLE AS SELECT persists that metadata.
+SET @p=42;
+PREPARE p_integer_decimal_domain FROM
+  'SELECT COALESCE(?,CAST(2 AS DECIMAL(10,2)))';
+EXECUTE p_integer_decimal_domain USING @p;
+DEALLOCATE PREPARE p_integer_decimal_domain;
+PREPARE p_integer_decimal_ctas FROM
+  'CREATE TABLE integer_decimal_ctas AS SELECT COALESCE(?,CAST(2 AS DECIMAL(10,2))) AS v';
+EXECUTE p_integer_decimal_ctas USING @p;
+DEALLOCATE PREPARE p_integer_decimal_ctas;
+SHOW CREATE TABLE integer_decimal_ctas;
+DROP TABLE integer_decimal_ctas;
+
 SET @p='1e100tail';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 DEALLOCATE PREPARE p_mysql_numeric_conversion;

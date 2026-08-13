@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"testing"
 
@@ -391,6 +392,7 @@ func TestRuntimePreparedNumericExactRetainsDecimal256Domain(t *testing.T) {
 		{marker: "mo_runtime_numeric:8:46:10", oid: types.T_decimal256, width: 46, scale: 10},
 		{marker: "mo_runtime_numeric:7:76:9", oid: types.T_float64},
 		{marker: "mo_runtime_numeric:5:0:0", oid: types.T_text},
+		{marker: "mo_runtime_numeric:9:65:30", oid: types.T_decimal256, width: 65, scale: 30},
 	}
 	for _, test := range tests {
 		expr := &Expr{Typ: planpb.Type{Enumvalues: test.marker}}
@@ -417,6 +419,72 @@ func TestRuntimePreparedNumericCommonTypeOverflowUsesApproximateNumericDomain(t 
 	require.Len(t, resolutionTypes, 2)
 	require.Equal(t, types.T_float64, resolutionTypes[0].Oid)
 	require.Equal(t, types.T_float64, resolutionTypes[1].Oid)
+}
+
+func TestRuntimePreparedNumericOverflowMaterializesFloatCast(t *testing.T) {
+	paramType := types.T_text.ToType()
+	param := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text), Enumvalues: "mo_runtime_numeric:8:76:9"},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	peerType := types.New(types.T_decimal256, 46, 10)
+	args := []*Expr{param, {Typ: MakePlan2Type(&peerType)}}
+	argsType := []types.Type{paramType, peerType}
+	resolutionTypes := []types.Type{types.T_float64.ToType(), types.T_float64.ToType()}
+
+	require.NoError(t, normalizeDecimalParamCommonTypeCastSources(
+		context.Background(), args, argsType, resolutionTypes, types.T_float64.ToType(),
+	))
+	require.Equal(t, types.T_float64, types.T(args[0].Typ.Id))
+	require.Equal(t, types.T_float64, argsType[0].Oid)
+	require.NotNil(t, args[0].GetF())
+	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
+	require.Equal(t, "mo_runtime_numeric:8:76:9", args[0].GetF().GetArgs()[0].Typ.Enumvalues)
+	require.Equal(t, types.T_float64, types.T(args[1].Typ.Id))
+	require.Equal(t, types.T_float64, argsType[1].Oid)
+	require.NotNil(t, args[1].GetF())
+	require.Equal(t, "cast", args[1].GetF().GetFunc().GetObjName())
+}
+
+func TestRuntimePreparedNumericOverflowBindsEveryOperandAsFloat(t *testing.T) {
+	param := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text), Enumvalues: "mo_runtime_numeric:4:76:9"},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	peerType := types.New(types.T_decimal256, 46, 10)
+	peer := &Expr{
+		Typ:  MakePlan2Type(&peerType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}},
+	}
+
+	bound, err := BindFuncExprImplByPlanExpr(
+		context.Background(), "least", []*Expr{param, peer},
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.T_float64, types.T(bound.Typ.Id))
+	require.Len(t, bound.GetF().GetArgs(), 2)
+	for _, arg := range bound.GetF().GetArgs() {
+		require.Equal(t, types.T_float64, types.T(arg.Typ.Id))
+		require.NotNil(t, arg.GetF())
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+	}
+}
+
+func TestPreparedIntegerAndBoolUseStableDecimalCommonDomain(t *testing.T) {
+	peerType := types.New(types.T_decimal64, 10, 2)
+	for _, param := range []*Expr{
+		makePlan2Int64ConstExprWithType(-42),
+		makePlan2Uint64ConstExprWithType(math.MaxUint64),
+		makePlan2BoolConstExprWithType(true),
+	} {
+		param.ExactDecimalParam = true
+		peer := &Expr{Typ: MakePlan2Type(&peerType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), "coalesce", []*Expr{param, peer})
+		require.NoError(t, err)
+		require.Equal(t, types.T_decimal256, types.T(bound.Typ.Id))
+		require.Equal(t, int32(65), bound.Typ.Width)
+		require.Equal(t, int32(30), bound.Typ.Scale)
+	}
 }
 
 func TestPreparedNumericCommonTypeResolutionGuards(t *testing.T) {

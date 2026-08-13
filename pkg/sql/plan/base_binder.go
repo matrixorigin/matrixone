@@ -5537,6 +5537,11 @@ func decimalParamCommonTypeResolutionTypes(
 	resolutionTypes := append([]types.Type(nil), argsType...)
 	for i, typ := range argsType {
 		switch {
+		case args[i].ExactDecimalParam && (typ.Oid.IsInteger() || typ.Oid == types.T_bool):
+			// A materialized binary-protocol integer/BOOL keeps its source marker.
+			// MySQL contributes prepared values from these protocol categories to a
+			// DECIMAL peer through the stable DECIMAL(65,30) result domain.
+			resolutionTypes[i] = types.New(types.T_decimal256, 65, 30)
 		case isUnresolvedPreparedNumericParam(args[i], typ):
 			if runtimeType, _, found := runtimePreparedNumericType(args[i]); found {
 				resolutionTypes[i] = runtimeType
@@ -5641,6 +5646,25 @@ func normalizeDecimalParamCommonTypeCastSources(
 		return nil
 	}
 	for i := range args {
+		if args[i].ExactDecimalParam && resolutionTypes[i].Oid.IsDecimal() &&
+			!argsType[i].Eq(resolutionTypes[i]) {
+			if argsType[i].Oid == types.T_bool {
+				bridgeType := types.T_uint8.ToType()
+				bridge, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&bridgeType))
+				if err != nil {
+					return err
+				}
+				args[i] = bridge
+			}
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&resolutionTypes[i]))
+			if err != nil {
+				return err
+			}
+			castExpr.ExactDecimalParam = true
+			args[i] = castExpr
+			argsType[i] = resolutionTypes[i]
+			continue
+		}
 		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
 			// Mark only this internal cast for MySQL numeric-prefix conversion.
 			// Charset is otherwise unused for numeric types and does not require a
@@ -5653,6 +5677,20 @@ func normalizeDecimalParamCommonTypeCastSources(
 			}
 			args[i] = castExpr
 			argsType[i] = returnType
+			continue
+		}
+		if resolutionTypes[i].Oid == types.T_float64 && argsType[i].Oid != types.T_float64 {
+			// When the combined DECIMAL domains exceed Decimal256, resolution falls
+			// back to FLOAT64. Materialize that decision on every operand. Once the
+			// overload sees only FLOAT64 resolution inputs it legitimately returns no
+			// implicit cast list; leaving either the ParamRef or its DECIMAL peer
+			// uncast would make the fixed-width executor read a different vector ABI.
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&resolutionTypes[i]))
+			if err != nil {
+				return err
+			}
+			args[i] = castExpr
+			argsType[i] = resolutionTypes[i]
 			continue
 		}
 		needsBridge := false
