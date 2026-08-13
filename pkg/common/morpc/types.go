@@ -177,7 +177,9 @@ type RPCServer interface {
 	// a separate goroutine is assigned to handle the Read, and the Read-to message is handed over
 	// to the Handler for processing.
 	Start() error
-	// Close close the rpc server
+	// Close closes the rpc server and waits for all admitted request handlers
+	// to return. Close must not be called synchronously from a request handler,
+	// because a handler cannot wait for its own completion.
 	Close() error
 	// RegisterRequestHandler register the request handler. The request handler is processed in the
 	// read goroutine of the current client connection. Sequence is the sequence of message received

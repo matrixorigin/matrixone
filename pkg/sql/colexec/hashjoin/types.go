@@ -51,6 +51,7 @@ const (
 )
 
 const hashJoinAllocationSiteMatchedRows mpool.AllocationSite = 80
+const hashJoinAllocationSiteAsofIndex mpool.AllocationSite = 106
 
 const (
 	hashJoinAllocationSiteResultData mpool.AllocationSite = iota + 102
@@ -96,6 +97,7 @@ type container struct {
 	buildHasNullKey        bool
 	asofCompare            compare.Compare
 	asofIndexes            map[uint64][]int32
+	asofIndexValues        [][]int32
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -262,6 +264,7 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	ctr.cleanAsofIndexes(proc)
 	hashmap.IteratorClearOwner(ctr.itr)
 	ctr.itr = nil
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
@@ -285,7 +288,6 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
 	ctr.asofCompare = nil
-	ctr.asofIndexes = nil
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
@@ -299,11 +301,22 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	ctr.cleanAsofIndexes(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+}
+
+func (ctr *container) cleanAsofIndexes(proc *process.Process) {
+	if proc != nil {
+		for _, values := range ctr.asofIndexValues {
+			mpool.FreeSlice(proc.Mp(), values)
+		}
+	}
+	ctr.asofIndexes = nil
+	ctr.asofIndexValues = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

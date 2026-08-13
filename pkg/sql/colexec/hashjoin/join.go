@@ -17,6 +17,7 @@ package hashjoin
 import (
 	"bytes"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -443,7 +444,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
-	ctr.asofIndexes = nil
+	ctr.cleanAsofIndexes(proc)
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
@@ -505,7 +506,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 					if res == spillutil.BucketReady {
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
-						ctr.asofIndexes = nil
+						ctr.cleanAsofIndexes(proc)
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
@@ -875,7 +876,14 @@ func (ctr *container) findAsofPredecessor(
 	}
 	ordered, ok := ctr.asofIndexes[groupKey]
 	if !ok {
-		ordered = append([]int32(nil), candidates...)
+		ordered, err = mpool.MakeSliceAccounted[int32](
+			len(candidates), proc.Mp(), hashJoin.allocationAccount,
+			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
+		)
+		if err != nil {
+			return -1, false, err
+		}
+		copy(ordered, candidates)
 		// Equal timestamps are arbitrary by the ASOF contract; choosing the
 		// lowest materialized row ordinal makes the result repeatable for one
 		// materialized build map without promising producer-arrival ordering.
@@ -895,15 +903,15 @@ func (ctr *container) findAsofPredecessor(
 			return left > right
 		})
 		ctr.asofIndexes[groupKey] = ordered
+		ctr.asofIndexValues = append(ctr.asofIndexValues, ordered)
 	}
 
-	leftCol := asofLeftTimeCol(hashJoin.NonEqCond)
+	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
 	if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
 		return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
 	}
 	leftVec := ctr.leftBat.Vecs[leftCol]
 	ctr.asofCompare.Set(1, leftVec)
-	strict := asofTemporalIsStrict(hashJoin.NonEqCond)
 	pos := sort.Search(len(ordered), func(i int) bool {
 		candidate := ordered[i]
 		batchIdx := int64(candidate / colexec.DefaultBatchSize)
@@ -928,27 +936,38 @@ func (ctr *container) findAsofPredecessor(
 	return candidate, qualified, nil
 }
 
-func asofTemporalIsStrict(expr *plan.Expr) bool {
-	if expr != nil {
-		if fn := expr.GetF(); fn != nil {
-			return fn.Func.ObjName == ">"
+func asofTemporalMetadata(expr *plan.Expr) (leftCol int, strict bool) {
+	leftCol = -1
+	if expr == nil {
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		if strings.EqualFold(fn.Func.ObjName, "and") {
+			for _, arg := range fn.Args {
+				if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+					return col, isStrict
+				}
+			}
+			return
+		}
+		if len(fn.Args) == 2 {
+			left, right := fn.Args[0].GetCol(), fn.Args[1].GetCol()
+			if left != nil && right != nil {
+				if left.RelPos == 0 && right.RelPos == 1 && (fn.Func.ObjName == ">" || fn.Func.ObjName == ">=") {
+					return int(left.ColPos), fn.Func.ObjName == ">"
+				}
+				if left.RelPos == 1 && right.RelPos == 0 && (fn.Func.ObjName == "<" || fn.Func.ObjName == "<=") {
+					return int(right.ColPos), fn.Func.ObjName == "<"
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if col, isStrict := asofTemporalMetadata(arg); col >= 0 {
+				return col, isStrict
+			}
 		}
 	}
-	return false
-}
-
-func asofLeftTimeCol(expr *plan.Expr) int {
-	if expr != nil {
-		if fn := expr.GetF(); fn != nil && len(fn.Args) == 2 {
-			if col := fn.Args[0].GetCol(); col != nil && col.RelPos == 0 {
-				return int(col.ColPos)
-			}
-			if col := fn.Args[1].GetCol(); col != nil && col.RelPos == 0 {
-				return int(col.ColPos)
-			}
-		}
-	}
-	return -1
+	return
 }
 
 func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {

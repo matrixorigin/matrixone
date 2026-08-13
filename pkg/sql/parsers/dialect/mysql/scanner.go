@@ -852,7 +852,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			return ID, keywordName
 		}
 		if lower == "asof" {
-			if s.asofJoinPhraseAhead(s.Pos) {
+			if s.asofJoinPhraseAhead(start, s.Pos) {
 				return keywordID, keywordName
 			}
 			return ID, keywordName
@@ -896,7 +896,25 @@ func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
 // asofJoinPhraseAhead keeps ASOF contextual: it is a keyword only when the
 // following tokens begin one of the supported ASOF JOIN forms. In every other
 // position ASOF remains an ordinary identifier for compatibility.
-func (s *Scanner) asofJoinPhraseAhead(pos int) bool {
+func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
+	// ASOF following FROM/AS/INTO/etc. is an existing table or alias name.
+	// Only allow the contextual join modifier after an already parsed table
+	// factor. This preserves `FROM asof JOIN ...` and `t AS asof JOIN ...`.
+	prev := start - 1
+	for prev >= 0 && (s.buf[prev] == ' ' || s.buf[prev] == '\n' || s.buf[prev] == '\r' || s.buf[prev] == '\t') {
+		prev--
+	}
+	end := prev + 1
+	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
+		prev--
+	}
+	if end > prev+1 {
+		previous := strings.ToLower(s.buf[prev+1 : end])
+		switch previous {
+		case "from", "as", "into", "join", "update", "table":
+			return false
+		}
+	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
 		return true

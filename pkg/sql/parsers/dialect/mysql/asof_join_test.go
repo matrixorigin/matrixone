@@ -51,6 +51,8 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 		"select * from asof",
 		"select * from t as asof",
 		"create table asof (asof int)",
+		"select * from asof join u on asof.k = u.k",
+		"select * from t as asof join u on asof.k = u.k",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

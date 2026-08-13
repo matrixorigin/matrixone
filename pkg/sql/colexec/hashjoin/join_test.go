@@ -1268,6 +1268,26 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
+	timeType := types.T_timestamp.ToType()
+	left := newExpr(1, timeType)
+	left.GetCol().RelPos = 0
+	right := newExpr(1, timeType)
+	right.GetCol().RelPos = 1
+	commuted := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "<"}, Args: []*plan.Expr{right, left},
+	}}}
+	tolerance := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: ">="}, Args: []*plan.Expr{right, left},
+	}}}
+	nested := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "and"}, Args: []*plan.Expr{commuted, tolerance},
+	}}}
+	col, strict := asofTemporalMetadata(nested)
+	require.Equal(t, 1, col)
+	require.True(t, strict)
+}
+
 /*
 	func BenchmarkJoin(b *testing.B) {
 		for i := 0; i < b.N; i++ {
