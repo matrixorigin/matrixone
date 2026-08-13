@@ -1617,15 +1617,12 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
-	isTimestampWindow := types.T(node.Timestamp.Typ.Id) == types.T_timestamp
 	// A tumbling window normally uses the interval fast path (EndExpr != nil),
 	// which forwards only groups already produced by the child aggregate. That
 	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
 	// sliding-window state machine with a slide equal to the interval; its
 	// explicit left/right bounds still produce the same tumbling windows.
-	// TIMESTAMP windows also use the general path so their end boundaries advance
-	// by fixed instant duration instead of DATE_ADD's session-wall-clock rules.
-	if (arg.GapFill || isTimestampWindow) && node.Sliding == nil {
+	if arg.GapFill && node.Sliding == nil {
 		arg.Sliding = arg.Interval
 	}
 	arg.WStart = wStart
@@ -1635,7 +1632,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	// planner leaves it pointing at the timestamp's GROUP BY position, which is
 	// 0 only while the window key is the sole grouping key. Copy before
 	// rewriting: the plan may be reused.
-	if node.WEnd != nil && !arg.GapFill && !isTimestampWindow {
+	if node.WEnd != nil && !arg.GapFill {
 		endExpr := plan2.DeepCopyExpr(node.WEnd)
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr

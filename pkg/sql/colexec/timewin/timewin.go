@@ -717,6 +717,33 @@ func appendTimestampBoundaryVector(
 	return vec, nil
 }
 
+func appendTimestampIntervalBoundaryVector(
+	starts *vector.Vector,
+	interval types.Datetime,
+	end bool,
+	typ plan.Type,
+	proc *process.Process,
+) (*vector.Vector, error) {
+	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
+	vec := vector.NewVec(tsType)
+	values := vector.MustFixedColWithTypeCheck[types.Timestamp](starts)
+	for i, value := range values {
+		if starts.IsNull(uint64(i)) {
+			if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if end {
+			value = types.Timestamp(int64(value) + int64(interval))
+		}
+		if err := vector.AppendFixed(vec, value, false, proc.Mp()); err != nil {
+			return nil, err
+		}
+	}
+	return vec, nil
+}
+
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
@@ -838,6 +865,33 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		// after the (absent) boundaries.
 		ctr.setPartVecsForInterval(i)
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+		return nil
+	}
+	if ap.timestampWindow() {
+		if ap.WStart {
+			ctr.startVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], 0, false, ap.TsType, proc)
+			if err != nil {
+				return err
+			}
+			ctr.startVecInBatch = true
+			ctr.bat.SetVector(int32(i), ctr.startVec)
+			i++
+		}
+
+		if ap.WEnd {
+			ctr.endVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], ap.Interval, true, ap.TsType, proc)
+			if err != nil {
+				return err
+			}
+			ctr.endVecInBatch = true
+			ctr.bat.SetVector(int32(i), ctr.endVec)
+			i++
+		}
+
+		ctr.setPartVecsForInterval(i)
+		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
+		ctr.wStart = nil
+		ctr.wEnd = nil
 		return nil
 	}
 	bat := batch.NewWithSize(1)
