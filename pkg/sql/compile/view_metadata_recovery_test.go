@@ -744,6 +744,22 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		require.Contains(t, exec.sqls[2], "set target_generation=target_generation+1,status='PENDING'")
 		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_SCAN'")
 	})
+
+	t.Run("empty revalidation page releases tenant markers after cursor CAS", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+			makeCursor(t, proc, catalog.ViewRefreshStatusRevalidateScan),
+			{}, {AffectedRows: 1}, {},
+		}}
+		count, err := discoverLegacyViewPage(proc, exec, executor.Options{})
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+		require.Len(t, exec.sqls, 4)
+		require.Contains(t, exec.sqls[2], "account_id=0")
+		require.Contains(t, exec.sqls[2], "source_relation_kind='LEGACY_SCAN'")
+		require.Contains(t, exec.sqls[3], "account_id<>0")
+		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_SCAN'")
+	})
 }
 
 func TestBeginViewMetadataRevalidationResetsDurableCursor(t *testing.T) {

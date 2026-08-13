@@ -541,11 +541,23 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
+	var sub *SubscriptionMeta
+	if obj.PubInfo != nil {
+		dbName = obj.SchemaName
+		accountId = uint32(obj.PubInfo.GetTenantId())
+		sub = &SubscriptionMeta{
+			AccountId: obj.PubInfo.GetTenantId(),
+		}
+		ctx.SetQueryingSubscription(sub)
+		defer func() {
+			ctx.SetQueryingSubscription(nil)
+		}()
+	}
 	if tableDef.ViewSql != nil {
 		if checker, ok := ctx.(interface {
-			EnsureViewMetadataCurrent(string, string, uint64) error
+			EnsureViewMetadataCurrent(string, string, uint32, uint64) error
 		}); ok {
-			if err = checker.EnsureViewMetadataCurrent(dbName, tblName, tableDef.TblId); err != nil {
+			if err = checker.EnsureViewMetadataCurrent(dbName, tblName, accountId, tableDef.TblId); err != nil {
 				return nil, err
 			}
 		}
@@ -560,19 +572,6 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		colNameOrigin := col.GetOriginCaseName()
 		colIdToOriginName[col.ColId] = colNameOrigin
 		colNameToOriginName[col.Name] = colNameOrigin
-	}
-
-	var sub *SubscriptionMeta
-	if obj.PubInfo != nil {
-		dbName = obj.SchemaName
-		accountId = uint32(obj.PubInfo.GetTenantId())
-		sub = &SubscriptionMeta{
-			AccountId: obj.PubInfo.GetTenantId(),
-		}
-		ctx.SetQueryingSubscription(sub)
-		defer func() {
-			ctx.SetQueryingSubscription(nil)
-		}()
 	}
 
 	var keyStr string

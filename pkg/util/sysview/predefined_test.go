@@ -111,6 +111,10 @@ func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 
 	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
 	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vd.source_relation_kind='REVALIDATE_SCAN'")
+	assert.Contains(t, InformationSchemaColumnsDDL,
+		"vr.status='CURRENT') and not exists")
+	assert.Contains(t, InformationSchemaColumnsDDL,
 		"(not exists (select 1 from mo_catalog.mo_view_refresh vr")
 	assert.Contains(t, InformationSchemaColumnsDDL,
 		"not exists (select 1 from mo_catalog.mo_view_dependencies vd")

@@ -23,22 +23,27 @@ import (
 )
 
 func TestViewMetadataStatusRequiresPersistedCurrentRow(t *testing.T) {
-	require.False(t, viewMetadataStatusIsCurrent(false, ""))
+	require.False(t, viewMetadataStatusIsCurrent(false, "", ""))
 	for _, status := range []string{
 		catalog.ViewRefreshStatusPending,
 		catalog.ViewRefreshStatusDiscovering,
 		catalog.ViewRefreshStatusRunning,
 		catalog.ViewRefreshStatusInvalid,
 	} {
-		require.False(t, viewMetadataStatusIsCurrent(true, status), status)
+		require.False(t, viewMetadataStatusIsCurrent(true, status, ""), status)
 	}
-	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent))
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusRevalidateRequired))
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusRevalidateScan))
+	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusLegacyScan))
 }
 
 func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {
 	tcc := &TxnCompilerContext{}
 	for _, databaseName := range catalog.SystemDatabases {
-		require.NoError(t, tcc.EnsureViewMetadataCurrent(databaseName, "system view", 1))
+		require.NoError(t, tcc.EnsureViewMetadataCurrent(databaseName, "system view", 0, 1))
 	}
 }
 

@@ -143,6 +143,71 @@ func TestAccountPITRInvalidatesSubscriberViewMetadata(t *testing.T) {
 	})
 }
 
+func TestSubscriberCanDescribePublishedView(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer sysDB.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		const (
+			account     = "view_metadata_desc_subscriber"
+			database    = "view_metadata_desc_source"
+			subDatabase = "view_metadata_desc_subscription"
+			publication = "view_metadata_desc_publication"
+		)
+		cleanup := func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop publication if exists `"+publication+"`")
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop database if exists `"+database+"`")
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists `"+account+"`")
+		}
+		cleanup()
+		defer cleanup()
+
+		execSQLRequire(t, ctx, sysDB,
+			"create account `"+account+"` admin_name 'admin' identified by '111'")
+		execSQLRequire(t, ctx, sysDB, "create database `"+database+"`")
+		execSQLRequire(t, ctx, sysDB, "create table `"+database+"`.source_table (value bigint)")
+		execSQLRequire(t, ctx, sysDB,
+			"create view `"+database+"`.published_view as select value from `"+database+"`.source_table")
+		execSQLRequire(t, ctx, sysDB,
+			"create publication `"+publication+"` database `"+database+"` account `"+account+"`")
+
+		subscriberDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", account, port))
+		require.NoError(t, err)
+		defer subscriberDB.Close()
+		execSQLRequire(t, ctx, subscriberDB,
+			"create database `"+subDatabase+"` from sys publication `"+publication+"`")
+
+		for _, statement := range []string{
+			"desc `" + subDatabase + "`.published_view",
+			"show columns from `" + subDatabase + "`.published_view",
+		} {
+			rows, queryErr := subscriberDB.QueryContext(ctx, statement)
+			require.NoError(t, queryErr, statement)
+			require.True(t, rows.Next(), statement)
+			columns, columnsErr := rows.Columns()
+			require.NoError(t, columnsErr)
+			values := make([]sql.RawBytes, len(columns))
+			dest := make([]any, len(columns))
+			for index := range values {
+				dest[index] = &values[index]
+			}
+			require.NoError(t, rows.Scan(dest...))
+			require.NoError(t, rows.Close())
+			require.Equal(t, "value", string(values[0]))
+			require.True(t, strings.Contains(strings.ToLower(string(values[1])), "bigint"), string(values[1]))
+		}
+	})
+}
+
 func viewRefreshStatus(t *testing.T, ctx context.Context, db *sql.DB, database, view string) string {
 	t.Helper()
 	var status string

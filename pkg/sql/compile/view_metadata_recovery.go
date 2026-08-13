@@ -875,6 +875,18 @@ func discoverLegacyViewPage(
 	if advanced.AffectedRows != 1 {
 		return 0, moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
 	}
+	if cursor.status == catalog.ViewRefreshStatusRevalidateScan && len(candidates) == 0 {
+		completed, completeErr := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
+			"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
+				"where account_id<>0 and target_relation_id=0 and dependency_ordinal=0 "+
+				"and source_relation_kind='%s'",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan), opts)
+		if completeErr != nil {
+			return 0, completeErr
+		}
+		completed.Close()
+	}
 	return 1, nil
 }
 

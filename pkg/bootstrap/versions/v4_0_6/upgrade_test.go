@@ -38,15 +38,19 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 11)
-	require.Len(t, clusterUpgEntries, 3)
+	require.Len(t, clusterUpgEntries, 4)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
 	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
-	for _, entry := range clusterUpgEntries[1:] {
+	for _, entry := range clusterUpgEntries[1:3] {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
 		require.NotContains(t, strings.ToLower(entry.UpgSql), "\n\t\taccount_id int")
 	}
+	require.Equal(t, versions.MODIFY_METADATA, clusterUpgEntries[3].UpgType)
+	require.Contains(t, strings.ToLower(clusterUpgEntries[3].UpgSql), "replace into")
+	require.Contains(t, clusterUpgEntries[3].UpgSql, catalog.ViewRefreshStatusRevalidateScan)
+	require.Contains(t, clusterUpgEntries[3].UpgSql, catalog.MoViewDependenciesColumns)
 	require.Contains(t, catalog.MoViewDependenciesDDL,
 		"primary key(account_id, target_relation_id, dependency_ordinal)")
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)

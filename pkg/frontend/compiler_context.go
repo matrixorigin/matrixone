@@ -650,6 +650,7 @@ func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
 func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	databaseName string,
 	relationName string,
+	ownerAccountID uint32,
 	relationID uint64,
 ) error {
 	if slices.Contains(catalog.SystemDatabases, strings.ToLower(databaseName)) {
@@ -658,7 +659,7 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
 		return nil
 	}
-	stale, err := tcc.hasNonCurrentViewMetadata(relationID)
+	stale, err := tcc.hasNonCurrentViewMetadata(ownerAccountID, relationID)
 	if err != nil {
 		return err
 	}
@@ -668,15 +669,18 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	return nil
 }
 
-func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(relationID uint64) (bool, error) {
+func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(ownerAccountID uint32, relationID uint64) (bool, error) {
 	v, ok := moruntime.ServiceRuntime(tcc.GetSession().GetService()).
 		GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
 	}
 	result, err := v.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
-		"select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d limit 1",
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, tcc.GetSession().GetAccountId(), relationID,
+		"select r.status,(select d.source_relation_kind from %s.%s d where d.account_id=%d "+
+			"and d.target_relation_id=0 and d.dependency_ordinal=0 limit 1) from %s.%s r "+
+			"where r.account_id=%d and r.target_relation_id=%d limit 1",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, ownerAccountID,
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, ownerAccountID, relationID,
 	),
 		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
 			WithAccountID(catalog.System_Account))
@@ -684,19 +688,24 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(relationID uint64) (boo
 		return false, err
 	}
 	defer result.Close()
-	found, status := false, ""
+	found, status, markerStatus := false, "", ""
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if rows > 0 {
 			found = true
 			status = columns[0].GetStringAt(0)
+			if !columns[1].IsNull(0) {
+				markerStatus = columns[1].GetStringAt(0)
+			}
 		}
 		return false
 	})
-	return !viewMetadataStatusIsCurrent(found, status), nil
+	return !viewMetadataStatusIsCurrent(found, status, markerStatus), nil
 }
 
-func viewMetadataStatusIsCurrent(found bool, status string) bool {
-	return found && status == catalog.ViewRefreshStatusCurrent
+func viewMetadataStatusIsCurrent(found bool, status, markerStatus string) bool {
+	return found && status == catalog.ViewRefreshStatusCurrent &&
+		markerStatus != catalog.ViewRefreshStatusRevalidateScan &&
+		markerStatus != catalog.ViewRefreshStatusRevalidateRequired
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(

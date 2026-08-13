@@ -31,6 +31,7 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	retireKafkaSinkDaemonTasks,
 	createMoViewDependencies,
 	createMoViewRefresh,
+	seedViewMetadataRevalidation,
 }
 
 var createMoViewDependencies = newViewMetadataCatalogTable(
@@ -38,6 +39,26 @@ var createMoViewDependencies = newViewMetadataCatalogTable(
 
 var createMoViewRefresh = newViewMetadataCatalogTable(
 	catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshDDL)
+
+var seedViewMetadataRevalidation = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_view_metadata_revalidation",
+	UpgType:   versions.MODIFY_METADATA,
+	UpgSql: fmt.Sprintf(
+		"replace into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
+			"'','','','','%s','',0,null,0,1 from %s.%s a",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.ViewRefreshStatusRevalidateScan,
+		catalog.MO_CATALOG, catalog.MOAccountTable),
+	CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+		return versions.CheckTableDataExist(txn, accountID, fmt.Sprintf(
+			"select 1 from %s.%s where account_id=0 and target_relation_id=0 "+
+				"and dependency_ordinal=0 and source_relation_kind='%s' limit 1",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+			catalog.ViewRefreshStatusRevalidateScan))
+	},
+}
 
 func newViewMetadataCatalogTable(name, ddl string) versions.UpgradeEntry {
 	return versions.UpgradeEntry{
