@@ -379,6 +379,145 @@ func TestTupleRuntimeFloatNormalizesToExactDecimal(t *testing.T) {
 	require.True(t, normalized.ExactDecimalParam)
 }
 
+func TestRuntimePreparedNumericExactRetainsDecimal256Domain(t *testing.T) {
+	tests := []struct {
+		marker string
+		oid    types.T
+		width  int32
+		scale  int32
+	}{
+		{marker: "mo_runtime_numeric:8:18:2", oid: types.T_decimal64, width: 18, scale: 2},
+		{marker: "mo_runtime_numeric:8:38:4", oid: types.T_decimal128, width: 38, scale: 4},
+		{marker: "mo_runtime_numeric:8:46:10", oid: types.T_decimal256, width: 46, scale: 10},
+		{marker: "mo_runtime_numeric:7:76:9", oid: types.T_float64},
+		{marker: "mo_runtime_numeric:5:0:0", oid: types.T_text},
+	}
+	for _, test := range tests {
+		expr := &Expr{Typ: planpb.Type{Enumvalues: test.marker}}
+		typ, _, found := runtimePreparedNumericType(expr)
+		require.True(t, found)
+		require.Equal(t, test.oid, typ.Oid)
+		require.Equal(t, test.width, typ.Width)
+		require.Equal(t, test.scale, typ.Scale)
+	}
+}
+
+func TestRuntimePreparedNumericCommonTypeOverflowUsesApproximateNumericDomain(t *testing.T) {
+	paramType := types.T_text.ToType()
+	param := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text), Enumvalues: "mo_runtime_numeric:8:46:10"},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	peerType := types.New(types.T_decimal256, 76, 9)
+	peer := &Expr{Typ: MakePlan2Type(&peerType)}
+
+	resolutionTypes := decimalParamCommonTypeResolutionTypes(
+		"greatest", []*Expr{param, peer}, []types.Type{paramType, peerType}, true,
+	)
+	require.Len(t, resolutionTypes, 2)
+	require.Equal(t, types.T_float64, resolutionTypes[0].Oid)
+	require.Equal(t, types.T_float64, resolutionTypes[1].Oid)
+}
+
+func TestPreparedNumericCommonTypeResolutionGuards(t *testing.T) {
+	paramType := types.T_text.ToType()
+	param := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	decimalType := types.New(types.T_decimal256, 65, 30)
+	decimalExpr := &Expr{Typ: MakePlan2Type(&decimalType)}
+	args := []*Expr{param, decimalExpr}
+	typesWithDecimal := []types.Type{paramType, decimalType}
+
+	require.Equal(t, typesWithDecimal,
+		decimalParamCommonTypeResolutionTypes("abs", args, typesWithDecimal, true))
+	require.Equal(t, typesWithDecimal,
+		decimalParamCommonTypeResolutionTypes("coalesce", args[:1], typesWithDecimal, true))
+	require.Equal(t, typesWithDecimal,
+		decimalParamCommonTypeResolutionTypes("coalesce", args, typesWithDecimal, false))
+	require.Equal(t, "mo_decimal_common_type_dependency", param.Typ.Enumvalues)
+
+	plainTypes := []types.Type{paramType, types.T_int64.ToType()}
+	require.Equal(t, plainTypes,
+		decimalParamCommonTypeResolutionTypes("coalesce", args, plainTypes, true))
+	unsupportedTypes := []types.Type{paramType, types.T_json.ToType()}
+	require.Equal(t, unsupportedTypes,
+		decimalParamCommonTypeResolutionTypes("coalesce", args, unsupportedTypes, true))
+
+	tooWide := types.New(types.T_decimal256, 76, 0)
+	param.Typ.Enumvalues = ""
+	require.Equal(t, []types.Type{paramType, tooWide},
+		decimalParamCommonTypeResolutionTypes(
+			"coalesce", []*Expr{param, {Typ: MakePlan2Type(&tooWide)}},
+			[]types.Type{paramType, tooWide}, true,
+		))
+
+	param.Typ.Enumvalues = "mo_runtime_numeric:8:46:10"
+	specialArgs := []*Expr{
+		param,
+		decimalExpr,
+		{Typ: planpb.Type{Id: int32(types.T_bool)}},
+		{Typ: planpb.Type{Id: int32(types.T_bit)}},
+		{Typ: planpb.Type{Id: int32(types.T_year)}},
+	}
+	specialTypes := []types.Type{
+		paramType,
+		decimalType,
+		types.T_bool.ToType(),
+		types.T_bit.ToType(),
+		types.T_year.ToType(),
+	}
+	resolved := decimalParamCommonTypeResolutionTypes("least", specialArgs, specialTypes, true)
+	require.Equal(t, types.T_decimal256, resolved[0].Oid)
+	require.Equal(t, types.T_uint8, resolved[2].Oid)
+	require.Equal(t, types.T_decimal128, resolved[3].Oid)
+	require.Equal(t, types.T_decimal64, resolved[4].Oid)
+}
+
+func TestPreparedDecimalCommonTypeHelperGuardsAndLists(t *testing.T) {
+	nilFunction := &Expr{Expr: &planpb.Expr_F{F: nil}}
+	require.False(t, isFoldableDecimalComparisonConstant(nilFunction))
+	require.False(t, isFoldableDecimalComparisonConstant(&Expr{
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{nil}}},
+	}))
+	require.True(t, isFoldableDecimalComparisonConstant(&Expr{
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{{
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}},
+		}}}},
+	}))
+
+	require.NoError(t, normalizeDecimalParamCommonTypeCastSources(
+		context.Background(), []*Expr{{}}, nil, nil, types.T_decimal64.ToType(),
+	))
+
+	paramType := types.T_text.ToType()
+	param := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	dynamicType := types.New(types.T_decimal256, 65, 30)
+	castTypes := applyDecimalParamCommonTypeCasts(
+		[]*Expr{param},
+		[]types.Type{paramType},
+		[]types.Type{dynamicType},
+		dynamicType,
+		nil,
+	)
+	require.Equal(t, []types.Type{dynamicType}, castTypes)
+	require.Nil(t, applyDecimalParamCommonTypeCasts(
+		[]*Expr{param}, []types.Type{paramType}, nil, types.T_int64.ToType(), nil,
+	))
+	tooWide := types.New(types.T_decimal256, 76, 0)
+	require.Nil(t, applyDecimalParamCommonTypeCasts(
+		[]*Expr{param, {Typ: MakePlan2Type(&tooWide)}},
+		[]types.Type{paramType, tooWide},
+		[]types.Type{dynamicType, tooWide},
+		dynamicType,
+		nil,
+	))
+}
+
 func expressionComparisonsUseType(expr *planpb.Expr, expected types.T) bool {
 	if expr == nil {
 		return true

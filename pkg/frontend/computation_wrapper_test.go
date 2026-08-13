@@ -361,8 +361,8 @@ func TestNativeDecimalPreparedParamBindingUsesStablePayloadCategory(t *testing.T
 	}{
 		{value: "123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{value: "1E+35", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
-		{value: "1E-31", wantMode: preparedNumericFallback},
-		{value: "1E-40", wantMode: preparedNumericFallback},
+		{value: "1E-31", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
+		{value: "1E-40", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{value: "  123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{value: "\t123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{value: "-12.3400", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
@@ -416,6 +416,14 @@ func TestPreparedParamBindingCategoryIgnoresExactDecimalDomain(t *testing.T) {
 	require.True(t, preparedParamBindingCategoryEqual(left, right))
 	right.Size = preparedNumericTextFloat
 	require.False(t, preparedParamBindingCategoryEqual(left, right))
+
+	exact := left
+	exact.Size = preparedNumericExact
+	exact.Width, exact.Scale = 46, 10
+	require.True(t, preparedParamBindingCategoryEqual(exact, exact))
+	differentExact := exact
+	differentExact.Scale = 11
+	require.False(t, preparedParamBindingCategoryEqual(exact, differentExact))
 }
 
 func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
@@ -435,6 +443,8 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
+		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericTextFloat},
+		{name: "36 integral plus 10 scale", width: 46, scale: 10, full: true, wantMode: preparedNumericExact, wantWidth: 46, wantScale: 10},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -495,7 +505,7 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericWide},
 		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericPrefixMax},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
-		{value: "1e-31", wantWidth: 31, wantScale: 31, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericFallback},
+		{value: "1e-31", wantWidth: 31, wantScale: 31, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 65, wantBindScale: 30},
 		{value: "1e999999999999999999999999999999", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 	}
 	for _, test := range tests {
@@ -638,8 +648,9 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 	}{
 		{value: "123456789012345678901234567890123456", wantType: types.T_decimal256, wantWidth: 76, wantScale: 9},
 		{value: "1E+35", wantType: types.T_decimal256, wantWidth: 76, wantScale: 9},
-		{value: "1E-31", wantType: types.T_varchar, wantWidth: types.MaxVarcharLen},
-		{value: "1E-40", wantType: types.T_varchar, wantWidth: types.MaxVarcharLen},
+		{value: "1E-31", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
+		{value: "1E-40", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
+		{value: "999999999999999999999999999999999999.1234567890", wantType: types.T_decimal256, wantWidth: 46, wantScale: 10},
 	}
 	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL} {
 		for _, test := range tests {

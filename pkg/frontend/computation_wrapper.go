@@ -748,6 +748,7 @@ const (
 	preparedNumericFallback   int32 = 5
 	preparedNumericPrefixMax  int32 = 6
 	preparedNumericApprox     int32 = 7
+	preparedNumericExact      int32 = 8
 )
 
 func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
@@ -778,7 +779,7 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	switch {
 	case full && integral > 76:
 		binding.Size = preparedNumericTextFloat
-	case integral <= 35 && scale <= 30:
+	case integral <= 35:
 		binding.Size = preparedNumericTextPrefix
 		binding.Width, binding.Scale = 65, 30
 	case integral <= 67 && scale <= 9:
@@ -789,6 +790,17 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 		// and an arbitrary fractional peer. Use an explicit numeric
 		// approximation instead of silently falling back to lexical TEXT.
 		binding.Size = preparedNumericApprox
+	case full && width <= 76:
+		// The payload is exactly representable by Decimal256, but does not fit
+		// either stable MySQL-compatible envelope above. Retain its physical
+		// domain and include width/scale in the prepared generation key.
+		binding.Size = preparedNumericExact
+		binding.Width, binding.Scale = max(width, 1), scale
+	case full:
+		// The complete payload is numeric but its combined integral and scale
+		// domain exceeds Decimal256. Keep numeric ordering through an explicit
+		// approximation instead of making the result depend on lexical spelling.
+		binding.Size = preparedNumericTextFloat
 	case !full && integral > 76:
 		binding.Size = preparedNumericPrefixMax
 		binding.Width, binding.Scale = 74, 9
@@ -1067,7 +1079,8 @@ func preparedParamBindingCategoryEqual(left, right types.Type) bool {
 	}
 	if left.Oid == types.T_text && left.Charset == preparedNumericTextBindingCharset &&
 		right.Charset == preparedNumericTextBindingCharset {
-		return left.Size == right.Size
+		return left.Size == right.Size &&
+			(left.Size != preparedNumericExact || left.Width == right.Width && left.Scale == right.Scale)
 	}
 	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
 		return true

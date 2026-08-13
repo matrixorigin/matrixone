@@ -88,6 +88,11 @@ SET @p='1e100';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 SET @p='1e-40';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
+PREPARE p_exact_dynamic_domain FROM
+  'SELECT COALESCE(?,CAST(2.0000000000 AS DECIMAL(46,10))),GREATEST(?,CAST(2.0000000000 AS DECIMAL(46,10))),LEAST(?,CAST(2.0000000000 AS DECIMAL(46,10)))';
+SET @p='999999999999999999999999999999999999.1234567890';
+EXECUTE p_exact_dynamic_domain USING @p,@p,@p;
+DEALLOCATE PREPARE p_exact_dynamic_domain;
 SET @p='1e100tail';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 DEALLOCATE PREPARE p_mysql_numeric_conversion;

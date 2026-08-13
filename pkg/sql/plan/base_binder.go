@@ -5569,10 +5569,15 @@ func decimalParamCommonTypeResolutionTypes(
 	}
 	if hasParam {
 		if maxIntegral+maxScale > 76 {
-			// No Decimal256 type can preserve both domains. Leave the direct
-			// parameter unresolved so the normal non-narrowing text path decides the
-			// common type instead of discarding high integral digits.
-			return argsType
+			// No Decimal256 type can preserve both domains. Use one explicit
+			// approximate numeric domain instead of falling back to TEXT, which
+			// would make GREATEST/LEAST compare numeric spellings lexically.
+			for i, typ := range resolutionTypes {
+				if typ.Oid.IsDecimal() || isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
+					resolutionTypes[i] = types.T_float64.ToType()
+				}
+			}
+			return resolutionTypes
 		}
 	}
 	return resolutionTypes

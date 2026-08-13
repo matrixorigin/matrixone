@@ -115,8 +115,15 @@ EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 1.0E100  ¦  1.0E100  ¦  2.0
 SET @p='1e-40';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
-➤ COALESCE(?, common_peers.d)[12,49151,0]  ¦  GREATEST(?, common_peers.d)[12,0,0]  ¦  LEAST(?, common_peers.d)[12,0,0]  𝄀
-1e-40  ¦  2.00  ¦  1e-40
+➤ COALESCE(?, d)[3,65,30]  ¦  GREATEST(?, d)[3,65,30]  ¦  LEAST(?, d)[3,65,30]  𝄀
+0E-30  ¦  2.000000000000000000000000000000  ¦  0E-30
+PREPARE p_exact_dynamic_domain FROM
+  'SELECT COALESCE(?,CAST(2.0000000000 AS DECIMAL(46,10))),GREATEST(?,CAST(2.0000000000 AS DECIMAL(46,10))),LEAST(?,CAST(2.0000000000 AS DECIMAL(46,10)))';
+SET @p='999999999999999999999999999999999999.1234567890';
+EXECUTE p_exact_dynamic_domain USING @p,@p,@p;
+➤ COALESCE(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  ¦  GREATEST(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  ¦  LEAST(?, cast(2.0000000000 as decimal(46, 10)))[3,46,10]  𝄀
+999999999999999999999999999999999999.1234567890  ¦  999999999999999999999999999999999999.1234567890  ¦  2.0000000000
+DEALLOCATE PREPARE p_exact_dynamic_domain;
 SET @p='1e100tail';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 ➤ COALESCE(?, common_peers.d)[3,74,9]  ¦  GREATEST(?, common_peers.d)[3,74,9]  ¦  LEAST(?, common_peers.d)[3,74,9]  𝄀
