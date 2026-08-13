@@ -321,6 +321,54 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	restored.Free()
 }
 
+func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	for _, binaryFirst := range []bool{false, true} {
+		inputs := maxByInputs(t, mp, []string{"same", "same"}, nil, []int64{10, 10}, []string{"tie", "tie"})
+		require.NoError(t, inputs[0].SetBinaryStringRowsWithMP([]bool{binaryFirst, !binaryFirst}, mp))
+		exec := makeMaxByExec(mp, 7020, false, params).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, inputs))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.True(t, result[0].GetBinaryStringMetadataAt(0))
+		result[0].Free(mp)
+		exec.Free()
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMaxByPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
+	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	for _, binaryFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("binary_first_%t", binaryFirst), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			inputs := maxByInputs(t, mp, []string{"first", "second"}, nil, []int64{1, 1}, []string{"a", "b"})
+			require.NoError(t, inputs[0].SetBinaryStringRowsWithMP([]bool{binaryFirst, !binaryFirst}, mp))
+			exec := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
+			require.NoError(t, exec.GroupGrow(2))
+			require.NoError(t, exec.Fill(0, 0, inputs))
+			require.NoError(t, exec.Fill(1, 1, inputs))
+
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, binaryFirst, result[0].GetBinaryStringMetadataAt(0))
+			require.Equal(t, !binaryFirst, result[0].GetBinaryStringMetadataAt(1))
+
+			result[0].Free(mp)
+			exec.Free()
+			for _, input := range inputs {
+				input.Free(mp)
+			}
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}

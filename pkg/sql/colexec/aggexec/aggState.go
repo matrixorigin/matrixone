@@ -37,6 +37,8 @@ const (
 	magicNumber       = uint64(0xdeadbeefbeefdead)
 )
 
+const aggBinaryStringTrailerMagic uint64 = 0x4147474253545231
+
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
 var _ [1]struct{} = [1 << aggBatchSizeShift / AggBatchSize]struct{}{} // shift matches size
 
@@ -925,6 +927,149 @@ func (ae *aggExec) RestorePrepareParamKindsFlat(
 	return nil
 }
 
+func binaryStringRowsFromVector(vec *vector.Vector) []bool {
+	if vec == nil || !vec.HasBinaryStringRows() {
+		return nil
+	}
+	rows := make([]bool, vec.Length())
+	for row := range rows {
+		rows[row] = vec.GetBinaryStringMetadataAt(row)
+	}
+	return rows
+}
+
+func (ae *aggExec) HasBinaryStringMetadata() bool {
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) > 0 && ae.state[chunk].vecs[0] != nil &&
+			ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
+			return true
+		}
+	}
+	return false
+}
+
+func (ae *aggExec) BinaryStringRowsForChunk(chunk int) []bool {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+		return nil
+	}
+	return binaryStringRowsFromVector(ae.state[chunk].vecs[0])
+}
+
+func (ae *aggExec) BinaryStringRowsForSelection(flags [][]uint8) []bool {
+	hasRows := false
+	for chunk := range flags {
+		if chunk < len(ae.state) && len(ae.state[chunk].vecs) > 0 &&
+			ae.state[chunk].vecs[0] != nil && ae.state[chunk].vecs[0].HasBinaryStringRows() {
+			hasRows = true
+			break
+		}
+	}
+	if !hasRows {
+		return nil
+	}
+	rowCount := 0
+	for _, chunkFlags := range flags {
+		for _, flag := range chunkFlags {
+			if flag != 0 {
+				rowCount++
+			}
+		}
+	}
+	if rowCount == 0 {
+		return nil
+	}
+	rows := make([]bool, 0, rowCount)
+	for chunk, chunkFlags := range flags {
+		var vec *vector.Vector
+		if chunk < len(ae.state) && len(ae.state[chunk].vecs) > 0 {
+			vec = ae.state[chunk].vecs[0]
+		}
+		for row, flag := range chunkFlags {
+			if flag == 0 {
+				continue
+			}
+			rows = append(rows, vec != nil && vec.GetBinaryStringMetadataAt(row))
+		}
+	}
+	return rows
+}
+
+func (ae *aggExec) BinaryStringSummaryForChunk(chunk int) bool {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
+		ae.state[chunk].vecs[0] == nil {
+		return false
+	}
+	vec := ae.state[chunk].vecs[0]
+	if !vec.HasBinaryStringMetadata() {
+		return false
+	}
+	for row := 0; row < vec.Length(); row++ {
+		if !vec.IsNull(uint64(row)) {
+			return vec.GetBinaryStringMetadataAt(row)
+		}
+	}
+	return false
+}
+
+func (ae *aggExec) BinaryStringSummaryForSelection(flags [][]uint8) bool {
+	for chunk, chunkFlags := range flags {
+		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		if !vec.HasBinaryStringMetadata() {
+			continue
+		}
+		for row, flag := range chunkFlags {
+			if flag != 0 && !vec.IsNull(uint64(row)) && vec.GetBinaryStringMetadataAt(row) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (ae *aggExec) RestoreBinaryStringRowsForChunk(chunk int, rows []bool, mp *mpool.MPool) error {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+		return moerr.NewInternalErrorNoCtxf("aggregate binary provenance chunk out of range: %d", chunk)
+	}
+	return ae.state[chunk].vecs[0].SetBinaryStringRowsWithMP(rows, mp)
+}
+
+func (ae *aggExec) RestoreBinaryStringRowsFlat(rows []bool, mp *mpool.MPool) error {
+	pos := 0
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		n := vec.Length()
+		if pos+n > len(rows) {
+			return moerr.NewInternalErrorNoCtx("aggregate binary provenance payload is shorter than state")
+		}
+		if err := vec.SetBinaryStringRowsWithMP(rows[pos:pos+n], mp); err != nil {
+			return err
+		}
+		pos += n
+	}
+	if pos != len(rows) {
+		return moerr.NewInternalErrorNoCtx("aggregate binary provenance payload has trailing rows")
+	}
+	return nil
+}
+
+func (ae *aggExec) SetBinaryStringSummary(binaryString bool) {
+	if !binaryString {
+		return
+	}
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) > 0 && ae.state[chunk].vecs[0] != nil &&
+			!ae.state[chunk].vecs[0].HasBinaryStringRows() {
+			ae.state[chunk].vecs[0].SetIsBinaryString(true)
+		}
+	}
+}
+
 func (ae *aggExec) getChunkSize() int {
 	return ae.chunkSize
 }
@@ -1067,6 +1212,9 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 			return err
 		}
 	}
+	if err := ae.writeBinaryStringTrailerForSelection(flags, buf); err != nil {
+		return err
+	}
 
 	if err := types.WriteUint64(buf, magic); err != nil {
 		return err
@@ -1088,11 +1236,65 @@ func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) e
 	if err := ae.state[chunk].writeAllStatesToBuf(buf, &ae.aggInfo); err != nil {
 		return err
 	}
+	if err := ae.writeBinaryStringTrailerForChunk(chunk, buf); err != nil {
+		return err
+	}
 
 	if err := types.WriteUint64(buf, magic); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (ae *aggExec) writeBinaryStringTrailerForSelection(flags [][]uint8, buf *bytes.Buffer) error {
+	if !ae.BinaryStringSummaryForSelection(flags) {
+		return nil
+	}
+	rowCount := int32(0)
+	for _, chunkFlags := range flags {
+		for _, flag := range chunkFlags {
+			if flag != 0 {
+				rowCount++
+			}
+		}
+	}
+	types.WriteUint64(buf, aggBinaryStringTrailerMagic)
+	types.WriteInt32(buf, rowCount)
+	for chunk, chunkFlags := range flags {
+		if chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		for row, flag := range chunkFlags {
+			if flag == 0 {
+				continue
+			}
+			if vec != nil && vec.GetBinaryStringMetadataAt(row) {
+				buf.WriteByte(1)
+			} else {
+				buf.WriteByte(0)
+			}
+		}
+	}
+	return nil
+}
+
+func (ae *aggExec) writeBinaryStringTrailerForChunk(chunk int, buf *bytes.Buffer) error {
+	if chunk < 0 || chunk >= len(ae.state) || len(ae.state[chunk].vecs) == 0 ||
+		ae.state[chunk].vecs[0] == nil || !ae.state[chunk].vecs[0].HasBinaryStringMetadata() {
+		return nil
+	}
+	vec := ae.state[chunk].vecs[0]
+	types.WriteUint64(buf, aggBinaryStringTrailerMagic)
+	types.WriteInt32(buf, int32(vec.Length()))
+	for row := 0; row < vec.Length(); row++ {
+		if vec.GetBinaryStringMetadataAt(row) {
+			buf.WriteByte(1)
+		} else {
+			buf.WriteByte(0)
+		}
+	}
 	return nil
 }
 
@@ -1105,7 +1307,6 @@ func checkAggStateMagic(reader io.Reader) {
 
 func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retErr error) {
 	checkAggStateMagic(reader)
-	defer checkAggStateMagic(reader)
 	defer func() {
 		if retErr != nil {
 			ae.Free()
@@ -1123,7 +1324,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 	if cnt == 0 {
 		ae.Free()
 		ae.state = nil
-		return nil
+		return ae.readBinaryStringTrailerAndMagic(reader, mp)
 	} else if cnt == 1 {
 		// The compact spill format makes this the common path. Retain one simple
 		// fixed-state chunk across records so UnmarshalWithReader can reuse its
@@ -1146,7 +1347,7 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 		if !ae.aggInfo.saveArg && ae.aggInfo.makeMarshalerUnmarshaler == nil {
 			ae.state[0].capacity = AggBatchSize
 		}
-		return nil
+		return ae.readBinaryStringTrailerAndMagic(reader, mp)
 	}
 
 	// Multi-chunk inputs may need to repack several independently allocated
@@ -1189,6 +1390,49 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 			return err
 		}
 	}
+	return ae.readBinaryStringTrailerAndMagic(reader, mp)
+}
+
+func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.MPool) error {
+	marker, err := types.ReadUint64(reader)
+	if err != nil {
+		return err
+	}
+	if marker == magicNumber {
+		return nil
+	}
+	if marker != aggBinaryStringTrailerMagic {
+		return moerr.NewInternalErrorNoCtxf("invalid aggregate trailer magic %d", marker)
+	}
+	rowCount, err := types.ReadInt32(reader)
+	if err != nil {
+		return err
+	}
+	if rowCount < 0 || int(rowCount) != ae.GetNumGroups() {
+		return moerr.NewInternalErrorNoCtxf(
+			"aggregate binary provenance row count %d does not match %d", rowCount, ae.GetNumGroups())
+	}
+	for chunk := range ae.state {
+		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+			continue
+		}
+		vec := ae.state[chunk].vecs[0]
+		for row := 0; row < vec.Length(); row++ {
+			binaryString, err := types.ReadByte(reader)
+			if err != nil {
+				return err
+			}
+			if binaryString > 1 {
+				return moerr.NewInternalErrorNoCtx("invalid aggregate binary provenance row")
+			}
+			if binaryString == 1 {
+				if err := vec.SetIsBinaryStringAt(row, true, mp); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	checkAggStateMagic(reader)
 	return nil
 }
 
