@@ -267,3 +267,25 @@ func TestAggregateTrailerPreservesBinaryStringRows(t *testing.T) {
 		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, false)
 	require.ErrorContains(t, err, "MORPCVersion18")
 }
+
+func TestAggregateTrailerRowModeUsesUniformBinarySummary(t *testing.T) {
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAny, false, nil, nil),
+	}
+	states := aggexec.PrepareParamKindStates{}
+	states.Reset(aggs)
+	var wire bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &wire, aggs, &states,
+		[][]vector.PrepareParamKind{{vector.PrepareParamInteger, vector.PrepareParamFloat}},
+		[]prepareParamKindSummary{{}}, [][]bool{nil}, []bool{true},
+	))
+
+	restored := aggexec.PrepareParamKindStates{}
+	restored.Reset(aggs)
+	rows, _, binaryRows, _, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, true)
+	require.NoError(t, err)
+	require.Equal(t, []vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat}, rows[0])
+	require.Equal(t, []bool{true, true}, binaryRows[0])
+}

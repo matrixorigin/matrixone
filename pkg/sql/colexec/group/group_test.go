@@ -659,7 +659,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion12)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
 
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
@@ -671,6 +671,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	input.Vecs[1].SetIsBinaryString(true)
 	input.SetRowCount(2)
 
 	partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
@@ -693,6 +694,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	keys := vector.MustFixedColNoTypeCheck[int32](outputs[0].Vecs[0])
 	for row, key := range keys {
 		seen[key] = outputs[0].Vecs[1].GetPrepareParamKindAt(row)
+		require.True(t, outputs[0].Vecs[1].GetBinaryStringMetadataAt(row))
 	}
 	require.Equal(t, vector.PrepareParamFloat, seen[0])
 	require.Equal(t, vector.PrepareParamNone, seen[1])

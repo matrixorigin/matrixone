@@ -290,15 +290,15 @@ func (exec *maxByExec) copyWinner(
 			dst[i].SetNull(uint64(dstRow))
 			continue
 		}
-		if err := dst[i].SetRawBytesAtFrom(dstRow, src[i], srcRows[i], exec.mp); err != nil {
-			return err
-		}
-		dst[i].UnsetNull(uint64(dstRow))
 		if i == 0 {
-			if err := dst[i].SetPrepareParamKindAtWithMP(
-				dstRow, src[i].GetPrepareParamKindAt(srcRows[i]), exec.mp); err != nil {
+			if err := dst[i].SetRawBytesAtFromAndUnsetNull(dstRow, src[i], srcRows[i], exec.mp); err != nil {
 				return err
 			}
+		} else {
+			if err := dst[i].SetRawBytesAtFrom(dstRow, src[i], srcRows[i], exec.mp); err != nil {
+				return err
+			}
+			dst[i].UnsetNull(uint64(dstRow))
 		}
 	}
 	for i, vec := range dst {

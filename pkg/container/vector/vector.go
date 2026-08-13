@@ -296,28 +296,36 @@ func (v *Vector) SetLength(n int) {
 // Capacity growth is deliberately not rolled back: it remains owned by the
 // vector and can be reused by a later append.
 type AppendCheckpoint struct {
-	length               int
-	areaLength           int
-	areaDisjoint         bool
-	sorted               bool
-	prepareParamKind     PrepareParamKind
-	prepareParamKindSeen bool
-	hadPrepareParamKinds bool
-	binaryString         bool
-	hadBinaryStringRows  bool
+	length                  int
+	areaLength              int
+	areaDisjoint            bool
+	sorted                  bool
+	prepareParamKind        PrepareParamKind
+	prepareParamKindSeen    bool
+	hadPrepareParamKinds    bool
+	binaryString            bool
+	hadBinaryStringRows     bool
+	binaryStringRowsUniform bool
 }
 
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
+	binaryStringRowsUniform := false
+	if v.binaryStringRowsActive {
+		binaryCount := v.binaryStringRows.Count()
+		nonNullCount := v.length - v.nsp.Count()
+		binaryStringRowsUniform = binaryCount == 0 || binaryCount == nonNullCount
+	}
 	return AppendCheckpoint{
-		length:               v.length,
-		areaLength:           len(v.area),
-		areaDisjoint:         v.areaDisjoint,
-		sorted:               v.sorted,
-		prepareParamKind:     v.prepareParamKind,
-		prepareParamKindSeen: v.prepareParamKindSeen,
-		hadPrepareParamKinds: v.prepareParamKinds != nil,
-		binaryString:         v.binaryString,
-		hadBinaryStringRows:  v.binaryStringRowsActive,
+		length:                  v.length,
+		areaLength:              len(v.area),
+		areaDisjoint:            v.areaDisjoint,
+		sorted:                  v.sorted,
+		prepareParamKind:        v.prepareParamKind,
+		prepareParamKindSeen:    v.prepareParamKindSeen,
+		hadPrepareParamKinds:    v.prepareParamKinds != nil,
+		binaryString:            v.binaryString,
+		hadBinaryStringRows:     v.binaryStringRowsActive,
+		binaryStringRowsUniform: binaryStringRowsUniform,
 	}
 }
 
@@ -351,11 +359,14 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.prepareParamKind = checkpoint.prepareParamKind
 	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
 	if checkpoint.hadBinaryStringRows {
-		if v.binaryStringRows == nil || !v.binaryStringRowsActive {
+		if !v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform {
+			v.setBinaryStringScalar(checkpoint.binaryString)
+		} else if v.binaryStringRows == nil || !v.binaryStringRowsActive {
 			panic("binary-string sidecar lost during append rollback")
+		} else {
+			v.binaryStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
+			v.binaryString = checkpoint.binaryString
 		}
-		v.binaryStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
-		v.binaryString = checkpoint.binaryString
 	} else {
 		v.setBinaryStringScalar(checkpoint.binaryString)
 	}
@@ -2788,6 +2799,34 @@ func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *m
 		return err
 	}
 	if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(idx) {
+		v.setBinaryStringScalar(binaryString)
+		return nil
+	}
+	return v.SetIsBinaryStringAt(idx, binaryString, mp)
+}
+
+// SetRawBytesAtFromAndUnsetNull replaces a row's payload, prepared-parameter
+// kind, and dynamic binary provenance, then publishes it as non-NULL. All
+// fallible capacity work happens before the NULL bit changes, so callers never
+// expose a partial row on error.
+func (v *Vector) SetRawBytesAtFromAndUnsetNull(idx int, source *Vector, sourceRow int, mp *mpool.MPool) error {
+	binaryString := source.GetBinaryStringMetadataAt(sourceRow)
+	kind := source.GetPrepareParamKindAt(sourceRow)
+	hasOtherValue := v.hasPrepareParamValueExcept(idx)
+	if err := v.preflightPrepareParamKindCopy(idx, kind, false, mp); err != nil {
+		return err
+	}
+	if err := v.preflightBinaryStringCopy(idx, binaryString, mp); err != nil {
+		return err
+	}
+	if err := v.SetRawBytesAt(idx, source.GetRawBytesAt(sourceRow), mp); err != nil {
+		return err
+	}
+	v.UnsetNull(uint64(idx))
+	if err := v.mergePrepareParamKindAt(idx, kind, true, false, mp); err != nil {
+		return err
+	}
+	if !v.binaryStringRowsActive && !hasOtherValue {
 		v.setBinaryStringScalar(binaryString)
 		return nil
 	}

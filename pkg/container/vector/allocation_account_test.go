@@ -1818,6 +1818,33 @@ func TestBinaryStringCopyAllocationFailureDoesNotOverwriteRow(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestBinaryStringCopyAndUnsetNullAllocationFailureIsAtomic(t *testing.T) {
+	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes+8, 16)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	require.NoError(t, destination.PreExtend(2, mp))
+	require.NoError(t, AppendBytes(destination, []byte("text"), false, mp))
+	require.NoError(t, AppendBytes(destination, nil, true, mp))
+
+	source := NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	before := state.account.Snapshot().Used
+
+	err := destination.SetRawBytesAtFromAndUnsetNull(1, source, 0, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.True(t, destination.IsNull(1))
+	require.False(t, destination.GetBinaryStringMetadataAt(0))
+	require.False(t, destination.GetBinaryStringMetadataAt(1))
+	require.Equal(t, before, state.account.Snapshot().Used)
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestDetachedUnaccountedBufferAndTypeChange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewOffHeapVecWithType(types.T_varchar.ToType())

@@ -160,8 +160,11 @@ func writePrepareParamKindTrailer(
 						"invalid aggregate prepared parameter row kind %d", kind)
 				}
 				encoded := byte(kind)
-				if version == prepareParamKindTrailerBinaryVersion && i < len(binaryRows) &&
-					len(binaryRows[i]) != 0 && binaryRows[i][row] {
+				binaryString := i < len(binarySummaries) && binarySummaries[i]
+				if i < len(binaryRows) && len(binaryRows[i]) != 0 {
+					binaryString = binaryRows[i][row]
+				}
+				if version == prepareParamKindTrailerBinaryVersion && binaryString {
 					encoded |= prepareParamKindTrailerRowsMarker
 				}
 				buf.WriteByte(encoded)
