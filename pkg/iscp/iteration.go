@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -56,6 +57,45 @@ type iterationSourceChanges struct {
 	rel     engine.Relation
 	def     *plan.TableDef
 	changes engine.ChangesHandle
+}
+
+func resolveMVBatchIndexes(bat *batch.Batch, def *plan.TableDef, insert bool, retainRowID bool) (tsIdx, pkIdx int) {
+	tsIdx, pkIdx = -1, -1
+	if bat == nil || def == nil {
+		return -1, -1
+	}
+	if insert {
+		for i := len(bat.Vecs) - 1; i >= 0; i-- {
+			if bat.Vecs[i] != nil && bat.Vecs[i].GetType().Oid == types.T_TS {
+				tsIdx = i
+				break
+			}
+		}
+		if len(def.Pkey.Names) == 1 {
+			for i, attr := range bat.Attrs {
+				if attr == def.Pkey.Names[0] {
+					pkIdx = i
+					break
+				}
+			}
+		}
+		if pkIdx < 0 {
+			pkIdx = len(bat.Vecs) - 2
+		}
+		return tsIdx, pkIdx
+	}
+	for i, vec := range bat.Vecs {
+		if vec != nil && vec.GetType().Oid == types.T_TS {
+			tsIdx = i
+			break
+		}
+	}
+	if retainRowID {
+		pkIdx = 1
+	} else {
+		pkIdx = 0
+	}
+	return tsIdx, pkIdx
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -515,6 +555,10 @@ func runISCPTaskIterationConsumers(
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
 			if insertData != nil {
 				dataLength += insertData.RowCount()
+			}
+			if stream.def != nil {
+				streamInsTSColIdx, streamInsPKColIdx = resolveMVBatchIndexes(insertData, stream.def, true, engine.RetainRowIDFromContext(ctxWithCancel))
+				streamDelTSColIdx, streamDelPKColIdx = resolveMVBatchIndexes(deleteData, stream.def, false, engine.RetainRowIDFromContext(ctxWithCancel))
 			}
 			// injection is for ut
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
