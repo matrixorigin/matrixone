@@ -1372,7 +1372,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			sort.SortForSQLOrder(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
 		}
 		if err := checkCanceled(proc, 0); err != nil {
 			return false, err
@@ -1392,7 +1392,11 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		if i <= n {
+			ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		} else {
+			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
+		}
 		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
@@ -1403,9 +1407,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 						return false, err
 					}
 					if i == j-1 {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
+						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
 					} else {
-						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
+						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
 					}
 				}
 			}
@@ -1429,7 +1433,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
-		ctr.os = partition.Partition(ctr.sels, ds, ps, ovec)
+		ctr.os = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
 	}

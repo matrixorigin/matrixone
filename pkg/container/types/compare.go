@@ -14,8 +14,6 @@
 
 package types
 
-import "math"
-
 func BoolAscCompare(x, y bool) int {
 	if x == y {
 		return 0
@@ -61,57 +59,75 @@ func GenericAscCompare[T OrderedT](x, y T) int {
 	return 1
 }
 
-// Float32AscCompare provides a deterministic total order for sort and merge
-// operators. IEEE comparisons alone do not order NaN: both x < NaN and
-// x > NaN are false. That makes a generic comparator claim both x > NaN and
-// NaN > x, which violates the comparator contract. Keep equal numeric values
-// (including -0 and +0) equal, put NaNs before finite values, and use their
-// bits to order distinct NaNs deterministically.
-func Float32AscCompare(x, y float32) int {
-	if x == y {
+// Float32OrderAscCompare implements the SQL ORDER BY relation for FLOAT.
+// Infinities retain their numeric order. Signed zeroes and all NaN payloads
+// are peers, and NaNs sort after every numeric value.
+func Float32OrderAscCompare(x, y float32) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	if x == y || x != x && y != y {
 		return 0
 	}
-	xNaN, yNaN := math.IsNaN(float64(x)), math.IsNaN(float64(y))
-	switch {
-	case xNaN && yNaN:
-		return GenericAscCompare(math.Float32bits(x), math.Float32bits(y))
-	case xNaN:
-		return -1
-	case yNaN:
-		return 1
-	case x < y:
-		return -1
-	default:
+	if x != x {
 		return 1
 	}
+	return -1
 }
 
-func Float32DescCompare(x, y float32) int {
-	return -Float32AscCompare(x, y)
-}
-
-// Float64AscCompare is the float64 counterpart of Float32AscCompare.
-func Float64AscCompare(x, y float64) int {
-	if x == y {
+// Float32OrderDescCompare keeps NaNs last while reversing numeric order.
+func Float32OrderDescCompare(x, y float32) int {
+	if x > y {
+		return -1
+	}
+	if x < y {
+		return 1
+	}
+	if x == y || x != x && y != y {
 		return 0
 	}
-	xNaN, yNaN := math.IsNaN(x), math.IsNaN(y)
-	switch {
-	case xNaN && yNaN:
-		return GenericAscCompare(math.Float64bits(x), math.Float64bits(y))
-	case xNaN:
-		return -1
-	case yNaN:
-		return 1
-	case x < y:
-		return -1
-	default:
+	if x != x {
 		return 1
 	}
+	return -1
 }
 
-func Float64DescCompare(x, y float64) int {
-	return -Float64AscCompare(x, y)
+// Float64OrderAscCompare is the float64 counterpart of
+// Float32OrderAscCompare.
+func Float64OrderAscCompare(x, y float64) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
+}
+
+// Float64OrderDescCompare keeps NaNs last while reversing numeric order.
+func Float64OrderDescCompare(x, y float64) int {
+	if x > y {
+		return -1
+	}
+	if x < y {
+		return 1
+	}
+	if x == y || x != x && y != y {
+		return 0
+	}
+	if x != x {
+		return 1
+	}
+	return -1
 }
 
 func BoolDescCompare(x, y bool) int {

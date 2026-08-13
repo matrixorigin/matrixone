@@ -1,0 +1,90 @@
+drop database if exists float_nan_order;
+create database float_nan_order;
+use float_nan_order;
+create table t_double_order (
+k double primary key,
+tenant int,
+id int,
+key idx_tenant(tenant)
+);
+insert into t_double_order values
+(bit_cast(unhex('000000000000f87f') as double), 1, 70),
+(bit_cast(unhex('010000000000f87f') as double), 1, 71),
+(cast('Inf' as double), 1, 60),
+(cast('-Inf' as double), 1, 10),
+(-1.0, 1, 20),
+(bit_cast(unhex('0000000000000080') as double), 1, 30),
+(0.0, 1, 31),
+(1.0, 1, 40);
+select id from t_double_order force index(idx_tenant)
+where tenant = 1 order by k asc limit 2;
+➤ id[4,32,0]  𝄀
+10  𝄀
+20
+select id from t_double_order force index(idx_tenant)
+where tenant = 1 order by k desc limit 2;
+➤ id[4,32,0]  𝄀
+60  𝄀
+40
+select id from t_double_order where tenant = 1 order by k asc, id asc;
+➤ id[4,32,0]  𝄀
+10  𝄀
+20  𝄀
+30  𝄀
+31  𝄀
+40  𝄀
+60  𝄀
+70  𝄀
+71
+select id from t_double_order where tenant = 1 order by k desc, id asc;
+➤ id[4,32,0]  𝄀
+60  𝄀
+40  𝄀
+30  𝄀
+31  𝄀
+20  𝄀
+10  𝄀
+70  𝄀
+71
+select id, rank() over (order by k) as r, dense_rank() over (order by k) as dr
+from t_double_order order by id;
+➤ id[4,32,0]  ¦  r[5,64,0]  ¦  dr[5,64,0]  𝄀
+10  ¦  1  ¦  1  𝄀
+20  ¦  2  ¦  2  𝄀
+30  ¦  3  ¦  3  𝄀
+31  ¦  3  ¦  3  𝄀
+40  ¦  5  ¦  4  𝄀
+60  ¦  6  ¦  5  𝄀
+70  ¦  7  ¦  6  𝄀
+71  ¦  7  ¦  6
+create table t_float_order(id int primary key, k float);
+insert into t_float_order values
+(70, bit_cast(unhex('0000c07f') as float)),
+(71, bit_cast(unhex('0100c07f') as float)),
+(60, cast('Inf' as float)),
+(10, cast('-Inf' as float)),
+(20, -1.0),
+(30, bit_cast(unhex('00000080') as float)),
+(31, 0.0),
+(40, 1.0);
+select id from t_float_order order by k asc, id asc;
+➤ id[4,32,0]  𝄀
+10  𝄀
+20  𝄀
+30  𝄀
+31  𝄀
+40  𝄀
+60  𝄀
+70  𝄀
+71
+select id from t_float_order order by k desc, id asc;
+➤ id[4,32,0]  𝄀
+60  𝄀
+40  𝄀
+30  𝄀
+31  𝄀
+20  𝄀
+10  𝄀
+70  𝄀
+71
+drop database float_nan_order;

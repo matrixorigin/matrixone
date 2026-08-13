@@ -419,7 +419,7 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[pos].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[pos].GetType(), desc, nullsLast),
 				)
 			}
 		} else {
@@ -437,7 +437,7 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[i].GetType(), desc, nullsLast),
 				)
 			}
 		}

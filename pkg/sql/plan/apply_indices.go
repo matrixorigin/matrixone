@@ -742,13 +742,15 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	}
 
 	orderExpr := sortProjectNode.ProjectList[orderByCol.ColPos]
+	if !encodedOrderMatchesSQLOrder(orderExpr) {
+		return nil
+	}
 	orderExprCol := orderExpr.GetCol()
 	if !canUseRegularIndexHiddenSortKey(scanNode, orderExprCol) {
 		return nil
 	}
-	orderedLimitSafe := regularIndexOrderedLimitSafe(orderExpr)
-	pushOrderedLimit := orderedLimitSafe && canPushRegularIndexOrderedLimit(scanNode)
-	if orderedLimitSafe && !pushOrderedLimit && isPositiveLiteralLimit(sortNode.Limit) {
+	pushOrderedLimit := canPushRegularIndexOrderedLimit(scanNode)
+	if !pushOrderedLimit && isPositiveLiteralLimit(sortNode.Limit) {
 		pushOrderedLimit = builder.rewriteRegularIndexCursorRangeFilter(scanNode)
 	}
 
@@ -1087,13 +1089,13 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 				continue
 			}
 			builder.protectedScans[scanNode.NodeId]++
-			if requirement.scope == forceIndexForOrder {
+			if requirement.scope == forceIndexForOrder && encodedOrderMatchesSQLOrder(requirement.columns...) {
 				idxNode := builder.qry.Nodes[idxNodeID]
 				idxNode.OrderBy = []*plan.OrderBySpec{{
 					Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
 					Flag: requirement.orderFlag,
 				}}
-				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim && regularIndexOrderedLimitSafe(requirement.columns...) {
+				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim {
 					applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
 				}
 			}
@@ -1340,12 +1342,12 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
-// regularIndexOrderedLimitSafe reports whether an index reader may truncate an
-// ordered scan before the SQL sort runs. Float NaNs have a deterministic SQL
-// sort order, but their serialized regular-index keys are not proven to share
-// that order. Keep the existing index access path, while leaving all candidates
-// for the SQL top/sort to compare when any logical sort key is a float.
-func regularIndexOrderedLimitSafe(orderExprs ...*plan.Expr) bool {
+// encodedOrderMatchesSQLOrder reports whether encoded regular-index keys and
+// storage metadata are proven to share the logical SQL ordering. Scalar float
+// encoding has an identity order over NaN payloads, while SQL makes all NaNs
+// peers and keeps them last in both directions, so encoded ordering cannot
+// replace the logical sort or drive early truncation.
+func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
 	for _, expr := range orderExprs {
 		if expr == nil {
 			return false

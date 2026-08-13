@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFloatCompareOrdersNaNAndNull(t *testing.T) {
+func TestFloatOrderCompareOrdersNaNAndNull(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		typ    types.Type
@@ -62,16 +62,11 @@ func TestFloatCompareOrdersNaNAndNull(t *testing.T) {
 			require.NoError(t, tc.append(vec, mp))
 
 			for _, desc := range []bool{false, true} {
-				cmp := New(tc.typ, desc, true)
+				cmp := NewOrder(tc.typ, desc, true)
 				cmp.Set(0, vec)
 				cmp.Set(1, vec)
-				if desc {
-					require.Negative(t, cmp.Compare(0, 0, 0, 1))
-					require.Positive(t, cmp.Compare(0, 0, 1, 2))
-				} else {
-					require.Positive(t, cmp.Compare(0, 0, 0, 1))
-					require.Negative(t, cmp.Compare(0, 0, 1, 2))
-				}
+				require.Negative(t, cmp.Compare(0, 0, 0, 1))
+				require.Zero(t, cmp.Compare(0, 0, 1, 2))
 				require.Positive(t, cmp.Compare(0, 0, 3, 1))
 			}
 		})

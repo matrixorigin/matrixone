@@ -86,6 +86,9 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	if scanID == -1 || scanOrderExpr == nil {
 		return
 	}
+	if !encodedOrderMatchesSQLOrder(scanOrderExpr) {
+		return
+	}
 	scanOrderByCol := scanOrderExpr.GetCol()
 	if scanOrderByCol == nil {
 		return
@@ -102,7 +105,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	enableOrderedLimit := false
 	if canUseRegularIndexHiddenSortKey(scanNode, scanOrderByCol) {
 		eligibleOrderedLimit := staticLimitSafe && node.Offset == nil && node.RankOption == nil &&
-			isPositiveLiteralLimit(node.Limit) && regularIndexOrderedLimitSafe(scanOrderExpr)
+			isPositiveLiteralLimit(node.Limit)
 		if eligibleOrderedLimit {
 			enableOrderedLimit = canPushRegularIndexOrderedLimit(scanNode)
 			if !enableOrderedLimit {

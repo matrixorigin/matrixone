@@ -636,6 +636,22 @@ func TestIndexHintOrderScopeSelectsCoveringIndexWithoutFilter(t *testing.T) {
 	require.NotEqual(t, "idx_a", findFirstIndexScanName(queryPlan))
 }
 
+func TestIndexHintOrderScopeKeepsFloatSortLogical(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addIndexHintChoiceTableForTest(mock)
+	mock.ctxt.tables["index_hint_t"].Cols[1].Typ = planpb.Type{Id: int32(types.T_float64)}
+
+	queryPlan, err := runOneStmt(mock, t,
+		"select a from index_hint_t force index for order by(idx_a) order by a limit 10")
+	require.NoError(t, err)
+	indexScan := findFirstIndexScanNode(queryPlan)
+	require.NotNil(t, indexScan)
+	require.Equal(t, "idx_a", indexScan.IndexScanInfo.IndexName)
+	require.Empty(t, indexScan.OrderBy)
+	require.Nil(t, indexScan.IndexReaderParam)
+	require.True(t, planHasSort(queryPlan))
+}
+
 func TestIndexHintOrderScopePreservesCoveringIndexFilters(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addIndexHintChoiceTableForTest(mock)
@@ -6147,9 +6163,13 @@ func TestApplyIndicesForProjectSkipsOrderedLimitForFloatSortKey(t *testing.T) {
 	_, err := builder.applyIndicesForProject(rootNodeID, builder.qry.Nodes[rootNodeID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
 	require.NoError(t, err)
 
-	// The hidden key can still deliver ordered candidates, but a reader-side
-	// LIMIT would discard a SQL-earlier NaN under the distinct float ordering.
-	require.Len(t, scanNode.OrderBy, 1)
+	// The serialized hidden key is not SQL-order-compatible for floats. Keep
+	// the logical float Sort intact and use the index only as an access path.
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(types.T_float64), sortNode.OrderBy[0].Expr.Typ.Id)
+	require.Equal(t, int32(0), sortNode.OrderBy[0].Expr.GetCol().ColPos)
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
@@ -6176,6 +6196,8 @@ func TestApplyIndicesForProjectSkipsFloatCursorRangeRewrite(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Nil(t, scanNode.IndexReaderParam)
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, sortNode.SendMsgList)
 	assert.True(t, isRegularIndexFullPrefixEquality(scanNode.FilterList[0], 2))
 }
 
@@ -6271,7 +6293,11 @@ func TestHandleMessageFromTopToScanSkipsOrderedLimitForFloatSortKey(t *testing.T
 
 	builder.handleMessageFromTopToScan(rootNodeID)
 
-	require.Len(t, scanNode.OrderBy, 1)
+	require.Empty(t, scanNode.OrderBy)
+	require.Empty(t, scanNode.RecvMsgList)
+	require.Empty(t, sortNode.SendMsgList)
+	require.Equal(t, int32(types.T_float64), sortNode.OrderBy[0].Expr.Typ.Id)
+	require.Equal(t, int32(1), sortNode.OrderBy[0].Expr.GetCol().ColPos)
 	assert.Nil(t, scanNode.IndexReaderParam)
 }
 
