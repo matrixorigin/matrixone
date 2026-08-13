@@ -79,6 +79,10 @@ type container struct {
 	gapFillStart    types.Datetime
 	gapFillEnd      types.Datetime
 	gapFillRows     int64
+	// boundedGapFill is the per-execution decision to use the inferred bounds.
+	// Zero temporal sentinels cannot participate in the regular DATETIME grid,
+	// so those executions fall back to the legacy observed-range GAPFILL path.
+	boundedGapFill  bool
 	syntheticBounds bool
 
 	status int32
@@ -199,6 +203,10 @@ func (timeWin *TimeWin) Release() {
 
 func (timeWin *TimeWin) hasGapFillBounds() bool {
 	return timeWin.GapFill && timeWin.GapFillStart != nil && timeWin.GapFillEnd != nil
+}
+
+func (ctr *container) hasGapFillBounds(timeWin *TimeWin) bool {
+	return ctr.boundedGapFill && timeWin.hasGapFillBounds()
 }
 
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -362,6 +370,7 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.gapFillStart = 0
 	ctr.gapFillEnd = 0
 	ctr.gapFillRows = 0
+	ctr.boundedGapFill = false
 	ctr.syntheticBounds = false
 }
 

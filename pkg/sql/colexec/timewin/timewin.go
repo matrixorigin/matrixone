@@ -202,15 +202,23 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	// Check this before flooring start, otherwise an unaligned [t, t) would
 	// appear to contain the bucket that begins before t.
 	if startNull || finishNull || start >= finish {
+		ctr.boundedGapFill = true
 		ctr.gapFillStart = start
 		ctr.gapFillEnd = finish
 		ctr.status = end
 		return nil
 	}
 	if start == types.ZeroDatetime || finish == types.ZeroDatetime {
-		return moerr.NewInvalidInputNoCtx("GAPFILL bounds cannot use the zero temporal value")
+		// Zero temporal values are valid SQL values, but their sentinel encoding
+		// cannot enter the regular DATETIME modulo/grid arithmetic. These bounds
+		// were inferred from WHERE rather than requested explicitly, so preserve
+		// the legacy observed-range GAPFILL behavior instead of rejecting a valid
+		// query. resetParam clears this choice before every Prepare, allowing a
+		// reused prepared statement with ordinary bounds to re-enable the grid.
+		return nil
 	}
 
+	ctr.boundedGapFill = true
 	ctr.gapFillStart = start - start%timeWin.Interval
 	ctr.gapFillEnd = finish
 	if ctr.gapFillStart < finish {
@@ -287,7 +295,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if result.Batch == nil {
-				if timeWin.hasGapFillBounds() && ctr.i == 0 && len(timeWin.PartitionBy) == 0 {
+				if ctr.hasGapFillBounds(timeWin) && ctr.i == 0 && len(timeWin.PartitionBy) == 0 {
 					if err = ctr.startSyntheticGapFill(timeWin); err != nil {
 						return result, err
 					}
@@ -353,7 +361,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.end {
-				if timeWin.hasGapFillBounds() {
+				if ctr.hasGapFillBounds(timeWin) {
 					if ctr.boundedStreamReadyForTail(timeWin) {
 						complete, err := ctr.closeBoundedGapFillTail(timeWin)
 						if err != nil {
@@ -667,7 +675,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 			return moerr.NewInvalidInputNoCtx("GAPFILL partition limit exceeded")
 		}
 		ctr.partitionWindows = 0
-		if t.hasGapFillBounds() && ctr.gapFillWindows+ctr.gapFillRows > maxGapFillRowsTotal {
+		if ctr.hasGapFillBounds(t) && ctr.gapFillWindows+ctr.gapFillRows > maxGapFillRowsTotal {
 			return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
 		}
 	}
@@ -684,7 +692,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		ctr.nextLeft = types.ZeroDatetime
 		ctr.nextRight = types.ZeroDatetime
 		ctr.zeroWindow = true
-	} else if t.hasGapFillBounds() {
+	} else if ctr.hasGapFillBounds(t) {
 		ctr.left = ctr.gapFillStart
 		ctr.right = ctr.left + t.Interval
 		ctr.nextLeft = ctr.left + t.Sliding
@@ -804,7 +812,7 @@ func (ctr *container) fillRows(t *TimeWin) error {
 
 	switch {
 	case partBreak:
-		if t.hasGapFillBounds() {
+		if ctr.hasGapFillBounds(t) {
 			if ctr.boundedPartitionReadyForTail(t) {
 				complete, err := ctr.closeBoundedGapFillTail(t)
 				if err != nil {
@@ -844,7 +852,7 @@ func (ctr *container) fillRows(t *TimeWin) error {
 				return nil
 			}
 		}
-		if t.hasGapFillBounds() && t.Sliding == t.Interval {
+		if ctr.hasGapFillBounds(t) && t.Sliding == t.Interval {
 			target := vals[ctr.curRowIdx] - vals[ctr.curRowIdx]%t.Interval
 			flushed, err := ctr.advanceBoundedTumblingGap(t, target)
 			if err != nil {

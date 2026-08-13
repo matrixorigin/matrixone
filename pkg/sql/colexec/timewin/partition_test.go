@@ -482,6 +482,29 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestBoundedGapFillZeroTemporalLiteralFallsBackToObservedRange(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	arg := newBoundedPartArg(
+		t, proc,
+		"0000-00-00 00:00:00", "0001-01-01 00:00:05",
+		false,
+	)
+
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+	require.False(t, arg.ctr.boundedGapFill)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testing.T) {
 	for _, scale := range []int32{0, 3, 6} {
 		t.Run(types.T_datetime.ToTypeWithScale(scale).String(), func(t *testing.T) {
@@ -525,6 +548,48 @@ func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testi
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("0000-00-00 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	arg := newBoundedPartArg(
+		t, proc,
+		"0000-00-00 00:00:00", "0001-01-01 00:00:05",
+		false,
+	)
+	arg.GapFillStart = preparedDatetimeBound(t, 0)
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+	require.False(t, arg.ctr.boundedGapFill)
+
+	arg.Reset(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("0001-01-01 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	starts, sums, _ = runPartArgBats(t, arg, proc, nil)
+	require.Equal(t, []types.Datetime{types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{0}, sums)
+	require.True(t, arg.ctr.boundedGapFill)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // Sliding windows carry state across rows, so a partition boundary has to
