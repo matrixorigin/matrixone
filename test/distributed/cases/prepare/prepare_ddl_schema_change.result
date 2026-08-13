@@ -103,8 +103,7 @@ where table_schema = 'prepare_ddl_schema_change' and table_name = 'renamed_t2'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
 b  𝄀
-c  𝄀
-__mo_fake_pk_col
+c
 deallocate prepare rename_stmt;
 create table like_src (a int);
 prepare like_stmt from 'create table like_dst like like_src';
@@ -116,8 +115,7 @@ where table_schema = 'prepare_ddl_schema_change' and table_name = 'like_dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
 a  𝄀
-b  𝄀
-__mo_fake_pk_col
+b
 deallocate prepare like_stmt;
 create table clone_src (a int);
 insert into clone_src values (1);
@@ -420,8 +418,7 @@ from information_schema.columns
 where table_schema = 'clone_prepare_db1' and table_name = 'dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
-a  𝄀
-__mo_fake_pk_col
+a
 select count(*)
 from information_schema.tables
 where table_schema = 'clone_prepare_db2' and table_name = 'dst';
@@ -435,8 +432,7 @@ from information_schema.columns
 where table_schema = 'clone_prepare_db1' and table_name = 'dst'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  𝄀
-a  𝄀
-__mo_fake_pk_col
+a
 select count(*)
 from information_schema.tables
 where table_schema = 'prepare_ddl_schema_change' and table_name = 'dst';

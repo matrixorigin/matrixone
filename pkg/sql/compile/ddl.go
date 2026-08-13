@@ -1341,6 +1341,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
+	return s.createTable(c, nil)
+}
+
+// createTable invokes tableCreated immediately after it creates the main table.
+// This lets callers that have follow-up work distinguish IF NOT EXISTS's no-op
+// success from a physical table creation without repeating the existence check.
+func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -1507,6 +1514,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	if tableCreated != nil {
+		tableCreated()
 	}
 
 	rollbackTempAlias := false
@@ -4046,15 +4056,19 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 func (s *Scope) TableClone(c *Compile) error {
 	var (
-		err error
+		err     error
+		created bool
 	)
 
 	clonePlan := s.Plan.GetDdl().GetCloneTable()
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
-		if err = s.CreateTable(c); err != nil {
+		if err = s.createTable(c, func() { created = true }); err != nil {
 			return err
+		}
+		if !created {
+			return nil
 		}
 	}
 
