@@ -578,6 +578,40 @@ func Test_SingleShowCreateTable(t *testing.T) {
 	}
 }
 
+func TestConstructCreateTableSQLPreservesPropertyQuotes(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	const sourceSQL = `create table property_source (id int) properties('key"with''quote\\slash' = 'value"with''quote\\slash')`
+
+	sourceDef, err := buildTestCreateTableStmt(mock, sourceSQL)
+	require.NoError(t, err)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
+	require.NoError(t, err)
+
+	replayedDef, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		`key"with'quote\slash`: `value"with'quote\slash`,
+	}, tablePropertiesForTest(replayedDef))
+}
+
+func tablePropertiesForTest(tableDef *plan.TableDef) map[string]string {
+	properties := make(map[string]string)
+	for _, def := range tableDef.Defs {
+		if propertiesDef := def.GetProperties(); propertiesDef != nil {
+			for _, property := range propertiesDef.Properties {
+				if property.Key != catalog.SystemRelAttr_Comment &&
+					property.Key != catalog.SystemRelAttr_Kind &&
+					property.Key != catalog.SystemRelAttr_CreateSQL &&
+					property.Key != catalog.PropSchemaExtra {
+					properties[property.Key] = property.Value
+				}
+			}
+		}
+	}
+	return properties
+}
+
 func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
 	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {

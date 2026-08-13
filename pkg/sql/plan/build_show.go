@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -147,18 +146,8 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, err
 	}
 
-	var buf bytes.Buffer
-	for i, ch := range ddlStr {
-		// escape double quote, for the sql pattern below
-		if ch == '"' {
-			if i == 0 || ddlStr[i-1] != '\\' {
-				buf.WriteRune('"')
-			}
-		}
-		buf.WriteRune(ch)
-	}
-	sql := "SELECT \"%s\" AS `Table`, \"%s\" AS `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, buf.String())
+	sql := "SELECT %s AS `Table`, %s AS `Create Table`"
+	sql = fmt.Sprintf(sql, formatStrLit(tblName), formatStrLit(ddlStr))
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }

@@ -645,7 +645,7 @@ func constructCreateTableSQL(
 			if i > 0 {
 				propsStr += ", "
 			}
-			propsStr += fmt.Sprintf(`"%s" = "%s"`, prop.Key, prop.Value)
+			propsStr += fmt.Sprintf("%s = %s", formatStrLit(prop.Key), formatStrLit(prop.Value))
 		}
 		propsStr += ")"
 		createStr += propsStr
@@ -1435,6 +1435,7 @@ func EscapeFormat(s string) string {
 	return buf.String()
 }
 
+// formatStrLit quotes s as a replayable MySQL string literal.
 func formatStrLit(s string) string {
 	var buf strings.Builder
 	buf.Grow(len(s) + 2)
