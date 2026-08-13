@@ -173,6 +173,38 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			},
 		}
 	}
+
+	// The loop above only rewrites projections that ARE a bare fulltext_match, because
+	// projids holds the positions getFullTextMatchFromProject recognised. A MATCH WRAPPED by
+	// a scalar -- `round(match(...), 3)`, `cast(match(...) as double)`, `match(...) * 100` --
+	// is not at one of those positions, so it was left untouched, reached execution and threw
+	// the 20105 "cannot be replaced by FULLTEXT INDEX" error even though the index scan had
+	// just been built for the accompanying WHERE MATCH.
+	//
+	// Sweep whatever is left. This is the projection twin of the wrapped-predicate lift in
+	// buildFullTextIndexScan, and the same defect the vector side fixed for wrapped distances
+	// in #26961 -- which is why the walk (replaceScoreFnInExpr) is shared with it.
+	//
+	// Single served MATCH only, matching the filter side: with several, choosing WHICH index
+	// scan's score a wrapped projection refers to needs argument matching this does not
+	// attempt, and guessing would silently report the wrong score.
+	if len(filter_node_ids)+len(proj_node_ids) == 1 {
+		id := append(append([]int32{}, filter_node_ids...), proj_node_ids...)[0]
+		if ftnode := builder.qry.Nodes[id]; ftnode != nil && len(ftnode.BindingTags) > 0 {
+			scoreExpr := func() *plan.Expr {
+				return &Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ, // score column
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
+					},
+				}
+			}
+			for i := range projNode.ProjectList {
+				projNode.ProjectList[i] = replaceScoreFnInExpr(
+					projNode.ProjectList[i], "fulltext_match", scoreExpr)
+			}
+		}
+	}
 	return nodeID, nil
 }
 

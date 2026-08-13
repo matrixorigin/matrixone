@@ -1,0 +1,90 @@
+set experimental_fulltext_index = 1;
+set ft_relevancy_algorithm="TF-IDF";
+drop database if exists ft_wrapped;
+create database ft_wrapped;
+use ft_wrapped;
+create table docs(id int primary key, body text);
+insert into docs values (1,'hello a'),(2,'other text'),(3,'hello hello b');
+create fulltext index ft on docs(body);
+select id, match(body) against('hello') as sc from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+3  ¦  0.062016264
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.031  𝄀
+3  ¦  0.062
+select id, cast(match(body) against('hello') as decimal(10,3)) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[3,10,3]  𝄀
+1  ¦  0.031  𝄀
+3  ¦  0.062
+select id, match(body) against('hello') * 100 as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  3.100813180208206  𝄀
+3  ¦  6.201626360416412
+select id, round(match(body) against('hello') + 1, 3) as r from docs where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  1.031  𝄀
+3  ¦  1.062
+select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello') order by r desc;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+3  ¦  0.062  𝄀
+1  ¦  0.031
+explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_wrapped.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
+select id from v where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where round(sc, 4) > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where cast(sc as double) > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where sc * 2 > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from v where sc > 0 and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(cast(sc as double) * 2, 3) > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+explain select id from v where round(sc, 4) > 0;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Filter Cond: (round(cast(#[12,1] AS DOUBLE), 4) > 0)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_wrapped.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+select id from (
+select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+drop database ft_wrapped;
