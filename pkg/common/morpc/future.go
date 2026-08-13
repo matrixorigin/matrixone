@@ -39,10 +39,14 @@ type Future struct {
 	c    chan Message
 	errC chan error
 	// used to check error for sending message
-	writtenC    chan error
-	waiting     atomic.Bool
-	releaseFunc func(*Future)
-	sendRelease func(Message)
+	writtenC chan error
+	waiting  atomic.Bool
+	// requestMetricObserved makes terminal request accounting exactly once even
+	// when timeout, transport failure, response delivery, and Close race.
+	requestMetricObserved atomic.Bool
+	requestMetrics        *metrics
+	releaseFunc           func(*Future)
+	sendRelease           func(Message)
 	// responseRelease remains owned by the Future until Get receives the
 	// response. If the caller abandons an already-delivered response and closes
 	// the Future, clear returns it to its application pool.
@@ -52,6 +56,7 @@ type Future struct {
 		sync.Mutex
 		notified bool
 		closed   bool
+		released bool
 		ref      int
 		cb       func()
 	}
@@ -62,6 +67,8 @@ func (f *Future) init(send RPCMessage) {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
+	f.requestMetricObserved.Store(false)
+	f.requestMetrics = nil
 	f.send = send
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
@@ -69,7 +76,55 @@ func (f *Future) init(send RPCMessage) {
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.notified = false
+	f.mu.released = false
 	f.mu.Unlock()
+}
+
+// enableRequestMetrics starts lifecycle accounting for a client-side unary
+// request. Internal heartbeat, stream, and server-side write Futures never call
+// this method, so they remain message-level traffic only.
+func (f *Future) enableRequestMetrics(m *metrics) {
+	if m == nil || f.oneWay || f.send.internal || f.send.stream {
+		return
+	}
+	f.requestMetrics = m
+	m.requestStarted()
+}
+
+func (f *Future) observeRequest(outcome requestOutcome) {
+	m := f.requestMetrics
+	if m == nil || !f.requestMetricObserved.CompareAndSwap(false, true) {
+		return
+	}
+	m.requestCompleted(f.send.createAt, outcome)
+}
+
+func (f *Future) observeRequestError(err error, fallback requestOutcome) {
+	if f.requestMetrics == nil || f.requestMetricObserved.Load() {
+		return
+	}
+	// A deadline/cancellation that happened before a later transport callback is
+	// the terminal condition visible to the caller and must win classification.
+	if f.send.Ctx != nil {
+		if ctxErr := f.send.Ctx.Err(); ctxErr != nil {
+			f.observeRequest(requestOutcomeForError(ctxErr, fallback))
+			return
+		}
+	}
+	f.observeRequest(requestOutcomeForError(err, fallback))
+}
+
+func (f *Future) observeRequestClose() {
+	if f.requestMetrics == nil || f.requestMetricObserved.Load() {
+		return
+	}
+	if f.send.Ctx != nil {
+		if err := f.send.Ctx.Err(); err != nil {
+			f.observeRequest(requestOutcomeForError(err, requestOutcomeAbandoned))
+			return
+		}
+	}
+	f.observeRequest(requestOutcomeAbandoned)
 }
 
 // Get get the response data synchronously, blocking until `context.Done` or the response is received.
@@ -80,14 +135,18 @@ func (f *Future) Get() (Message, error) {
 	// waiting in the send queue after the Get returns, causing concurrent reading and writing on the
 	// request.
 	if err := f.waitSendCompleted(); err != nil {
+		f.observeRequestError(err, requestOutcomeSendError)
 		return nil, err
 	}
 	select {
 	case <-f.send.Ctx.Done():
+		f.observeRequestError(f.send.Ctx.Err(), requestOutcomeCanceled)
 		return nil, f.send.Ctx.Err()
 	case resp := <-f.c:
+		f.observeRequest(requestOutcomeSuccess)
 		return resp, nil
 	case err := <-f.errC:
+		f.observeRequestError(err, requestOutcomeBackendError)
 		return nil, err
 	}
 }
@@ -100,11 +159,15 @@ func (f *Future) Close() {
 		f.mu.Unlock()
 		return
 	}
+	f.observeRequestClose()
 	f.mu.closed = true
 	cb := f.mu.cb
 	f.mu.cb = nil
-	f.maybeReleaseLocked()
+	release := f.takeReleaseLocked()
 	f.mu.Unlock()
+	if release != nil {
+		release(f)
+	}
 	if cb != nil {
 		cb()
 	}
@@ -127,6 +190,9 @@ func (f *Future) waitSendCompleted() error {
 
 func (f *Future) messageSent(err error) {
 	if !f.oneWay && f.waiting.CompareAndSwap(false, true) {
+		if err != nil {
+			f.observeRequestError(err, requestOutcomeSendError)
+		}
 		if f.sendRelease != nil {
 			f.sendRelease(f.send.Message)
 		}
@@ -147,11 +213,13 @@ func (f *Future) clearSendRelease() {
 	f.sendRelease = nil
 }
 
-func (f *Future) maybeReleaseLocked() {
-	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+func (f *Future) takeReleaseLocked() func(*Future) {
+	if f.mu.closed && f.mu.ref == 0 && !f.mu.released && f.releaseFunc != nil {
+		f.mu.released = true
 		f.clear()
-		f.releaseFunc(f)
+		return f.releaseFunc
 	}
+	return nil
 }
 
 func (f *Future) clear() {
@@ -184,6 +252,7 @@ func (f *Future) done(response Message, cb func()) bool {
 		return false
 	}
 	f.mu.cb = cb
+	f.observeRequest(requestOutcomeSuccess)
 	f.c <- response
 	f.mu.notified = true
 	f.mu.Unlock()
@@ -201,6 +270,7 @@ func (f *Future) error(id uint64, err error, cb func()) bool {
 		return false
 	}
 	f.mu.cb = cb
+	f.observeRequestError(err, requestOutcomeBackendError)
 	f.errC <- err
 	f.mu.notified = true
 	f.mu.Unlock()
@@ -208,21 +278,34 @@ func (f *Future) error(id uint64, err error, cb func()) bool {
 }
 
 func (f *Future) ref() {
+	if !f.tryRef() {
+		panic("ref released MORPC Future")
+	}
+}
+
+func (f *Future) tryRef() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if f.mu.released {
+		return false
+	}
 	f.mu.ref++
+	return true
 }
 
 func (f *Future) unRef() {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	f.mu.ref--
 	if f.mu.ref < 0 {
+		f.mu.Unlock()
 		panic("BUG")
 	}
-	f.maybeReleaseLocked()
+	release := f.takeReleaseLocked()
+	f.mu.Unlock()
+	if release != nil {
+		release(f)
+	}
 }
 
 func (f *Future) reset() {
@@ -233,6 +316,7 @@ func (f *Future) reset() {
 	f.send = RPCMessage{}
 	f.sendRelease = nil
 	f.responseRelease = nil
+	f.requestMetrics = nil
 	f.mu.cb = nil
 	f.id = 0
 }

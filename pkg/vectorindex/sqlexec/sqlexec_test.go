@@ -258,3 +258,21 @@ func TestFinishTxnWithCleanupContextCommitsWithFreshContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), commitTenant)
 }
+
+// TestSqlProcessServiceAndAccount covers the GetService/GetAccountID accessors added for the
+// cache freshness check (captured at load to re-query in the background).
+func TestSqlProcessServiceAndAccount(t *testing.T) {
+	// Proc-backed: just exercise the branch (values depend on the test proc).
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sp := NewSqlProcess(proc)
+	_ = sp.GetService()
+	_, _ = sp.GetAccountID()
+
+	// SqlCtx-backed: deterministic service + account.
+	sc := NewSqlContext(context.Background(), "cn-uuid", nil, 42, nil)
+	sp2 := NewSqlProcessWithContext(sc)
+	require.Equal(t, "cn-uuid", sp2.GetService())
+	acc, err := sp2.GetAccountID()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), acc)
+}

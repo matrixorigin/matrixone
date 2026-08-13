@@ -20,6 +20,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -44,6 +44,19 @@ type HnswSearch[T types.RealNumbers] struct {
 	Mutex         sync.Mutex
 	Cond          *sync.Cond
 	ThreadsSearch int64
+
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a CONTENT
+	// fingerprint over the per-model file checksums (MD5s) plus the model-row count — see
+	// hnswGenerationSql. loadedFp moves on ANY content change (CDC append/delete rewrites a model
+	// file, REBUILD/MERGE, or a model emptied) and is clock-independent, so it survives an
+	// intermediate empty state that a timestamp-based generation could not. cnUUID/accountID re-query
+	// in the background. genValid=false (capture failed) ⇒ IsStale reports stale so the entry is
+	// evicted and reloaded.
+	cnUUID      string
+	accountID   uint32
+	loadedFp    uint64
+	loadedCount int64
+	genValid    bool
 }
 
 func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -289,7 +302,40 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	s.Indexes = indexes
 
+	// Capture the generation + durable handles for IsStale. Same txn as the load, so the captured
+	// generation matches the loaded snapshot. If capture fails here, genValid stays false and
+	// IsStale reports the entry as uncheckable-hence-stale (evict + reload to retry capture)
+	// rather than pinning it forever — see IsStale.
+	s.cnUUID = sqlproc.GetService()
+	if acc, e := sqlproc.GetAccountID(); e == nil {
+		if fp, count, e2 := loadHnswGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedFp, s.loadedCount, s.genValid = acc, fp, count, true
+		}
+	}
 	return nil
+}
+
+// IsStale reports whether the loaded model has fallen behind the persisted index — any content
+// change (CDC append/delete rewriting a model file, REBUILD/MERGE, or an emptied model) changes the
+// checksum fingerprint / model count — for the VectorIndexCache cross-CN freshness check.
+// Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
+// at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
+// dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒
+// (true, nil): the entry cannot self-check freshness, so evict it to force a reload that retries
+// capture. Returning (false, nil) here would pin a hot entry — whose TTL keeps sliding on every
+// search — in cache indefinitely, serving pre-CDC/rebuild data forever; the bounded reload (one
+// per freshness sweep) self-heals the moment capture succeeds.
+func (s *HnswSearch[T]) IsStale() (bool, error) {
+	if !s.genValid || s.cnUUID == "" {
+		return true, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	fp, count, err := queryHnswGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	if err != nil {
+		return true, err
+	}
+	return fp != s.loadedFp || count != s.loadedCount, nil
 }
 
 // check config and update some parameters such as ef_search
@@ -317,6 +363,8 @@ func (s *HnswSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt ve
 	return nil
 }
 
-func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (s *HnswSearch[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }
