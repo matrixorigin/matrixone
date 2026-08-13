@@ -150,6 +150,9 @@ func (r *preparedParamCommonTypeDependencyRule) visitPlan(p *Plan) error {
 					r.visit(item.Reserved)
 				}
 			}
+			if err := r.visitQuery(setVariables.Query); err != nil {
+				return err
+			}
 		}
 		if prepare := planImpl.Dcl.GetPrepare(); prepare != nil {
 			return r.visitPlan(prepare.Plan)

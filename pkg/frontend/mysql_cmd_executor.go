@@ -936,11 +936,27 @@ func doSetVar(
 		userVarIsBin            bool
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
-	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
+	var rebuiltItems []*plan.SetVariablesItem
+	if preparedExpression {
+		if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			p := cw.Plan()
+			if p != nil && p.GetDcl() != nil && p.GetDcl().GetSetVariables() != nil {
+				rebuiltItems = p.GetDcl().GetSetVariables().GetItems()
+			}
+		}
+	}
+	evaluateAssignment := func(index int, assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, evalErr := getExprValueWithPrepareMeta(
-			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		var value interface{}
+		var evalErr error
+		if index < len(rebuiltItems) && rebuiltItems[index] != nil && !planExprHasSubquery(rebuiltItems[index].Value) {
+			value, evalErr = getPlanExprValueWithPrepareMeta(
+				rebuiltItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+		} else {
+			value, evalErr = getExprValueWithPrepareMeta(
+				assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
+		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
@@ -1167,7 +1183,7 @@ func doSetVar(
 		}()
 
 		for _, assign := range sv.Assignments {
-			item, evalErr := evaluateAssignment(assign)
+			item, evalErr := evaluateAssignment(0, assign)
 			if evalErr != nil {
 				return evalErr
 			}
@@ -1179,8 +1195,8 @@ func doSetVar(
 		return nil
 	}
 
-	for _, assign := range sv.Assignments {
-		item, evalErr := evaluateAssignment(assign)
+	for index, assign := range sv.Assignments {
+		item, evalErr := evaluateAssignment(index, assign)
 		if evalErr != nil {
 			return evalErr
 		}

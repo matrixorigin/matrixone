@@ -4801,7 +4801,7 @@ func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
 	clause.Exprs = clause.Exprs[1:]
 
 	retryPlan, err := buildPlanForCompileRetry(
-		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, nil)
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
 	require.Equal(t, 2, secondParam.Offset)
@@ -4823,7 +4823,7 @@ func TestCompileRetryKeepsRuntimeParamSelection(t *testing.T) {
 	compilerCtx := plan.NewMockCompilerContext(true)
 	compilerCtx.GetProcessFunc = func() *process.Process { return proc }
 
-	retryPlan, err := buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, true, []int32{1})
+	retryPlan, err := buildPlanForCompileRetry(ctx, nil, compilerCtx, stmt, true, []int32{1}, nil)
 	require.NoError(t, err)
 	project := retryPlan.GetQuery().Nodes[retryPlan.GetQuery().Steps[0]].ProjectList
 	require.NotNil(t, project[0].GetP())

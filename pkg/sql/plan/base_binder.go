@@ -5711,7 +5711,7 @@ func runtimePreparedNumericType(expr *Expr) (types.Type, int32, bool) {
 	if _, err := fmt.Sscanf(expr.Typ.Enumvalues, prefix+"%d:%d:%d", &mode, &width, &scale); err != nil {
 		return types.Type{}, 0, false
 	}
-	if mode == 3 {
+	if mode == 3 || mode == 7 {
 		return types.T_float64.ToType(), mode, true
 	}
 	if mode == 5 {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,4 +61,14 @@ func TestStatementOptionParamsPreserveNulls(t *testing.T) {
 	require.Equal(t, []byte("7"), vec.GetRawBytesAt(0))
 	require.True(t, vec.IsNull(1))
 	require.Equal(t, []byte("value"), vec.GetRawBytesAt(2))
+}
+
+func TestStatementOptionPreservesPrepareParamMeta(t *testing.T) {
+	opts := StatementOption{}.WithPrepareParamMeta(
+		[]bool{true, false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamFloat},
+	)
+	isBin, kinds := opts.PrepareParamMeta()
+	require.Equal(t, []bool{true, false}, isBin)
+	require.Equal(t, []vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamFloat}, kinds)
 }

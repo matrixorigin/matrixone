@@ -114,6 +114,15 @@ func TestPreparedParamCommonTypeDependenciesCoverPlanAndWindowShapes(t *testing.
 			want: []bool{true, true},
 		},
 		{
+			name: "dcl set scalar subquery graph",
+			plan: &Plan{Plan: &planpb.Plan_Dcl{Dcl: &planpb.DataControl{
+				Control: &planpb.DataControl_SetVariables{SetVariables: &planpb.SetVariables{
+					Query: queryWithProject(dependent(0)),
+				}},
+			}}},
+			want: []bool{true},
+		},
+		{
 			name: "ddl embedded query",
 			plan: &Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
 				Query: queryWithProject(dependent(0)),

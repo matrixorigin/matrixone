@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -415,7 +416,8 @@ func (exec *txnExecutor) Exec(
 	prepared := false
 	if statementOption.HasParams() {
 		vec := statementOption.Params(exec.s.mp)
-		proc.SetPrepareParams(vec)
+		isBin, kinds := statementOption.PrepareParamMeta()
+		proc.SetPrepareParamsWithMeta(vec, isBin, kinds)
 		prepared = true
 		defer vec.Free(proc.Mp())
 	}
@@ -497,15 +499,18 @@ func (exec *txnExecutor) Exec(
 	defer c.Release()
 
 	if prepared {
+		retryBindingTypes := append([]types.Type(nil), statementOption.PreparedParamBindingTypes()...)
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			retryCtx := exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower)
+			retryCtx.preparedParamBindingTypes = retryBindingTypes
 			pn, err := plan.BuildPlan(
-				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+				retryCtx,
 				stmts[0], true,
 			)
 			if err != nil {
 				return pn, err
 			}
-			_, _, err = plan.ResetPreparePlan(compileContext, pn)
+			_, _, err = plan.ResetPreparePlan(retryCtx, pn)
 			if err != nil {
 				return pn, err
 			}
@@ -625,8 +630,9 @@ func materializeInternalExactDecimalComparisonParams(
 			continue
 		}
 		values[i] = plan.ParamValue{
-			Value: string(params.GetRawBytesAt(i)),
-			IsBin: proc.GetPrepareParamIsBin(i),
+			Value:            string(params.GetRawBytesAt(i)),
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
 		}
 	}
 	return plan.FillExactDecimalComparisonParamsInPlan(ctx, pn, values)

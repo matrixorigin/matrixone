@@ -747,6 +747,7 @@ const (
 	preparedNumericWide       int32 = 4
 	preparedNumericFallback   int32 = 5
 	preparedNumericPrefixMax  int32 = 6
+	preparedNumericApprox     int32 = 7
 )
 
 func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
@@ -783,6 +784,11 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	case integral <= 67 && scale <= 9:
 		binding.Size = preparedNumericWide
 		binding.Width, binding.Scale = 76, 9
+	case full && integral > 67 && integral <= 76 && scale <= 9:
+		// A fixed exact DECIMAL domain cannot retain both 68+ integral digits
+		// and an arbitrary fractional peer. Use an explicit numeric
+		// approximation instead of silently falling back to lexical TEXT.
+		binding.Size = preparedNumericApprox
 	case !full && integral > 76:
 		binding.Size = preparedNumericPrefixMax
 		binding.Width, binding.Scale = 74, 9
@@ -1847,9 +1853,10 @@ func createCompile(
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	forcePrepare := execCtx.input.isPreparedExpr()
 	retryRuntimePositions := slices.Clone(runtimeDecimalParamPositions)
+	retryBindingTypes := clonePreparedParamBindingTypes(proc.GetPreparedParamBindingTypes())
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		return buildPlanForCompileRetry(
-			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, retryRuntimePositions)
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, retryRuntimePositions, retryBindingTypes)
 	})
 
 	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
@@ -1884,7 +1891,12 @@ func buildPlanForCompileRetry(
 	stmt tree.Statement,
 	forcePrepare bool,
 	runtimeDecimalParamPositions []int32,
+	preparedParamBindingTypes []types.Type,
 ) (*plan2.Plan, error) {
+	if txnCtx, ok := compilerContext.(*TxnCompilerContext); ok {
+		txnCtx.setPreparedParamBindingTypes(preparedParamBindingTypes)
+		defer txnCtx.setPreparedParamBindingTypes(nil)
+	}
 	if len(runtimeDecimalParamPositions) > 0 {
 		ctx = plan2.WithPrepareRuntimeParams(ctx, runtimeDecimalParamPositions...)
 		originalCtx := compilerContext.GetContext()

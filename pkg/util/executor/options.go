@@ -392,6 +392,18 @@ func (opts StatementOption) WithParamsAndNulls(
 	return opts
 }
 
+func (opts StatementOption) WithPrepareParamMeta(
+	isBin []bool, kinds []vector.PrepareParamKind,
+) StatementOption {
+	opts.paramIsBin = append([]bool(nil), isBin...)
+	opts.paramKinds = append([]vector.PrepareParamKind(nil), kinds...)
+	return opts
+}
+
+func (opts StatementOption) PrepareParamMeta() ([]bool, []vector.PrepareParamKind) {
+	return opts.paramIsBin, opts.paramKinds
+}
+
 func (opts StatementOption) WithPreparedParamBindingTypes(bindingTypes []types.Type) StatementOption {
 	opts.preparedParamBindingTypes = append([]types.Type(nil), bindingTypes...)
 	return opts

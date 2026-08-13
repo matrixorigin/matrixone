@@ -331,6 +331,56 @@ func getExprValueWithPrepareMeta(
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
+func planExprHasSubquery(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetSub() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if planExprHasSubquery(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if planExprHasSubquery(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getPlanExprValueWithPrepareMeta(
+	expr *plan.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin *bool,
+) (interface{}, error) {
+	executor, err := colexec.NewExpressionExecutor(ses.GetProc(), expr)
+	if err != nil {
+		return nil, err
+	}
+	defer executor.Free()
+	result, err := executor.Eval(
+		ses.GetProc(), []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Free(ses.GetMemPool())
+	*isBin = result.GetIsBin()
+	*prepareParamKind = result.GetPrepareParamKind()
+	if *prepareParamKind == vector.PrepareParamNone {
+		*prepareParamKind = prepareParamKindFromType(result.GetType().Oid)
+	}
+	return getValueFromVector(execCtx.reqCtx, result, ses, expr)
+}
+
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
 // synthetic SELECT evaluation. A direct parameter or variable retains its
 // source conversion category even if projection materialization drops vector-
