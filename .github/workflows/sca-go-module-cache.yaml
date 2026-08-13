@@ -79,12 +79,18 @@ jobs:
         with:
           path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
+      # Keep these metadata outputs and the key schema aligned with
+      # matrixorigin/CI:.github/workflows/ci.yaml.
       - name: Resolve native cache metadata
         id: native-cache-metadata
         run: |
           set -euo pipefail
           compiler="$(cc -dumpmachine)-$(cc -dumpfullversion -dumpversion)"
+          cxx_compiler="$(c++ -dumpmachine)-$(c++ -dumpfullversion -dumpversion)"
+          cmake_version="$(cmake --version | sed -n '1p')"
           echo "compiler=${compiler// /_}" >> "$GITHUB_OUTPUT"
+          echo "cxx-compiler=${cxx_compiler// /_}" >> "$GITHUB_OUTPUT"
+          echo "cmake=${cmake_version// /_}" >> "$GITHUB_OUTPUT"
       - name: Restore native SCA prerequisites
         id: native-cache
         uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
@@ -94,7 +100,7 @@ jobs:
             cgo/*.o
             cgo/libmo.a
             cgo/libmo.so
-          key: matrixone-sca-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-cache-metadata.outputs.compiler }}-${{ hashFiles('cgo/*.c', 'cgo/*.h', 'cgo/Makefile', 'thirdparties/Makefile', 'thirdparties/*.tar.gz', 'thirdparties/download') }}
+          key: matrixone-sca-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-cache-metadata.outputs.compiler }}-${{ steps.native-cache-metadata.outputs.cxx-compiler }}-${{ steps.native-cache-metadata.outputs.cmake }}-${{ hashFiles('Makefile', 'cgo/*.c', 'cgo/*.h', 'cgo/Makefile', 'thirdparties/Makefile', 'thirdparties/*.tar.gz', 'thirdparties/download') }}
       - name: Build native SCA prerequisites
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
