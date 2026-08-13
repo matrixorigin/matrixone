@@ -1615,12 +1615,15 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if n <= 0 {
 			return "", false
 		}
+		if len(base) == 0 {
+			return "", false
+		}
 
 		// return null if result is too long.
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > types.MaxVarcharLen {
+		if n > int64(types.MaxVarcharLen)/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -4333,6 +4336,44 @@ func opBinaryBytesBytesToFixedByBinaryRow[Tr types.FixedSizeTExceptStrType](
 			continue
 		}
 		value, err := fn(v1, v2, parameters[0].GetIsBinaryStringAt(row))
+		if err != nil {
+			return err
+		}
+		if err = rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func opBinaryBytesBytesToFixedByAnyBinaryRow[Tr types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	fn func([]byte, []byte, bool) (Tr, error),
+	selectList *FunctionSelectList,
+) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[Tr](result)
+	var zero Tr
+	for row := 0; row < length; row++ {
+		v1, null1 := p1.GetStrValue(uint64(row))
+		v2, null2 := p2.GetStrValue(uint64(row))
+		if null1 || null2 || selectList != nil && selectList.Contains(uint64(row)) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		binaryString := false
+		for _, parameter := range parameters {
+			if parameter.GetIsBinaryStringAt(row) {
+				binaryString = true
+				break
+			}
+		}
+		value, err := fn(v1, v2, binaryString)
 		if err != nil {
 			return err
 		}

@@ -135,6 +135,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 		succeed, info := tcc.Run()
 		require.True(t, succeed, tc.info, info)
 	}
+
 }
 
 func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
@@ -996,6 +997,21 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
 				[]string{"", "", "", "", "", ""}, []bool{true, true, true, true, true, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, tc.info, info)
+	}
+
+	{
+		tc := tcTemp{
+			info: "test repeat overflow precheck and empty source with max count",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ab", ""}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{math.MaxInt64, math.MaxInt64}, nil),
+			},
+			expect: NewFunctionTestResult(
+				types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
 		succeed, info := tcc.Run()

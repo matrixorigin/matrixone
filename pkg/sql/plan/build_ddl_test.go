@@ -1560,6 +1560,78 @@ func TestBuildCTASMaterializesBinaryLiteralExpressionTypes(t *testing.T) {
 	}
 }
 
+func TestBuildCTASUsesConservativeRepeatTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		prepare   bool
+		wantOIDs  []types.T
+		wantWidth []int32
+	}{
+		{
+			name: "literal counts",
+			sql: `create table copied as select
+				repeat(X'6162', 2) binary_positive,
+				repeat('ab', 2) text_positive,
+				repeat(X'6162', 0) binary_zero,
+				repeat(X'6162', 1 + 1) binary_folded,
+				repeat('ab', 1 + 1) text_folded`,
+			wantOIDs: []types.T{
+				types.T_varbinary, types.T_varchar, types.T_varbinary,
+				types.T_varbinary, types.T_varchar,
+			},
+			wantWidth: []int32{4, 4, 0, 4, 4},
+		},
+		{
+			name: "negative counts",
+			sql: `create table copied as select
+				repeat(X'6162', -1) binary_negative,
+				repeat('ab', -1) text_negative`,
+			wantOIDs:  []types.T{types.T_blob, types.T_text},
+			wantWidth: []int32{0, 0},
+		},
+		{
+			name: "prepared counts",
+			sql: `create table copied as select
+				repeat(X'6162', ?) binary_parameter,
+				repeat('ab', ?) text_parameter`,
+			prepare:   true,
+			wantOIDs:  []types.T{types.T_blob, types.T_text},
+			wantWidth: []int32{0, 0},
+		},
+		{
+			name:      "prepared source",
+			sql:       `create table copied as select repeat(?, 2) text_parameter`,
+			prepare:   true,
+			wantOIDs:  []types.T{types.T_text},
+			wantWidth: []int32{0},
+		},
+		{
+			name: "column counts",
+			sql: `create table copied as select
+				repeat(X'6162', n_nationkey) binary_column,
+				repeat('ab', n_nationkey) text_column
+				from nation`,
+			wantOIDs:  []types.T{types.T_blob, types.T_text},
+			wantWidth: []int32{0, 0},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, tc.prepare)
+			require.NoError(t, err)
+			cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), len(tc.wantOIDs))
+			for idx, oid := range tc.wantOIDs {
+				require.Equal(t, int32(oid), cols[idx].GetTyp().Id, cols[idx].GetName())
+				require.Equal(t, tc.wantWidth[idx], cols[idx].GetTyp().Width, cols[idx].GetName())
+			}
+		})
+	}
+}
+
 func TestBuildCTASMaterializesDynamicBinaryStringTypes(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	ctx.ResolveVariableBinaryStringFunc = func(name string, system, global bool) (bool, error) {

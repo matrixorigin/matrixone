@@ -3957,7 +3957,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
-	adjustBinaryStringFunctionMetadata(name, args, &returnType)
+	adjustStringFunctionMetadata(name, args, &returnType)
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
@@ -4480,19 +4480,66 @@ func literalNonNegativeInt64(expr *Expr) (int64, bool) {
 	return value, value >= 0
 }
 
-func adjustBinaryStringFunctionMetadata(name string, args []*Expr, returnType *types.Type) {
-	if name != "repeat" || len(args) != 2 || returnType.Oid != types.T_varbinary {
+func adjustStringFunctionMetadata(name string, args []*Expr, returnType *types.Type) {
+	if name != "repeat" || len(args) != 2 {
 		return
 	}
 	repeatCount, ok := literalNonNegativeInt64(args[1])
 	if !ok {
+		makeRepeatResultUnbounded(returnType)
 		return
 	}
-	width := int64(returnType.Width) * repeatCount
-	if width > int64(types.MaxVarBinaryLen) {
-		width = int64(types.MaxVarBinaryLen)
+	if repeatCount == 0 {
+		switch returnType.Oid {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			*returnType = types.New(types.T_varbinary, 0, 0)
+		case types.T_char, types.T_varchar, types.T_text:
+			charset := returnType.Charset
+			*returnType = types.NewWithCharset(types.T_varchar, 0, 0, charset)
+		}
+		return
 	}
-	returnType.Width = int32(width)
+
+	sourceType := makeTypeByPlan2Expr(args[0])
+	if sourceType.Oid == types.T_text || sourceType.Oid == types.T_blob || sourceType.Width < 0 {
+		makeRepeatResultUnbounded(returnType)
+		return
+	}
+	limit := int64(types.MaxVarcharLen)
+	switch returnType.Oid {
+	case types.T_binary, types.T_varbinary:
+		limit = int64(types.MaxVarBinaryLen)
+	case types.T_blob:
+		return
+	case types.T_char, types.T_varchar:
+	case types.T_text:
+		return
+	default:
+		return
+	}
+	width := int64(sourceType.Width)
+	if returnType.Oid == types.T_binary || returnType.Oid == types.T_varbinary {
+		// A raw hex/bit literal keeps a VARCHAR-shaped source expression whose
+		// Width counts decoded UTF-8 runes. Overload lookup has already derived
+		// the byte-exact binary width on the return type.
+		width = int64(returnType.Width)
+	}
+	if width < 0 || width > limit || repeatCount > 0 && width > limit/repeatCount {
+		makeRepeatResultUnbounded(returnType)
+		return
+	}
+	returnType.Width = int32(width * repeatCount)
+}
+
+func makeRepeatResultUnbounded(returnType *types.Type) {
+	switch returnType.Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		*returnType = types.T_blob.ToType()
+	case types.T_char, types.T_varchar, types.T_text:
+		charset := returnType.Charset
+		*returnType = types.T_text.ToType()
+		returnType.Charset = charset
+	}
 }
 
 // adjustControlFlowMetadata keeps MySQL-visible metadata for conditional

@@ -684,6 +684,63 @@ func TestRawBinaryLiteralUsesBinaryStringTypesOnlyInStringConsumers(t *testing.T
 	assertType(bind("unary_tilde", raw), types.T_uint64, 0)
 }
 
+func TestRepeatMetadataUsesUnboundedTypeForDynamicOrUnsafeCounts(t *testing.T) {
+	binder := &baseBinder{sysCtx: context.Background()}
+	planType := func(typ types.Type) plan.Type {
+		return makePlan2Type(&typ)
+	}
+	raw, err := binder.bindNumVal(
+		tree.NewNumVal("0x6162", "0x6162", false, tree.P_hexnum),
+		plan.Type{},
+	)
+	require.NoError(t, err)
+	text := makePlan2StringConstExprWithType("ab")
+	param := &plan.Expr{
+		Typ:  planType(types.T_text.ToType()),
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}},
+	}
+	countColumn := &plan.Expr{
+		Typ:  planType(types.T_int64.ToType()),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+
+	bind := func(source, count *plan.Expr) *plan.Expr {
+		expr, bindErr := BindFuncExprImplByPlanExpr(context.Background(), "repeat", []*plan.Expr{
+			DeepCopyExpr(source), DeepCopyExpr(count),
+		})
+		require.NoError(t, bindErr)
+		return expr
+	}
+	assertType := func(expr *plan.Expr, oid types.T, width int32) {
+		require.Equal(t, int32(oid), expr.GetTyp().Id)
+		require.Equal(t, width, expr.GetTyp().Width)
+	}
+
+	assertType(bind(raw, makePlan2Int64ConstExprWithType(0)), types.T_varbinary, 0)
+	assertType(bind(raw, makePlan2Int64ConstExprWithType(2)), types.T_varbinary, 4)
+	assertType(bind(text, makePlan2Int64ConstExprWithType(2)), types.T_varchar, 4)
+	assertType(bind(raw, makePlan2Int64ConstExprWithType(-1)), types.T_blob, 0)
+	assertType(bind(text, makePlan2Int64ConstExprWithType(-1)), types.T_text, 0)
+	assertType(bind(raw, param), types.T_blob, 0)
+	assertType(bind(text, param), types.T_text, 0)
+	assertType(bind(raw, countColumn), types.T_blob, 0)
+	assertType(bind(text, countColumn), types.T_text, 0)
+
+	wideBinary := &plan.Expr{
+		Typ:  planType(types.New(types.T_varbinary, types.MaxVarBinaryLen, 0)),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}},
+	}
+	wideText := &plan.Expr{
+		Typ:  planType(types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}},
+	}
+	assertType(bind(wideBinary, makePlan2Int64ConstExprWithType(1)), types.T_varbinary, types.MaxVarBinaryLen)
+	assertType(bind(wideText, makePlan2Int64ConstExprWithType(1)), types.T_varchar, types.MaxVarcharLen)
+	assertType(bind(wideBinary, makePlan2Int64ConstExprWithType(2)), types.T_blob, 0)
+	assertType(bind(wideText, makePlan2Int64ConstExprWithType(2)), types.T_text, 0)
+	assertType(bind(raw, makePlan2Int64ConstExprWithType(math.MaxInt64)), types.T_blob, 0)
+}
+
 func TestBinaryColumnComparisonDoesNotPadRawLiteral(t *testing.T) {
 	binder := &baseBinder{sysCtx: context.Background()}
 	raw, err := binder.bindNumVal(

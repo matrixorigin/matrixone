@@ -59,9 +59,9 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	rs := vector.MustFunctionResult[bool](result)
-	binaryInput := isBinaryStringVector(parameters[0])
-	if parameters[0].HasBinaryStringRows() {
-		return opBinaryBytesBytesToFixedByBinaryRow[bool](parameters, result, length,
+	binaryInput, binaryRows := likeBinaryStringMode(parameters)
+	if binaryRows {
+		return opBinaryBytesBytesToFixedByAnyBinaryRow[bool](parameters, result, length,
 			func(value, pattern []byte, binaryString bool) (bool, error) {
 				if binaryString {
 					return op.regMap.regularMatchForBinaryLikeOp(
@@ -134,10 +134,13 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		escapeIsNull = isNull
 	}
 
+	binaryInput, binaryRows := likeBinaryStringMode(parameters)
 	escapeEnabled := false
 	var escape rune
 	if !escapeIsNull {
-		if !utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1 {
+		binaryMode, textMode := likeEvaluationModes(parameters, length, binaryInput, binaryRows)
+		if binaryMode && len(escapeBytes) > 1 ||
+			textMode && (!utf8.Valid(escapeBytes) || utf8.RuneCount(escapeBytes) > 1) {
 			return moerr.NewInvalidInputNoCtx("Incorrect arguments to ESCAPE")
 		}
 		if len(escapeBytes) == 0 && likeNoBackslashEscapes(proc) {
@@ -145,13 +148,12 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		}
 
 		escapeEnabled = len(escapeBytes) != 0
-		if escapeEnabled {
+		if escapeEnabled && utf8.Valid(escapeBytes) {
 			escape, _ = utf8.DecodeRune(escapeBytes)
 		}
 	}
-	binaryInput := isBinaryStringVector(parameters[0])
-	if parameters[0].HasBinaryStringRows() {
-		return opBinaryBytesBytesToFixedByBinaryRow[bool](parameters[:2], result, length,
+	if binaryRows {
+		return opBinaryBytesBytesToFixedByAnyBinaryRow[bool](parameters, result, length,
 			func(value, pattern []byte, binaryString bool) (bool, error) {
 				if binaryString {
 					return op.regMap.regularMatchForBinaryLikeOp(pattern, value, escapeBytes, escapeEnabled)
@@ -166,6 +168,45 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		}
 		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 	}, selectList)
+}
+
+func likeBinaryStringMode(parameters []*vector.Vector) (binaryInput, binaryRows bool) {
+	for _, parameter := range parameters {
+		binaryInput = binaryInput || isBinaryStringVector(parameter)
+		binaryRows = binaryRows || parameter.HasBinaryStringRows()
+	}
+	return binaryInput, binaryRows
+}
+
+func likeEvaluationModes(
+	parameters []*vector.Vector,
+	length int,
+	binaryInput bool,
+	binaryRows bool,
+) (binaryMode, textMode bool) {
+	if binaryInput {
+		return true, false
+	}
+	if !binaryRows {
+		return false, true
+	}
+	for row := 0; row < length; row++ {
+		rowIsBinary := false
+		for _, parameter := range parameters {
+			if parameter.GetIsBinaryStringAt(row) {
+				rowIsBinary = true
+				break
+			}
+		}
+		binaryMode = binaryMode || rowIsBinary
+		textMode = textMode || !rowIsBinary
+	}
+	if !binaryMode && !textMode {
+		// An empty batch still needs deterministic validation. Dynamic provenance
+		// can produce either mode on a later batch, so require an escape valid in both.
+		return true, true
+	}
+	return binaryMode, textMode
 }
 
 func likeNoBackslashEscapes(proc *process.Process) bool {

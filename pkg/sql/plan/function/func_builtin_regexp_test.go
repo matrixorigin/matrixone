@@ -625,6 +625,175 @@ func Test_BuiltIn_BinaryStringRegexpPredicatesUseSubjectRows(t *testing.T) {
 	}
 }
 
+func Test_BuiltIn_LikeUsesBinaryModeFromPatternRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"你", "你", "你"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"_", "___", "_"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, false}, nil),
+		newOpBuiltInRegexp().likeFn,
+	)
+	require.NoError(t, tcc.parameters[1].SetIsBinaryStringAt(1, true, proc.Mp()))
+	require.NoError(t, tcc.parameters[1].SetIsBinaryStringAt(2, true, proc.Mp()))
+	succeed, errInfo := tcc.Run()
+	require.True(t, succeed, errInfo)
+}
+
+func Test_BuiltIn_LikeUsesBinaryModeFromStaticPattern(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, tc := range []struct {
+		name        string
+		pattern     string
+		patternType types.Type
+		markPattern bool
+		want        bool
+	}{
+		{name: "typed binary optimized shape", pattern: "_", patternType: types.T_varbinary.ToType()},
+		{name: "typed binary general shape", pattern: "___", patternType: types.T_varbinary.ToType(), want: true},
+		{name: "runtime binary optimized shape", pattern: "_", patternType: types.T_varchar.ToType(), markPattern: true},
+		{name: "runtime binary general shape", pattern: "___", patternType: types.T_varchar.ToType(), markPattern: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"你"}, nil),
+					NewFunctionTestConstInput(tc.patternType, []string{tc.pattern}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), false, []bool{tc.want}, nil),
+				newOpBuiltInRegexp().likeFn,
+			)
+			if tc.markPattern {
+				tcc.parameters[1].SetIsBinaryString(true)
+			}
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
+func Test_BuiltIn_LikeValidatesEscapeForAllArgumentModes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInRegexp()
+
+	t.Run("text escape accepts one multibyte character", func(t *testing.T) {
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a你_"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"你"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+			op.likeFn,
+		)
+		succeed, errInfo := tcc.Run()
+		require.True(t, succeed, errInfo)
+	})
+
+	t.Run("binary escape accepts one arbitrary byte", func(t *testing.T) {
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a\xff_"}, nil),
+				NewFunctionTestConstInput(types.T_varbinary.ToType(), []string{"\xff"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+			op.likeFn,
+		)
+		succeed, errInfo := tcc.Run()
+		require.True(t, succeed, errInfo)
+	})
+
+	t.Run("runtime binary escape selects byte matching", func(t *testing.T) {
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"你"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"___"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"="}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, nil),
+			op.likeFn,
+		)
+		tcc.parameters[2].SetIsBinaryString(true)
+		succeed, errInfo := tcc.Run()
+		require.True(t, succeed, errInfo)
+	})
+
+	t.Run("mixed rows preserve text escape matching", func(t *testing.T) {
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a_", "a_"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a!_", "a!_"}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!"}, nil),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true}, nil),
+			op.likeFn,
+		)
+		require.NoError(t, tcc.parameters[0].SetIsBinaryStringAt(1, true, proc.Mp()))
+		succeed, errInfo := tcc.Run()
+		require.True(t, succeed, errInfo)
+	})
+
+	for _, tc := range []struct {
+		name        string
+		subjectType types.Type
+		patternType types.Type
+		escapeType  types.Type
+		markPattern bool
+		markEscape  bool
+	}{
+		{
+			name:        "binary escape is measured in bytes",
+			subjectType: types.T_varbinary.ToType(), patternType: types.T_varbinary.ToType(),
+			escapeType: types.T_varbinary.ToType(),
+		},
+		{
+			name:        "binary pattern makes text escape byte-oriented",
+			subjectType: types.T_varchar.ToType(), patternType: types.T_varbinary.ToType(),
+			escapeType: types.T_varchar.ToType(),
+		},
+		{
+			name:        "runtime binary escape makes mode byte-oriented",
+			subjectType: types.T_varchar.ToType(), patternType: types.T_varchar.ToType(),
+			escapeType: types.T_varchar.ToType(), markEscape: true,
+		},
+		{
+			name:        "runtime binary pattern makes text escape byte-oriented",
+			subjectType: types.T_varchar.ToType(), patternType: types.T_varchar.ToType(),
+			escapeType: types.T_varchar.ToType(), markPattern: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(tc.subjectType, []string{"a"}, nil),
+					NewFunctionTestConstInput(tc.patternType, []string{"a"}, nil),
+					NewFunctionTestConstInput(tc.escapeType, []string{"你"}, nil),
+				},
+				NewFunctionTestResult(types.T_bool.ToType(), true, []bool{false}, nil),
+				op.likeFn,
+			)
+			if tc.markPattern {
+				tcc.parameters[1].SetIsBinaryString(true)
+			}
+			if tc.markEscape {
+				tcc.parameters[2].SetIsBinaryString(true)
+			}
+			succeed, errInfo := tcc.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
 func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	subjects := []string{"你a", "你a", "你a"}

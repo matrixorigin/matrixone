@@ -631,4 +631,32 @@ execute stmt_ctas_where using @g;
 select * from ctas_where order by i;
 deallocate prepare stmt_ctas_where;
 
+prepare stmt_ctas_repeat from
+  'create table ctas_repeat as select repeat(X''6162'', ?) as binary_value, repeat(''ab'', ?) as text_value';
+set @repeat_count=2;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+show create table ctas_repeat;
+select hex(binary_value), length(binary_value), text_value, length(text_value) from ctas_repeat;
+drop table ctas_repeat;
+set @repeat_count=-1;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+show create table ctas_repeat;
+select binary_value is null, text_value is null from ctas_repeat;
+drop table ctas_repeat;
+set @repeat_count=9223372036854775807;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+select binary_value is null, text_value is null from ctas_repeat;
+drop table ctas_repeat;
+deallocate prepare stmt_ctas_repeat;
+
+create table ctas_repeat_static as select
+  repeat(X'6162', 0) as binary_zero,
+  repeat(X'6162', 2) as binary_positive,
+  repeat(X'6162', -1) as binary_negative,
+  repeat('ab', -1) as text_negative;
+show create table ctas_repeat_static;
+select length(binary_zero), hex(binary_positive), binary_negative is null, text_negative is null
+from ctas_repeat_static;
+drop table ctas_repeat_static;
+
 drop database db_prepare_ctas;

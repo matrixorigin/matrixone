@@ -803,4 +803,55 @@ g    i    v
 1    10    aa
 1    20    bbb
 deallocate prepare stmt_ctas_where;
+prepare stmt_ctas_repeat from
+'create table ctas_repeat as select repeat(X''6162'', ?) as binary_value, repeat(''ab'', ?) as text_value';
+set @repeat_count=2;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+show create table ctas_repeat;
+➤ Table[12,8,0]  ¦  Create Table[12,74,0]  𝄀
+ctas_repeat  ¦  CREATE TABLE `ctas_repeat` (
+  `binary_value` blob DEFAULT NULL,
+  `text_value` text DEFAULT NULL
+)
+select hex(binary_value), length(binary_value), text_value, length(text_value) from ctas_repeat;
+➤ hex(binary_value)[12,49151,0]  ¦  length(binary_value)[-5,64,0]  ¦  text_value[12,0,0]  ¦  length(text_value)[-5,64,0]  𝄀
+61626162  ¦  4  ¦  abab  ¦  4
+drop table ctas_repeat;
+set @repeat_count=-1;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+show create table ctas_repeat;
+➤ Table[12,8,0]  ¦  Create Table[12,74,0]  𝄀
+ctas_repeat  ¦  CREATE TABLE `ctas_repeat` (
+  `binary_value` blob DEFAULT NULL,
+  `text_value` text DEFAULT NULL
+)
+select binary_value is null, text_value is null from ctas_repeat;
+➤ binary_value is null[-7,1,0]  ¦  text_value is null[-7,1,0]  𝄀
+0  ¦  0
+drop table ctas_repeat;
+set @repeat_count=9223372036854775807;
+execute stmt_ctas_repeat using @repeat_count, @repeat_count;
+select binary_value is null, text_value is null from ctas_repeat;
+➤ binary_value is null[-7,1,0]  ¦  text_value is null[-7,1,0]  𝄀
+1  ¦  1
+drop table ctas_repeat;
+deallocate prepare stmt_ctas_repeat;
+create table ctas_repeat_static as select
+repeat(X'6162', 0) as binary_zero,
+repeat(X'6162', 2) as binary_positive,
+repeat(X'6162', -1) as binary_negative,
+repeat('ab', -1) as text_negative;
+show create table ctas_repeat_static;
+➤ Table[12,13,0]  ¦  Create Table[12,139,0]  𝄀
+ctas_repeat_static  ¦  CREATE TABLE `ctas_repeat_static` (
+  `binary_zero` varbinary(0) NOT NULL,
+  `binary_positive` varbinary(4) NOT NULL,
+  `binary_negative` blob NOT NULL,
+  `text_negative` text NOT NULL
+)
+select length(binary_zero), hex(binary_positive), binary_negative is null, text_negative is null
+from ctas_repeat_static;
+➤ length(binary_zero)[-5,64,0]  ¦  hex(binary_positive)[12,49151,0]  ¦  binary_negative is null[-7,1,0]  ¦  text_negative is null[-7,1,0]  𝄀
+0  ¦  61626162  ¦  0  ¦  0
+drop table ctas_repeat_static;
 drop database db_prepare_ctas;

@@ -262,6 +262,32 @@ execute like_escape_stmt using @like_value, @like_pattern, @like_escape;
 set sql_mode = default;
 deallocate prepare like_escape_stmt;
 
+-- LIKE uses byte semantics when any participating string is binary.
+select '你' like _binary '_' as binary_pattern_one_byte,
+       '你' like _binary '___' as binary_pattern_three_bytes;
+select _binary 'a_' like _binary 'a!_' escape _binary '!' as binary_custom_escape;
+select _binary 'a' like _binary 'a' escape _binary '你';
+
+drop table if exists like_binary_mode_test;
+create table like_binary_mode_test (
+  id int primary key,
+  text_subject varchar(8),
+  binary_subject varbinary(8),
+  text_pattern varchar(8),
+  binary_pattern varbinary(8)
+);
+insert into like_binary_mode_test values
+  (1, '你', _binary '你', '_', _binary '_'),
+  (2, '你', _binary '你', '___', _binary '___');
+select id,
+       text_subject like text_pattern as text_text,
+       text_subject like binary_pattern as text_binary,
+       binary_subject like text_pattern as binary_text,
+       binary_subject like binary_pattern as binary_binary
+from like_binary_mode_test
+order by id;
+drop table like_binary_mode_test;
+
 drop table if exists like_escape_test;
 create table like_escape_test (v varchar(20), esc varchar(2));
 insert into like_escape_test values ('a_b', '!'), ('axb', '!');
