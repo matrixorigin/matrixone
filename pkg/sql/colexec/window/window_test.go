@@ -1247,6 +1247,93 @@ func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_float64.ToType()),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		-1,
+	}, nil, proc.Mp()))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestWindowValueResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize + 17

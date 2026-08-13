@@ -1382,9 +1382,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
 
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	n := len(w.PartitionBy)
-
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
 		if err := checkCanceled(proc, 0); err != nil {
@@ -1392,11 +1389,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		if i <= n {
-			ps = partition.Partition(ctr.sels, ds, ps, ovec)
-		} else {
-			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
-		}
+		ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
@@ -1418,18 +1411,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			return false, err
 		}
 		ovec = vec
-		if n == i {
-			ctr.ps = make([]int64, len(ps))
-			copy(ctr.ps, ps)
-		}
-	}
-
-	if n == i {
-		ps = partition.Partition(ctr.sels, ds, ps, ovec)
-		ctr.ps = make([]int64, len(ps))
-		copy(ctr.ps, ps)
-	} else if n == 0 {
-		ctr.ps = nil
 	}
 
 	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
