@@ -137,6 +137,11 @@ func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
 		{name: "leading supplementary", input: "😀", wantTokens: []int{LEX_ERROR}},
 		{name: "ASCII then supplementary", input: "t😀", wantTokens: []int{ID, LEX_ERROR}},
 		{name: "digit then supplementary", input: "1😀", wantTokens: []int{INTEGRAL, LEX_ERROR}},
+		{name: "hex prefix then supplementary", input: "0x😀", wantTokens: []int{LEX_ERROR}},
+		{name: "bit prefix then supplementary", input: "0b😀", wantTokens: []int{LEX_ERROR}},
+		{name: "user variable then supplementary", input: "@😀", wantTokens: []int{LEX_ERROR}},
+		{name: "system variable then supplementary", input: "@@😀", wantTokens: []int{LEX_ERROR}},
+		{name: "charset introducer then supplementary", input: "_utf8mb4😀", wantTokens: []int{LEX_ERROR}},
 	}
 
 	for _, test := range tests {
@@ -149,6 +154,32 @@ func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
 					t.Fatalf("Scan(%q) token %d = %s, want %s",
 						test.input, i, tokenName(token), tokenName(want))
 				}
+			}
+		})
+	}
+}
+
+func TestUnquotedRawByteDirectIdentifierEntries(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantToken int
+		wantValue string
+	}{
+		{name: "hex prefix", input: "0x\xe9A", wantToken: ID, wantValue: "0x\xe9a"},
+		{name: "bit prefix", input: "0b\xe9A", wantToken: ID, wantValue: "0b\xe9a"},
+		{name: "user variable", input: "@\xe9A", wantToken: AT_ID, wantValue: "\xe9A"},
+		{name: "system variable", input: "@@\xe9A", wantToken: AT_AT_ID, wantValue: "\xe9A"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != test.wantToken || value != test.wantValue {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(test.wantToken), test.wantValue)
 			}
 		})
 	}

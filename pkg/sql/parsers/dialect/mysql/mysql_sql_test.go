@@ -5117,6 +5117,11 @@ func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
 		"CREATE TABLE t😀 (a INT)",
 		"CREATE TABLE 1😀 (a INT)",
 		"CREATE TABLE \U00010000 (a INT)",
+		"CREATE TABLE 0x😀 (a INT)",
+		"CREATE TABLE 0b😀 (a INT)",
+		"SELECT @😀",
+		"SELECT @@😀",
+		"SELECT _utf8mb4😀",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := ParseOne(context.Background(), sql, 1)

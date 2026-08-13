@@ -180,7 +180,10 @@ func (s *Scanner) Scan() (int, string) {
 			} else {
 				// this is a dollar sign string
 				strTyp, strStr := s.scanString('$', STRING)
-				_, tagStr := s.scanIdentifier(false)
+				tagTyp, tagStr := s.scanIdentifier(false)
+				if tagTyp == LEX_ERROR {
+					return tagTyp, tagStr
+				}
 				if tagStr != str {
 					return LEX_ERROR, string(byte(s.cur()))
 				}
@@ -198,7 +201,10 @@ func (s *Scanner) Scan() (int, string) {
 					s.inc()
 					return s.scanString('\'', STRING)
 				} else {
-					s.scanIdentifier(false)
+					typ, str := s.scanIdentifier(false)
+					if typ == LEX_ERROR {
+						return typ, str
+					}
 				}
 			}
 			return s.scanIdentifier(false)
@@ -773,7 +779,9 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
+				if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+					return typ, str
+				}
 				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
@@ -786,7 +794,9 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
+				if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+					return typ, str
+				}
 				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
@@ -827,6 +837,12 @@ exit:
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
+		start := s.Pos
+		s.incN(size)
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
+
 	dollarFlag := false
 	if s.cur() == '$' {
 		dollarFlag = true
@@ -865,7 +881,10 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 				s.Pos = cur
 				return keywordID, keywordName
 			}
-			typ, _ := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			typ, str := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			if typ == LEX_ERROR {
+				return typ, str
+			}
 			if typ == WORK || typ == TRANSACTION {
 				s.Pos = cur
 				return keywordID, keywordName
