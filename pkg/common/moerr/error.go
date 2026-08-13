@@ -75,6 +75,7 @@ const (
 	ErrTruncatedWrongValueForField uint16 = 20204
 	ErrTooBigPrecision             uint16 = 20205
 	ErrRegexpIllegalArgument       uint16 = 20206
+	ErrCharacterSetMismatch        uint16 = 20207
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -407,6 +408,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
+	ErrCharacterSetMismatch:        {ER_CHARACTER_SET_MISMATCH, []string{MySQLDefaultSqlState}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1010,6 +1012,10 @@ func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 
 func NewTruncatedValueForField(ctx context.Context, t, v, c string, idx int) *Error {
 	return newError(ctx, ErrTruncatedWrongValueForField, t, v, c, idx)
+}
+
+func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
+	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
 }
 
 func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {

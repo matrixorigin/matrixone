@@ -100,6 +100,16 @@ func TestNew_MyErrorCode(t *testing.T) {
 	)
 }
 
+func TestNewCharacterSetMismatch(t *testing.T) {
+	err := NewCharacterSetMismatch(context.Background(), "binary", "utf8mb4_general_ci", "regexp_like")
+	require.Equal(t, ErrCharacterSetMismatch, err.ErrorCode())
+	require.Equal(t, uint16(ER_CHARACTER_SET_MISMATCH), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t,
+		"Character set 'binary' cannot be used in conjunction with 'utf8mb4_general_ci' in call to regexp_like.",
+		err.Error())
+}
+
 func TestWrongArgumentsMySQLError(t *testing.T) {
 	err := NewWrongArguments(context.Background(), "nth_value")
 	require.Equal(t, ErrWrongArguments, err.ErrorCode())
