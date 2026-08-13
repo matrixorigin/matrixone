@@ -7927,6 +7927,21 @@ func inferGapFillBounds(
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// The time-window key is evaluated as DATETIME by mo_win_truncate. Convert
+	// the already-combined bounds through the same cast path so every temporal
+	// input accepted by the binder (notably TIME and YEAR) reaches the executor
+	// in one representation. Combining first also preserves TIMESTAMP ordering
+	// across session-timezone/DST conversions.
+	datetimeType := plan.Type{Id: int32(types.T_datetime), Scale: timestamp.Typ.Scale}
+	start, err = appendCastBeforeExpr(ctx, start, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = appendCastBeforeExpr(ctx, finish, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
 	return start, finish, nil
 }
 

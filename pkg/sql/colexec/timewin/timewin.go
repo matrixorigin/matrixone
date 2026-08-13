@@ -164,52 +164,51 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
 		loc = proc.GetSessionInfo().TimeZone
 	}
-	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, error) {
+	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, bool, error) {
 		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		if vec.Length() == 0 || vec.IsNull(0) {
-			return 0, moerr.NewInvalidInputNoCtx("GAPFILL bounds cannot be NULL")
+			return 0, true, nil
 		}
 		switch vec.GetType().Oid {
 		case types.T_date:
-			return vector.MustFixedColWithTypeCheck[types.Date](vec)[0].ToDatetime(), nil
+			return vector.MustFixedColWithTypeCheck[types.Date](vec)[0].ToDatetime(), false, nil
 		case types.T_datetime:
-			return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[0], nil
+			return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[0], false, nil
 		case types.T_timestamp:
-			return vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0].ToDatetime(loc), nil
+			return vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0].ToDatetime(loc), false, nil
 		default:
-			return 0, moerr.NewInternalErrorNoCtxf("GAPFILL %s bound has non-temporal type %s", name, vec.GetType().Oid.String())
+			return 0, false, moerr.NewInternalErrorNoCtxf("GAPFILL %s bound has non-temporal type %s", name, vec.GetType().Oid.String())
 		}
 	}
 
-	start, err := eval(ctr.gapFillStartExe, "start")
+	start, startNull, err := eval(ctr.gapFillStartExe, "start")
 	if err != nil {
 		return err
 	}
-	finish, err := eval(ctr.gapFillEndExe, "finish")
+	finish, finishNull, err := eval(ctr.gapFillEndExe, "finish")
 	if err != nil {
 		return err
-	}
-	if start == types.ZeroDatetime || finish == types.ZeroDatetime {
-		return moerr.NewInvalidInputNoCtx("GAPFILL bounds cannot use the zero temporal value")
-	}
-	if start > finish {
-		return moerr.NewInvalidInputNoCtx("GAPFILL start bound must not be after finish bound")
 	}
 	if timeWin.Interval <= 0 || timeWin.Sliding <= 0 {
 		return moerr.NewInternalErrorNoCtx("GAPFILL interval and sliding values must be positive")
 	}
 
-	// An equal half-open range is empty regardless of bucket alignment. Check
-	// it before flooring start, otherwise an unaligned [t, t) would appear to
-	// contain the bucket that begins before t.
-	if start == finish {
+	// These bounds are inferred from ordinary WHERE predicates. NULL makes a
+	// comparison unknown and a reversed/equal half-open range is contradictory,
+	// so all three cases describe an empty input rather than an execution error.
+	// Check this before flooring start, otherwise an unaligned [t, t) would
+	// appear to contain the bucket that begins before t.
+	if startNull || finishNull || start >= finish {
 		ctr.gapFillStart = start
 		ctr.gapFillEnd = finish
 		ctr.status = end
 		return nil
+	}
+	if start == types.ZeroDatetime || finish == types.ZeroDatetime {
+		return moerr.NewInvalidInputNoCtx("GAPFILL bounds cannot use the zero temporal value")
 	}
 
 	ctr.gapFillStart = start - start%timeWin.Interval

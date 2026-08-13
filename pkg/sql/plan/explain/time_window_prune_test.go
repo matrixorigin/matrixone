@@ -268,8 +268,8 @@ func TestGapFillInfersHalfOpenQueryBounds(t *testing.T) {
 	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
 	require.NotNil(t, node.GapFillStart)
 	require.NotNil(t, node.GapFillEnd)
-	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillEnd.Typ.Id)
 }
 
 func TestGapFillInfersDateBounds(t *testing.T) {
@@ -282,8 +282,8 @@ func TestGapFillInfersDateBounds(t *testing.T) {
 	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
 	require.NotNil(t, node.GapFillStart)
 	require.NotNil(t, node.GapFillEnd)
-	require.Equal(t, int32(types.T_date), node.GapFillStart.Typ.Id)
-	require.Equal(t, int32(types.T_date), node.GapFillEnd.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillEnd.Typ.Id)
 }
 
 func TestGapFillLeavesOneSidedPredicateUnbounded(t *testing.T) {
@@ -305,8 +305,10 @@ func TestGapFillCombinesRepeatedBounds(t *testing.T) {
 			" and updated_at < '2026-01-01 00:05:00'"+
 			" interval(updated_at, 1, minute) gapfill(partition)")
 
-	require.Equal(t, "greatest", node.GapFillStart.GetF().Func.ObjName)
-	require.Equal(t, "least", node.GapFillEnd.GetF().Func.ObjName)
-	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
-	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
+	require.Equal(t, "cast", node.GapFillStart.GetF().Func.ObjName)
+	require.Equal(t, "cast", node.GapFillEnd.GetF().Func.ObjName)
+	require.Equal(t, "greatest", node.GapFillStart.GetF().Args[0].GetF().Func.ObjName)
+	require.Equal(t, "least", node.GapFillEnd.GetF().Args[0].GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_datetime), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillEnd.Typ.Id)
 }

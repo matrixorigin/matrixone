@@ -15,6 +15,7 @@
 package timewin
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -91,6 +92,90 @@ func dateBound(t testing.TB, s string) *plan.Expr {
 		Typ: plan.Type{Id: int32(types.T_date)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Value: &plan.Literal_Dateval{Dateval: int32(d)},
+		}},
+	}
+}
+
+func timeBound(t testing.TB, s string) *plan.Expr {
+	t.Helper()
+	value, err := types.ParseTime(s, 6)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_time), Scale: 6},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Timeval{Timeval: int64(value)},
+		}},
+	}
+}
+
+func yearBound(t testing.TB, year string) *plan.Expr {
+	t.Helper()
+	from := types.T_varchar.ToType()
+	to := types.T_year.ToType()
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_year)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_varchar)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{Sval: year},
+					}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_year)},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		}},
+	}
+}
+
+func castTemporalBoundToDatetime(t testing.TB, expr *plan.Expr) *plan.Expr {
+	t.Helper()
+	from := types.NewWithCharset(
+		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+	to := types.T_datetime.ToTypeWithScale(6)
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				expr,
+				{
+					Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		}},
+	}
+}
+
+func preparedDatetimeBound(t testing.TB, pos int32) *plan.Expr {
+	t.Helper()
+	from := types.T_text.ToType()
+	to := types.T_datetime.ToTypeWithScale(6)
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_text)},
+					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
 		}},
 	}
 }
@@ -710,6 +795,51 @@ func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestBoundedGapFillExecutesNormalizedTimeAndYearBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		start    *plan.Expr
+		finish   *plan.Expr
+		wantRows int
+		interval types.Datetime
+	}{
+		{
+			name:     "time",
+			start:    timeBound(t, "00:00:00"),
+			finish:   timeBound(t, "00:00:15"),
+			wantRows: 3,
+			interval: 5 * types.Datetime(types.MicroSecsPerSec),
+		},
+		{
+			name:     "year",
+			start:    yearBound(t, "2023"),
+			finish:   yearBound(t, "2024"),
+			wantRows: 0,
+			interval: types.Datetime(types.SecsPerDay * types.MicroSecsPerSec),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := newBoundedPartArg(
+				t, proc,
+				"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+				false,
+			)
+			arg.GapFillStart = castTemporalBoundToDatetime(t, tc.start)
+			arg.GapFillEnd = castTemporalBoundToDatetime(t, tc.finish)
+			arg.Interval = tc.interval
+			arg.Sliding = tc.interval
+
+			starts, _, _ := runPartArgBats(t, arg, proc, nil)
+			require.Len(t, starts, tc.wantRows)
+
+			arg.Free(proc, false, nil)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
@@ -771,7 +901,7 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 	}{
 		{name: "aligned empty", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:00"},
 		{name: "unaligned empty", start: "2023-08-01 00:00:02", finish: "2023-08-01 00:00:02"},
-		{name: "reversed", start: "2023-08-01 00:00:05", finish: "2023-08-01 00:00:00", wantError: "after finish"},
+		{name: "reversed", start: "2023-08-01 00:00:05", finish: "2023-08-01 00:00:00"},
 		{name: "unpaired", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:05", dropFinish: true, wantError: "both start and finish"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -793,6 +923,39 @@ func TestBoundedGapFillValidatesDomain(t *testing.T) {
 			require.Equal(t, int64(0), proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.GapFillStart = preparedDatetimeBound(t, 0)
+	starts, _, _ := runPartArgBats(t, arg, proc, nil)
+	require.Empty(t, starts)
+
+	arg.Reset(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+
+	params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("2023-08-01 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	starts, _, _ = runPartArgBats(t, arg, proc, nil)
+	require.Len(t, starts, 3)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func TestBoundedGapFillReuseAfterReset(t *testing.T) {

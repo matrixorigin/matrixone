@@ -2778,7 +2778,7 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2840,6 +2840,69 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.Equal(t, int32(types.T_datetime), timeWindowNode.GroupBy[0].Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
+		})
+	}
+}
+
+func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oid   types.T
+		scale int32
+		make  func(int64) *plan.Expr
+	}{
+		{
+			name:  "time",
+			oid:   types.T_time,
+			scale: 6,
+			make: func(value int64) *plan.Expr {
+				return MakePlan2TimeConstExprWithType(value)
+			},
+		},
+		{
+			name:  "year",
+			oid:   types.T_year,
+			scale: 0,
+			make: func(value int64) *plan.Expr {
+				expr := makePlan2Int16ConstExprWithType(int16(value))
+				expr.Typ = plan.Type{Id: int32(types.T_year)}
+				return expr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			timestamp := &plan.Expr{
+				Typ: plan.Type{Id: int32(tc.oid), Scale: tc.scale},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			boundFilter := func(op string, bound *plan.Expr) *plan.Expr {
+				return &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: op},
+						Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+					}},
+				}
+			}
+
+			start, finish, err := inferGapFillBounds(
+				context.Background(),
+				[]*plan.Expr{
+					boundFilter(">=", tc.make(1)),
+					boundFilter("<", tc.make(2)),
+				},
+				timestamp,
+			)
+			require.NoError(t, err)
+			for _, bound := range []*plan.Expr{start, finish} {
+				require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+				require.Equal(t, timestamp.Typ.Scale, bound.Typ.Scale)
+				require.Equal(t, "cast", bound.GetF().Func.ObjName)
+				require.Equal(t, int32(tc.oid), bound.GetF().Args[0].Typ.Id)
+			}
 		})
 	}
 }
