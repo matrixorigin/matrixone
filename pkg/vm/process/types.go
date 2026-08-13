@@ -371,6 +371,7 @@ type BaseProcess struct {
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
 	prepareParams                       *vector.Vector
 	prepareParamsIsBin                  []bool
+	preparedParamBindingTypes           []types.Type
 	prepareParamsOwned                  bool
 	QueryClient                         qclient.QueryClient
 	Hakeeper                            logservice.CNHAKeeperClient
@@ -560,6 +561,14 @@ func (proc *Process) GetPrepareParamKind(i int) vector.PrepareParamKind {
 		kind |= 4
 	}
 	return kind
+}
+
+func (proc *Process) SetPreparedParamBindingTypes(bindingTypes []types.Type) {
+	proc.Base.preparedParamBindingTypes = append([]types.Type(nil), bindingTypes...)
+}
+
+func (proc *Process) GetPreparedParamBindingTypes() []types.Type {
+	return proc.Base.preparedParamBindingTypes
 }
 
 func (proc *Process) getPrepareParamMeta(i, section int) bool {

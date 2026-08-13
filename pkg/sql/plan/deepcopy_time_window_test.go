@@ -17,9 +17,38 @@ package plan
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeepCopyPlanPreservesCompleteProtoSemantics(t *testing.T) {
+	original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		DdlType: plan.DataDefinition_CREATE_TABLE,
+		Query: &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{{
+			NodeType:          plan.Node_JOIN,
+			ApplyType:         plan.Node_OUTERAPPLY,
+			OnDuplicateAction: plan.Node_UPDATE,
+			ScanSnapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{
+				TenantName: "snapshot-tenant", TenantID: 42,
+			}},
+			SendMsgList: []plan.MsgHeader{{MsgTag: 17, MsgType: 3}},
+		}}},
+		Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{
+			Database: "db", CreateAsSelectSql: "insert into dst select * from src",
+		}},
+	}}}
+
+	copied := DeepCopyPlan(original)
+	require.True(t, proto.Equal(original, copied))
+	require.NotSame(t, original, copied)
+	require.NotSame(t, original.GetDdl().Query.Nodes[0], copied.GetDdl().Query.Nodes[0])
+
+	copied.GetDdl().Query.Nodes[0].ScanSnapshot.Tenant.TenantName = "changed"
+	copied.GetDdl().GetCreateTable().CreateAsSelectSql = "changed"
+	require.Equal(t, "snapshot-tenant", original.GetDdl().Query.Nodes[0].ScanSnapshot.Tenant.TenantName)
+	require.Equal(t, "insert into dst select * from src", original.GetDdl().GetCreateTable().CreateAsSelectSql)
+}
 
 func twTestColExpr(relPos, colPos int32) *plan.Expr {
 	return &plan.Expr{

@@ -1652,6 +1652,13 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
 	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
 		// The literal is a string, parse it as decimal
+		if constT.Oid == types.T_decimal256 {
+			dec, _, err := types.Parse256(sval.Sval)
+			if err != nil {
+				return false
+			}
+			return decimal256HasTrailingZeros(dec, trailingDigits)
+		}
 		dec, _, err := types.Parse128(sval.Sval)
 		if err != nil {
 			return false
@@ -1660,6 +1667,22 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	}
 
 	return false
+}
+
+func decimal256HasTrailingZeros(value types.Decimal256, trailingDigits int32) bool {
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+	if value.Sign() {
+		value = value.Minus()
+	}
+	divisor := types.Decimal256{B0_63: uint64(types.Pow10[trailingDigits])}
+	remainder, err := value.Mod256(divisor)
+	if err != nil {
+		return false
+	}
+	return remainder.B0_63 == 0 && remainder.B64_127 == 0 &&
+		remainder.B128_191 == 0 && remainder.B192_255 == 0
 }
 
 // decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros
@@ -1680,6 +1703,9 @@ func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
 	// For values with non-zero high part, we need 128-bit modulo
 	// Use types.Decimal128 for proper 128-bit arithmetic
 	d128 := types.Decimal128{B0_63: uint64(low), B64_127: uint64(high)}
+	if d128.Sign() {
+		d128 = d128.Minus()
+	}
 	divisorDec := types.Decimal128{B0_63: uint64(divisor), B64_127: 0}
 
 	// Compute d128 % divisorDec
@@ -2787,7 +2813,8 @@ func resetPreparePlan(
 			return nil, nil, err
 		}
 
-		getParamRule.SetParamOrder()
+		_, preserveProtocolPositions := ctx.GetContext().Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams)
+		getParamRule.SetParamOrder(preserveProtocolPositions)
 		args := getParamRule.params
 		querySchemas, err := resolveIndexDependencies(getParamRule)
 		if err != nil {
@@ -2851,7 +2878,8 @@ func resetPreparePlan(
 				return nil, nil, err
 			}
 		}
-		getParamRule.SetParamOrder()
+		_, preserveProtocolPositions := ctx.GetContext().Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams)
+		getParamRule.SetParamOrder(preserveProtocolPositions)
 		resetRule := NewResetParamOrderRule(getParamRule.params)
 		for _, item := range setVars.Items {
 			var err error
@@ -2864,6 +2892,22 @@ func resetPreparePlan(
 				if err != nil {
 					return nil, nil, err
 				}
+			}
+		}
+		if transientQuery != nil && len(visitedRoots) > 0 {
+			roots := make([]int32, 0, len(visitedRoots))
+			for root := range visitedRoots {
+				roots = append(roots, root)
+			}
+			slices.Sort(roots)
+			query := *transientQuery
+			query.Steps = roots
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &query}}
+			if err := NewVisitPlan(queryPlan, []VisitPlanRule{resetRule}).Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
+			if err := visitMissingNodeExprs(&query, roots, []VisitPlanRule{resetRule}); err != nil {
+				return nil, nil, err
 			}
 		}
 		querySchemas, err := resolveIndexDependencies(getParamRule)
@@ -3152,6 +3196,59 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	return copied, nil
 }
 
+// FillExactDecimalComparisonParamsInPlan materializes only parameters whose
+// text value determines an exact DECIMAL comparison domain. Other parameter
+// references remain attached to the execution process, preserving protocol
+// source-kind metadata used by BIT, JSON, and other runtime conversions.
+func FillExactDecimalComparisonParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals []any) (*Plan, error) {
+	copied := DeepCopyPlan(preparePlan)
+	if copied == nil {
+		return nil, nil
+	}
+	params := makePrepareParamExprs(paramVals, true)
+	realGroups := make(map[int32]bool)
+	domainRule := &findPreparedDecimalGroupDomainsRule{
+		params: params, realGroups: realGroups,
+		floatGroups: make(map[int32]bool), stringGroups: make(map[int32]bool),
+	}
+	if err := NewVisitPlan(copied, []VisitPlanRule{domainRule}).Visit(ctx); err != nil {
+		return nil, err
+	}
+	visitor := NewVisitPlan(copied, []VisitPlanRule{
+		NewResetExactDecimalComparisonParamRule(ctx, params, realGroups),
+	})
+	if err := visitor.Visit(ctx); err != nil {
+		return nil, err
+	}
+	return copied, nil
+}
+
+// PlanHasExactDecimalComparisonParam reports whether a prepared plan's
+// DECIMAL comparison domain depends on the actual text parameter.
+func PlanHasExactDecimalComparisonParam(ctx context.Context, preparePlan *Plan) (bool, error) {
+	positions, err := ExactDecimalComparisonParamPositions(ctx, preparePlan)
+	return len(positions) > 0, err
+}
+
+// ExactDecimalComparisonParamPositions returns the zero-based positions whose
+// runtime values participate in a DECIMAL comparison's common coercion domain.
+func ExactDecimalComparisonParamPositions(ctx context.Context, preparePlan *Plan) ([]int32, error) {
+	if preparePlan == nil {
+		return nil, nil
+	}
+	rule := &findDecimalComparisonParamRule{positions: make(map[int32]struct{})}
+	visitor := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	if err := visitor.Visit(ctx); err != nil {
+		return nil, err
+	}
+	positions := make([]int32, 0, len(rule.positions))
+	for pos := range rule.positions {
+		positions = append(positions, pos)
+	}
+	slices.Sort(positions)
+	return positions, nil
+}
+
 type ParamValue struct {
 	Value            any
 	IsBin            bool
@@ -3218,33 +3315,7 @@ func isPositivePreparedInteger(value any) bool {
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
-	params := make([]*Expr, len(paramVals))
-	for i, val := range paramVals {
-		isBin := false
-		if param, ok := val.(ParamValue); ok {
-			val = param.Value
-			isBin = param.IsBin
-		}
-		if val == nil {
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
-		} else {
-			pc := &plan.Literal{IsBin: isBin}
-			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
-		}
-	}
+	params := makePrepareParamExprs(paramVals, false)
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
 		if name != "nth_value" || len(args) != 2 {
@@ -3262,12 +3333,48 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 		return nil
 	}
-	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
-	if err != nil {
-		return err
+	return NewVisitPlan(plan0, []VisitPlanRule{paramRule}).Visit(ctx)
+}
+
+func makePrepareParamExprs(paramVals []any, preserveSourceKind bool) []*Expr {
+	params := make([]*Expr, len(paramVals))
+	for i, val := range paramVals {
+		isBin := false
+		kind := vector.PrepareParamNone
+		if param, ok := val.(ParamValue); ok {
+			val = param.Value
+			isBin = param.IsBin
+			if preserveSourceKind {
+				kind = param.PrepareParamKind
+			}
+		}
+		if val == nil {
+			params[i] = makePlan2NullConstExprWithType()
+		} else {
+			text := fmt.Sprintf("%v", val)
+			switch kind {
+			case vector.PrepareParamFloat:
+				if value, err := strconv.ParseFloat(text, 64); err == nil {
+					params[i] = makePlan2Float64ConstExprWithType(value)
+					continue
+				}
+			case vector.PrepareParamInteger:
+				if value, err := strconv.ParseInt(text, 10, 64); err == nil {
+					params[i] = makePlan2Int64ConstExprWithType(value)
+					continue
+				}
+				if value, err := strconv.ParseUint(text, 10, 64); err == nil {
+					params[i] = makePlan2Uint64ConstExprWithType(value)
+					continue
+				}
+			case vector.PrepareParamBoolean:
+				params[i] = makePlan2BoolConstExprWithType(text == "1" || strings.EqualFold(text, "true"))
+				continue
+			}
+			params[i] = makePlan2StringConstExprWithType(text, isBin)
+		}
 	}
-	return nil
+	return params
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

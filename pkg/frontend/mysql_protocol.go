@@ -955,7 +955,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				err = util.SetAnyToStringVector(proc, math.Float64frombits(val), stmt.params, i)
 
 			// Binary/varbinary has mysql_type_varchar.
-			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
+			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
@@ -1032,15 +1032,14 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				}
 				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
 
-			case defines.MYSQL_TYPE_NEWDECIMAL:
-				// use string for decimal.  Not tested
+			case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 				}
 				pos = newPos
-				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
+				err = util.SetAnyToStringVector(proc, normalizePreparedDecimalPayload([]byte(val)), stmt.params, i)
 
 			default:
 				return moerr.NewInternalError(ctx, "unsupport parameter type")

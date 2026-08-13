@@ -2206,14 +2206,22 @@ func createPrepareStmtInSession(
 		owner, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	prepareControl := preparePlan.GetDcl().GetPrepare()
+	exactDecimalParamPositions, err := plan2.ExactDecimalComparisonParamPositions(
+		execCtx.reqCtx,
+		prepareControl.Plan,
+	)
+	if err != nil {
+		return nil, err
+	}
 	_, isQueryPlan := prepareControl.Plan.Plan.(*plan.Plan_Query)
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan &&
+		len(exactDecimalParamPositions) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, executionSes, executionProc, originSQL, originSQL, &schedulingSQLMode, saveStmt, prepareControl.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2228,22 +2236,25 @@ func createPrepareStmtInSession(
 	}
 
 	prepareStmt := &PrepareStmt{
-		Name:                preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                 originSQL,
-		compile:             comp,
-		PreparePlan:         preparePlan,
-		PrepareStmt:         saveStmt,
-		NativeMode:          owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:     owner.sqlModeHasOnlyFullGroupBy(),
-		onlyFullGroupBySet:  true,
-		remapDb:             maps.Clone(execCtx.remapDb),
-		defaultDatabase:     executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:    owner.GetTempTableVersion(),
-		ddlVersion:          owner.getDDLVersion(),
-		cloneSQL:            cloneSQL,
-		protocolVersion:     protocolVersion,
-		getFromSendLongData: make(map[int]struct{}),
-		schedulingSQLMode:   schedulingSQLMode,
+		Name:                            preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                             originSQL,
+		compile:                         comp,
+		PreparePlan:                     preparePlan,
+		PrepareStmt:                     saveStmt,
+		NativeMode:                      owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:                 owner.sqlModeHasOnlyFullGroupBy(),
+		onlyFullGroupBySet:              true,
+		remapDb:                         maps.Clone(execCtx.remapDb),
+		defaultDatabase:                 executionSes.GetTxnCompileCtx().GetDatabase(),
+		exactDecimalComparisonParams:    len(exactDecimalParamPositions) > 0,
+		exactDecimalComparisonParamsSet: true,
+		exactDecimalParamPositions:      exactDecimalParamPositions,
+		tempTableVersion:                owner.GetTempTableVersion(),
+		ddlVersion:                      owner.getDDLVersion(),
+		cloneSQL:                        cloneSQL,
+		protocolVersion:                 protocolVersion,
+		getFromSendLongData:             make(map[int]struct{}),
+		schedulingSQLMode:               schedulingSQLMode,
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

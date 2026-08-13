@@ -2071,6 +2071,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 				}
 			}
 			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+			statementOption = statementOption.WithPreparedParamBindingTypes(
+				c.proc.GetPreparedParamBindingTypes())
 		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx

@@ -354,6 +354,23 @@ func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestPlanHasExactDecimalComparisonParamIgnoresUnrelatedPlan(t *testing.T) {
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{
+			Steps: []int32{0},
+			Nodes: []*plan.Node{{
+				NodeType: plan.Node_VALUE_SCAN,
+				Limit:    &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+			}},
+		}},
+	}
+
+	changed, err := PlanHasExactDecimalComparisonParam(context.Background(), queryPlan)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -661,6 +678,16 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
 		})
 	}
+}
+
+func TestSignedDecimalsHaveTrailingZeros(t *testing.T) {
+	d128, _, err := types.Parse128("-1.200")
+	require.NoError(t, err)
+	require.True(t, decimal128HasTrailingZeros(int64(d128.B0_63), int64(d128.B64_127), 1))
+
+	d256, _, err := types.Parse256("-12345678901234567890123456789012345678.1200")
+	require.NoError(t, err)
+	require.True(t, decimal256HasTrailingZeros(d256, 2))
 }
 
 // TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.

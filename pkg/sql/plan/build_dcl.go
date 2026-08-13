@@ -528,6 +528,21 @@ func buildSetVariablesWithQuery(
 	setVariables := &plan.SetVariables{
 		Items: items,
 	}
+	if isPrepareStmt {
+		setVariables.Query = builder.qry
+		subqueryRoots := newSubqueryRootRule()
+		for _, item := range items {
+			if _, err = subqueryRoots.ApplyExpr(item.Value); err != nil {
+				return nil, nil, err
+			}
+			if item.Reserved != nil {
+				if _, err = subqueryRoots.ApplyExpr(item.Reserved); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		setVariables.Query.Steps = append([]int32(nil), subqueryRoots.pending...)
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Dcl{

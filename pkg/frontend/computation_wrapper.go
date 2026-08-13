@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -74,6 +75,9 @@ type TxnComputationWrapper struct {
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
+	// preparedParamBindingTypes carries the current execution's dependency-only
+	// runtime domains into AST-only SET expression evaluation.
+	preparedParamBindingTypes []types.Type
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -100,6 +104,9 @@ type TxnComputationWrapper struct {
 	// protocolVersion is captured when plan is built. The session plan cache
 	// uses it instead of the version observed later when execution completes.
 	protocolVersion int64
+	// runtimeDecimalParamPositions identifies the parameters materialized while
+	// rebuilding this execution's parameter-sensitive DECIMAL plan.
+	runtimeDecimalParamPositions []int32
 }
 
 func InitTxnComputationWrapper(
@@ -197,6 +204,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
 	cwft.schedulingTrace.Reset()
+	cwft.runtimeDecimalParamPositions = nil
 }
 
 func (cwft *TxnComputationWrapper) ParamVals() []any {
@@ -303,10 +311,19 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
+		buildCtx := execCtx.reqCtx
+		compilerCtx := cwft.ses.GetTxnCompileCtx()
+		var restoreCompilerCtx context.Context
+		if execCtx.input.isPreparedExpr() {
+			buildCtx = plan2.WithPrepareRuntimeParams(buildCtx, cwft.runtimeDecimalParamPositions...)
+			restoreCompilerCtx = compilerCtx.GetContext()
+			compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(restoreCompilerCtx, cwft.runtimeDecimalParamPositions...))
+			defer compilerCtx.SetContext(restoreCompilerCtx)
+		}
 		cwft.plan, err = buildPlanWithPrepareMode(
-			execCtx.reqCtx,
+			buildCtx,
 			cwft.ses,
-			cwft.ses.GetTxnCompileCtx(),
+			compilerCtx,
 			cwft.stmt,
 			execCtx.input.isPreparedExpr(),
 		)
@@ -314,7 +331,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 	}
-
 	if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil && !cwft.ses.IsBackgroundSession() {
 		var accId uint32
 		accId, err = defines.GetAccountId(execCtx.reqCtx)
@@ -442,6 +458,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				fill,
 				false,
 				&cwft.schedulingTrace,
+				cwft.runtimeDecimalParamPositions,
 			)
 			if err != nil {
 				return nil, err
@@ -485,6 +502,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			fill,
 			false,
 			&cwft.schedulingTrace,
+			nil,
 		)
 		if err != nil {
 			return nil, err
@@ -721,6 +739,477 @@ func binaryProtocolPrepareParamKind(
 	}
 }
 
+const preparedNumericTextBindingCharset = uint8(255)
+
+const (
+	preparedNumericTextPrefix int32 = 2
+	preparedNumericTextFloat  int32 = 3
+	preparedNumericWide       int32 = 4
+	preparedNumericFallback   int32 = 5
+	preparedNumericPrefixMax  int32 = 6
+)
+
+func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.Type {
+	switch kind {
+	case vector.PrepareParamInteger:
+		if len(value) > 0 && value[0] == '-' {
+			return types.T_int64.ToType()
+		}
+		return types.T_uint64.ToType()
+	case vector.PrepareParamFloat:
+		return types.T_float64.ToType()
+	case vector.PrepareParamDecimal:
+		value = normalizePreparedDecimalPayload(value)
+		width, scale := preparedNativeDecimalDomain(value)
+		return preparedDecimalBindingType(width, scale, true, false)
+	case vector.PrepareParamBoolean:
+		return types.T_bool.ToType()
+	}
+
+	width, scale, full, exponent := preparedNumericTextDomain(value)
+	return preparedDecimalBindingType(width, scale, full, exponent)
+}
+
+func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.Type {
+	binding := types.T_text.ToType()
+	binding.Charset = preparedNumericTextBindingCharset
+	integral := max(width-scale, 0)
+	switch {
+	case full && exponent && integral > 76:
+		binding.Size = preparedNumericTextFloat
+	case integral <= 35 && scale <= 30:
+		binding.Size = preparedNumericTextPrefix
+		binding.Width, binding.Scale = 65, 30
+	case integral <= 67 && scale <= 9:
+		binding.Size = preparedNumericWide
+		binding.Width, binding.Scale = 76, 9
+	case !full && integral > 76:
+		binding.Size = preparedNumericPrefixMax
+		binding.Width, binding.Scale = 74, 9
+	default:
+		binding.Size = preparedNumericFallback
+	}
+	return binding
+}
+
+// normalizePreparedDecimalPayload applies the MySQL numeric lexical rules that
+// types.ParseDecimal256 does not yet accept directly. It is allocation-free for
+// already canonical payloads, which are the common binary-protocol case.
+func normalizePreparedDecimalPayload(value []byte) []byte {
+	start := 0
+	for start < len(value) && isPreparedNumericSpace(value[start]) {
+		start++
+	}
+	value = value[start:]
+	end := preparedDecimalPrefixEnd(value)
+	if end == 0 {
+		return []byte{'0'}
+	}
+	normalized := value[:end]
+	for i, ch := range normalized {
+		if ch == 'E' {
+			copyValue := append([]byte(nil), normalized...)
+			copyValue[i] = 'e'
+			return copyValue
+		}
+	}
+	return normalized
+}
+
+func preparedDecimalPrefixEnd(value []byte) int {
+	i := 0
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		i++
+		digits++
+	}
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
+		return 0
+	}
+	mantissaEnd := i
+	if i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		i++
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			i++
+		}
+		exponentStart := i
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			i++
+		}
+		if i == exponentStart {
+			return mantissaEnd
+		}
+	}
+	return i
+}
+
+// preparedNativeDecimalDomain preserves the lexical scale carried by a native
+// DECIMAL/NEWDECIMAL payload. Unlike generic text numeric-prefix conversion,
+// trailing fractional zeroes are part of the client's exact DECIMAL domain.
+func preparedNativeDecimalDomain(value []byte) (width, scale int32) {
+	const capDigits = int64(77)
+	i := 0
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	digits := int64(0)
+	firstNonZero := int64(-1)
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		if value[i] != '0' && firstNonZero < 0 {
+			firstNonZero = digits
+		}
+		digits = min(digits+1, capDigits)
+		i++
+	}
+	decimalPos := digits
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			if value[i] != '0' && firstNonZero < 0 {
+				firstNonZero = digits
+			}
+			digits = min(digits+1, capDigits)
+			i++
+		}
+	}
+	exponent := int64(0)
+	if i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		i++
+		negative := false
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			negative = value[i] == '-'
+			i++
+		}
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			exponent = min(exponent*10+int64(value[i]-'0'), capDigits)
+			i++
+		}
+		if negative {
+			exponent = -exponent
+		}
+	}
+	integral := int64(0)
+	if firstNonZero >= 0 {
+		integral = max(decimalPos+exponent-firstNonZero, 0)
+	}
+	scale64 := max(digits-decimalPos-exponent, 0)
+	return int32(max(min(integral+scale64, capDigits), 1)), int32(min(scale64, capDigits))
+}
+
+// preparedNumericTextDomain scans only the numeric prefix and caps all counts
+// at 77. It never expands the exponent or allocates proportionally to its
+// numeric value.
+func preparedNumericTextDomain(value []byte) (width, scale int32, full, exponent bool) {
+	const capDigits = int64(77)
+	i := 0
+	for i < len(value) && isPreparedNumericSpace(value[i]) {
+		i++
+	}
+	if i < len(value) && (value[i] == '+' || value[i] == '-') {
+		i++
+	}
+	decimalPos := int64(0)
+	digitPos := int64(0)
+	firstNonZero, lastNonZero := int64(-1), int64(-1)
+	for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+		if value[i] != '0' {
+			if firstNonZero < 0 {
+				firstNonZero = digitPos
+			}
+			lastNonZero = digitPos
+		}
+		digitPos++
+		i++
+	}
+	decimalPos = digitPos
+	hasDigits := digitPos > 0
+	if i < len(value) && value[i] == '.' {
+		i++
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			if value[i] != '0' {
+				if firstNonZero < 0 {
+					firstNonZero = digitPos
+				}
+				lastNonZero = digitPos
+			}
+			digitPos++
+			i++
+		}
+		hasDigits = digitPos > 0
+	}
+	exp := int64(0)
+	if hasDigits && i < len(value) && (value[i] == 'e' || value[i] == 'E') {
+		exponent = true
+		expAt := i
+		i++
+		negative := false
+		if i < len(value) && (value[i] == '+' || value[i] == '-') {
+			negative = value[i] == '-'
+			i++
+		}
+		expDigits := 0
+		for i < len(value) && value[i] >= '0' && value[i] <= '9' {
+			exp = min(exp*10+int64(value[i]-'0'), capDigits)
+			expDigits++
+			i++
+		}
+		if expDigits == 0 {
+			i = expAt
+			exponent = false
+			exp = 0
+		} else if negative {
+			exp = -exp
+		}
+	}
+	for i < len(value) && isPreparedNumericSpace(value[i]) {
+		i++
+	}
+	full = hasDigits && i == len(value)
+	if !hasDigits {
+		return 1, 0, false, false
+	}
+	// Zero has no precision domain: spelling it with leading/trailing zeroes or
+	// an exponent must not promote an otherwise exact prepared value to DOUBLE.
+	if firstNonZero < 0 {
+		return 1, 0, full, exponent
+	}
+	integral := max(decimalPos-firstNonZero+exp, 0)
+	scale64 := max(lastNonZero+1-decimalPos-exp, 0)
+	width64 := min(integral+scale64, capDigits)
+	return int32(max(width64, 1)), int32(min(scale64, capDigits)), full, exponent
+}
+
+func isPreparedNumericSpace(ch byte) bool {
+	switch ch {
+	case ' ', '\t', '\n', '\v', '\f', '\r':
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedParamBindingTypes(
+	params *vector.Vector,
+	kinds []vector.PrepareParamKind,
+	dependencies []bool,
+	count int,
+) []types.Type {
+	if len(dependencies) == 0 {
+		return nil
+	}
+	var bindingTypes []types.Type
+	for i := 0; i < count; i++ {
+		if i >= len(dependencies) || !dependencies[i] {
+			continue
+		}
+		var value []byte
+		if !params.IsNull(uint64(i)) {
+			value = params.GetRawBytesAt(i)
+		}
+		var kind vector.PrepareParamKind
+		if i < len(kinds) {
+			kind = kinds[i]
+		}
+		bindingType := preparedParamBindingType(kind, value)
+		if bindingType.Oid == types.T_any {
+			continue
+		}
+		if bindingTypes == nil {
+			bindingTypes = make([]types.Type, count)
+		}
+		bindingTypes[i] = bindingType
+	}
+	return bindingTypes
+}
+
+func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, dependencies []bool, count int) bool {
+	for i := 0; i < count; i++ {
+		if i >= len(dependencies) || !dependencies[i] {
+			continue
+		}
+		var leftType, rightType types.Type
+		if i < len(left) {
+			leftType = left[i]
+		}
+		if i < len(right) {
+			rightType = right[i]
+		}
+		if !preparedParamBindingCategoryEqual(leftType, rightType) {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedParamBindingCategoryEqual(left, right types.Type) bool {
+	if left.Oid == 0 && isStablePreparedDecimalBinding(right) ||
+		right.Oid == 0 && isStablePreparedDecimalBinding(left) {
+		return true
+	}
+	if left.Oid != right.Oid {
+		return false
+	}
+	if left.Oid == types.T_text && left.Charset == preparedNumericTextBindingCharset &&
+		right.Charset == preparedNumericTextBindingCharset {
+		return left.Size == right.Size
+	}
+	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
+		return true
+	}
+	return left.Eq(right)
+}
+
+func isStablePreparedDecimalBinding(typ types.Type) bool {
+	return typ.Oid == types.T_text && typ.Charset == preparedNumericTextBindingCharset &&
+		typ.Size == preparedNumericTextPrefix
+}
+
+func clonePreparedParamBindingTypes(bindingTypes []types.Type) []types.Type {
+	if len(bindingTypes) == 0 {
+		return nil
+	}
+	return append([]types.Type(nil), bindingTypes...)
+}
+
+func preparedParamBindingTypesAtDependencies(bindingTypes []types.Type, dependencies []bool) []types.Type {
+	if len(bindingTypes) == 0 || len(dependencies) == 0 {
+		return nil
+	}
+	masked := make([]types.Type, len(bindingTypes))
+	for i := range bindingTypes {
+		if i < len(dependencies) && dependencies[i] {
+			masked[i] = bindingTypes[i]
+		}
+	}
+	return masked
+}
+
+type preparedExecuteParamState struct {
+	params       *vector.Vector
+	paramVals    []any
+	paramIsBin   []bool
+	paramKinds   []vector.PrepareParamKind
+	paramTypes   []byte
+	bindingTypes []types.Type
+	owned        bool
+}
+
+func (state *preparedExecuteParamState) bindingTypesFor(dependencies []bool, count int) []types.Type {
+	if state == nil || state.params == nil {
+		return nil
+	}
+	bindingTypes := preparedParamBindingTypes(state.params, state.paramKinds, dependencies, count)
+	for i := 0; i < count && i*2+1 < len(state.paramTypes); i++ {
+		if bindingTypes == nil || i >= len(state.paramKinds) ||
+			state.paramKinds[i] != vector.PrepareParamInteger {
+			continue
+		}
+		if state.paramTypes[i*2+1]&0x80 != 0 {
+			bindingTypes[i] = types.T_uint64.ToType()
+		} else {
+			bindingTypes[i] = types.T_int64.ToType()
+		}
+	}
+	return bindingTypes
+}
+
+func (state *preparedExecuteParamState) apply(proc *process.Process) {
+	if state == nil || state.params == nil {
+		return
+	}
+	if state.owned {
+		proc.SetOwnedPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
+		state.owned = false
+		return
+	}
+	proc.SetPrepareParamsWithMeta(state.params, state.paramIsBin, state.paramKinds)
+}
+
+func (state *preparedExecuteParamState) release(proc *process.Process) {
+	if state == nil || !state.owned || state.params == nil {
+		return
+	}
+	state.params.Free(proc.Mp())
+	state.params = nil
+	state.owned = false
+}
+
+func initPreparedExecuteParams(
+	reqCtx context.Context,
+	prepareStmt *PrepareStmt,
+	execPlan *plan.Execute,
+	cwft *TxnComputationWrapper,
+	dependencies []bool,
+	numParams int,
+) (*preparedExecuteParamState, error) {
+	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // binary protocol
+		if prepareStmt.params.Length() != numParams {
+			return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+		}
+		paramCount := prepareStmt.params.Length()
+		var kinds []vector.PrepareParamKind
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind != vector.PrepareParamNone {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = kind
+			}
+		}
+		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, dependencies, numParams)
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			if i >= len(kinds) || kinds[i] != vector.PrepareParamInteger || bindingTypes == nil {
+				continue
+			}
+			if prepareStmt.ParamTypes[i*2+1]&0x80 != 0 {
+				bindingTypes[i] = types.T_uint64.ToType()
+			} else {
+				bindingTypes[i] = types.T_int64.ToType()
+			}
+		}
+		return &preparedExecuteParamState{
+			params:       prepareStmt.params,
+			paramVals:    preparedParamValues(prepareStmt.params, nil),
+			paramKinds:   kinds,
+			paramTypes:   prepareStmt.ParamTypes,
+			bindingTypes: bindingTypes,
+		}, nil
+	} else if execPlan != nil && len(execPlan.Args) > 0 {
+		if len(execPlan.Args) != numParams {
+			return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+		}
+		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, err
+		}
+		return &preparedExecuteParamState{
+			params:       params,
+			paramVals:    paramVals,
+			paramIsBin:   paramIsBin,
+			paramKinds:   paramKinds,
+			bindingTypes: preparedParamBindingTypes(params, paramKinds, dependencies, numParams),
+			owned:        true,
+		}, nil
+	} else if numParams > 0 {
+		return nil, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+	}
+	return &preparedExecuteParamState{}, nil
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -740,6 +1229,18 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	if !prepareStmt.paramBindingDependenciesSet {
+		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
+			preparePlan.Plan, len(preparePlan.ParamTypes))
+		prepareStmt.paramBindingDependenciesSet = true
+	}
+	paramState, err := initPreparedExecuteParams(
+		reqCtx, prepareStmt, execPlan, cwft, prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
+	if err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	defer paramState.release(cwft.proc)
+	paramBindingTypes := paramState.bindingTypes
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -817,17 +1318,54 @@ func initExecuteStmtParamWithResolverInSession(
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || fkSensitive
+	paramBindingMismatch := !preparedParamBindingTypesEqualAtDependencies(
+		prepareStmt.paramBindingTypes, paramBindingTypes,
+		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) ||
+		fkSensitive || paramBindingMismatch
 
 	// Rebuild the plan when catalog schema, session temporary-table name
-	// resolution, FK-check state, protocol, or compatibility mode changed.
+	// resolution, FK-check state, protocol, compatibility mode, or runtime
+	// parameter category changed.
 	if needRebuild {
-		newPlan, err := rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		compilerCtx := executionSes.GetTxnCompileCtx()
+		rebuildWithBindingTypes := func(bindingTypes []types.Type, dependencies []bool) (*plan.Plan, error) {
+			compilerCtx.setPreparedParamBindingTypes(preparedParamBindingTypesAtDependencies(
+				bindingTypes, dependencies))
+			defer compilerCtx.setPreparedParamBindingTypes(nil)
+			return rebuildPreparePlan(execCtx, executionSes, prepareStmt, buildPlan)
+		}
+		newPlan, err := rebuildWithBindingTypes(paramBindingTypes, prepareStmt.paramBindingDependencies)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
-		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		newDependencies := plan2.PreparedParamCommonTypeDependencies(
+			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		convergedBindingTypes := paramState.bindingTypesFor(
+			newDependencies, len(newPreparePlan.ParamTypes))
+		if !preparedParamBindingTypesEqualAtDependencies(
+			paramBindingTypes, convergedBindingTypes, newDependencies, len(newPreparePlan.ParamTypes)) {
+			newPlan, err = rebuildWithBindingTypes(convergedBindingTypes, newDependencies)
+			if err != nil {
+				return nil, nil, nil, "", false, err
+			}
+			newPreparePlan = newPlan.GetDcl().GetPrepare()
+			finalDependencies := plan2.PreparedParamCommonTypeDependencies(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+			finalBindingTypes := paramState.bindingTypesFor(
+				finalDependencies, len(newPreparePlan.ParamTypes))
+			if !slices.Equal(newDependencies, finalDependencies) ||
+				!preparedParamBindingTypesEqualAtDependencies(
+					convergedBindingTypes, finalBindingTypes, finalDependencies, len(newPreparePlan.ParamTypes)) {
+				return nil, nil, nil, "", false, moerr.NewInternalError(
+					reqCtx, "prepared parameter dependencies did not converge after schema rebuild")
+			}
+			newDependencies = finalDependencies
+			convergedBindingTypes = finalBindingTypes
+		}
+		paramBindingTypes = convergedBindingTypes
+		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		var txnHaveDDL bool
 		switch prepareStmt.PrepareStmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
@@ -846,6 +1384,17 @@ func initExecuteStmtParamWithResolverInSession(
 
 		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.exactDecimalParamPositions, err = plan2.ExactDecimalComparisonParamPositions(
+			reqCtx,
+			preparePlan.Plan,
+		)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+		prepareStmt.exactDecimalParamPositions = excludePreparedParamDependencies(
+			prepareStmt.exactDecimalParamPositions, newDependencies)
+		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
+		prepareStmt.exactDecimalComparisonParamsSet = true
 		prepareStmt.ColDefData = newColDefData
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
@@ -860,6 +1409,9 @@ func initExecuteStmtParamWithResolverInSession(
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
+		prepareStmt.paramBindingTypes = clonePreparedParamBindingTypes(paramBindingTypes)
+		prepareStmt.paramBindingDependencies = newDependencies
+		prepareStmt.paramBindingDependenciesSet = true
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -881,10 +1433,11 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
+				!prepareStmt.exactDecimalComparisonParams &&
 				shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
-				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil)
+				comp, err := createCompile(execCtx, executionSes, cwft.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, owner.GetOutputCallback(execCtx), true, nil, nil)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 						return nil, nil, nil, "", false, err
@@ -900,49 +1453,60 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 	}
-	numParams := len(preparePlan.ParamTypes)
-	cwft.paramVals = nil
-	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
-		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
-		paramCount := prepareStmt.params.Length()
-		var kinds []vector.PrepareParamKind
-		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
-			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
-			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
-			kind := binaryProtocolPrepareParamKind(
-				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-			if kind != vector.PrepareParamNone {
-				if kinds == nil {
-					kinds = make([]vector.PrepareParamKind, paramCount)
-				}
-				kinds[i] = kind
-			}
-		}
-		if kinds == nil {
-			cwft.proc.SetPrepareParams(prepareStmt.params)
-		} else {
-			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
-		}
-		cwft.paramVals, err = preparedParamValues(cwft.proc)
+	// Replanning uses the same process and may run internal SQL that replaces
+	// its parameter slot. Install this execution's parameters only after the
+	// new plan and cached compile generation are complete.
+	paramState.apply(cwft.proc)
+	cwft.paramVals = paramState.paramVals
+	cwft.preparedParamBindingTypes = preparedParamBindingTypesAtDependencies(
+		paramBindingTypes, prepareStmt.paramBindingDependencies)
+	cwft.proc.SetPreparedParamBindingTypes(cwft.preparedParamBindingTypes)
+	executionPlan := preparePlan.Plan
+	if !prepareStmt.exactDecimalComparisonParamsSet {
+		prepareStmt.exactDecimalParamPositions, err = plan2.ExactDecimalComparisonParamPositions(
+			reqCtx,
+			executionPlan,
+		)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-	} else if execPlan != nil && len(execPlan.Args) > 0 {
-		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
-		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		prepareStmt.exactDecimalParamPositions = excludePreparedParamDependencies(
+			prepareStmt.exactDecimalParamPositions, prepareStmt.paramBindingDependencies)
+		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
+		prepareStmt.exactDecimalComparisonParamsSet = true
+	}
+	if prepareStmt.exactDecimalComparisonParams {
+		// Parameter source kinds participate in DECIMAL coercion. Rebuild from
+		// the saved AST after installing the runtime values so every derived
+		// predicate (including index prefix filters) and every constant vector is
+		// produced in one consistent domain. Rewriting an already optimized plan
+		// leaves stale index conditions and can mix DECIMAL physical widths.
+		compilerCtx := executionSes.GetTxnCompileCtx()
+		compilerCtx.setPreparedParamBindingTypes(cwft.preparedParamBindingTypes)
+		defer compilerCtx.setPreparedParamBindingTypes(nil)
+		var rebuilt *plan2.Plan
+		rebuilt, err = rebuildPreparePlan(
+			execCtx,
+			executionSes,
+			prepareStmt,
+			func(ctx context.Context, ses FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+				originalCtx := compilerCtx.GetContext()
+				compilerCtx.SetContext(plan2.WithPrepareRuntimeParams(
+					originalCtx, prepareStmt.exactDecimalParamPositions...))
+				defer compilerCtx.SetContext(originalCtx)
+				return buildPlan(
+					plan2.WithPrepareRuntimeParams(ctx, prepareStmt.exactDecimalParamPositions...),
+					ses,
+					compilerCtx,
+					stmt,
+				)
+			},
+		)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
-		cwft.paramVals = paramVals
-	} else {
-		if numParams > 0 {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-		}
+		executionPlan = rebuilt.GetDcl().GetPrepare().Plan
+		cwft.runtimeDecimalParamPositions = slices.Clone(prepareStmt.exactDecimalParamPositions)
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling intent must be evaluated for this execution, so it
@@ -954,6 +1518,9 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if prepareStmt.exactDecimalComparisonParams {
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -967,7 +1534,21 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
-	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func excludePreparedParamDependencies(positions []int32, dependencies []bool) []int32 {
+	if len(positions) == 0 || len(dependencies) == 0 {
+		return positions
+	}
+	filtered := positions[:0]
+	for _, pos := range positions {
+		if pos >= 0 && int(pos) < len(dependencies) && dependencies[pos] {
+			continue
+		}
+		filtered = append(filtered, pos)
+	}
+	return filtered
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
@@ -1077,27 +1658,22 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process) ([]any, error) {
-	params := proc.GetPrepareParams()
+func preparedParamValues(params *vector.Vector, paramIsBin []bool) []any {
 	if params == nil || params.Length() == 0 {
-		return nil, nil
+		return nil
 	}
 	values := make([]any, params.Length())
 	for i := range values {
 		if params.IsNull(uint64(i)) {
 			continue
 		}
-		raw, err := proc.GetPrepareParamsAt(i)
-		if err != nil {
-			return nil, err
+		isBin := false
+		if i < len(paramIsBin) {
+			isBin = paramIsBin[i]
 		}
-		values[i] = plan2.ParamValue{
-			Value:            string(raw),
-			IsBin:            proc.GetPrepareParamIsBin(i),
-			PrepareParamKind: proc.GetPrepareParamKind(i),
-		}
+		values[i] = plan2.ParamValue{Value: string(params.GetRawBytesAt(i)), IsBin: isBin}
 	}
-	return values, nil
+	return values
 }
 
 func buildExecuteUserParams(
@@ -1197,6 +1773,7 @@ func createCompile(
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
+	runtimeDecimalParamPositions []int32,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -1269,9 +1846,10 @@ func createCompile(
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	forcePrepare := execCtx.input.isPreparedExpr()
+	retryRuntimePositions := slices.Clone(runtimeDecimalParamPositions)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		return buildPlanForCompileRetry(
-			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, retryRuntimePositions)
 	})
 
 	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
@@ -1305,7 +1883,14 @@ func buildPlanForCompileRetry(
 	compilerContext plan2.CompilerContext,
 	stmt tree.Statement,
 	forcePrepare bool,
+	runtimeDecimalParamPositions []int32,
 ) (*plan2.Plan, error) {
+	if len(runtimeDecimalParamPositions) > 0 {
+		ctx = plan2.WithPrepareRuntimeParams(ctx, runtimeDecimalParamPositions...)
+		originalCtx := compilerContext.GetContext()
+		compilerContext.SetContext(plan2.WithPrepareRuntimeParams(originalCtx, runtimeDecimalParamPositions...))
+		defer compilerContext.SetContext(originalCtx)
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)

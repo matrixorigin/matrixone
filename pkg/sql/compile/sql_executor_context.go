@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -50,7 +51,16 @@ type compilerContext struct {
 	sql                  string
 	mu                   sync.Mutex
 
-	lower int64
+	lower                     int64
+	preparedParamBindingTypes []types.Type
+}
+
+func (c *compilerContext) ResolvePreparedParamBindingType(pos int32) (types.Type, bool) {
+	if pos < 0 || int(pos) >= len(c.preparedParamBindingTypes) {
+		return types.Type{}, false
+	}
+	typ := c.preparedParamBindingTypes[pos]
+	return typ, typ.Oid != types.T_any
 }
 
 func (c *compilerContext) GetLowerCaseTableNames() int64 {

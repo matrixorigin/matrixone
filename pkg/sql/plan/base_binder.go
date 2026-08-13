@@ -21,12 +21,15 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -52,6 +55,36 @@ var kAlwaysFalseExpr = &plan.Expr{
 			},
 		},
 	},
+}
+
+var exactDecimalListGroupID atomic.Int32
+
+type prepareRuntimeParamsKey struct{}
+
+type prepareRuntimeParams struct {
+	all       bool
+	positions map[int32]struct{}
+}
+
+// WithPrepareRuntimeParams marks an execution-time prepared-plan rebuild. In
+// that rebuild ParamExpr nodes bind the values already installed on Process.
+func WithPrepareRuntimeParams(ctx context.Context, positions ...int32) context.Context {
+	params := prepareRuntimeParams{all: len(positions) == 0}
+	if len(positions) > 0 {
+		params.positions = make(map[int32]struct{}, len(positions))
+		for _, pos := range positions {
+			params.positions[pos] = struct{}{}
+		}
+	}
+	return context.WithValue(ctx, prepareRuntimeParamsKey{}, params)
+}
+
+func nextExactDecimalListGroupID() int32 {
+	id := exactDecimalListGroupID.Add(-1)
+	if id == 0 {
+		id = exactDecimalListGroupID.Add(-1)
+	}
+	return id
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
@@ -353,6 +386,55 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	// EXECUTE may rebuild a parameter-sensitive prepared statement after the
+	// protocol values have been installed on the process. Bind those values now
+	// so overload resolution, constant-list construction, and index planning all
+	// observe the same runtime type domain. The initial PREPARE has no parameter
+	// vector and keeps the ParamRef below.
+	materialize := false
+	pos := int(astExpr.Offset) - 1
+	if ctx := b.GetContext(); ctx != nil {
+		if params, ok := ctx.Value(prepareRuntimeParamsKey{}).(prepareRuntimeParams); ok {
+			_, selected := params.positions[int32(pos)]
+			materialize = params.all || selected
+		}
+	}
+	if materialize && b.builder != nil && b.builder.compCtx != nil {
+		proc := b.builder.compCtx.GetProcess()
+		if proc != nil {
+			params := proc.GetPrepareParams()
+			// Parser ordinals are one-based. Plan ParamRefs are normalized to
+			// zero-based positions only after binding.
+			if params != nil && pos >= 0 && pos < params.Length() {
+				var value any
+				if !params.IsNull(uint64(pos)) {
+					raw, getErr := proc.GetPrepareParamsAt(pos)
+					if getErr != nil {
+						return nil, getErr
+					}
+					value = string(raw)
+				}
+				expr = makePrepareParamExprs([]any{ParamValue{
+					Value:            value,
+					IsBin:            proc.GetPrepareParamIsBin(pos),
+					PrepareParamKind: proc.GetPrepareParamKind(pos),
+				}}, true)[0]
+				// Preserve prepared-parameter provenance after materialization. The
+				// concrete literal type carries the protocol source kind, while this
+				// marker lets multi-operand coercion distinguish it from SQL text.
+				expr.ExactDecimalParam = true
+				if b.numericParamType != nil {
+					cast, castErr := appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
+					if castErr != nil {
+						return nil, castErr
+					}
+					cast.ExactDecimalParam = true
+					return cast, nil
+				}
+				return expr, nil
+			}
+		}
+	}
 	typ := types.T_text.ToType()
 	param := &Expr{
 		Typ: makePlan2Type(&typ),
@@ -362,10 +444,47 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
+	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found && b.decimalParamCommonTypeTarget {
+		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
+			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
+			return param, nil
+		}
+		if bindingType.Oid.IsMySQLString() {
+			param.Typ = makePlan2Type(&bindingType)
+			return param, nil
+		}
+		// Preserve which direct parameter consumed a runtime hint after the
+		// enclosing cast is materialized. Dependency extraction uses this marker
+		// to invalidate exactly that position on later executions.
+		param.Typ.Enumvalues = "mo_decimal_common_type_dependency"
+		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
+	}
+	if b.decimalParamCommonTypeTarget {
+		// Let COALESCE/GREATEST/LEAST see the unresolved parameter directly. In
+		// particular, an enclosing prepared SUM/AVG installs a generic numeric
+		// context; applying that cast here would hide the parameter before the
+		// DECIMAL common-type resolver can mark its runtime dependency.
+		return param, nil
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
 	return param, nil
+}
+
+func (b *baseBinder) preparedParamBindingType(pos int32) (types.Type, bool) {
+	if b.builder == nil {
+		return types.Type{}, false
+	}
+	resolver, ok := b.builder.compCtx.(interface {
+		ResolvePreparedParamBindingType(int32) (types.Type, bool)
+	})
+	if !ok {
+		return types.Type{}, false
+	}
+	// Parser offsets are one-based until NormalizePrepareParamRefs rewrites the
+	// finished plan to the zero-based protocol parameter positions.
+	return resolver.ResolvePreparedParamBindingType(pos - 1)
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -753,7 +872,212 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 		b.mysqlSpecialTypeNumericContext(astExpr.To) {
 		return b.bindWithRawMySQLSpecialTypes(bind)
 	}
+
+	if _, tuple := astExpr.Left.(*tree.Tuple); !tuple {
+		left, err := b.impl.BindExpr(astExpr.Left, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		// A materialized parameter on the left still belongs to one prepared
+		// BETWEEN domain. Inspect DECIMAL endpoints before the legacy branch that
+		// only recognizes a DECIMAL left operand.
+		if left.ExactDecimalParam && !types.T(left.Typ.Id).IsDecimal() {
+			from, bindErr := b.impl.BindExpr(astExpr.From, depth, false)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			to, bindErr := b.impl.BindExpr(astExpr.To, depth, false)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			if types.T(from.Typ.Id).IsDecimal() || types.T(to.Typ.Id).IsDecimal() {
+				operands := []*plan.Expr{left, from, to}
+				normalized, normalizeErr := normalizePreparedDecimalRange(b.GetContext(), operands)
+				if normalizeErr != nil {
+					return nil, normalizeErr
+				}
+				if normalized {
+					return bindPreparedRangeOperands(b.GetContext(), astExpr.Not, operands)
+				}
+			}
+		}
+		if types.T(left.Typ.Id).IsDecimal() {
+			from, err := b.impl.BindExpr(astExpr.From, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			to, err := b.impl.BindExpr(astExpr.To, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			if left.ExactDecimalParam || from.ExactDecimalParam || to.ExactDecimalParam {
+				operands := []*plan.Expr{left, from, to}
+				normalized, normalizeErr := normalizePreparedDecimalRange(b.GetContext(), operands)
+				if normalizeErr != nil {
+					return nil, normalizeErr
+				}
+				if normalized {
+					return bindPreparedRangeOperands(b.GetContext(), astExpr.Not, operands)
+				}
+			}
+			fromType, toType := types.T(from.Typ.Id), types.T(to.Typ.Id)
+			if fromType.IsMySQLString() && (toType.IsMySQLString() || toType.ToType().IsNumeric()) ||
+				toType.IsMySQLString() && fromType.ToType().IsNumeric() {
+				lowerOp, upperOp, logical := ">=", "<=", "and"
+				if astExpr.Not {
+					lowerOp, upperOp, logical = "<", ">", "or"
+				}
+				// BETWEEN selects one common coercion domain for all three
+				// operands. Only two prepared TEXT endpoints are exact; mixing a
+				// runtime parameter with a literal/foldable endpoint uses REAL.
+				exact := fromType.IsMySQLString() && toType.IsMySQLString() &&
+					isDirectDynamicParam(from) && isDirectDynamicParam(to)
+				groupID := int32(0)
+				if exact {
+					groupID = b.builder.genNewBindTag()
+				}
+				if !exact {
+					floatType := types.T_float64.ToType()
+					target := makePlan2Type(&floatType)
+					left, err = appendCastBeforeExpr(b.GetContext(), left, target)
+					if err != nil {
+						return nil, err
+					}
+					from, err = appendCastBeforeExpr(b.GetContext(), from, target)
+					if err != nil {
+						return nil, err
+					}
+					to, err = appendCastBeforeExpr(b.GetContext(), to, target)
+					if err != nil {
+						return nil, err
+					}
+				}
+				lower, err := bindMixedInListComparison(
+					b.GetContext(), lowerOp, DeepCopyExpr(left), from, exact)
+				if err != nil {
+					return nil, err
+				}
+				upper, err := bindMixedInListComparison(
+					b.GetContext(), upperOp, left, to, exact)
+				if err != nil {
+					return nil, err
+				}
+				lower.ExactDecimalGroup = groupID
+				upper.ExactDecimalGroup = groupID
+				result, err := BindFuncExprImplByPlanExpr(b.GetContext(), logical, []*plan.Expr{lower, upper})
+				return result, err
+			}
+			if astExpr.Not {
+				lower, err := BindFuncExprImplByPlanExpr(b.GetContext(), "<", []*plan.Expr{DeepCopyExpr(left), from})
+				if err != nil {
+					return nil, err
+				}
+				upper, err := BindFuncExprImplByPlanExpr(b.GetContext(), ">", []*plan.Expr{left, to})
+				if err != nil {
+					return nil, err
+				}
+				return BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{lower, upper})
+			}
+			return BindFuncExprImplByPlanExpr(b.GetContext(), "between", []*plan.Expr{left, from, to})
+		}
+	}
 	return bind()
+}
+
+func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (bool, error) {
+	hasDecimal := false
+	hasRuntime := false
+	useReal := false
+	hasRuntimeFloat := false
+	hasRuntimeNonFloat := false
+	for _, operand := range operands {
+		typ := types.T(operand.Typ.Id)
+		hasDecimal = hasDecimal || typ.IsDecimal()
+		if operand.ExactDecimalParam {
+			hasRuntime = true
+			if typ == types.T_float32 || typ == types.T_float64 {
+				hasRuntimeFloat = true
+			} else {
+				hasRuntimeNonFloat = true
+			}
+		} else if typ.IsMySQLString() {
+			// A static string peer and a runtime parameter select one shared REAL
+			// domain for the three-operand BETWEEN operation.
+			useReal = true
+		}
+	}
+	useReal = useReal || hasRuntimeFloat && hasRuntimeNonFloat
+	if !hasDecimal || !hasRuntime {
+		return false, nil
+	}
+
+	if !useReal {
+		for i, operand := range operands {
+			if !operand.ExactDecimalParam || types.T(operand.Typ.Id).IsDecimal() {
+				continue
+			}
+			literal := operand.GetLit()
+			if literal == nil || literal.Isnull || literal.IsBin {
+				useReal = true
+				break
+			}
+			value := ""
+			switch typed := literal.Value.(type) {
+			case *plan.Literal_Sval:
+				var ok bool
+				value, ok = function.GetNumericStringPrefix(typed.Sval)
+				if !ok {
+					useReal = true
+					continue
+				}
+			case *plan.Literal_I64Val:
+				value = strconv.FormatInt(typed.I64Val, 10)
+			case *plan.Literal_U64Val:
+				value = strconv.FormatUint(typed.U64Val, 10)
+			case *plan.Literal_Bval:
+				value = "0"
+				if typed.Bval {
+					value = "1"
+				}
+			default:
+				useReal = true
+				continue
+			}
+			decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, value)
+			if err != nil {
+				return false, err
+			}
+			if !exact {
+				useReal = true
+				break
+			}
+			decimal.ExactDecimalParam = true
+			operands[i] = decimal
+		}
+	}
+	if useReal {
+		floatType := types.T_float64.ToType()
+		target := makePlan2Type(&floatType)
+		for i := range operands {
+			cast, err := appendCastBeforeExpr(ctx, operands[i], target)
+			if err != nil {
+				return false, err
+			}
+			operands[i] = cast
+		}
+	}
+	return true, nil
+}
+
+func bindPreparedRangeOperands(ctx context.Context, not bool, operands []*plan.Expr) (*plan.Expr, error) {
+	between, err := BindFuncExprImplByPlanExpr(ctx, "between", operands)
+	if err != nil {
+		return nil, err
+	}
+	if !not {
+		return between, nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{between})
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -1042,7 +1366,16 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
-		return numericAstTypeScan{hasParam: true}, nil
+		scan := numericAstTypeScan{hasParam: true}
+		if bindingType, found := b.preparedParamBindingType(int32(expr.Offset)); found && b.decimalParamCommonTypeTarget {
+			if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
+				return scan, nil
+			}
+			typed := numericAstTypedOperand(makePlan2Type(&bindingType))
+			typed.hasParam = true
+			return typed, nil
+		}
+		return scan, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return numericAstTypeScan{}, nil
@@ -2152,6 +2485,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg, err = b.normalizeDecimalSubqueryProducer("=", leftArg, rightArg)
+				if err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2199,6 +2536,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			}
 
 			if subquery := rightArg.GetSub(); subquery != nil {
+				leftArg, err = b.normalizeDecimalSubqueryProducer("=", leftArg, rightArg)
+				if err != nil {
+					return nil, err
+				}
 				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
@@ -2248,6 +2589,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 		if subquery := expr.GetSub(); subquery != nil {
+			child, err = b.normalizeDecimalSubqueryProducer(op, child, expr)
+			if err != nil {
+				return nil, err
+			}
 			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
@@ -2289,7 +2634,94 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			return b.bindFuncExprImplByAstExpr(op, args, depth)
 		})
 	}
+	if isDecimalComparisonOperator(op) {
+		if expr, ok, err := b.bindDecimalScalarSubqueryComparison(op, astExpr.Left, astExpr.Right, depth); ok || err != nil {
+			return expr, err
+		}
+	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+func (b *baseBinder) bindDecimalScalarSubqueryComparison(
+	op string,
+	leftAst tree.Expr,
+	rightAst tree.Expr,
+	depth int32,
+) (*Expr, bool, error) {
+	for _, candidate := range []struct {
+		subquery tree.Expr
+		peer     tree.Expr
+		subLeft  bool
+	}{
+		{subquery: leftAst, peer: rightAst, subLeft: true},
+		{subquery: rightAst, peer: leftAst},
+	} {
+		subquery, ok := scalarSubqueryExpr(candidate.subquery)
+		if !ok || subquery.Exists {
+			continue
+		}
+		peer, err := b.impl.BindExpr(candidate.peer, depth, false)
+		if err != nil {
+			return nil, true, err
+		}
+		if !types.T(peer.Typ.Id).IsDecimal() {
+			continue
+		}
+		subExpr, err := b.impl.BindExpr(candidate.subquery, depth, false)
+		if err != nil {
+			return nil, true, err
+		}
+		bindCurrentArgs := func() (*Expr, bool, error) {
+			boundArgs := []*Expr{peer, subExpr}
+			if candidate.subLeft {
+				boundArgs[0], boundArgs[1] = subExpr, peer
+			}
+			expr, bindErr := BindFuncExprImplByPlanExpr(b.GetContext(), op, boundArgs)
+			return expr, true, bindErr
+		}
+		projects := b.subqueryProjectList(subExpr)
+		if len(projects) != 1 || !types.T(projects[0].Typ.Id).IsMySQLString() {
+			return bindCurrentArgs()
+		}
+		args := []*Expr{peer, projects[0]}
+		foldDecimalComparisonStringConstants(b.builder.compCtx.GetProcess(), op, args)
+		if err = normalizeDecimalStringLiteralComparisonArgs(b.GetContext(), op, args); err != nil {
+			return nil, true, err
+		}
+		if err = normalizeDecimalParamComparisonArgs(b.GetContext(), op, args); err != nil {
+			return nil, true, err
+		}
+		if !types.T(args[1].Typ.Id).IsDecimal() {
+			return bindCurrentArgs()
+		}
+		projects[0] = args[1]
+		subExpr.Typ = args[1].Typ
+		return bindCurrentArgs()
+	}
+	return nil, false, nil
+}
+
+func (b *baseBinder) normalizeDecimalSubqueryProducer(op string, child, subExpr *Expr) (*Expr, error) {
+	if !types.T(child.Typ.Id).IsDecimal() {
+		return child, nil
+	}
+	projects := b.subqueryProjectList(subExpr)
+	if len(projects) != 1 || !types.T(projects[0].Typ.Id).IsMySQLString() {
+		return child, nil
+	}
+	args := []*Expr{child, projects[0]}
+	foldDecimalComparisonStringConstants(b.builder.compCtx.GetProcess(), op, args)
+	if err := normalizeDecimalStringLiteralComparisonArgs(b.GetContext(), op, args); err != nil {
+		return nil, err
+	}
+	if err := normalizeDecimalParamComparisonArgs(b.GetContext(), op, args); err != nil {
+		return nil, err
+	}
+	if types.T(args[1].Typ.Id).IsDecimal() {
+		projects[0] = args[1]
+		subExpr.Typ = args[1].Typ
+	}
+	return args[0], nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
@@ -2727,6 +3159,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		decimalParamCommonTypeTarget := b.decimalParamCommonTypeTarget
+		switch name {
+		case "coalesce", "greatest", "least":
+			b.decimalParamCommonTypeTarget = true
+		default:
+			b.decimalParamCommonTypeTarget = false
+		}
+		defer func() { b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget }()
 		var functionContext numericFunctionContext
 		hasFunctionContext := false
 		if b.numericFunctionTarget {
@@ -3149,7 +3589,10 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	foldSingleInDecimalComparisonStringConstants(proc, name, args)
+	foldDecimalComparisonStringConstants(proc, name, args)
+	retExpr, err := bindFuncExprImplByPlanExpr(
+		ctx, name, args, preparedDecimalPrefixCastEnabled(proc))
 	if err != nil {
 		return nil, err
 	}
@@ -3303,6 +3746,19 @@ between_fallback:
 	return retExpr, nil
 }
 
+func foldSingleInDecimalComparisonStringConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || (name != "in" && name != "not_in") || len(args) != 2 {
+		return
+	}
+	right := args[1].GetList()
+	if right == nil || len(right.List) != 1 {
+		return
+	}
+	comparisonArgs := []*Expr{args[0], right.List[0]}
+	foldDecimalComparisonStringConstants(proc, "=", comparisonArgs)
+	args[0], right.List[0] = comparisonArgs[0], comparisonArgs[1]
+}
+
 // validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
 // the offset must be a constant positive integer or a positional parameter.
 // Folding first keeps valid constant expressions, such as 1 + 1, compatible
@@ -3420,12 +3876,24 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
 // lose precision for numeric columns compared with string constants.
-func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr, exact bool) (*plan.Expr, error) {
+	operands := []*Expr{left, right}
+	if exact {
+		if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
+		if err := normalizeDecimalParamComparisonArgs(ctx, operator, operands); err != nil {
+			return nil, err
+		}
+	}
+	left, right = operands[0], operands[1]
 	leftType := makeTypeByPlan2Expr(left)
 	rightType := makeTypeByPlan2Expr(right)
-	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
+	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
+	if stringLeftNumericRight || !exact && numericLeftStringRight {
 		targetType := types.T_float64.ToType()
-		operands := []*Expr{left, right}
+		operands = []*Expr{left, right}
 		for i := range operands {
 			var err error
 			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
@@ -3439,6 +3907,12 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true)
+}
+
+func bindFuncExprImplByPlanExpr(
+	ctx context.Context, name string, args []*Expr, prefixCastEnabled bool,
+) (*plan.Expr, error) {
 	var err error
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
@@ -3460,6 +3934,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
@@ -3810,6 +4287,68 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			exactSingleComparison := len(rightList.List) == 1
+			leftIsPreparedParam := isDirectDynamicParam(args[0]) || args[0].ExactDecimalParam
+			preparedListParams := 0
+			if leftIsPreparedParam {
+				preparedListParams++
+			}
+			for _, item := range rightList.List {
+				if isDirectDynamicParam(item) || item.ExactDecimalParam {
+					preparedListParams++
+				}
+			}
+			// MySQL chooses the left runtime numeric parameter's REAL domain for
+			// the complete IN predicate when a runtime string peer is present. Do
+			// this before list packing so the vector and expanded comparisons share
+			// one physical type.
+			leftTypeID := types.T(args[0].Typ.Id)
+			leftRuntimeNumeric := args[0].ExactDecimalParam &&
+				(leftTypeID.ToType().IsNumeric() || leftTypeID == types.T_bool)
+			useRuntimeLeftReal := leftRuntimeNumeric &&
+				(leftTypeID == types.T_float32 || leftTypeID == types.T_float64)
+			if leftRuntimeNumeric && !useRuntimeLeftReal {
+				for _, item := range rightList.List {
+					if types.T(item.Typ.Id).IsMySQLString() {
+						useRuntimeLeftReal = true
+						break
+					}
+				}
+			}
+			if !leftIsPreparedParam && len(rightList.List) > 1 {
+				hasRuntimeFloat := false
+				hasOtherRuntime := false
+				for _, item := range rightList.List {
+					if !item.ExactDecimalParam {
+						continue
+					}
+					itemType := types.T(item.Typ.Id)
+					if itemType == types.T_float32 || itemType == types.T_float64 {
+						hasRuntimeFloat = true
+					} else {
+						hasOtherRuntime = true
+					}
+				}
+				useRuntimeLeftReal = hasRuntimeFloat && hasOtherRuntime
+			}
+			if useRuntimeLeftReal {
+				floatType := types.T_float64.ToType()
+				target := makePlan2Type(&floatType)
+				args[0], err = appendCastBeforeExpr(ctx, args[0], target)
+				if err != nil {
+					return nil, err
+				}
+				for i := range rightList.List {
+					rightList.List[i], err = appendCastBeforeExpr(ctx, rightList.List[i], target)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			groupID := int32(0)
+			if preparedListParams > 1 {
+				groupID = nextExactDecimalListGroupID()
+			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -3817,6 +4356,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			for _, rightVal := range rightList.List {
 				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
 					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				// Prepared TEXT parameters derive their exact DECIMAL domain from
+				// the execution value. Do not pack them into the peer-typed IN
+				// vector, which would truncate scale before that value is known.
+				if !partitionIn && (leftIsPreparedParam || isDirectDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
+					orExprList = append(orExprList, rightVal)
+					continue
 				}
 				if leftIsConstNull && !partitionIn {
 					orExprList = append(orExprList, rightVal)
@@ -3870,19 +4416,23 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
+					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
+					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
+					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "and", expanded)
@@ -3921,7 +4471,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	resolutionTypes := decimalParamCommonTypeResolutionTypes(name, args, argsType, prefixCastEnabled)
+	var fGet function.FuncGetResult
+	fGet, err = function.GetFunctionByName(ctx, name, resolutionTypes)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3943,7 +4495,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
-	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
+	adjustControlFlowMetadata(name, args, resolutionTypes, &returnType, argsCastType)
+	argsCastType = applyDecimalParamCommonTypeCasts(
+		args, argsType, resolutionTypes, returnType, argsCastType,
+	)
+	if err := normalizeDecimalParamCommonTypeCastSources(ctx, args, argsType, resolutionTypes, returnType); err != nil {
+		return nil, err
+	}
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -4511,7 +5069,7 @@ func temporalDisplayWidthForVarchar(typ types.Type) (int32, bool) {
 
 func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
 	hasDecimal := false
-	hasIntegerLiteral := false
+	hasNarrowLiteral := false
 	maxIntegral := int32(0)
 	maxScale := int32(0)
 
@@ -4523,23 +5081,28 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 		switch {
 		case typ.Oid.IsDecimal():
 			hasDecimal = true
-			integral := typ.Width - typ.Scale
+			width, scale := typ.Width, typ.Scale
+			if literalWidth, literalScale, ok := controlFlowDecimalLiteralMetadata(args[idx]); ok {
+				width, scale = literalWidth, literalScale
+				hasNarrowLiteral = true
+			}
+			integral := width - scale
 			if integral > maxIntegral {
 				maxIntegral = integral
 			}
-			if typ.Scale > maxScale {
-				maxScale = typ.Scale
+			if scale > maxScale {
+				maxScale = scale
 			}
 		case typ.Oid.IsInteger():
 			integral, literal := decimalIntegerWidth(args[idx], typ)
 			if integral > maxIntegral {
 				maxIntegral = integral
 			}
-			hasIntegerLiteral = hasIntegerLiteral || literal
+			hasNarrowLiteral = hasNarrowLiteral || literal
 		}
 	}
 
-	if !hasDecimal || !hasIntegerLiteral {
+	if !hasDecimal || !hasNarrowLiteral {
 		return false
 	}
 	precision := maxIntegral + maxScale
@@ -4552,6 +5115,32 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 	returnType.Width = precision
 	returnType.Scale = maxScale
 	return changed
+}
+
+func controlFlowDecimalLiteralMetadata(expr *Expr) (int32, int32, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return 0, 0, false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 0 || fn.Args[1].Typ.Width != expr.Typ.Width || fn.Args[1].Typ.Scale != expr.Typ.Scale {
+		return 0, 0, false
+	}
+	value, ok := decimalStringLiteralValue(fn.Args[0])
+	if !ok {
+		return 0, 0, false
+	}
+	// The implicit literal cast already carries the physical coefficient's
+	// width and scale. Keep that scale unchanged when narrowing control-flow
+	// metadata; recomputing a canonical scale would require rescaling the
+	// coefficient as well (for example, 2.0 is stored as 20 at scale 1).
+	width := decimalLiteralPrecision(value)
+	if strings.ContainsAny(value, "eE") {
+		if _, naturalWidth, _, ok := canonicalExactDecimalString(value); ok {
+			width = naturalWidth
+		}
+	}
+	return width, expr.Typ.Scale, true
 }
 
 func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
@@ -4598,6 +5187,9 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 		return 0, false
 	}
 	if typ.Oid.IsDecimal() {
+		if width, scale, ok := controlFlowDecimalLiteralMetadata(expr); ok {
+			return decimalDisplayWidth(types.New(typ.Oid, width, scale)), true
+		}
 		if typ.Width <= 0 {
 			return 0, false
 		}
@@ -4682,10 +5274,154 @@ func integerMetadataWidth(oid types.T) int32 {
 	}
 }
 
+func isDecimalComparisonOperator(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		return true
+	default:
+		return false
+	}
+}
+
+// foldDecimalComparisonStringConstants evaluates only query-invariant string
+// expressions before overload resolution. Runtime strings (columns, variables,
+// and prepared parameters) stay on MySQL's generic REAL coercion path.
+func foldDecimalComparisonStringConstants(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || !isDecimalComparisonOperator(name) || len(args) != 2 {
+		return
+	}
+	for stringPos, decimalPos := range []int{1, 0} {
+		if !types.T(args[decimalPos].Typ.Id).IsDecimal() ||
+			!types.T(args[stringPos].Typ.Id).IsMySQLString() ||
+			args[stringPos].GetLit() != nil ||
+			!isFoldableDecimalComparisonConstant(args[stringPos]) {
+			continue
+		}
+		vec, free, err := colexec.GetReadonlyResultFromExpression(
+			proc,
+			DeepCopyExpr(args[stringPos]),
+			[]*batch.Batch{batch.EmptyForConstFoldBatch},
+		)
+		if err != nil {
+			continue
+		}
+		literal := rule.GetConstantValue(vec, false, 0)
+		free()
+		if literal == nil || literal.Isnull || literal.IsBin {
+			continue
+		}
+		if _, ok := literal.Value.(*plan.Literal_Sval); !ok {
+			continue
+		}
+		args[stringPos] = &Expr{Typ: args[stringPos].Typ, Expr: &plan.Expr_Lit{Lit: literal}}
+	}
+}
+
+func isFoldableDecimalComparisonConstant(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_F:
+		if impl.F == nil || impl.F.Func == nil {
+			return false
+		}
+		fn, ok := function.GetFunctionByIdWithoutError(impl.F.Func.GetObj())
+		if !ok || fn.CannotFold() || fn.IsRealTimeRelated() || fn.IsAgg() || fn.IsWin() {
+			return false
+		}
+		for _, arg := range impl.F.Args {
+			if !isFoldableDecimalComparisonConstant(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		for _, arg := range impl.List.List {
+			if !isFoldableDecimalComparisonConstant(arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// A numeric string literal paired with DECIMAL has an exact numeric domain.
+// Resolve that domain before the generic string/numeric cast matrix selects
+// FLOAT64, which cannot distinguish adjacent DECIMAL values above 2^53. Keep
+// the original expression when it contains an explicit string cast, then cast
+// its result to the literal's natural DECIMAL type so the explicit cast still
+// executes and a peer with a narrower scale cannot truncate the boundary.
+func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	if !isDecimalComparisonOperator(name) || len(args) != 2 {
+		return nil
+	}
+
+	for stringPos, decimalPos := range []int{1, 0} {
+		decimalType := types.T(args[decimalPos].Typ.Id)
+		if !decimalType.IsDecimal() {
+			continue
+		}
+		value, ok := decimalStringLiteralValue(args[stringPos])
+		if !ok {
+			continue
+		}
+		numericValue, ok := function.GetNumericStringPrefix(value)
+		if !ok {
+			continue
+		}
+		if args[stringPos].GetLit() == nil && numericValue != value {
+			continue
+		}
+
+		decimalExpr, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, numericValue)
+		if err != nil {
+			return err
+		}
+		if !exact {
+			continue
+		}
+		if args[stringPos].GetLit() != nil {
+			args[stringPos] = decimalExpr
+			return nil
+		}
+		args[stringPos], err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+		return err
+	}
+	return nil
+}
+
+// decimalStringLiteralValue recognizes character-string literals, including
+// _binary/BINARY character forms, and cast chains rooted in one. Raw hex/bit
+// literals use the varbinary byte-value domain and are deliberately excluded.
+// Dynamic string expressions retain the generic REAL comparison path.
+func decimalStringLiteralValue(expr *Expr) (string, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return "", false
+	}
+	if literal := expr.GetLit(); literal != nil {
+		value, ok := literal.Value.(*plan.Literal_Sval)
+		if !ok || literal.Isnull || literal.IsBin {
+			return "", false
+		}
+		return value.Sval, true
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return "", false
+	}
+	return decimalStringLiteralValue(fn.Args[0])
+}
+
 // A direct prepared parameter in a binary comparison derives its type from
 // the other operand. Preserve that contract for DECIMAL before the generic
-// string/numeric cast rules see the parameter's transport type (TEXT). Real
-// string expressions continue through the ordinary MySQL coercion path.
+// string/numeric cast rules see the parameter's transport type (TEXT).
+// Non-literal string expressions continue through ordinary coercion.
 func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args []*Expr) error {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
@@ -4697,6 +5433,14 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	}
 
 	for paramPos, peerPos := range []int{1, 0} {
+		if args[paramPos].ExactDecimalParam && types.T(args[peerPos].Typ.Id).IsDecimal() {
+			normalized, err := normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
+			if err != nil {
+				return err
+			}
+			args[paramPos] = normalized
+			return nil
+		}
 		if !isDirectDynamicParam(args[paramPos]) || !types.T(args[peerPos].Typ.Id).IsDecimal() {
 			continue
 		}
@@ -4704,10 +5448,285 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 		if err != nil {
 			return err
 		}
+		castExpr.ExactDecimalParam = true
 		args[paramPos] = castExpr
 		return nil
 	}
 	return nil
+}
+
+// A direct prepared parameter is represented as TEXT for transport, but MySQL
+// contributes DECIMAL(65,30) for it while aggregating DECIMAL-aware common
+// types. Keep argsType unchanged so cast insertion still converts the runtime
+// TEXT value to the selected numeric type.
+func decimalParamCommonTypeResolutionTypes(
+	name string, args []*Expr, argsType []types.Type, prefixCastEnabled bool,
+) []types.Type {
+	switch name {
+	case "coalesce", "greatest", "least":
+	default:
+		return argsType
+	}
+	if len(args) != len(argsType) {
+		return argsType
+	}
+
+	hasParam := false
+	hasDecimal := false
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) {
+			hasParam = true
+			continue
+		}
+		switch {
+		case typ.Oid == types.T_any:
+			continue
+		case typ.Oid.IsDecimal():
+			hasDecimal = true
+		case typ.IsNumeric():
+			continue
+		case typ.Oid == types.T_bool:
+			continue
+		case typ.Oid == types.T_year:
+			continue
+		default:
+			return argsType
+		}
+	}
+	if !hasDecimal {
+		return argsType
+	}
+	for i, typ := range argsType {
+		if isUnresolvedPreparedNumericParam(args[i], typ) && args[i].Typ.Enumvalues == "" {
+			args[i].Typ.Enumvalues = "mo_decimal_common_type_dependency"
+		}
+	}
+	if !prefixCastEnabled {
+		return argsType
+	}
+
+	dynamicParamType, ok := types.Type{}, true
+	if hasParam {
+		hasUnclassifiedParam := false
+		for i, typ := range argsType {
+			if isUnresolvedPreparedNumericParam(args[i], typ) {
+				if _, _, found := runtimePreparedNumericType(args[i]); !found {
+					hasUnclassifiedParam = true
+					break
+				}
+			}
+		}
+		if hasUnclassifiedParam {
+			dynamicParamType, ok = dynamicParamDecimalCommonType(argsType)
+		}
+	}
+	if hasParam && decimalParamCommonTypeHasFloatingPeer(args, argsType) {
+		// FLOAT/DOUBLE determines the final common type, so its DOUBLE cast can
+		// preserve the native floating parameter domain without first forcing
+		// every DECIMAL contribution into one fixed representation.
+		dynamicParamType = types.New(types.T_decimal256, 65, 30)
+		ok = true
+	}
+	if hasParam && !ok {
+		// Validation reports the same physical-domain boundary before this
+		// helper is used by the normal binder. Keep the unresolved inputs here
+		// so direct white-box callers do not invent a lossy numeric type.
+		return argsType
+	}
+	resolutionTypes := append([]types.Type(nil), argsType...)
+	for i, typ := range argsType {
+		switch {
+		case isUnresolvedPreparedNumericParam(args[i], typ):
+			if runtimeType, _, found := runtimePreparedNumericType(args[i]); found {
+				resolutionTypes[i] = runtimeType
+			} else {
+				resolutionTypes[i] = dynamicParamType
+			}
+		case typ.Oid == types.T_bool:
+			// BOOL is MySQL's TINYINT(1) alias, but is not classified as
+			// numeric internally. Use its supported integer cast bridge.
+			resolutionTypes[i] = types.T_uint8.ToType()
+		case typ.Oid == types.T_bit:
+			// BIT can hold the full uint64 domain. Represent that contribution
+			// as DECIMAL(20,0) so it cannot win as an integer common type.
+			resolutionTypes[i] = types.New(types.T_decimal128, 20, 0)
+		case typ.Oid == types.T_year:
+			// YEAR contributes its four-digit numeric value. Normalizing only
+			// the resolution input avoids the temporal/string mixed-type path.
+			resolutionTypes[i] = types.New(types.T_decimal64, 4, 0)
+		}
+	}
+	maxIntegral, maxScale := int32(0), int32(0)
+	for _, typ := range resolutionTypes {
+		if typ.Oid.IsFloat() {
+			return resolutionTypes
+		}
+		if typ.Oid.IsDecimal() {
+			maxIntegral = max(maxIntegral, typ.Width-typ.Scale)
+			maxScale = max(maxScale, typ.Scale)
+		}
+	}
+	if hasParam {
+		if maxIntegral+maxScale > 76 {
+			// No Decimal256 type can preserve both domains. Leave the direct
+			// parameter unresolved so the normal non-narrowing text path decides the
+			// common type instead of discarding high integral digits.
+			return argsType
+		}
+	}
+	return resolutionTypes
+}
+
+func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion18
+}
+
+func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {
+	for i, typ := range argsType {
+		if !isUnresolvedPreparedNumericParam(args[i], typ) && typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicParamDecimalCommonType(peerTypes []types.Type) (types.Type, bool) {
+	const (
+		maxDecimal256Width = int32(76)
+		paramIntegralWidth = int32(35)
+		paramScale         = int32(30)
+	)
+
+	maxPeerIntegralWidth := int32(0)
+	maxPeerScale := int32(0)
+	for _, typ := range peerTypes {
+		if !typ.Oid.IsDecimal() {
+			continue
+		}
+		if integralWidth := typ.Width - typ.Scale; integralWidth > maxPeerIntegralWidth {
+			maxPeerIntegralWidth = integralWidth
+		}
+		if typ.Scale > maxPeerScale {
+			maxPeerScale = typ.Scale
+		}
+	}
+
+	integralWidth := max(paramIntegralWidth, maxPeerIntegralWidth)
+	scale := max(paramScale, maxPeerScale)
+	if integralWidth+scale > maxDecimal256Width {
+		return types.Type{}, false
+	}
+	return types.New(types.T_decimal256, integralWidth+scale, scale), true
+}
+
+func normalizeDecimalParamCommonTypeCastSources(
+	ctx context.Context,
+	args []*Expr,
+	argsType []types.Type,
+	resolutionTypes []types.Type,
+	returnType types.Type,
+) error {
+	if len(args) != len(argsType) || len(args) != len(resolutionTypes) {
+		return nil
+	}
+	for i := range args {
+		if returnType.Oid.IsDecimal() && isUnresolvedPreparedNumericParam(args[i], argsType[i]) {
+			// Mark only this internal cast for MySQL numeric-prefix conversion.
+			// Charset is otherwise unused for numeric types and does not require a
+			// new CAST overload ID that an old CN could fail to decode.
+			castType := returnType
+			castType.Charset = 255
+			castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&castType))
+			if err != nil {
+				return err
+			}
+			args[i] = castExpr
+			argsType[i] = returnType
+			continue
+		}
+		needsBridge := false
+		switch argsType[i].Oid {
+		case types.T_bool:
+			needsBridge = resolutionTypes[i].Oid == types.T_uint8
+		case types.T_bit:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal128
+		case types.T_year:
+			needsBridge = resolutionTypes[i].Oid == types.T_decimal64
+		}
+		if !needsBridge {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, args[i], makePlan2Type(&resolutionTypes[i]))
+		if err != nil {
+			return err
+		}
+		args[i] = castExpr
+		argsType[i] = resolutionTypes[i]
+	}
+	return nil
+}
+
+func applyDecimalParamCommonTypeCasts(
+	args []*Expr,
+	argsType []types.Type,
+	resolutionTypes []types.Type,
+	returnType types.Type,
+	argsCastType []types.Type,
+) []types.Type {
+	if !returnType.Oid.IsDecimal() || len(args) != len(argsType) || len(args) != len(resolutionTypes) {
+		return argsCastType
+	}
+
+	dynamicParamType, ok := dynamicParamDecimalCommonType(argsType)
+	if !ok {
+		return argsCastType
+	}
+	for i := range args {
+		if !isUnresolvedPreparedNumericParam(args[i], argsType[i]) || !resolutionTypes[i].Eq(dynamicParamType) {
+			continue
+		}
+		if len(argsCastType) == 0 {
+			argsCastType = append([]types.Type(nil), argsType...)
+		}
+		argsCastType[i] = returnType
+	}
+	return argsCastType
+}
+
+func isUnresolvedPreparedNumericParam(expr *Expr, typ types.Type) bool {
+	return typ.Oid == types.T_text && isDirectDynamicParam(expr)
+}
+
+func runtimePreparedNumericType(expr *Expr) (types.Type, int32, bool) {
+	const prefix = "mo_runtime_numeric:"
+	if expr == nil || !strings.HasPrefix(expr.Typ.Enumvalues, prefix) {
+		return types.Type{}, 0, false
+	}
+	var mode, width, scale int32
+	if _, err := fmt.Sscanf(expr.Typ.Enumvalues, prefix+"%d:%d:%d", &mode, &width, &scale); err != nil {
+		return types.Type{}, 0, false
+	}
+	if mode == 3 {
+		return types.T_float64.ToType(), mode, true
+	}
+	if mode == 5 {
+		return types.T_text.ToType(), mode, true
+	}
+	var typ types.Type
+	switch {
+	case width <= 18:
+		typ = types.New(types.T_decimal64, max(width, 1), scale)
+	case width <= 38:
+		typ = types.New(types.T_decimal128, width, scale)
+	default:
+		typ = types.New(types.T_decimal256, width, scale)
+	}
+	return typ, mode, true
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a
@@ -4835,7 +5854,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() {
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val), typ)
 		}
-		return makePlan2DecimalExprWithType(b.GetContext(), val)
+		return makePlan2LegacyDecimalExprWithType(b.GetContext(), val)
 	}
 
 	returnHexNumExpr := func(val string, isBin ...bool) (*Expr, error) {
@@ -5670,6 +6689,38 @@ func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
+	// Row comparison selects a domain per tuple position. Materialized protocol
+	// values paired with a DECIMAL position must enter that domain before the
+	// tuple is expanded into scalar equalities; otherwise a FLOAT parameter can
+	// use a broad scalar DOUBLE comparison and match the wrong tuple row.
+	for position := range leftList.List.List {
+		hasDecimal := types.T(leftList.List.List[position].Typ.Id).IsDecimal()
+		for _, candidate := range rightList.List {
+			rightTuple := candidate.GetList()
+			if rightTuple != nil && position < len(rightTuple.List) {
+				hasDecimal = hasDecimal || types.T(rightTuple.List[position].Typ.Id).IsDecimal()
+			}
+		}
+		if !hasDecimal {
+			continue
+		}
+		var err error
+		leftList.List.List[position], err = normalizeTuplePreparedDecimalValue(ctx, leftList.List.List[position])
+		if err != nil {
+			return nil, err
+		}
+		for _, candidate := range rightList.List {
+			rightTuple := candidate.GetList()
+			if rightTuple == nil || position >= len(rightTuple.List) {
+				continue
+			}
+			rightTuple.List[position], err = normalizeTuplePreparedDecimalValue(ctx, rightTuple.List[position])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	candidates := make([]*plan.Expr, 0, len(rightList.List))
 
 	for _, rightVal := range rightList.List {
@@ -5709,6 +6760,42 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func normalizeTuplePreparedDecimalValue(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil || !expr.ExactDecimalParam || types.T(expr.Typ.Id).IsDecimal() {
+		return expr, nil
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull || literal.IsBin {
+		return expr, nil
+	}
+	var value string
+	switch typed := literal.Value.(type) {
+	case *plan.Literal_Sval:
+		value = typed.Sval
+	case *plan.Literal_I64Val:
+		value = strconv.FormatInt(typed.I64Val, 10)
+	case *plan.Literal_U64Val:
+		value = strconv.FormatUint(typed.U64Val, 10)
+	case *plan.Literal_Dval:
+		value = strconv.FormatFloat(typed.Dval, 'g', -1, 64)
+	case *plan.Literal_Fval:
+		value = strconv.FormatFloat(float64(typed.Fval), 'g', -1, 32)
+	case *plan.Literal_Bval:
+		value = "0"
+		if typed.Bval {
+			value = "1"
+		}
+	default:
+		return expr, nil
+	}
+	decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, value)
+	if err != nil || !exact {
+		return expr, err
+	}
+	decimal.ExactDecimalParam = true
+	return decimal, nil
 }
 
 func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {

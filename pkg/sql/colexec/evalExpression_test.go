@@ -534,6 +534,118 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 		"coalesce must fold all active source categories")
 }
 
+func TestPreparedDecimalCoalesceRebindAcrossExecutorReset(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	textType := types.T_text.ToType()
+	values := []string{
+		"9007199254740992.0001",
+		"9007199254740992.0002",
+		"9007199254740992.0003",
+		"9007199254740993.0001",
+	}
+
+	for _, rowCount := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("rows=%d", rowCount), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			columnValues := make([]types.Decimal128, rowCount)
+			for i := range columnValues {
+				value, err := types.ParseDecimal128(values[i], decimalType.Width, decimalType.Scale)
+				require.NoError(t, err)
+				columnValues[i] = value
+			}
+			input := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(rowCount, decimalType, proc.Mp(), false, columnValues),
+			}, nil)
+			defer input.Clean(proc.Mp())
+
+			param := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			target := &plan.Expr{
+				Typ: plan.Type{
+					Id:    int32(decimalType.Oid),
+					Width: decimalType.Width,
+					Scale: decimalType.Scale,
+				},
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			}
+			castFn, err := function.GetFunctionByName(proc.Ctx, "cast", []types.Type{textType, decimalType})
+			require.NoError(t, err)
+			castParam := &plan.Expr{
+				Typ: target.Typ,
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "cast", Obj: castFn.GetEncodedOverloadID()},
+					Args: []*plan.Expr{param, target},
+				}},
+			}
+			column := &plan.Expr{
+				Typ:  target.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			coalesceFn, err := function.GetFunctionByName(proc.Ctx, "coalesce", []types.Type{decimalType, decimalType})
+			require.NoError(t, err)
+			coalesce := &plan.Expr{
+				Typ: target.Typ,
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "coalesce", Obj: coalesceFn.GetEncodedOverloadID()},
+					Args: []*plan.Expr{castParam, column},
+				}},
+			}
+
+			executor, err := NewExpressionExecutor(proc, coalesce)
+			require.NoError(t, err)
+			defer executor.Free()
+			functionExecutor := executor.(*FunctionExpressionExecutor)
+
+			for execution, parameter := range []struct {
+				value  string
+				isNull bool
+			}{
+				{value: values[1]},
+				{isNull: true},
+				{value: values[2]},
+				{isNull: true},
+			} {
+				if execution > 0 {
+					executor.ResetForNextQuery()
+				}
+				params := vector.NewVec(textType)
+				require.NoError(t, vector.AppendBytes(params, []byte(parameter.value), parameter.isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, rowCount, result.Length())
+				resultValues := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](result)
+				for row := 0; row < rowCount; row++ {
+					got, isNull := resultValues.GetValue(uint64(row))
+					require.False(t, isNull)
+					if parameter.isNull {
+						require.Equal(t, columnValues[row], got)
+					} else {
+						want, err := types.ParseDecimal128(parameter.value, decimalType.Width, decimalType.Scale)
+						require.NoError(t, err)
+						require.Equal(t, want, got)
+					}
+				}
+				if execution == 0 {
+					// Runtime folding may broadcast one physical result row across
+					// the batch. The next execution must be able to materialize a
+					// flat multi-row result from that reusable vector.
+					functionExecutor.resultVector.GetResultVector().ToConst()
+					functionExecutor.resultVector.GetResultVector().SetLength(rowCount)
+				}
+
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+			}
+		})
+	}
+}
+
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

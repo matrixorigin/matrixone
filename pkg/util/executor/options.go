@@ -392,6 +392,15 @@ func (opts StatementOption) WithParamsAndNulls(
 	return opts
 }
 
+func (opts StatementOption) WithPreparedParamBindingTypes(bindingTypes []types.Type) StatementOption {
+	opts.preparedParamBindingTypes = append([]types.Type(nil), bindingTypes...)
+	return opts
+}
+
+func (opts StatementOption) PreparedParamBindingTypes() []types.Type {
+	return opts.preparedParamBindingTypes
+}
+
 func (opts Options) WithForceRebuildPlan() Options {
 	opts.forceRebuildPlan = true
 	return opts
