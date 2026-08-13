@@ -20,11 +20,14 @@ SQL surface is implemented. It deliberately replaces the account-level
 static compute-group execution MVP with strict authorization and failure. It
 does not include workload classification or resource admission.
 
-This revision of #26109 is only the Milestone A RFC reset. It removes and
-rejects the prior implementation; it does not claim that Milestone B exists or
-that the feature's implementation acceptance gate is closed. #25451 remains
-open until named owners implement every applicable acceptance row and attach
-the required multi-CN and disabled-path benchmark evidence.
+This revision of #26109 delivers the Milestone A contract and removes the
+rejected policy implementation. It also extracts two independently valid
+legacy-scheduler safety fixes: writable workspaces retain ingress
+participation, and `LOAD DATA LOCAL` remains ingress-only. Those fixes neither
+resolve nor authorize a compute group and do not claim that Milestone B exists
+or that its implementation acceptance gate is closed. #25451 remains open
+until named owners implement every applicable acceptance row and attach the
+required multi-CN and disabled-path benchmark evidence.
 
 The companion [acceptance matrix](00000000_compute_group_acceptance_matrix.md)
 is normative. A production implementation is not reviewable until every
@@ -685,9 +688,11 @@ already exists. In particular, this RFC removes or rejects:
 
 Independently useful scheduler, topology, and observability changes may be
 extracted only when current main has another stable consumer and their tests do
-not depend on the rejected policy model. Dirty-workspace and local-input
-constraints belong in the future compute-group resolver because legacy main
-does not move those statements outside their ingress boundary.
+not depend on the rejected policy model. This PR extracts the legacy execution
+invariants for dirty workspaces and `LOAD DATA LOCAL`: ingress must participate
+when it owns uncommitted state, and a client-local input stream is ingress-only.
+They remain inputs to a future compute-group resolver, not evidence that group
+identity, authorization, transaction pinning, or RemoteRun fencing exists.
 
 Two candidate fixes found while auditing #26109 are explicitly outside this
 RFC and should be delivered as isolated correctness PRs if their regressions

@@ -18,10 +18,14 @@ rows marked `B` before the feature can be enabled in production. Rows marked
 `D` define the later admission boundary and must remain unsupported—not
 partially emulated—until an admission owner exists.
 
-#26109 delivers only the Milestone A reset: the rejected policy implementation
-is removed and none of the unchecked Milestone B gates below is claimed as
-complete. #25451 remains the implementation gate until named tests and current
-results, including the multi-CN witnesses and disabled-path benchmark, exist.
+#26109 delivers the Milestone A reset plus independent legacy-scheduler fixes
+for writable-workspace ingress participation and ingress-only
+`LOAD DATA LOCAL`. The rejected policy implementation remains removed, and
+none of the unchecked Milestone B gates below is claimed as complete: these
+local invariants do not provide compute-group identity, authorization, or
+transaction pinning. #25451 remains the implementation gate until named tests
+and current results, including the multi-CN witnesses and disabled-path
+benchmark, exist.
 
 # Test topology
 

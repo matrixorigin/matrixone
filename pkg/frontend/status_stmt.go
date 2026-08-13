@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -54,6 +55,7 @@ func grantDatabaseOwnershipAfterCreate(
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
+	var loadLocalReader *io.PipeReader
 	var columns []interface{}
 	execCtx.persistentDropTableTargets = nil
 
@@ -219,16 +221,32 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		runBegin := time.Now()
 		if st, ok := execCtx.stmt.(*tree.Load); ok {
 			if st.Local {
+				// The LOCAL stream belongs to this accepted ingress execution.
+				// Create it only after compile/placement succeeds so a fail-closed
+				// scheduling decision cannot leave an unattached pipe behind.
+				reader, writer := io.Pipe()
+				loadLocalReader = reader
+				execCtx.proc.Base.LoadLocalReader = reader
+				execCtx.loadLocalWriter = writer
+				defer func() {
+					_ = reader.Close()
+					if execCtx.proc.Base.LoadLocalReader == reader {
+						execCtx.proc.Base.LoadLocalReader = nil
+					}
+					if execCtx.loadLocalWriter == writer {
+						execCtx.loadLocalWriter = nil
+					}
+				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter, execCtx.proc.GetLoadLocalReader())
+					return processLoadLocal(ses, execCtx, st.Param, writer, reader)
 				})
 			}
 		}
 
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			if loadLocalErrGroup != nil { // release resources
-				err2 := execCtx.proc.Base.LoadLocalReader.Close()
+				err2 := loadLocalReader.Close()
 				if err2 != nil {
 					ses.Error(execCtx.reqCtx,
 						"processLoadLocal goroutine failed",
