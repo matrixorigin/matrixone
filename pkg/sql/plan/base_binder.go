@@ -399,8 +399,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
+		typ := plan.Type{Id: int32(types.T_timestamp)}
+		if b.ctx.timeBoundaryType != nil {
+			typ = *DeepCopyType(b.ctx.timeBoundaryType)
+		}
+		typ.NotNullable = true
 		expr = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_timestamp)},
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -3539,6 +3544,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
 		scale := args[0].Typ.Scale
+		if timeWindowIntervalUsesMicrosecond(args[1]) && scale < 6 {
+			scale = 6
+		}
 		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
 			Id:    int32(types.T_datetime),
 			Scale: scale,
@@ -4401,6 +4409,19 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {
+	list := expr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	lit := list.List[1].GetLit()
+	if lit == nil {
+		return false
+	}
+	unit, err := types.IntervalTypeOf(lit.GetSval())
+	return err == nil && unit == types.MicroSecond
 }
 
 func controlFlowValueIndexes(name string, argsLength int) []int {

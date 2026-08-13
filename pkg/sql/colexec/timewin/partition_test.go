@@ -310,6 +310,51 @@ func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testing.T) {
+	for _, scale := range []int32{0, 3, 6} {
+		t.Run(types.T_datetime.ToTypeWithScale(scale).String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			oneMicrosecond, err := calcDatetime(1, types.MicroSecond)
+			require.NoError(t, err)
+
+			in := batch.New([]string{"ts", "val"})
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale))
+			in.Vecs[1] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
+			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+				mustDatetimeScale(t, "2026-08-12 10:00:00", scale),
+			}, nil, proc.Mp()))
+			in.SetRowCount(1)
+
+			arg := newPartArg(t, proc, oneMicrosecond, false)
+			arg.WEnd = true
+			arg.Interval = oneMicrosecond
+			arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+			arg.Children = nil
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, res.Batch)
+			require.GreaterOrEqual(t, len(res.Batch.Vecs), 3)
+
+			startVec := res.Batch.Vecs[1]
+			endVec := res.Batch.Vecs[2]
+			require.Equal(t, int32(6), startVec.GetType().Scale)
+			require.Equal(t, int32(6), endVec.GetType().Scale)
+			start := vector.MustFixedColNoTypeCheck[types.Datetime](startVec)[0]
+			end := vector.MustFixedColNoTypeCheck[types.Datetime](endVec)[0]
+			require.Equal(t, types.Datetime(1), end-start)
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 // Sliding windows carry state across rows, so a partition boundary has to
 // restart that state. Each partition must produce exactly the windows it would
 // have produced on its own.

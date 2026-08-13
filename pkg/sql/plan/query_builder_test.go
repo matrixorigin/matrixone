@@ -2674,6 +2674,69 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 	}
 }
 
+func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "datetime scale 0", typ: types.T_datetime.ToTypeWithScale(0)},
+		{name: "datetime scale 3", typ: types.T_datetime.ToTypeWithScale(3)},
+		{name: "datetime scale 6", typ: types.T_datetime.ToTypeWithScale(6)},
+		{name: "timestamp scale 0", typ: types.T_timestamp.ToTypeWithScale(0)},
+		{name: "timestamp scale 3", typ: types.T_timestamp.ToTypeWithScale(3)},
+		{name: "timestamp scale 6", typ: types.T_timestamp.ToTypeWithScale(6)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mockTimeWindowScaleTable(t, mock, tt.typ)
+
+			logicPlan, err := runOneStmt(mock, t,
+				"select _wstart, _wend, count(*) from tw_scale interval(ts, 1, microsecond)")
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotEmpty(t, query.Steps)
+			root := query.Nodes[query.Steps[0]]
+			require.Equal(t, plan.Node_PROJECT, root.NodeType)
+			require.GreaterOrEqual(t, len(root.ProjectList), 2)
+
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Scale)
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[1].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Scale)
+
+			var timeWindowNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					timeWindowNode = node
+					break
+				}
+			}
+			require.NotNil(t, timeWindowNode)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.Timestamp.Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
+			require.Len(t, timeWindowNode.GroupBy, 1)
+			require.Equal(t, int32(types.T_datetime), timeWindowNode.GroupBy[0].Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
+		})
+	}
+}
+
+func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
+	t.Helper()
+	tableName := "tw_scale"
+	mock.ctxt.objects[tableName] = &plan.ObjectRef{DbName: "test", ObjName: tableName, Obj: 42}
+	mock.ctxt.tables[tableName] = &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "ts", Typ: makePlan2Type(&typ)},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+	}
+}
+
 func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
 	err := validateTimeWindowIntervalUnit(context.Background(), "century")
 	require.ErrorContains(t, err, "invalid interval type 'century'")
@@ -2839,7 +2902,11 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 					require.Equal(t, "cast", castExpr.F.Func.ObjName)
 				} else {
 					// For temporal types, should keep original type
-					require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					if tt.colType == types.T_date {
+						require.Equal(t, int32(types.T_datetime), ts.Typ.Id)
+					} else {
+						require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					}
 				}
 
 				// Verify boundTimeWindowOrderBy

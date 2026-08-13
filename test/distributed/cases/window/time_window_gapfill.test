@@ -77,6 +77,47 @@ where device_id = 2
 group by device_id interval(event_dt, 500, microsecond) gapfill(partition) fill(value, -1)
 order by device_id, _wstart;
 
+create table hf_scale_boundaries(
+    id int,
+    ts0 datetime,
+    ts3 datetime(3),
+    ts6 datetime(6)
+);
+insert into hf_scale_boundaries values
+    (1, '2026-08-12 10:00:00', '2026-08-12 10:00:00.123', '2026-08-12 10:00:00.123456');
+
+select 'dt0' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond)
+order by _wstart;
+
+select 'dt3' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts3, 1, microsecond)
+order by _wstart;
+
+select 'dt6' as scale_case, _wstart, _wend, timestampdiff(microsecond, _wstart, _wend) as width_us
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts6, 1, microsecond)
+order by _wstart;
+
+create table hf_scale_materialized as
+select _wstart, _wend, count(*) as row_count
+from hf_scale_boundaries
+where id = 1
+group by id interval(ts0, 1, microsecond);
+
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'hf_scale_materialized'
+  and column_name in ('_wstart', '_wend')
+order by ordinal_position;
+
+drop table hf_scale_materialized;
+drop table hf_scale_boundaries;
 drop table hf_readings;
 set time_zone = 'SYSTEM';
 

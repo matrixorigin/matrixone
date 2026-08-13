@@ -4843,6 +4843,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
 
+	if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
+		setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ, astTimeWindow)
+	}
+
 	// bind SELECT clause (Projection List)
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)
 	if resultLen, notCacheable, err = builder.bindProjection(ctx, projectionBinder, selectList, notCacheable); err != nil {
@@ -7549,6 +7553,85 @@ func (builder *QueryBuilder) bindProjection(
 	return
 }
 
+func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type, astTimeWindow *tree.TimeWindow) {
+	if ctx == nil || astTimeWindow == nil {
+		return
+	}
+	if typ.Id == 0 {
+		typ.Id = int32(types.T_timestamp)
+	}
+	if types.T(typ.Id) == types.T_date {
+		typ.Id = int32(types.T_datetime)
+	}
+	if timeWindowUsesMicrosecond(astTimeWindow) && typ.Scale < 6 {
+		typ.Scale = 6
+	}
+	typ.NotNullable = true
+	ctx.timeBoundaryType = &typ
+}
+
+func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.TimeWindow, fallback *plan.Type) plan.Type {
+	boundaryType := tsType
+	if boundaryType.Id == 0 && fallback != nil {
+		boundaryType = *DeepCopyType(fallback)
+	}
+	if fallback != nil && boundaryType.Scale < fallback.Scale {
+		boundaryType.Scale = fallback.Scale
+	}
+	if types.T(boundaryType.Id) == types.T_date {
+		boundaryType.Id = int32(types.T_datetime)
+	}
+	if timeWindowUsesMicrosecond(astTimeWindow) && boundaryType.Scale < 6 {
+		boundaryType.Scale = 6
+	}
+	boundaryType.NotNullable = true
+	return boundaryType
+}
+
+func timeWindowUsesMicrosecond(astTimeWindow *tree.TimeWindow) bool {
+	if astTimeWindow == nil {
+		return false
+	}
+	if timeWindowUnitIsMicrosecond(astTimeWindow.Interval.Unit) {
+		return true
+	}
+	return astTimeWindow.Sliding != nil && timeWindowUnitIsMicrosecond(astTimeWindow.Sliding.Unit)
+}
+
+func timeWindowUnitIsMicrosecond(unit string) bool {
+	typ, err := types.IntervalTypeOf(unit)
+	return err == nil && typ == types.MicroSecond
+}
+
+func updateTimeWindowBoundaryTypes(ctx *BindContext, boundaryType plan.Type) {
+	if ctx == nil {
+		return
+	}
+	ctx.timeBoundaryType = &boundaryType
+	for _, expr := range ctx.times {
+		if isTimeWindowBoundaryColRef(expr, ctx.timeTag) {
+			expr.Typ = boundaryType
+		}
+	}
+	for _, expr := range ctx.projects {
+		updateDirectTimeWindowBoundaryType(expr, ctx.timeTag, boundaryType)
+	}
+}
+
+func isTimeWindowBoundaryColRef(expr *plan.Expr, timeTag int32) bool {
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	return col != nil && col.RelPos == timeTag && (col.Name == TimeWindowStart || col.Name == TimeWindowEnd)
+}
+
+func updateDirectTimeWindowBoundaryType(expr *plan.Expr, timeTag int32, boundaryType plan.Type) {
+	if isTimeWindowBoundaryColRef(expr, timeTag) {
+		expr.Typ = boundaryType
+	}
+}
+
 func (builder *QueryBuilder) bindTimeWindow(
 	ctx *BindContext,
 	projectionBinder *ProjectionBinder,
@@ -7594,6 +7677,9 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
+	boundaryType := timeWindowBoundaryTypeForTimestamp(ts.Typ, astTimeWindow, ctx.timeBoundaryType)
+	ts.Typ = boundaryType
+	updateTimeWindowBoundaryTypes(ctx, boundaryType)
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7616,7 +7702,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 		if tmp, err = projectionBinder.BindExpr(helpFunc.dateAdd, 0, true); err != nil {
 			return
 		}
-		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ); err != nil {
+		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, boundaryType); err != nil {
 			return
 		}
 	}
