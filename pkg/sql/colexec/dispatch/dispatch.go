@@ -169,8 +169,12 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if dispatch.MaterializedSource != nil {
-		err = dispatch.MaterializedSource.Append(whichToSend)
-		analyzer.SetMemUsed(dispatch.MaterializedSource.CurrentBytes())
+		stats, err := dispatch.MaterializedSource.AppendWithStats(whichToSend)
+		analyzer.SetMemUsed(stats.RetainedBytes)
+		if stats.SpilledBytes > 0 {
+			analyzer.Spill(stats.SpilledBytes)
+			analyzer.SpillRows(stats.SpilledRows)
+		}
 		return result, err
 	}
 
