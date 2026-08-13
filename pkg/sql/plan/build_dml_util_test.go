@@ -741,6 +741,77 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 	})
 }
 
+func TestUniqueIndexDeletePreservesTagThroughFilterAndLock(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(plan.Query_DELETE, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	sourceTag := builder.genNewBindTag()
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), Width: 16}
+	keyType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+	sourceID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: catalog.Row_ID, Typ: rowIDType},
+			{Name: catalog.IndexTableIndexColName, Typ: keyType},
+		}},
+		ProjectList: []*plan.Expr{
+			{Typ: rowIDType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: 0}}},
+			{Typ: keyType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: 1}}},
+		},
+		BindingTags: []int32{sourceTag},
+	}, bindCtx)
+	delInfo := &deleteNodeInfo{
+		objRef:             &plan.ObjectRef{ObjName: "idx_unique"},
+		tableDef:           &plan.TableDef{Name: "idx_unique"},
+		deleteIndex:        0,
+		pkPos:              1,
+		pkTyp:              keyType,
+		preserveProjection: true,
+	}
+
+	deleteID, err := makeOneDeletePlan(builder, bindCtx, sourceID, delInfo, true, false, false)
+	require.NoError(t, err)
+	deleteNode := builder.qry.Nodes[deleteID]
+	require.Equal(t, plan.Node_DELETE, deleteNode.NodeType)
+	require.Equal(t, int32(0), deleteNode.DeleteCtx.RowIdIdx)
+	require.Equal(t, int32(1), deleteNode.DeleteCtx.PrimaryKeyIdx)
+
+	deleteProject := builder.qry.Nodes[deleteNode.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, deleteProject.NodeType)
+	require.Len(t, deleteProject.ProjectList, 2)
+	require.Len(t, deleteProject.BindingTags, 1)
+	lockNode := builder.qry.Nodes[deleteProject.Children[0]]
+	require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+	require.Equal(t, int32(1), lockNode.LockTargets[0].PrimaryColIdxInBat)
+	filterNode := builder.qry.Nodes[lockNode.Children[0]]
+	require.Equal(t, plan.Node_FILTER, filterNode.NodeType)
+	compactProject := builder.qry.Nodes[filterNode.Children[0]]
+	require.Equal(t, plan.Node_PROJECT, compactProject.NodeType)
+	require.Len(t, compactProject.ProjectList, 2)
+	require.Len(t, compactProject.BindingTags, 1)
+	compactTag := compactProject.BindingTags[0]
+	require.NotEqual(t, sourceTag, compactTag)
+	require.Equal(t, []int32{compactTag}, filterNode.BindingTags)
+	require.Empty(t, lockNode.BindingTags)
+	require.Equal(t, compactTag, filterNode.FilterList[0].GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, compactTag, lockNode.LockTargets[0].PrimaryColRelPos)
+
+	_, err = builder.remapAllColRefs(
+		deleteID,
+		0,
+		make(map[[2]int32]int),
+		make(map[[2]int32]bool),
+		make(map[[2]int32]int),
+	)
+	require.NoError(t, err)
+	require.Len(t, lockNode.ProjectList, 2)
+	require.Len(t, filterNode.ProjectList, 2)
+	require.Len(t, compactProject.ProjectList, 2)
+	require.Len(t, deleteProject.ProjectList, 2)
+	require.Equal(t, int32(0), deleteNode.DeleteCtx.RowIdIdx)
+	require.Equal(t, int32(1), deleteNode.DeleteCtx.PrimaryKeyIdx)
+}
+
 func TestPrefixIndexDMLPlansMaterializePrefixKeys(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	emp := mock.ctxt.tables["emp"]

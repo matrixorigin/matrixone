@@ -120,7 +120,11 @@ type dmlPlanCtx struct {
 	// Recursive child actions still build their normal delete/update branches.
 	skipTargetDelete               bool
 	preserveUpdateSourceProjection bool
-	ignoreCheckConstraint          bool
+	// fkSetNullColumns records columns that are unconditionally NULL in every
+	// row of this recursive FK update source. A UNIQUE hidden index containing
+	// one of these columns has no replacement row to insert.
+	fkSetNullColumns      map[string]struct{}
+	ignoreCheckConstraint bool
 }
 
 // information of deleteNode, which is about the deleted table
@@ -1967,6 +1971,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 						upPlanCtx.preserveUpdateSourceProjection = delCtx.skipTargetDelete
+						upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(fk.Cols))
+						for _, childColID := range fk.Cols {
+							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
+						}
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
@@ -2752,16 +2760,52 @@ func makeOneDeletePlan(
 	isSK bool,
 	canTruncate bool,
 ) (int32, error) {
+	var hiddenDeleteTag int32
 	if isUK || isSK {
+		// Give hidden-index deletion a compact and explicit input ABI before any
+		// UK-specific consumer is attached. The source stream can be shared with
+		// recursive FK actions and is therefore subject to projection pruning;
+		// FILTER, LOCK and DELETE must all use the stable (rowid, primary-key)
+		// layout instead of offsets inherited from that wide stream.
+		if delNodeInfo.preserveProjection {
+			inputProjection := getProjectionByLastNode(builder, lastNodeId)
+			inputTags := builder.qry.Nodes[lastNodeId].BindingTags
+			if len(inputTags) == 0 {
+				return -1, moerr.NewInternalError(builder.GetContext(), "hidden-index delete input has no binding tag")
+			}
+			deleteProjectTag := builder.genNewBindTag()
+			hiddenDeleteTag = deleteProjectTag
+			lastNodeId = builder.appendNode(&Node{
+				NodeType: plan.Node_PROJECT,
+				Children: []int32{lastNodeId},
+				ProjectList: []*Expr{
+					{Typ: inputProjection[delNodeInfo.deleteIndex].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: inputTags[0], ColPos: int32(delNodeInfo.deleteIndex), Name: catalog.Row_ID,
+					}}},
+					{Typ: inputProjection[delNodeInfo.pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: inputTags[0], ColPos: int32(delNodeInfo.pkPos), Name: catalog.IndexTableIndexColName,
+					}}},
+				},
+				BindingTags: []int32{deleteProjectTag},
+			}, bindCtx)
+			delNodeInfo.deleteIndex = 0
+			delNodeInfo.pkPos = 1
+		}
 
 		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
 		if isUK {
+			inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
 			// append filter
 			rowIdTyp := types.T_Rowid.ToType()
+			rowIDRelPos := int32(0)
+			if len(inputTags) > 0 {
+				rowIDRelPos = inputTags[0]
+			}
 			rowIdColExpr := &plan.Expr{
 				Typ: makePlan2Type(&rowIdTyp),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
+						RelPos: rowIDRelPos,
 						ColPos: int32(delNodeInfo.deleteIndex),
 					},
 				},
@@ -2775,11 +2819,19 @@ func makeOneDeletePlan(
 				Children:    []int32{lastNodeId},
 				FilterList:  []*plan.Expr{filterExpr},
 				ProjectList: getProjectionByLastNode(builder, lastNodeId),
+				BindingTags: slices.Clone(inputTags),
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
+			if delNodeInfo.preserveProjection {
+				if builder.preserveFilterProjection == nil {
+					builder.preserveFilterProjection = make(map[int32]struct{})
+				}
+				builder.preserveFilterProjection[lastNodeId] = struct{}{}
+			}
 			// append lock
 			lockTarget := &plan.LockTarget{
 				TableId:            delNodeInfo.tableDef.TblId,
+				PrimaryColRelPos:   rowIDRelPos,
 				PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
 				PrimaryColTyp:      delNodeInfo.pkTyp,
 				RefreshTsIdxInBat:  -1, //unsupport now
@@ -2796,36 +2848,28 @@ func makeOneDeletePlan(
 				LockTargets: []*plan.LockTarget{lockTarget},
 			}
 			lastNodeId = builder.appendNode(lockNode, bindCtx)
-		}
-
-		// Give hidden-index deletion a compact and explicit input ABI. The source
-		// stream can be shared with recursive FK actions and is therefore subject
-		// to projection pruning; carrying offsets from that wide stream into the
-		// deletion operator makes prepared copies depend on columns that may no
-		// longer exist. Locking and the UK NULL filter have already consumed the
-		// wide layout, so only rowid and primary key are needed from here on.
-		if delNodeInfo.preserveProjection {
-			inputProjection := getProjectionByLastNode(builder, lastNodeId)
-			inputTags := builder.qry.Nodes[lastNodeId].BindingTags
-			if len(inputTags) == 0 {
-				return -1, moerr.NewInternalError(builder.GetContext(), "hidden-index delete input has no binding tag")
+			if delNodeInfo.preserveProjection {
+				if builder.preserveLockProjection == nil {
+					builder.preserveLockProjection = make(map[int32]struct{})
+				}
+				builder.preserveLockProjection[lastNodeId] = struct{}{}
 			}
-			deleteProjectTag := builder.genNewBindTag()
+		}
+		if isUK && delNodeInfo.preserveProjection {
+			lockProjection := getProjectionByLastNode(builder, lastNodeId)
 			lastNodeId = builder.appendNode(&Node{
 				NodeType: plan.Node_PROJECT,
 				Children: []int32{lastNodeId},
 				ProjectList: []*Expr{
-					{Typ: inputProjection[delNodeInfo.deleteIndex].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-						RelPos: inputTags[0], ColPos: int32(delNodeInfo.deleteIndex), Name: catalog.Row_ID,
+					{Typ: lockProjection[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: hiddenDeleteTag, ColPos: 0, Name: catalog.Row_ID,
 					}}},
-					{Typ: inputProjection[delNodeInfo.pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-						RelPos: inputTags[0], ColPos: int32(delNodeInfo.pkPos), Name: catalog.IndexTableIndexColName,
+					{Typ: lockProjection[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: hiddenDeleteTag, ColPos: 1, Name: catalog.IndexTableIndexColName,
 					}}},
 				},
-				BindingTags: []int32{deleteProjectTag},
+				BindingTags: []int32{builder.genNewBindTag()},
 			}, bindCtx)
-			delNodeInfo.deleteIndex = 0
-			delNodeInfo.pkPos = 1
 		}
 	}
 	truncateTable := &plan.TruncateTable{}
@@ -6129,6 +6173,15 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		return err
 	}
 	if isUpdate {
+		skipIndexInsert := false
+		if isUk && len(delCtx.fkSetNullColumns) > 0 {
+			for _, part := range indexdef.Parts {
+				if _, becomesNull := delCtx.fkSetNullColumns[catalog.ResolveAlias(part)]; becomesNull {
+					skipIndexInsert = true
+					break
+				}
+			}
+		}
 		// do it like simple update
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		var indexSourceTag int32
@@ -6160,8 +6213,10 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			}
 			builder.appendStep(lastNodeId)
 		}
-		// insert uk plan
-		{
+		// A UNIQUE key containing an unconditional SET NULL column has no
+		// replacement hidden-index row. Avoid creating an empty insert fanout,
+		// which otherwise leaves a sink producer without a physical consumer.
+		if !skipIndexInsert {
 			if indexSourceTag != 0 {
 				lastNodeId = builder.appendTaggedSinkScan(bindCtx, newSourceStep, indexSourceTag)
 			} else {
@@ -6204,7 +6259,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			_checkPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 			updateColLength := 1
 			addAffectedRows := false
-			isFkRecursionCall := false
+			isFkRecursionCall := delCtx.isFkRecursionCall
 			updatePkCol := true
 			ifExistAutoPkCol := false
 			ifInsertFromUnique := false

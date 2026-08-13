@@ -2474,6 +2474,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_FILTER, plan.Node_ASSERT:
+		_, preserveProjection := builder.preserveFilterProjection[nodeID]
+		if preserveProjection && len(node.BindingTags) > 0 {
+			for i := range node.ProjectList {
+				colRefCnt[[2]int32{node.BindingTags[0], int32(i)}]++
+			}
+			node.ProjectList = nil
+		}
 		if node.NodeType == plan.Node_ASSERT || node.FilterIsBarrier {
 			// Semantic-boundary filters have identity output. Rebuild their
 			// projections from the parent reference counts so stale pre-pruning

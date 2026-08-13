@@ -42,10 +42,20 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		cn2, err := c.GetCNService(1)
+		require.NoError(t, err)
+		db2, err := sql.Open("mysql", fmt.Sprintf(
+			"dump:111@tcp(127.0.0.1:%d)/", cn2.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db2.Close()
+		conn2, err := db2.Conn(ctx)
+		require.NoError(t, err)
+		defer conn2.Close()
 
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
 		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		mustExec(t, ctx, conn2, fmt.Sprintf("use `%s`", dbName))
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cleanupCancel()
@@ -85,6 +95,48 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 		require.False(t, pid.Valid)
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from setnull_c force index(idx_pid) where pid=1").Scan(&count))
+		require.Zero(t, count)
+
+		mustExec(t, ctx, conn, "create table unique_cascade_p(id int primary key, note varchar(20))")
+		mustExec(t, ctx, conn, `create table unique_cascade_c(
+			id int primary key, pid int, unique key uk_pid(pid),
+			foreign key(pid) references unique_cascade_p(id) on delete cascade)`)
+		mustExec(t, ctx, conn, "insert into unique_cascade_p values(1, 'first'),(2, 'empty')")
+		mustExec(t, ctx, conn, "insert into unique_cascade_c values(10, 1),(11, null)")
+		uniqueCascadeStmt, err := conn2.PrepareContext(ctx, "replace into unique_cascade_p values(?, ?)")
+		require.NoError(t, err)
+		defer uniqueCascadeStmt.Close()
+		_, err = uniqueCascadeStmt.ExecContext(ctx, 1, "replaced")
+		require.NoError(t, err)
+		_, err = uniqueCascadeStmt.ExecContext(ctx, 2, "still empty")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=10").Scan(&count))
+		require.Zero(t, count)
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from unique_cascade_c where id=11 and pid is null").Scan(&count))
+		require.Equal(t, 1, count)
+
+		mustExec(t, ctx, conn, "create table unique_setnull_p(id int primary key, note varchar(20))")
+		mustExec(t, ctx, conn, `create table unique_setnull_c(
+			id int primary key, pid int, marker int,
+			unique key uk_pid_marker(pid, marker),
+			foreign key(pid) references unique_setnull_p(id) on delete set null)`)
+		mustExec(t, ctx, conn, "insert into unique_setnull_p values(1, 'first'),(2, 'delete'),(3, 'empty')")
+		mustExec(t, ctx, conn, "insert into unique_setnull_c values(10, 1, 7),(11, 2, 8),(12, null, 9)")
+		uniqueSetNullStmt, err := conn2.PrepareContext(ctx, "replace into unique_setnull_p values(?, ?)")
+		require.NoError(t, err)
+		defer uniqueSetNullStmt.Close()
+		_, err = uniqueSetNullStmt.ExecContext(ctx, 1, "replaced")
+		require.NoError(t, err)
+		_, err = uniqueSetNullStmt.ExecContext(ctx, 3, "still empty")
+		require.NoError(t, err)
+		mustExec(t, ctx, conn, "delete from unique_setnull_p where id=2")
+		for _, childID := range []int{10, 11, 12} {
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select count(*) from unique_setnull_c where id=? and pid is null", childID).Scan(&count))
+			require.Equal(t, 1, count)
+		}
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from unique_setnull_c force index(uk_pid_marker) where pid in (1,2)").Scan(&count))
 		require.Zero(t, count)
 	})
 }
