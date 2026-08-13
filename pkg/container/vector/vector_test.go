@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -94,6 +95,33 @@ func TestAppendCheckpointRollback(t *testing.T) {
 		"the checkpoint predates the explicit provenance assignment")
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
+}
+
+func TestAppendCheckpointScratch(t *testing.T) {
+	checkpoints, required, err := AppendCheckpointScratch(nil, 2)
+	require.NoError(t, err)
+	require.Nil(t, checkpoints)
+	require.Positive(t, required)
+
+	storage := make([]byte, required)
+	checkpoints, exact, err := AppendCheckpointScratch(storage, 2)
+	require.NoError(t, err)
+	require.Equal(t, required, exact)
+	require.Len(t, checkpoints, 2)
+
+	checkpoints, required, err = AppendCheckpointScratch(nil, 0)
+	require.NoError(t, err)
+	require.Nil(t, checkpoints)
+	require.Zero(t, required)
+
+	_, _, err = AppendCheckpointScratch(nil, -1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	_, _, err = AppendCheckpointScratch(nil, math.MaxInt)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+
+	unaligned := make([]byte, exact+1)[1:]
+	_, _, err = AppendCheckpointScratch(unaligned, 2)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 }
 
 func TestCapacityForUntypedNull(t *testing.T) {
