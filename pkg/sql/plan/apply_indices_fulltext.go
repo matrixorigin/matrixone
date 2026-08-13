@@ -54,6 +54,7 @@ import (
 // +------------------------------------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID int32, projNode *plan.Node, sortNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef, projids []int32, projIndexDef []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	ctx := builder.ctxByNode[nodeID]
@@ -81,16 +82,24 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	// WITH include columns can DROP the base-table JOIN and serve pk/score/include-cols
 	// straight from the fulltext2_search TVF. Purely additive: when not covered, falls
 	// through to the existing JOIN path below byte-for-byte.
-	if handled, herr := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDef, eqmap,
-		paginationLimit, paginationOffset); herr != nil {
-		return -1, herr
-	} else if handled {
-		return nodeID, nil
+	//
+	// A wrapped MATCH that survived deduplication is by definition a DIFFERENT match than the
+	// driving one, so it needs a second stream the covered path cannot produce -- skip it and
+	// take the JOIN path. (A wrapped copy of the SAME match never gets here: it is deduplicated
+	// away and handled by the covered path's own sweep.)
+	if len(wrappedExprs) == 0 {
+		if handled, herr := builder.tryApplyCoveredFulltext2(nodeID, projNode, sortNode, scanNode,
+			filterids, filterIndexDefs, projids, projIndexDef, eqmap,
+			paginationLimit, paginationOffset); herr != nil {
+			return -1, herr
+		} else if handled {
+			return nodeID, nil
+		}
 	}
 
 	idxID, filter_node_ids, proj_node_ids, served, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -215,6 +224,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 // +----------------------------------------------------------------+
 func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, projNode *plan.Node, aggNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	var err error
 
@@ -224,7 +234,8 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
@@ -242,7 +253,8 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
-	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
+	projids []int32, proj_indexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrapped_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, []fulltextServedMatch, error) {
 
 	ctx := builder.ctxByNode[nodeID]
@@ -287,6 +299,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			indexDefs = append(indexDefs, proj_indexDefs[i])
 		}
 	}
+
+	// Wrapped MATCHes that no bare match already covers get a stream of their own. They are
+	// recorded nowhere else: unlike the filter and projection matches they have no position to
+	// map a node id back to, because the expression holding them is rewritten by argument
+	// (served) rather than replaced wholesale. Appending them last keeps the filter/projection
+	// index arithmetic above untouched.
+	extraStart := len(ft_filters)
+	ft_filters = append(ft_filters, wrappedExprs...)
+	indexDefs = append(indexDefs, wrapped_indexDefs...)
 
 	// ft_filters is now the complete set of MATCHes this rewrite will build an index scan for.
 	// Record them; the node ids are filled in by the build loop below, after which served
@@ -458,7 +479,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
-		if i < proj_offset {
+		if i >= extraStart {
+			// a wrapped-only match: served[i] above is its whole record
+		} else if i < proj_offset {
 			v, ok := ret_proj_node_ids_map[int32(i)]
 			if ok {
 				// equal fulltext_match() in proj and filter
@@ -1194,6 +1217,8 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 		filterIndexDefs,
 		nil,
 		nil,
+		nil, // no project node here, so no wrapped-match drivers to add
+		nil,
 		map[int32]int32{},
 		colRefCnt,
 		idxColMap,
@@ -1429,6 +1454,123 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 		}
 	}
 	return nil
+}
+
+// collectNestedFullTextMatches appends every fulltext_match call inside expr to out. Unlike
+// the bare-position scans below it descends: `round(match(...),3)` and `match(...) > 0.5` both
+// yield their inner MATCH.
+func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Expr {
+	if expr == nil {
+		return out
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == "fulltext_match" {
+			return append(out, expr)
+		}
+		for _, arg := range e.F.Args {
+			out = collectNestedFullTextMatches(arg, out)
+		}
+	case *plan.Expr_List:
+		for _, sub := range e.List.List {
+			out = collectNestedFullTextMatches(sub, out)
+		}
+	}
+	return out
+}
+
+// getWrappedFullTextMatches finds MATCHes that are nested inside a larger expression rather
+// than being one -- `where match(...) > 0.5`, `select round(match(...),3)` -- and resolves an
+// index for each.
+//
+// getFullTextMatchFiltersFromScanNode and getFullTextMatchFromProject recognise only a BARE
+// fulltext_match sitting at a top-level position, so a wrapped one never enters ft_filters: no
+// stream is built, and the rewrite is not even entered when it is the query's ONLY match. The
+// placeholder then reaches execution and raises 20105. That is why a wrapped MATCH used to work
+// only as a passenger, alongside a bare MATCH with identical arguments to drive the rewrite.
+//
+// Deduplicated against the bare matches and against each other with equalsFullTextMatchFunc, so
+// a wrapped copy of a match that already has a stream reuses it instead of building a second
+// one -- the same collapsing eqmap does for bare projections. A match no index can serve is
+// skipped, leaving it to raise 20105 as before.
+//
+// Returned exprs are the MATCH calls themselves; the caller appends them to ft_filters, where
+// each becomes its own index scan and every wrapped reference to it is resolved by argument.
+func (builder *QueryBuilder) getWrappedFullTextMatches(projNode, scanNode *plan.Node,
+	filterids, projids []int32) ([]*plan.Expr, []*plan.IndexDef) {
+
+	if scanNode == nil {
+		return nil, nil
+	}
+
+	candidates := make([]*plan.Expr, 0)
+	isBarePos := func(ids []int32, i int) bool {
+		for _, id := range ids {
+			if int(id) == i {
+				return true
+			}
+		}
+		return false
+	}
+	for i, expr := range scanNode.FilterList {
+		if isBarePos(filterids, i) {
+			continue // already a driver
+		}
+		candidates = collectNestedFullTextMatches(expr, candidates)
+	}
+	if projNode != nil {
+		for i, expr := range projNode.ProjectList {
+			if isBarePos(projids, i) {
+				continue
+			}
+			candidates = collectNestedFullTextMatches(expr, candidates)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// everything that already drives a stream: the bare filter and projection matches
+	seen := make([]*plan.Function, 0, len(filterids)+len(projids))
+	for _, id := range filterids {
+		if fn := scanNode.FilterList[id].GetF(); fn != nil {
+			seen = append(seen, fn)
+		}
+	}
+	if projNode != nil {
+		for _, id := range projids {
+			if fn := projNode.ProjectList[id].GetF(); fn != nil {
+				seen = append(seen, fn)
+			}
+		}
+	}
+
+	exprs := make([]*plan.Expr, 0, len(candidates))
+	idxdefs := make([]*plan.IndexDef, 0, len(candidates))
+	for _, cand := range candidates {
+		fn := cand.GetF()
+		if fn == nil || len(fn.Args) < 2 {
+			continue
+		}
+		dup := false
+		for _, s := range seen {
+			if builder.equalsFullTextMatchFunc(fn, s) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		idx := builder.findMatchFullTextIndex(fn, scanNode)
+		if idx == nil {
+			continue // no index can serve it: leave it to throw, as it does today
+		}
+		seen = append(seen, fn)
+		exprs = append(exprs, cand)
+		idxdefs = append(idxdefs, idx)
+	}
+	return exprs, idxdefs
 }
 
 // Get the filters that are fulltext_match() in ScanNode

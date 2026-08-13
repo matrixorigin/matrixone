@@ -99,14 +99,15 @@ from two where match(body) against('hello') and match(body) against('world') ord
 select id, match(body) against('hello') as sc, round(match(body) against('hello'),3) as r
 from two where match(body) against('hello') order by id;
 
--- a wrapped MATCH that NO index scan answers must not borrow the served match's score: it is
--- left alone and raises 20105, exactly as it does when no rewrite happens at all.
-select id, round(match(body) against('world'),3) as r from two where match(body) against('hello');
-select id from two where match(body) against('hello') and match(body) against('world') > 0.1;
+-- a wrapped MATCH on a DIFFERENT term is answered by a stream of its OWN, reporting its own
+-- relevance. Note the row set: two streams are INNER JOINed, so only documents matching BOTH
+-- survive -- the same restriction bare multi-stream MATCH already applies.
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello') order by id;
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1 order by id;
+select id from two where match(body) against('hello') and match(body) against('world') > 0.9 order by id;
 
--- ...but once that second match IS served by its own bare MATCH, the wrapped predicate on it
--- resolves to ITS stream and is lifted above the join. Two streams with a lifted score filter
--- was refused outright by the old count guard. The two thresholds must disagree.
+-- the same with the second match ALSO named bare: the wrapped predicate must reuse that
+-- stream rather than build a second one, and still filter by the world score.
 select id, round(match(body) against('world'),3) as w from two
 where match(body) against('hello') and match(body) against('world')
   and match(body) against('world') > 0.1 order by id;
@@ -116,6 +117,26 @@ where match(body) against('hello') and match(body) against('world')
 
 -- ORDER BY a wrapped MATCH with no alias to hide behind
 select id from two where match(body) against('hello') order by round(match(body) against('hello'),3) desc, id;
+
+-- ---------------- a wrapped MATCH drives the rewrite on its own ------------------
+-- Discovery recognises only a BARE fulltext_match at a top-level position, so a query whose
+-- ONLY match is wrapped never entered the rewrite and raised 20105: a wrapped MATCH could
+-- work solely as a passenger, alongside a bare MATCH with identical arguments to drive it.
+-- getWrappedFullTextMatches registers it as its own stream instead.
+select id from two where match(body) against('hello') > 0.015 order by id;   -- drops the lowest scorer
+select id from two where match(body) against('hello') > 0.9 order by id;     -- none
+select id, round(match(body) against('hello'),3) as r from two order by id;  -- projection, no WHERE MATCH
+select count(*) as n from two where match(body) against('hello') > 0.015;    -- and through an aggregate
+select count(*) as n from two where match(body) against('hello') > 0.9;
+
+-- @separator:table
+-- @regex("Table Function on fulltext_index_scan", true)
+explain select id from two where match(body) against('hello') > 0.015;
+
+-- a MATCH no INDEX can serve is still left alone and still raises 20105
+create table nodx(id int primary key, txt text);
+insert into nodx values (1,'hello');
+select id from nodx where match(txt) against('hello') > 0.1;
 
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------
 -- Lifting a wrapped predicate off the scan empties FilterList, which used to re-enable the

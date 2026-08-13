@@ -121,10 +121,14 @@ from two where match(body) against('hello') order by id;
 2  ¦  0.013416502  ¦  0.013  𝄀
 3  ¦  0.013913408  ¦  0.014  𝄀
 5  ¦  0.011558833  ¦  0.012
-select id, round(match(body) against('world'),3) as r from two where match(body) against('hello');
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
-select id from two where match(body) against('hello') and match(body) against('world') > 0.1;
-not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+5  ¦  0.129
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  𝄀
+5
+select id from two where match(body) against('hello') and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
 select id, round(match(body) against('world'),3) as w from two
 where match(body) against('hello') and match(body) against('world')
 and match(body) against('world') > 0.1 order by id;
@@ -140,6 +144,43 @@ select id from two where match(body) against('hello') order by round(match(body)
 2  𝄀
 1  𝄀
 5
+select id from two where match(body) against('hello') > 0.0132 order by id;  -- drops the lower scorers
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+select id from two where match(body) against('hello') > 0.9 order by id;     -- none
+➤ id[4,32,0]
+select id, round(match(body) against('hello'),3) as r from two order by id;  -- projection, no WHERE MATCH
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.012  𝄀
+2  ¦  0.013  𝄀
+3  ¦  0.014  𝄀
+5  ¦  0.012
+select count(*) as n from two where match(body) against('hello') > 0.0132;   -- and through an aggregate
+➤ n[-5,64,0]  𝄀
+2
+select count(*) as n from two where match(body) against('hello') > 0.9;
+➤ n[-5,64,0]  𝄀
+0
+explain select id from two where match(body) against('hello') > 0.0132;
+-- @regex("Table Function on fulltext2_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        ->  Filter  𝄀
+              Filter Cond: (cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE) > 0.0132)
+              -- HINT: Cast expression may prevent index usage  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (two.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_wrapped.two  𝄀
+                          Runtime Filter Probe: two.id  𝄀
+                    ->  Table Function on fulltext2_search
+create table nodx(id int primary key, txt text);
+insert into nodx values (1,'hello');
+select id from nodx where match(txt) against('hello') > 0.1;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118 limit 1;
 ➤ id[4,32,0]  𝄀
 5

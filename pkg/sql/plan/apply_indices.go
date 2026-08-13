@@ -621,10 +621,15 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// a MATCH wrapped in a larger expression drives the aggregate rewrite too:
+			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				nil, path.scanNode, filterids, nil)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 {
+			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, path.aggNode, path.scanNode,
-					filterids, filterFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		} else if path != nil {
 			// get the list of project that is fulltext_match func
@@ -633,10 +638,16 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// MATCHes nested inside a larger expression drive the rewrite too. Without this a
+			// query whose ONLY match is wrapped -- `where match(...) > 0.5`, or a projected
+			// `round(match(...),3)` -- never enters the rewrite at all and throws 20105.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				projNode, path.scanNode, filterids, projids)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 || len(projids) > 0 {
+			if len(filterids) > 0 || len(projids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
-					filterids, filterFTIdxs, projids, projFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		}
 	}
