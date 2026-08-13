@@ -496,24 +496,92 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	vectors[0].Close()
 }
 
-func TestLoadColumnsDataEmptyLocation(t *testing.T) {
+func TestObjectReadersRejectEmptyLocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	destination := vector.NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+
+	readers := []struct {
+		name string
+		read func(objectio.Location) error
+	}{
+		{
+			name: "cache vectors",
+			read: func(location objectio.Location) error {
+				_, _, _, err := LoadColumnsData(
+					context.Background(), nil, nil, nil, location, nil, nil, 0,
+				)
+				return err
+			},
+		},
+		{
+			name: "scoped vectors",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadColumnsDataInto(
+					context.Background(),
+					[]uint16{0},
+					[]types.Type{types.T_int64.ToType()},
+					nil,
+					location,
+					[]*vector.Vector{destination},
+					nil,
+					nil,
+					mp,
+					0,
+				)
+				return err
+			},
+		},
+		{
+			name: "TN vectors",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadColumns2(
+					context.Background(), nil, nil, nil, location, 0, false, nil,
+				)
+				return err
+			},
+		},
+		{
+			name: "whole block",
+			read: func(location objectio.Location) error {
+				_, _, err := LoadOneBlock(
+					context.Background(), nil, location, objectio.SchemaData,
+				)
+				return err
+			},
+		},
+		{
+			name: "legacy object reader",
+			read: func(location objectio.Location) error {
+				_, err := NewObjectReader(nil, location)
+				return err
+			},
+		},
+	}
+
 	for _, test := range []struct {
 		name     string
 		location objectio.Location
 	}{
 		{name: "missing encoding"},
+		{
+			name: "truncated encoding",
+			location: append(
+				objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+			),
+		},
 		{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, release, fromCache, err := LoadColumnsData(
-				context.Background(),
-				nil, nil, nil,
-				test.location,
-				nil, nil, 0,
-			)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
-			require.Nil(t, release)
-			require.False(t, fromCache)
+			for _, reader := range readers {
+				t.Run(reader.name, func(t *testing.T) {
+					err := reader.read(test.location)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+				})
+			}
 		})
 	}
+	require.Zero(t, destination.Length())
+	require.Zero(t, mp.CurrNB())
 }

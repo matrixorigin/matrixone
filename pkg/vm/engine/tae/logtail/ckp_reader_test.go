@@ -450,6 +450,12 @@ func TestCKPReaderReadMetaEmptyLocation(t *testing.T) {
 			location objectio.Location
 		}{
 			{name: "missing encoding"},
+			{
+				name: "truncated encoding",
+				location: append(
+					objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+				),
+			},
 			{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
 		} {
 			t.Run(fmt.Sprintf("version-%d/%s", version, test.name), func(t *testing.T) {
