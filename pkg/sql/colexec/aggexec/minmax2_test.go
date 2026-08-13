@@ -305,17 +305,19 @@ func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
 		vector.PrepareParamInteger,
 		vector.PrepareParamNone,
 	})
+	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
 	defer func() {
 		input.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	}()
 
 	for _, tc := range []struct {
-		name string
-		id   int64
-		want vector.PrepareParamKind
+		name   string
+		id     int64
+		want   vector.PrepareParamKind
+		binary bool
 	}{
-		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger},
+		{name: "min", id: AggIdOfMin, want: vector.PrepareParamInteger, binary: true},
 		{name: "max", id: AggIdOfMax, want: vector.PrepareParamNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,6 +328,7 @@ func TestMinMaxPreservesWinningPrepareParamKind(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			require.Equal(t, tc.want, results[0].GetPrepareParamKindAt(0))
+			require.Equal(t, tc.binary, results[0].GetBinaryStringMetadataAt(0))
 			results[0].Free(mp)
 			agg.Free()
 		})
