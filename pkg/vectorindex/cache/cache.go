@@ -24,9 +24,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
+// The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
+// cadence — the bound on how long a remote CN can serve a stale index before it ages out.
+const stalenessCheckEveryNTicks = 4
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -62,9 +68,43 @@ type VectorIndexSearchIf interface {
 	// outKeys and outDists must be pre-allocated to nQueries*rt.Limit elements.
 	// GPU implementations write float32 distances directly; CPU implementations convert on write.
 	SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error
+	// SearchInto is the box-free, alloc-free-after-warmup twin of Search: instead of
+	// returning keys as []any (a heap box per key), it fills a CALLER-OWNED SearchResult —
+	// pk column, scores, and covered-INCLUDE columns, all as reusable ColumnBuffers/slices
+	// the caller pools and Resets across queries, so a warm query allocates nothing for its
+	// results. It is the arbitrary-pk generalization of SearchFloat32 (whose outKeys []int64
+	// cannot hold varchar/uuid/decimal pks). The callee Resets out before filling; on return
+	// out.Keys.N is the result count, len(out.Dists) == out.Keys.N, and out.Include (when
+	// rt.RequestedIncludeColumns is set) holds one buffer per FULL index INCLUDE column.
+	// Implemented by fulltext2; the vector algos stub it "not supported" until each migrates
+	// (mirrors how fulltext2 stubs SearchFloat32).
+	SearchInto(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error
 	Load(*sqlexec.SqlProcess) error
-	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
+}
+
+// StaleChecker is an OPTIONAL capability an algo's search impl may implement (currently
+// fulltext2). It reports whether the loaded index has fallen behind the persisted index —
+// e.g. a CDC append / REBUILD applied on ANOTHER CN, which the local process-scoped Remove
+// never sees. HouseKeeping calls it periodically and force-expires stale entries so the next
+// search reloads; this is how cross-CN cache coherence is maintained by PULL (each CN checks
+// its own entries) with no invalidation broadcast. Impls MUST run their own short background
+// txn (the check fires on the housekeeping goroutine, not the search path) and MUST return an
+// error rather than "stale" on a transient failure, so a meta-read blip can't trigger a
+// reload storm. An impl that cannot determine freshness returns (false, nil).
+//
+// DESIGN DECISION — EVENTUAL consistency, not immediate (won't-fix, by design): Search serves a
+// warmed entry directly and does NOT validate freshness on the query path (that would put a meta
+// read on every search — the perf floor this cache exists to avoid). Coherence is the periodic
+// PULL sweep only: it runs every stalenessCheckEveryNTicks ticks of the TTL/2 ticker and evicts a
+// stale entry on the NEXT housekeeping pass, so after a writer commits on another CN a warm remote
+// entry can keep answering the pre-CDC/MERGE/REBUILD snapshot for up to ~10–12.5 minutes before it
+// is reloaded. This is intentional: the contract is that a stale entry is EVENTUALLY removed, not
+// that reads are correct the instant the writer commits. Do NOT "fix" it by validating on the
+// search path or by broadcasting invalidations; if a caller ever needs read-your-writes across CNs,
+// that is a separate, opt-in requirement (or disable this cache for that index in multi-CN).
+type StaleChecker interface {
+	IsStale() (bool, error)
 }
 
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
@@ -73,9 +113,10 @@ type VectorIndexSearch struct {
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
-	Outdated   atomic.Bool
 	Algo       VectorIndexSearchIf
-	Cond       *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
+	Cond       *sync.Cond  // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
+	stale      atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
+	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -117,6 +158,15 @@ func (s *VectorIndexSearch) Expired() bool {
 	return (ts > 0 && ts < now)
 }
 
+// markStale flags this entry for reclamation by the NEXT HouseKeeping sweep. Used by the
+// IsStale freshness check to schedule eviction of a stale index without evicting inline (the
+// removal always goes through the single expired/stale-sweep path, keeping Search pure-read).
+// A dedicated flag (not ExpireAt) so a concurrent Search's extend() sliding TTL cannot
+// un-mark a hot stale entry.
+func (s *VectorIndexSearch) markStale() {
+	s.stale.Store(true)
+}
+
 func (s *VectorIndexSearch) extend(update bool) {
 	now := time.Now()
 	if update {
@@ -144,14 +194,31 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		}
 	}
 
-	// if error mark as outdated
-	err = s.Algo.UpdateConfig(newalgo)
-	if err != nil {
-		s.Outdated.Store(true)
-	}
-
+	// The cached index's configuration is immutable for its lifetime (a config change
+	// evicts the entry via Cache.Remove), so there is nothing to refresh from newalgo
+	// here. Search is therefore pure-read under the shared read lock — no mutation of the
+	// cached algo, so concurrent searches on one entry cannot race on its config.
 	s.extend(false)
 	return s.Algo.Search(sqlproc, query, rt)
+}
+
+// SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
+// SearchResult). Same shared-read-lock / status discipline.
+func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	for s.Status.Load() == 0 {
+		s.Cond.Wait()
+	}
+	status := s.Status.Load()
+	if status >= STATUS_DESTROYED {
+		if status == STATUS_DESTROYED {
+			return moerr.NewInvalidStateNoCtx("Index destroyed")
+		}
+		return moerr.NewInternalErrorNoCtx("Load index error")
+	}
+	s.extend(false)
+	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
 
 // implementation of VectorIndexCache
@@ -164,6 +231,8 @@ type VectorIndexCache struct {
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
+	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
+	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -199,8 +268,16 @@ func (c *VectorIndexCache) serve() {
 				c.Destroy()
 				return
 			case <-c.ticker.C:
-				// delete expired index
+				// delete expired index (fast, no SQL) — always runs synchronously so TTL
+				// reclamation and shutdown never wait on a freshness read.
 				c.HouseKeeping()
+				c.hkTicks++
+				if c.hkTicks%stalenessCheckEveryNTicks == 0 && c.staleChecking.CompareAndSwap(false, true) {
+					go func() {
+						defer c.staleChecking.Store(false)
+						c.checkStale()
+					}()
+				}
 			}
 		}
 	}()
@@ -218,7 +295,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
-		if algo.Expired() || algo.Outdated.Load() {
+		if algo.Expired() || algo.stale.Load() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
@@ -230,6 +307,49 @@ func (c *VectorIndexCache) HouseKeeping() {
 			algo := value.(*VectorIndexSearch)
 			algo.Destroy()
 			algo = nil
+			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
+		}
+	}
+}
+
+// checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
+// (the next HouseKeeping sweep reclaims them; Search stays pure-read). Runs on its own
+// goroutine off the ticker (see serve), single-flighted, because each IsStale opens a short
+// background txn — so a slow/stalled executor delays only the next freshness sweep, never TTL
+// eviction or shutdown. The IsStale calls are collected out of the IndexMap.Range callback so a
+// slow meta read never holds up the map iteration, and the loop bails on shutdown.
+func (c *VectorIndexCache) checkStale() {
+	type staleEntry struct {
+		s   *VectorIndexSearch
+		sc  StaleChecker
+		key any
+	}
+	entries := make([]staleEntry, 0, 16)
+	c.IndexMap.Range(func(key, value any) bool {
+		algo := value.(*VectorIndexSearch)
+		if algo.Status.Load() != STATUS_LOADED {
+			return true // skip loading/errored/destroyed entries
+		}
+		if sc, ok := algo.Algo.(StaleChecker); ok {
+			entries = append(entries, staleEntry{algo, sc, key})
+		}
+		return true
+	})
+	for _, e := range entries {
+		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
+		// goroutine (and any resources it pins) alive long after Destroy.
+		if c.exited.Load() {
+			return
+		}
+		stale, err := e.sc.IsStale()
+		if err != nil {
+			// A query error usually means the index was dropped/rebuilt out from under us —
+			// IsStale returns stale=true so the dead entry is reclaimed; log the cause.
+			logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
+		}
+		if stale {
+			logutil.Infof("[veccache] index %v is stale — marking for eviction on next sweep", e.key)
+			e.s.markStale()
 		}
 	}
 }
@@ -282,7 +402,39 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 	}
 }
 
+// SearchInto is the box-free twin of Search: it fills the caller-owned out SearchResult
+// (pk/scores/includes as reusable ColumnBuffers) instead of returning boxed []any keys.
+// Same LoadOrStore / Load / ErrInvalidState-retry discipline as Search.
+func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
+	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	for {
+		s := &VectorIndexSearch{Algo: newalgo}
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		value, loaded := c.IndexMap.LoadOrStore(key, s)
+		algo := value.(*VectorIndexSearch)
+		if !loaded {
+			if err := algo.Load(sqlproc); err != nil {
+				c.IndexMap.Delete(key)
+				return err
+			}
+		}
+		err := algo.SearchInto(sqlproc, query, rt, out)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				continue // index destroyed by Remove()/HouseKeeping — retry
+			}
+			return err
+		}
+		return nil
+	}
+}
+
 // remove key from cache
+// Remove drops a cached index by key so the next Search reloads it. Callers use
+// it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
+// stale. It is LOCAL to this process — a prompt local optimization only; cross-CN
+// coherence is handled by the pull-based freshness check (StaleChecker/IsStale via
+// HouseKeeping), which evicts a remote CN's warm-but-stale entry on its own.
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {
