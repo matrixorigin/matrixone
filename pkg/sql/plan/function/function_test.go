@@ -465,6 +465,32 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
+func TestUnixTimestampTemporalReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "unix_timestamp", []types.Type{
+		types.T_timestamp.ToType(),
+	})
+	require.NoError(t, err)
+	require.False(t, integerResult.needCast)
+	require.Equal(t, types.T_int64.ToType(), integerResult.retType)
+
+	fractionalTimestampResult, err := GetFunctionByName(proc.Ctx, "unix_timestamp", []types.Type{
+		types.T_timestamp.ToTypeWithScale(6),
+	})
+	require.NoError(t, err)
+	require.False(t, fractionalTimestampResult.needCast)
+	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalTimestampResult.retType)
+
+	fractionalDatetimeResult, err := GetFunctionByName(proc.Ctx, "unix_timestamp", []types.Type{
+		types.T_datetime.ToTypeWithScale(6),
+	})
+	require.NoError(t, err)
+	require.True(t, fractionalDatetimeResult.needCast)
+	require.Equal(t, []types.Type{types.T_timestamp.ToTypeWithScale(6)}, fractionalDatetimeResult.targetTypes)
+	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
+}
+
 func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimalType := types.New(types.T_decimal128, 30, 20)

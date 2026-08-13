@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -2152,6 +2153,30 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
+	})
+
+	t.Run("suppress joined cancellation fallout after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := errors.Join(context.Canceled, moerr.NewQueryInterrupted(ctx))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, err))
+	})
+
+	t.Run("keep independent deadline joined with cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := suppressRemoteRunCancelError(
+			ctx, errors.Join(context.DeadlineExceeded, context.Canceled))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		primaryErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+		err := suppressRemoteRunCancelError(
+			ctx, errors.Join(primaryErr, context.Canceled))
+		require.ErrorIs(t, err, primaryErr)
 	})
 
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {

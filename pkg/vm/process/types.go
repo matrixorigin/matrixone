@@ -368,9 +368,11 @@ type BaseProcess struct {
 	Aicm                                *defines.AutoIncrCacheManager
 	resolveVariableFunc                 func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	resolveVariableIsBinFunc            func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	resolveVariableBinaryStringFunc     func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
 	resolveVariablePrepareParamKindFunc func(varName string, isSystemVar, isGlobalVar bool) (vector.PrepareParamKind, error)
 	prepareParams                       *vector.Vector
 	prepareParamsIsBin                  []bool
+	prepareParamsBinaryString           []bool
 	prepareParamsOwned                  bool
 	QueryClient                         qclient.QueryClient
 	Hakeeper                            logservice.CNHAKeeperClient
@@ -572,6 +574,10 @@ func (proc *Process) getPrepareParamMeta(i, section int) bool {
 		proc.Base.prepareParamsIsBin[offset]
 }
 
+func (proc *Process) GetPrepareParamIsBinaryString(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsBinaryString) && proc.Base.prepareParamsBinaryString[i]
+}
+
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // published workspace read view. See BaseProcess.incrStatementDisabled.
@@ -599,6 +605,14 @@ func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystem
 
 func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
 	return proc.Base.resolveVariableIsBinFunc
+}
+
+func (proc *Process) SetResolveVariableBinaryStringFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableBinaryStringFunc = f
+}
+
+func (proc *Process) GetResolveVariableBinaryStringFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableBinaryStringFunc
 }
 
 func (proc *Process) SetResolveVariablePrepareParamKindFunc(
