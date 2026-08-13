@@ -1498,7 +1498,7 @@ func restoreViews(
 				// the whole account unrestorable over a single object that never worked.
 				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
 				// false, so gating on that flag would not help the case that matters.
-				if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+				if isUnservableViewError(err) {
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
 						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
 							"the view is NOT present in the restored account",
@@ -1518,6 +1518,25 @@ func restoreViews(
 	}
 
 	return nil
+}
+
+// isUnservableViewError reports whether err is the #27027 refusal: a view definition whose
+// MATCH() no FULLTEXT index can serve.
+//
+// Checks the code AND the text on purpose. Restore executes the stored CREATE VIEW through
+// the background executor, which reconstructs the error on the way back, so the moerr code
+// is lost and only the message survives -- verified end to end: a PITR restore aborted with
+// ERROR 1191 while an IsMoErrCode-only guard sat right there and did not fire. The unit
+// tests injected the error directly and could not see this. canSkipRestoreViewError pairs
+// its code checks with text checks for the same reason.
+func isUnservableViewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+		return true
+	}
+	return strings.Contains(err.Error(), moerr.FtMatchingKeyNotFoundMsg)
 }
 
 func canSkipRestoreViewError(err error) bool {
@@ -1595,6 +1614,21 @@ func sortedViewInfos(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance. Leave the view out of the graph:
+				// the loop below only visits sorted keys, so the view is neither dropped
+				// nor re-created and the restore completes. The view is therefore absent
+				// afterwards whenever the restore rebuilds its database (verified on a
+				// database-level PITR restore); it survives only where the target database
+				// is left standing. Either way the account is restorable, which it was not
+				// before.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip view %v.%v during restore: its definition can never run (%v)",
+						snapshotName, viewEntry.dbName, viewEntry.tblName, err))
+					continue
+				}
 				return nil, err
 			}
 		}

@@ -442,7 +442,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, "Can't find FULLTEXT index matching the column list"},
+	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1041,6 +1041,13 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 // NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
 // Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
 // by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
 func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
 	return newError(ctx, ErrFtMatchingKeyNotFound)
 }

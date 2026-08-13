@@ -1794,6 +1794,21 @@ func restoreViewsWithPitr(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance. Leave the view out of the graph:
+				// the loop below only visits sorted keys, so the view is neither dropped
+				// nor re-created and the restore completes. The view is therefore absent
+				// afterwards whenever the restore rebuilds its database (verified on a
+				// database-level PITR restore); it survives only where the target database
+				// is left standing. Either way the account is restorable, which it was not
+				// before.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip view %v.%v during restore: its definition can never run (%v)",
+						pitrName, viewEntry.dbName, viewEntry.tblName, err))
+					continue
+				}
 				return err
 			}
 		}
@@ -1833,7 +1848,7 @@ func restoreViewsWithPitr(
 				// Same reasoning as restoreViews: the view was dropped just above, and an
 				// unrunnable legacy definition must not make the entire PITR restore fail.
 				// This path has no skip flag at all, so the tolerance is unconditional.
-				if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+				if isUnservableViewError(err) {
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
 						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
 							"the view is NOT present after the restore",

@@ -3844,5 +3844,18 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		bh.executedSQLs = nil
 		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.Error(t, err, "an unrelated error must remain fatal")
+
+		// The background executor reconstructs errors, so by the time restore sees one the
+		// moerr code is gone and only the text remains -- an end-to-end PITR restore aborted
+		// with ERROR 1191 while a code-only guard sat right there. Injecting the error
+		// directly (as the cases above do) cannot reproduce that, so pin the degraded form
+		// explicitly.
+		bh.sql2err = map[string]error{
+			badSQL: moerr.NewInternalError(ctx, moerr.FtMatchingKeyNotFoundMsg),
+		}
+		bh.executedSQLs = nil
+		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+		require.NoError(t, err, "the refusal must be recognised even once its code is lost")
+		require.Contains(t, bh.executedSQLs, okSQL)
 	})
 }
