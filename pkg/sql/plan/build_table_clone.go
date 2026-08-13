@@ -201,7 +201,7 @@ func checkPrivilege(
 				srcTblDef.DbName,
 				srcTblDef.Name,
 				srcTblDef.DbId,
-				srcTblDef.TblId,
+				SnapshotTableID(srcTblDef),
 			); err != nil {
 				snapshotErr = err
 			}
@@ -214,7 +214,7 @@ func checkPrivilege(
 				srcTblDef.DbName,
 				srcTblDef.Name,
 				srcTblDef.DbId,
-				srcTblDef.TblId,
+				SnapshotTableID(srcTblDef),
 			); err != nil {
 				snapshotErr = err
 			}

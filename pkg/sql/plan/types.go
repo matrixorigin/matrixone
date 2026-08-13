@@ -183,6 +183,18 @@ func ValidateSnapshotScope(
 	return nil
 }
 
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
 // ValidateSnapshotDatabaseScope verifies that an operation scoped to a
 // database is compatible with a named snapshot. A table snapshot cannot read
 // database-wide metadata because it represents a single relation.

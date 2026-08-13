@@ -95,3 +95,9 @@ func TestValidateSnapshotDatabaseScope(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotTableID(t *testing.T) {
+	require.Zero(t, SnapshotTableID(nil))
+	require.Equal(t, uint64(2), SnapshotTableID(&planpb.TableDef{TblId: 2}))
+	require.Equal(t, uint64(3), SnapshotTableID(&planpb.TableDef{TblId: 2, LogicalId: 3}))
+}

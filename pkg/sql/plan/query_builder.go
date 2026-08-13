@@ -10148,7 +10148,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
 		if explicitNamedSnapshot {
-			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, tableDef.TblId)
+			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
 			return 0, err

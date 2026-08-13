@@ -124,7 +124,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, tableDef.TblId); err != nil {
+	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
@@ -195,7 +195,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
-	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, tableDef.TblId); err != nil {
+	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
