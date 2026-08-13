@@ -62,9 +62,10 @@ func TestJemallocAllocatorArenaStatsCoverMixedLiveSizeClasses(t *testing.T) {
 	before, err := allocator.Stats()
 	require.NoError(t, err)
 
+	requests := []uint64{4 << 10, 128 << 10, 700 << 10, 1 << 20, 1500 << 10, 2 << 20}
 	var backing uint64
-	var deallocators []Deallocator
-	for _, request := range []uint64{4 << 10, 128 << 10, 700 << 10, 1 << 20, 1500 << 10, 2 << 20} {
+	deallocators := make([]Deallocator, 0, len(requests))
+	for _, request := range requests {
 		size, err := allocator.BackingSize(request)
 		require.NoError(t, err)
 		_, dec, err := allocator.Allocate(request, NoHints)
