@@ -246,6 +246,15 @@ type generatedRangeObjectStorage struct {
 	reads []objectStorageReadRange
 }
 
+type controlledRangeObjectStorage struct {
+	dummyObjectStorage
+	data            []byte
+	followerStarted chan struct{}
+	releaseFollower chan struct{}
+	followerOnce    sync.Once
+	readCount       atomic.Int64
+}
+
 type heldWriter struct {
 	once    sync.Once
 	started chan struct{}
@@ -306,6 +315,34 @@ func (g *generatedRangeObjectStorage) readRanges() []objectStorageReadRange {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]objectStorageReadRange(nil), g.reads...)
+}
+
+func (c *controlledRangeObjectStorage) Read(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+) (io.ReadCloser, error) {
+	if c.readCount.Add(1) > 1 {
+		c.followerOnce.Do(func() { close(c.followerStarted) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.releaseFollower:
+		}
+	}
+	start := int64(0)
+	if min != nil {
+		start = *min
+	}
+	end := int64(len(c.data))
+	if max != nil {
+		end = *max
+	}
+	if start < 0 || end < start || end > int64(len(c.data)) {
+		return nil, errors.New("expected a valid bounded range read")
+	}
+	return io.NopCloser(bytes.NewReader(c.data[start:end])), nil
 }
 
 func (w *heldWriter) Write(p []byte) (int, error) {
@@ -1407,14 +1444,18 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
 
-	data := make([]byte, (9<<20)+1)
+	data := make([]byte, 1025)
 	data[0] = 1
 	data[len(data)-1] = 2
-	require.NoError(t, fs.Write(ctx, IOVector{
-		FilePath: "foo/bar",
-		Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
-		Policy:   SkipAllCache,
-	}))
+	storage := &controlledRangeObjectStorage{
+		data:            data,
+		followerStarted: make(chan struct{}),
+		releaseFollower: make(chan struct{}),
+	}
+	releaseFollower := sync.OnceFunc(func() { close(storage.releaseFollower) })
+	fs.storage = storage
+	fs.rawStorage = storage
+	t.Cleanup(releaseFollower)
 
 	writer := &heldWriter{
 		started: make(chan struct{}),
@@ -1433,7 +1474,7 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
 			{Offset: 0, Size: 1},
-			{Offset: 9 << 20, Size: 1},
+			{Offset: int64(len(data) - 1), Size: 1},
 		},
 	}
 	t.Cleanup(followerVector.Release)
@@ -1462,16 +1503,22 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 	followerDone := make(chan error, 1)
 	go func() { followerDone <- fs.Read(ctx, followerVector) }()
 	select {
+	case <-storage.followerStarted:
 	case err := <-followerDone:
 		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
+		t.Fatal("cache-producing follower completed before the controlled storage read was observed")
+	case <-time.After(5 * time.Second):
 		releaseWriter()
-		select {
-		case <-followerDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("cache-producing follower did not terminate after leader release")
-		}
-		t.Fatal("cache-producing follower waited for a non-cache-producing leader")
+		releaseFollower()
+		t.Fatal("cache-producing follower did not start storage read while non-cache-producing leader was blocked")
+	}
+	releaseFollower()
+	select {
+	case err := <-followerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		releaseWriter()
+		t.Fatal("cache-producing follower did not terminate after storage release")
 	}
 	require.Equal(t, []byte{1}, followerVector.Entries[0].Data)
 	require.Equal(t, []byte{2}, followerVector.Entries[1].Data)

@@ -303,27 +303,20 @@ func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
 	src.Vecs[0] = vec
 	src.SetRowCount(2)
 	defer src.Clean(mp)
-	data, err := src.MarshalBinary()
+	var encoded bytes.Buffer
+	withMetadata, err := src.MarshalBinaryWithPrepareParamKinds(&encoded, false)
 	require.NoError(t, err)
-	withMetadata, err := appendTopSpillPrepareParamMetadata(data, src)
-	require.NoError(t, err)
-	base, metadata, metadataRows, err := splitTopSpillPrepareParamMetadata(withMetadata)
-	require.NoError(t, err)
-	require.NotEqual(t, data, withMetadata)
 	decoded := batch.NewWithSize(1)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(base, mp))
-	require.NoError(t, restoreTopSpillPrepareParamMetadata(decoded, metadata, metadataRows, mp))
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(withMetadata, mp))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-
-	bad := append([]byte(nil), withMetadata...)
-	bad[len(bad)-1] = 0xff
-	_, _, _, err = splitTopSpillPrepareParamMetadata(bad)
-	require.Error(t, err)
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {

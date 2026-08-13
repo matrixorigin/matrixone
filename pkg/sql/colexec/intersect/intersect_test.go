@@ -81,6 +81,41 @@ func TestIntersect(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
+func TestIntersectPreservesSparseBinaryStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	left := batch.NewWithSize(1)
+	left.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytesList(left.Vecs[0],
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("match")}, nil, proc.Mp()))
+	require.NoError(t, left.Vecs[0].SetIsBinaryStringAt(3, true, proc.Mp()))
+	left.SetRowCount(4)
+	right := batch.NewWithSize(1)
+	right.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(right.Vecs[0], []byte("match"), false, proc.Mp()))
+	right.SetRowCount(1)
+
+	leftChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{left})
+	rightChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{right})
+	arg := new(Intersect)
+	arg.AppendChild(leftChild)
+	arg.AppendChild(rightChild)
+	t.Cleanup(func() {
+		leftChild.Free(proc, false, nil)
+		rightChild.Free(proc, false, nil)
+		arg.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, "match", result.Batch.Vecs[0].GetStringAt(0))
+	require.True(t, result.Batch.Vecs[0].GetBinaryStringMetadataAt(0))
+}
+
 func TestAuditIntersectFreeReleasesBuildState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := newIntersectTestCase(proc)
