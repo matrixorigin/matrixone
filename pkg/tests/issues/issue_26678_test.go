@@ -87,9 +87,11 @@ func TestIssue26678MaxExecutionTime(t *testing.T) {
 		// command, when deciding whether the timeout applies.
 		prepared, err := timedConn.PrepareContext(ctx, "select sleep(?)")
 		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, prepared.Close())
+		}()
 		err = prepared.QueryRowContext(ctx, 2).Scan(&slept)
 		requireQueryTimeout(t, err)
-		require.NoError(t, prepared.Close())
 
 		_, err = timedConn.ExecContext(ctx, "set @@session.max_execution_time=0")
 		require.NoError(t, err)
