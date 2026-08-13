@@ -592,7 +592,7 @@ ex_table_1  ¦  CREATE EXTERNAL TABLE `ex_table_1` (
   `date_1` date DEFAULT NULL,
   `date_2` datetime DEFAULT NULL,
   `date_3` timestamp NULL DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 1 LINES
+) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\\n' IGNORE 1 LINES
 drop table ex_table_1;
 drop stage ex_stage01;
 drop stage sub_stage01;
@@ -670,7 +670,7 @@ ex_table_2  ¦  CREATE EXTERNAL TABLE `ex_table_2` (
   `col10` double DEFAULT NULL,
   `col11` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
   `col12` date DEFAULT NULL
-) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES
+) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\\n' IGNORE 1 LINES
 drop table ex_table_2;
 drop stage ex_stage02;
 drop stage sub_stage02;
