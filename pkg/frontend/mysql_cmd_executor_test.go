@@ -176,6 +176,28 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 	require.ErrorContains(t, err, "first statement failed")
 }
 
+func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	compileErr := moerr.NewInternalError(ctx, "placement rejected")
+	cw := mock_frontend.NewMockComputationWrapper(ctrl)
+	cw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, compileErr)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.proc = ses.GetProc()
+	execCtx.input = &UserInput{}
+	execCtx.cw = cw
+	execCtx.stmt = &tree.Load{Local: true}
+
+	err := executeStmt(ses, execCtx)
+	require.ErrorIs(t, err, compileErr)
+	require.Nil(t, execCtx.proc.Base.LoadLocalReader)
+	require.Nil(t, execCtx.loadLocalWriter)
+}
+
 func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
 	execCtx := &ExecCtx{}
@@ -6019,6 +6041,65 @@ func TestProcessLoadLocal(t *testing.T) {
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		runnerErr error
+		payload   []byte
+	}{
+		{name: "success", payload: []byte("helloworld")},
+		{name: "runner failure", runnerErr: moerr.NewInternalErrorNoCtx("runner failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			proc := testutil.NewProc(t)
+			tConn := &testConn{}
+			writeExceptResult(tConn, []*Packet{
+				{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+				{Length: 5, Payload: []byte("world"), SequenceID: 2},
+				{Length: 0, Payload: nil, SequenceID: 3},
+			})
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			setPu("", pu)
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSession(tConn, pu, "")
+			require.NoError(t, err)
+			ses := &Session{feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+			}}
+
+			var payload []byte
+			runner := mock_frontend.NewMockComputationRunner(ctrl)
+			runner.EXPECT().Run(uint64(0)).DoAndReturn(func(uint64) (*util.RunResult, error) {
+				reader := proc.GetLoadLocalReader()
+				require.NotNil(t, reader)
+				if test.runnerErr != nil {
+					return nil, test.runnerErr
+				}
+				payload, err = io.ReadAll(reader)
+				return &util.RunResult{}, err
+			})
+			execCtx := newTestExecCtx(context.Background(), ctrl)
+			execCtx.proc = proc
+			execCtx.runner = runner
+			execCtx.stmt = &tree.Load{
+				Local: true,
+				Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}},
+			}
+
+			err = executeStatusStmt(ses, execCtx)
+			require.ErrorIs(t, err, test.runnerErr)
+			require.Equal(t, test.payload, payload)
+			require.Nil(t, proc.GetLoadLocalReader())
+			require.Nil(t, execCtx.loadLocalWriter)
+		})
+	}
 }
 
 func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {

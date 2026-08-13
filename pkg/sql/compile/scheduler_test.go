@@ -292,6 +292,24 @@ func TestScheduleQueryWorkersKeepsDefaultLoadDataLocalOnIngressWithoutDiscovery(
 	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
 }
 
+func TestScheduleQueryWorkersRejectsCanceledLoadDataLocalWithoutDiscovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	provider := &schedulerProviderTestEngine{schedulerTestEngine: &schedulerTestEngine{}}
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.stmt = &tree.Load{Local: true}
+	c.e = provider
+
+	_, category, err := c.evaluateQueryPlacement(ctx, queryCandidateModeExecution)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, scheduleFailureCandidateDiscovery, category)
+	require.Zero(t, provider.discoveryCalls)
+	require.Zero(t, provider.resolutionCalls)
+}
+
 func TestScheduleQueryWorkersKeepsStrictLoadDataLocalOnIngress(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "ingress:6001"
@@ -359,6 +377,10 @@ func TestScheduleQueryWorkersCanonicalizesWritableIngressAddress(t *testing.T) {
 		schedulerTestEngine: &schedulerTestEngine{},
 		candidates: engine.QueryCandidates{
 			{Service: metadata.CNService{
+				ServiceID: "stale-owner", PipelineServiceAddress: "ingress-stale:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+			{Service: metadata.CNService{
 				ServiceID: "ingress", PipelineServiceAddress: "ingress-stale:6001",
 				WorkState: metadata.WorkState_Working,
 			}, Mcpu: 8},
@@ -368,6 +390,7 @@ func TestScheduleQueryWorkersCanonicalizesWritableIngressAddress(t *testing.T) {
 			}, Mcpu: 16},
 		},
 		resolvedNodes: engine.Nodes{
+			{Id: "stale-owner", Addr: "ingress-stale:6001", Mcpu: 4, WorkState: metadata.WorkState_Working},
 			{Id: "ingress", Addr: "ingress-stale:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
 			{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
 		},
@@ -379,6 +402,13 @@ func TestScheduleQueryWorkersCanonicalizesWritableIngressAddress(t *testing.T) {
 		{Id: "ingress", Addr: "ingress-real:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
 		{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
 	}, nodes)
+	require.Equal(t, schedule.DroppedWorkers{{
+		Worker: schedule.Worker{
+			ID: "stale-owner", Addr: "ingress-stale:6001", Mcpu: 4,
+			State: schedule.WorkerStateWorking, Route: schedule.WorkerRouteRemote,
+		},
+		Reason: schedule.ReasonDroppedDuplicateCN,
+	}}, c.queryPlacement.Dropped)
 }
 
 func TestScheduleQueryWorkersRejectsIngressOwnedStateOutsideResolvedPool(t *testing.T) {

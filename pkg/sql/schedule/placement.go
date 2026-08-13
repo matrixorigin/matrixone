@@ -292,20 +292,15 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	resolved := resolvedWorkers(req)
+	if req.RequireCurrentCN {
+		// Candidate de-duplication treats either a repeated service ID or a
+		// repeated address as the same endpoint. Put the exact ingress identity
+		// first so an address alias cannot make the result depend on discovery
+		// order and discard the authoritative service-ID match.
+		resolved = prioritizeIngressCandidate(resolved, req.CurrentCN)
+	}
 	workers, dropped := selectEligibleCandidateWorkers(resolved)
-	if req.RequireCurrentCN && len(workers) > 0 {
-		var found bool
-		workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
-		if !found {
-			decision := queryDecision(req, nil, dropped, ReasonRequiredCurrentOutsidePool, false)
-			decision.EligibleCount = len(workers)
-			return decision
-		}
-	}
 	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
-	if currentRejected {
-		workers = removeCurrentWorker(workers, req.CurrentCN)
-	}
 	eligibleCount := len(workers)
 	makeDecision := func(decisionWorkers Workers, reason string, satisfied bool) QueryDecision {
 		decision := queryDecision(req, decisionWorkers, dropped, reason, satisfied)
@@ -317,6 +312,18 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 	if req.CurrentCNPolicy == CurrentCNRequired && currentRejected {
 		return makeDecision(workers, currentRejectReason, false)
+	}
+	if req.RequireCurrentCN && len(workers) > 0 {
+		var found bool
+		workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
+		eligibleCount = len(workers)
+		if !found {
+			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
+		}
+	}
+	if currentRejected {
+		workers = removeCurrentWorker(workers, req.CurrentCN)
+		eligibleCount = len(workers)
 	}
 	if req.CurrentCNPolicy == CurrentCNExcluded {
 		if !hasWorkerIdentity(req.CurrentCN) {
@@ -382,17 +389,18 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 // is never widened to make the request fit: it must prove ingress membership,
 // while the selected topology remains local-only.
 func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
+	if !hasWorkerIdentity(req.CurrentCN) {
+		return queryDecision(req, nil, nil, ReasonCurrentCNMissingIdentity, false)
+	}
+	if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
+		return queryDecision(req, nil, nil, reason, false)
+	}
 	if !hasAuthoritativeResolvedPool(req) {
-		if !hasWorkerIdentity(req.CurrentCN) {
-			return queryDecision(req, nil, nil, ReasonCurrentCNMissingIdentity, false)
-		}
-		if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
-			return queryDecision(req, nil, nil, reason, false)
-		}
 		return queryDecision(req, Workers{req.CurrentCN}, nil, ReasonRequiredCurrentCN, true)
 	}
 
-	workers, dropped := selectEligibleCandidateWorkers(resolvedWorkers(req))
+	resolved := prioritizeIngressCandidate(resolvedWorkers(req), req.CurrentCN)
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
 	var found bool
 	workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
 	decision := func(selected Workers, reason string, satisfied bool) QueryDecision {
@@ -400,13 +408,6 @@ func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
 		result.EligibleCount = len(workers)
 		return result
 	}
-	if !hasWorkerIdentity(req.CurrentCN) {
-		return decision(nil, ReasonCurrentCNMissingIdentity, false)
-	}
-	if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
-		return decision(nil, reason, false)
-	}
-
 	// Candidate discovery is intentionally skipped for the ordinary ingress
 	// path. An explicit resolved pool, however, is authoritative and must prove
 	// ingress membership before we return a local decision.
@@ -419,6 +420,21 @@ func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
 	return decision(nil, ReasonNoCandidateCN, false)
 }
 
+// prioritizeIngressCandidate makes service-ID-based ingress proof independent
+// of candidate order. It does not mutate the resolved pool, whose worker slice
+// is immutable input to placement.
+func prioritizeIngressCandidate(workers Workers, ingress Worker) Workers {
+	match := ingressCandidateIndex(workers, ingress)
+	if match <= 0 {
+		return workers
+	}
+	prioritized := make(Workers, 0, len(workers))
+	prioritized = append(prioritized, workers[match])
+	prioritized = append(prioritized, workers[:match]...)
+	prioritized = append(prioritized, workers[match+1:]...)
+	return prioritized
+}
+
 // canonicalizeIngressWorker proves internal ingress ownership with service ID
 // when both sides have one, falling back to address only for legacy identities.
 // It then replaces discovery aliases with the actual ingress route and drops
@@ -428,24 +444,7 @@ func canonicalizeIngressWorker(
 	dropped DroppedWorkers,
 	ingress Worker,
 ) (Workers, DroppedWorkers, bool) {
-	match := -1
-	if ingress.ID != "" {
-		for i := range workers {
-			if workers[i].ID == ingress.ID {
-				match = i
-				break
-			}
-		}
-	}
-	if match < 0 && ingress.Addr != "" {
-		for i := range workers {
-			if (ingress.ID == "" || workers[i].ID == "") &&
-				workers[i].Addr == ingress.Addr {
-				match = i
-				break
-			}
-		}
-	}
+	match := ingressCandidateIndex(workers, ingress)
 	if match < 0 {
 		return workers, dropped, false
 	}
@@ -458,22 +457,41 @@ func canonicalizeIngressWorker(
 		canonical.Addr = ingress.Addr
 	}
 	canonical.Route = WorkerRouteLocal
-	normalized := make(Workers, 0, len(workers))
+	workers[match] = canonical
+	next := 0
 	for i, worker := range workers {
-		if i == match {
-			normalized = append(normalized, canonical)
-			continue
-		}
-		if sameWorker(worker, canonical) {
+		if i != match && sameWorker(worker, canonical) {
 			dropped = append(dropped, DroppedWorker{
 				Worker: worker,
 				Reason: ReasonDroppedDuplicateCN,
 			})
 			continue
 		}
-		normalized = append(normalized, worker)
+		workers[next] = worker
+		next++
 	}
-	return normalized, dropped, true
+	clear(workers[next:])
+	return workers[:next], dropped, true
+}
+
+func ingressCandidateIndex(workers Workers, ingress Worker) int {
+	if ingress.ID != "" {
+		for i := range workers {
+			if workers[i].ID == ingress.ID {
+				return i
+			}
+		}
+	}
+	if ingress.Addr == "" {
+		return -1
+	}
+	for i := range workers {
+		if (ingress.ID == "" || workers[i].ID == "") &&
+			workers[i].Addr == ingress.Addr {
+			return i
+		}
+	}
+	return -1
 }
 
 func hasAuthoritativeResolvedPool(req QueryRequest) bool {

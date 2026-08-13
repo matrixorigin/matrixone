@@ -4616,10 +4616,6 @@ func executeStmt(ses *Session,
 	case *tree.ShowTableStatus:
 		ses.SetShowStmtType(ShowTableStatus)
 		ses.SetData(nil)
-	case *tree.Load:
-		if st.Local {
-			execCtx.proc.Base.LoadLocalReader, execCtx.loadLocalWriter = io.Pipe()
-		}
 	case *tree.ShowGrants:
 		if len(st.Username) == 0 {
 			st.Username = execCtx.userName

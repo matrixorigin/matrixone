@@ -391,36 +391,34 @@ func (c *Compile) evaluateQueryPlacement(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	requireCurrentCN := false
-	ingressOnly := false
+	var requireCurrentCN, ingressOnly bool
 	// TP and AP_ONECN are already local, so inspecting workspace/AST state
 	// cannot change their placement. Keep their legacy hot path untouched and
 	// derive these guards only for the remotely schedulable execution kind.
 	if c.execType == plan2.ExecTypeAP_MULTICN {
-		requireCurrentCN = requireCurrentCN || c.executionRequiresCurrentCN()
-		ingressOnly = ingressOnly || c.ingressOnlyExecution()
+		requireCurrentCN = c.executionRequiresCurrentCN()
+		ingressOnly = c.ingressOnlyExecution()
 	}
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
-	currentCNPolicy := intent.CurrentCNPolicy
-	if requireCurrentCN || ingressOnly {
-		if currentCNPolicy != schedule.CurrentCNExcluded {
-			currentCNPolicy = schedule.CurrentCNRequired
-		}
-	}
 	req := schedule.QueryRequest{
 		ExecKind:         toScheduleExecKind(c.execType),
 		CurrentCN:        currentCN,
 		RequireCurrentCN: requireCurrentCN,
 		IngressOnly:      ingressOnly,
-		CurrentCNPolicy:  currentCNPolicy,
+		CurrentCNPolicy:  intent.CurrentCNPolicy,
 		Intent:           intent,
 	}
-	if (requireCurrentCN || ingressOnly) && currentCNPolicy == schedule.CurrentCNExcluded {
+	if (requireCurrentCN || ingressOnly) && intent.CurrentCNPolicy == schedule.CurrentCNExcluded {
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
 	if schedule.ValidateSchedulingIntent(intent) != "" {
 		return schedule.DecideQueryPlacement(req), "", nil
+	}
+	if c.execType == plan2.ExecTypeAP_MULTICN {
+		if err := ctx.Err(); err != nil {
+			return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
+		}
 	}
 	if ingressOnly && intent.PoolFallback != schedule.PoolFallbackStrict {
 		// With no strict target pool to prove, LOCAL input has exactly one
@@ -438,10 +436,6 @@ func (c *Compile) evaluateQueryPlacement(
 		}
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if err := ctx.Err(); err != nil {
-		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
-	}
-
 	poolRequest := queryCandidatePoolRequest{
 		IsInternal:     c.isInternal,
 		Tenant:         c.tenant,
@@ -492,7 +486,8 @@ func (c *Compile) evaluateQueryPlacement(
 // executionRequiresCurrentCN identifies coordinator-owned transaction state
 // that cannot be reconstructed by a remote CN. A writable workspace is the
 // conservative boundary: read-only snapshot workspaces remain remotely
-// schedulable, while every writable transaction stays on its ingress CN.
+// schedulable, while a writable transaction keeps ingress participation so
+// its local partition can observe uncommitted state.
 func (c *Compile) executionRequiresCurrentCN() bool {
 	if c == nil || c.proc == nil {
 		return false

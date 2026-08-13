@@ -335,6 +335,47 @@ func TestDecideQueryPlacementKeepsIngressInWritableWorkspaceTopology(t *testing.
 	require.False(t, decision.IngressOnly)
 }
 
+func TestDecideQueryPlacementUsesExactIngressIdentityBeforeAddressAlias(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "ingress-real:6001", Mcpu: 8}
+	alias := Worker{ID: "stale-owner", Addr: "ingress-advertised:6001", Mcpu: 4}
+	advertisedIngress := Worker{ID: "ingress", Addr: "ingress-advertised:6001", Mcpu: 12}
+	remote := Worker{ID: "remote", Addr: "remote:6001", Mcpu: 16}
+	candidates := Workers{alias, advertisedIngress, remote}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:         QueryExecAPMultiCN,
+		CurrentCN:        ingress,
+		Candidates:       candidates,
+		RequireCurrentCN: true,
+	})
+
+	require.True(t, decision.Satisfied)
+	canonicalIngress := advertisedIngress
+	canonicalIngress.Addr = ingress.Addr
+	canonicalIngress.Route = WorkerRouteLocal
+	require.Equal(t, Workers{canonicalIngress, remote}, decision.Workers)
+	require.Equal(t, DroppedWorkers{{Worker: alias, Reason: ReasonDroppedDuplicateCN}}, decision.Dropped)
+	// Resolved pool input is immutable even though the exact ingress candidate
+	// is prioritized and canonicalized during selection.
+	require.Equal(t, Workers{alias, advertisedIngress, remote}, candidates)
+}
+
+func TestDecideQueryPlacementDoesNotUseAddressAliasAsIngressIdentity(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "shared:6001", Mcpu: 8}
+	alias := Worker{ID: "not-ingress", Addr: "shared:6001", Mcpu: 16}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:         QueryExecAPMultiCN,
+		CurrentCN:        ingress,
+		Candidates:       Workers{alias},
+		RequireCurrentCN: true,
+	})
+
+	require.False(t, decision.Satisfied)
+	require.Equal(t, ReasonRequiredCurrentOutsidePool, decision.Reason)
+	require.Empty(t, decision.Workers)
+}
+
 func TestDecideQueryPlacementRejectsLoadDataLocalOutsideResolvedPool(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 	remote := Worker{ID: "remote", Addr: "remote:6001", Mcpu: 16}
@@ -770,10 +811,11 @@ func TestDecideQueryPlacementRejectsRequiredDrainingCurrentCN(t *testing.T) {
 	}
 
 	decision := DecideQueryPlacement(QueryRequest{
-		ExecKind:        QueryExecAPMultiCN,
-		CurrentCN:       local,
-		Candidates:      candidates,
-		CurrentCNPolicy: CurrentCNRequired,
+		ExecKind:         QueryExecAPMultiCN,
+		CurrentCN:        local,
+		Candidates:       candidates,
+		RequireCurrentCN: true,
+		CurrentCNPolicy:  CurrentCNRequired,
 	})
 
 	require.Equal(t, Workers{candidates[1]}, decision.Workers)
