@@ -1753,7 +1753,10 @@ func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 		if v == types.ZeroTimestamp {
 			if err = rs.Append(types.ZeroTimestamp, false); err != nil {

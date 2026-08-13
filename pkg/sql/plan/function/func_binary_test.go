@@ -13184,6 +13184,45 @@ func TestMoWinTruncatePropagatesNull(t *testing.T) {
 	}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
 }
 
+func TestMoWinTruncateTimestampPropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Timestamp{
+			types.Timestamp(0),
+			types.Timestamp(0),
+			types.Timestamp(types.MicroSecsPerSec),
+		},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Timestamp{
+		types.Timestamp(0),
+		0,
+		types.Timestamp(types.MicroSecsPerSec),
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](got))
+}
+
 func TestMoWinTruncateRejectsNonPositiveInterval(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := vector.NewVec(types.T_datetime.ToType())
