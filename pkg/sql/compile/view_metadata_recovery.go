@@ -56,76 +56,99 @@ type viewMetadataRecoveryCommand struct {
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
-	inserted, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
-		"insert into %s.%s (%s) select 0,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,1 "+
-			"where not exists (select 1 from %s.%s where account_id=0 and target_relation_id=0 "+
-			"and dependency_ordinal=0)",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
-		catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
-		catalog.ViewRefreshStatusRevalidateRequired,
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
-		executor.Options{}.WithAccountID(catalog.System_Account))
-	if err != nil {
-		return err
-	}
-	inserted.Close()
-	markers, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
-		"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
-			"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
-			"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
-			"and d.dependency_ordinal=0)",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
-		catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
-		catalog.ViewRefreshStatusRevalidateRequired,
-		catalog.MO_CATALOG, catalog.MOAccountTable,
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
-		executor.Options{}.WithAccountID(catalog.System_Account))
-	if err != nil {
-		return err
-	}
-	markers.Close()
-	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
-		"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-			"where target_relation_id=0 and dependency_ordinal=0 "+
-			"and source_relation_kind in ('%s','%s')",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
-		catalog.ViewRefreshStatusRevalidateRequired,
-		catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan),
-		executor.Options{}.WithAccountID(catalog.System_Account))
-	if err != nil {
-		return err
-	}
-	result.Close()
-	return nil
+	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
+		gate, err := txn.Exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		gate.Close()
+
+		inserted, err := txn.Exec(fmt.Sprintf(
+			"insert into %s.%s (%s) select 0,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,1 "+
+				"where not exists (select 1 from %s.%s where account_id=0 and target_relation_id=0 "+
+				"and dependency_ordinal=0)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+			catalog.ViewRefreshStatusRevalidateRequired,
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		inserted.Close()
+		markers, err := txn.Exec(fmt.Sprintf(
+			"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
+				"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
+				"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
+				"and d.dependency_ordinal=0)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+			catalog.ViewRefreshStatusRevalidateRequired,
+			catalog.MO_CATALOG, catalog.MOAccountTable,
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		markers.Close()
+		result, err := txn.Exec(fmt.Sprintf(
+			"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
+				"where target_relation_id=0 and dependency_ordinal=0 "+
+				"and source_relation_kind in ('%s','%s')",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+			catalog.ViewRefreshStatusRevalidateRequired,
+			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		result.Close()
+		return nil
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
 }
 
 // StartViewMetadataRevalidation starts one durable bounded pass over every
 // CURRENT user View after the rolling-upgrade capability barrier reopens.
 func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor, workerID string) error {
 	_ = workerID
-	return updateViewMetadataRevalidationCursor(ctx, sqlExecutor,
-		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan)
-}
-
-func updateViewMetadataRevalidationCursor(
-	ctx context.Context,
-	sqlExecutor executor.SQLExecutor,
-	fromStatus string,
-	toStatus string,
-) error {
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
-	result, err := sqlExecutor.Exec(callCtx, fmt.Sprintf(
-		"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
-			"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-			"where target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, toStatus, fromStatus),
-		executor.Options{}.WithAccountID(catalog.System_Account))
-	if err != nil {
-		return err
-	}
-	result.Close()
-	return nil
+	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
+		gate, err := txn.Exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		gate.Close()
+
+		seeded, err := txn.Exec(fmt.Sprintf(
+			"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
+				"'','','','','%s','',0,null,0,g.dependency_generation from %s.%s a join %s.%s g "+
+				"on g.account_id=0 and g.target_relation_id=0 and g.dependency_ordinal=0 "+
+				"and g.source_relation_kind='%s' where a.account_id<>0 and not exists "+
+				"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
+				"and d.dependency_ordinal=0)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+			catalog.ViewRefreshStatusRevalidateRequired,
+			catalog.MO_CATALOG, catalog.MOAccountTable,
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+			catalog.ViewRefreshStatusRevalidateRequired,
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		seeded.Close()
+
+		result, err := txn.Exec(fmt.Sprintf(
+			"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
+				"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
+				"where target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+			catalog.ViewRefreshStatusRevalidateScan,
+			catalog.ViewRefreshStatusRevalidateRequired), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		result.Close()
+		return nil
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
 }
 
 // RunViewMetadataRecovery performs one bounded local-CN recovery tick. It is

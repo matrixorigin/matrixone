@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
@@ -479,13 +480,14 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
+	fromName := sqlquote.Ident(tblName)
 	if obj.PubInfo != nil {
-		sub := &SubscriptionMeta{
-			AccountId: obj.PubInfo.GetTenantId(),
-		}
+		sub := subscriptionMetaForResolvedObject(obj)
+		fromName = sqlquote.QualifiedIdent(sub.SubName, tblName)
+		previousSubscription := ctx.GetQueryingSubscription()
 		ctx.SetQueryingSubscription(sub)
 		defer func() {
-			ctx.SetQueryingSubscription(nil)
+			ctx.SetQueryingSubscription(previousSubscription)
 		}()
 	}
 
@@ -513,9 +515,18 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	if isAllNull {
 		sql += " LIMIT 1"
 	}
-	sql = fmt.Sprintf(sql, tblName)
+	sql = fmt.Sprintf(sql, fromName)
 
 	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+func subscriptionMetaForResolvedObject(obj *ObjectRef) *SubscriptionMeta {
+	return &SubscriptionMeta{
+		AccountId: obj.PubInfo.GetTenantId(),
+		DbName:    obj.SchemaName,
+		SubName:   obj.SubscriptionName,
+		Tables:    pubsub.TableAll,
+	}
 }
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {

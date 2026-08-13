@@ -56,6 +56,35 @@ type autoIncrementOffsetCompilerContext struct {
 	offset int64
 }
 
+type subscriptionScopeCompilerContext struct {
+	*MockCompilerContext
+	subscription *SubscriptionMeta
+	querying     *SubscriptionMeta
+}
+
+func (c *subscriptionScopeCompilerContext) SetQueryingSubscription(meta *SubscriptionMeta) {
+	c.querying = meta
+}
+
+func (c *subscriptionScopeCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
+	return c.querying
+}
+
+func (c *subscriptionScopeCompilerContext) GetSubscriptionMeta(
+	dbName string,
+	_ *Snapshot,
+) (*SubscriptionMeta, error) {
+	if dbName == c.subscription.SubName {
+		return c.subscription, nil
+	}
+	if c.querying != nil && dbName != c.querying.SubName {
+		publisherBinding := *c.querying
+		publisherBinding.DbName = dbName
+		return &publisherBinding, nil
+	}
+	return nil, nil
+}
+
 func (c *autoIncrementOffsetCompilerContext) ResolveVariable(
 	varName string, isSystemVar, isGlobalVar bool,
 ) (interface{}, error) {
@@ -2059,6 +2088,47 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	persisted := tableDefCreateSQL(built.GetDdl().GetCreateTable().GetTableDef())
 	require.NotContains(t, strings.ToUpper(persisted), " LIKE ")
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
+}
+
+func TestBuildCreateTableLikeRestoresSubscriptionBeforePlanningTarget(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prepared=%t", prepared), func(t *testing.T) {
+			const rootSQL = "CREATE TABLE localdb.clone LIKE subdb.source"
+			base := NewMockCompilerContext(false)
+			base.dbs["localdb"] = true
+			base.dbs["subdb"] = true
+			base.tables["source"] = &plan.TableDef{
+				Name:      "source",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*plan.ColDef{{
+					Name: "id", OriginName: "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+			base.objects["source"] = &plan.ObjectRef{
+				SchemaName:       "publisherdb",
+				ObjName:          "source",
+				SubscriptionName: "subdb",
+				PubInfo:          &plan.PubInfo{TenantId: 7},
+			}
+			ctx := &subscriptionScopeCompilerContext{
+				MockCompilerContext: base,
+				subscription: &SubscriptionMeta{
+					AccountId: 7, DbName: "publisherdb", SubName: "subdb",
+					Tables: "*",
+				},
+			}
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, prepared)
+			require.NoError(t, err)
+			require.Equal(t, "localdb", built.GetDdl().GetCreateTable().GetDatabase())
+			require.Nil(t, ctx.GetQueryingSubscription())
+		})
+	}
 }
 
 func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {

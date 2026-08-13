@@ -158,6 +158,7 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 			account     = "view_metadata_desc_subscriber"
 			database    = "view_metadata_desc_source"
 			subDatabase = "view_metadata_desc_subscription"
+			localDB     = "view_metadata_desc_local"
 			publication = "view_metadata_desc_publication"
 		)
 		cleanup := func() {
@@ -186,7 +187,23 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 		defer subscriberDB.Close()
 		execSQLRequire(t, ctx, subscriberDB,
 			"create database `"+subDatabase+"` from sys publication `"+publication+"`")
+		execSQLRequire(t, ctx, subscriberDB, "create database `"+localDB+"`")
 		waitForViewMetadataRevalidation(t, ctx, sysDB)
+		execSQLRequire(t, ctx, subscriberDB,
+			"create table `"+localDB+"`.like_text like `"+subDatabase+"`.source_table")
+		execSQLRequire(t, ctx, subscriberDB,
+			"prepare like_stmt from 'create table `"+localDB+"`.like_prepared like `"+
+				subDatabase+"`.source_table'")
+		execSQLRequire(t, ctx, subscriberDB, "execute like_stmt")
+		execSQLRequire(t, ctx, subscriberDB, "deallocate prepare like_stmt")
+		execSQLRequire(t, ctx, subscriberDB,
+			"create table `"+localDB+"`.cloned clone `"+subDatabase+"`.source_table")
+
+		var maximum, minimum int64
+		require.NoError(t, subscriberDB.QueryRowContext(ctx,
+			"show table_values from `"+subDatabase+"`.source_table").Scan(&maximum, &minimum))
+		require.Equal(t, int64(1), maximum)
+		require.Equal(t, int64(1), minimum)
 
 		for _, statement := range []string{
 			"select * from `" + subDatabase + "`.published_view",
