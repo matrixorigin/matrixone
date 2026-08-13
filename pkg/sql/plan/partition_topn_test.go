@@ -47,6 +47,9 @@ func TestPartitionTopNRecognizesLiteralRankBounds(t *testing.T) {
 		{"rn = 0", 0},
 		{"rn <= 1024", 1024},
 		{"rn <= 10 and rn < 3", 2},
+		{"rn <= 2 and rn >= 2", 2},
+		{"rn <= 2 and rn >= -1", 2},
+		{"rn between 1 and 2", 2},
 		{"rn <= 1 + 1", 2},
 	}
 
@@ -77,6 +80,7 @@ func TestPartitionTopNFallsBackForUnsupportedShapes(t *testing.T) {
 		{"in", formatPartitionTopNSQL("rn in (1, 2)")},
 		{"volatile residual", formatPartitionTopNSQL("rn <= 2 and rand() >= rn")},
 		{"volatile order", `select * from (select o_orderkey, row_number() over (partition by o_custkey order by rand(), o_orderkey) rn from orders) t where rn <= 2`},
+		{"float partition key", `select * from (select o_orderkey, row_number() over (partition by cast(o_totalprice as double) order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"rank", `select * from (select o_orderkey, rank() over (partition by o_custkey order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"dense rank", `select * from (select o_orderkey, dense_rank() over (partition by o_custkey order by o_orderkey) rn from orders) t where rn <= 2`},
 		{"no partition", `select * from (select o_orderkey, row_number() over (order by o_orderkey) rn from orders) t where rn <= 2`},

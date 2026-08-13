@@ -44,6 +44,8 @@ type topNContainer struct {
 
 	retained     *batch.Batch
 	retainedKeys *batch.Batch
+	retainedDead []int
+	keyDead      []int
 	compares     []compare.Compare
 	groups       []*partitionHeap
 	output       *batch.Batch
@@ -51,6 +53,8 @@ type topNContainer struct {
 	outputSlots  []int64
 	outputOffset int
 }
+
+const minTopNVarlenCompactBytes = 64 << 10
 
 type partitionHeap struct {
 	ctr   *topNContainer
@@ -300,15 +304,61 @@ func (ctr *topNContainer) appendRow(proc *process.Process, input *batch.Batch, r
 
 func (ctr *topNContainer) replaceRow(proc *process.Process, input *batch.Batch, row, slot int64) error {
 	for i := range ctr.retained.Vecs {
+		dead := replacedVarlenBytes(ctr.retained.Vecs[i], slot)
 		if err := ctr.retained.Vecs[i].Copy(input.Vecs[i], slot, row, proc.Mp()); err != nil {
+			return err
+		}
+		ctr.retainedDead = growIntSlice(ctr.retainedDead, len(ctr.retained.Vecs))
+		ctr.retainedDead[i] += dead
+		if err := compactTopNVector(proc, ctr.retained, i, ctr.retainedDead); err != nil {
 			return err
 		}
 	}
 	for i := range ctr.retainedKeys.Vecs {
+		dead := replacedVarlenBytes(ctr.retainedKeys.Vecs[i], slot)
 		if err := ctr.retainedKeys.Vecs[i].Copy(ctr.orderEval.Vec[i], slot, row, proc.Mp()); err != nil {
 			return err
 		}
+		ctr.keyDead = growIntSlice(ctr.keyDead, len(ctr.retainedKeys.Vecs))
+		ctr.keyDead[i] += dead
+		if err := compactTopNVector(proc, ctr.retainedKeys, i, ctr.keyDead); err != nil {
+			return err
+		}
+		ctr.compares[i].Set(0, ctr.retainedKeys.Vecs[i])
 	}
+	return nil
+}
+
+func growIntSlice(values []int, length int) []int {
+	if len(values) < length {
+		values = append(values, make([]int, length-len(values))...)
+	}
+	return values
+}
+
+func replacedVarlenBytes(vec *vector.Vector, row int64) int {
+	if !vec.GetType().IsVarlen() || vec.IsNull(uint64(row)) {
+		return 0
+	}
+	length := len(vec.GetBytesAt(int(row)))
+	if length <= types.VarlenaInlineSize {
+		return 0
+	}
+	return length
+}
+
+func compactTopNVector(proc *process.Process, bat *batch.Batch, index int, deadBytes []int) error {
+	vec := bat.Vecs[index]
+	if deadBytes[index] < minTopNVarlenCompactBytes || deadBytes[index]*2 < len(vec.GetArea()) {
+		return nil
+	}
+	compact, err := vec.CloneToFlatCompact(proc.Mp())
+	if err != nil {
+		return err
+	}
+	vec.Free(proc.Mp())
+	bat.Vecs[index] = compact
+	deadBytes[index] = 0
 	return nil
 }
 
@@ -395,6 +445,8 @@ func (ctr *topNContainer) reset(proc *process.Process) {
 	ctr.hash.Free0()
 	ctr.groups = nil
 	ctr.compares = nil
+	ctr.retainedDead = nil
+	ctr.keyDead = nil
 	ctr.partitionEval.ResetForNextQuery()
 	ctr.orderEval.ResetForNextQuery()
 	if ctr.limitExecutor != nil {

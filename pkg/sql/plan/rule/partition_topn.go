@@ -56,6 +56,11 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 	if windowFunctionID != function.ROW_NUMBER {
 		return
 	}
+	for _, expr := range window.PartitionBy {
+		if !partitionTopNHashCompatible(types.T(expr.Typ.Id)) {
+			return
+		}
+	}
 
 	child := qry.Nodes[node.Children[0]]
 	if child.NodeType != plan.Node_PARTITION || len(child.OrderBy) != len(window.PartitionBy) || child.Limit != nil {
@@ -69,7 +74,7 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 			return
 		}
 		candidate, recognized, referencesWindow := rankUpperBound(filter, windowTag, windowIdx)
-		if referencesWindow && !recognized {
+		if referencesWindow && !recognized && !rankLowerBoundResidual(filter, windowTag, windowIdx) {
 			return
 		}
 		if recognized && (!found || candidate < bound) {
@@ -98,12 +103,68 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 	}
 }
 
-func rankUpperBound(expr *plan.Expr, tag, idx int32) (uint64, bool, bool) {
+func partitionTopNHashCompatible(typ types.T) bool {
+	// Hash grouping canonicalizes floating NaNs and JSON values, while the
+	// legacy PARTITION comparator does not use the same equality relation.
+	switch typ {
+	case types.T_float32, types.T_float64, types.T_json,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return false
+	default:
+		return true
+	}
+}
+
+func rankLowerBoundResidual(expr *plan.Expr, tag, idx int32) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+	leftRank := isRankRef(fn.Args[0], tag, idx)
+	rightRank := isRankRef(fn.Args[1], tag, idx)
+	if leftRank == rightRank {
+		return false
+	}
+	literal := fn.Args[1]
+	if rightRank {
+		literal = fn.Args[0]
+	}
+	if !integerLiteral(literal) {
+		return false
+	}
+	return leftRank && (fid == function.GREAT_EQUAL || fid == function.GREAT_THAN) ||
+		rightRank && (fid == function.LESS_EQUAL || fid == function.LESS_THAN)
+}
+
+func integerLiteral(expr *plan.Expr) bool {
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return false
+	}
+	switch lit.Value.(type) {
+	case *plan.Literal_I8Val, *plan.Literal_I16Val, *plan.Literal_I32Val, *plan.Literal_I64Val,
+		*plan.Literal_U8Val, *plan.Literal_U16Val, *plan.Literal_U32Val, *plan.Literal_U64Val:
+		return true
+	default:
+		return false
+	}
+}
+
+func rankUpperBound(expr *plan.Expr, tag, idx int32) (uint64, bool, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
 		return 0, false, referencesRank(expr, tag, idx)
 	}
 	fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if fid == function.BETWEEN && len(fn.Args) == 3 && isRankRef(fn.Args[0], tag, idx) {
+		value, ok := nonNegativeInteger(fn.Args[2])
+		return value, ok, true
+	}
+	if len(fn.Args) != 2 {
+		return 0, false, referencesRank(expr, tag, idx)
+	}
 	leftRank := isRankRef(fn.Args[0], tag, idx)
 	rightRank := isRankRef(fn.Args[1], tag, idx)
 	if leftRank == rightRank {

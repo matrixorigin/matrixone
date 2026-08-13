@@ -17,6 +17,7 @@ package partition
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -152,6 +153,41 @@ func TestPartitionTopNPreReducePacksCandidateGroups(t *testing.T) {
 	result, err = arg.Call(proc)
 	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, result.Status)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestPartitionTopNVarlenReplacementMemoryBound(t *testing.T) {
+	const (
+		rows        = 2048
+		payloadSize = 4096
+	)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(4)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	input.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	payload := []byte(strings.Repeat("x", payloadSize))
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(1), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], int64(i), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input.Vecs[3], payload, false, proc.Mp()))
+	}
+	input.SetRowCount(rows)
+
+	arg := newTopNArgument(1)
+	arg.OrderBySpecs[1].Flag = plan.OrderBySpec_DESC
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, collectTopNRows(t, arg, proc), 1)
+	require.Equal(t, 1, arg.top.retained.RowCount())
+	require.LessOrEqual(t, len(arg.top.retained.Vecs[3].GetArea()), minTopNVarlenCompactBytes+payloadSize)
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
