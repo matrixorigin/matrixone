@@ -69,10 +69,14 @@ func newJiebaChecked(paths [5]string) (*gojieba.Jieba, error) {
 //   - true at query time: HMM new-word discovery broadens recall for terms
 //     not in the dictionary.
 func SharedJiebaTokenizer(useHmm bool) (*JiebaTokenizer, error) {
-	paths := jiebaDictPaths()
+	// jiebaDictPaths() resolves the dictionary directory via filepath.EvalSymlinks +
+	// os.Stat syscalls; it is ONLY needed to construct the singleton, so it must run
+	// inside the Once. Computing it before the Once made every call — one per document
+	// at index-build time (DocTokenizer) and one per query — re-walk the filesystem to
+	// resolve a constant path, which profiled at ~23% of a large CREATE FULLTEXT2 build.
 	if useHmm {
 		sharedJiebaHmmOnce.Do(func() {
-			j, err := newJiebaChecked(paths)
+			j, err := newJiebaChecked(jiebaDictPaths())
 			if err != nil {
 				sharedJiebaHmmErr = err
 				return
@@ -86,7 +90,7 @@ func SharedJiebaTokenizer(useHmm bool) (*JiebaTokenizer, error) {
 		return sharedJiebaHmm, sharedJiebaHmmErr
 	}
 	sharedJiebaNoHmmOnce.Do(func() {
-		j, err := newJiebaChecked(paths)
+		j, err := newJiebaChecked(jiebaDictPaths())
 		if err != nil {
 			sharedJiebaNoHmmErr = err
 			return

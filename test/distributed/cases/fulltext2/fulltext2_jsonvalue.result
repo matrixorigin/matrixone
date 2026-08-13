@@ -1,0 +1,62 @@
+drop database if exists fulltext2_jsonvalue;
+create database fulltext2_jsonvalue;
+use fulltext2_jsonvalue;
+set experimental_fulltext2_index = 1;
+drop table if exists js;
+create table js(id bigint primary key, doc json);
+insert into js values
+(0,'{"a":"redbluebrownyelloworange","b":"winter"}'),
+(1,'{"a":"red","b":"winter"}'),
+(2,'{"a":"中文學習教材"}'),
+(3,'{"a":"happybirthday.happy-birthday_happybirthday"}');
+create fulltext2 index ft on js(doc) with parser json_value;
+select id from js where match(doc) against('redbluebrownyelloworange' in boolean mode) order by id;
+id
+0
+select id from js where match(doc) against('中文學習教材' in boolean mode) order by id;
+id
+2
+select id from js where match(doc) against('happybirthday.happy-birthday_happybirthday' in boolean mode) order by id;
+id
+3
+select id from js where match(doc) against('red' in boolean mode) order by id;
+id
+1
+select id from js where match(doc) against('winter' in boolean mode) order by id;
+id
+0
+1
+select id from js where match(doc) against('+red +winter' in boolean mode) order by id;
+id
+1
+select id from js where match(doc) against('bluebrown' in boolean mode) order by id;
+id
+select id from js where match(doc) against('中文學習' in boolean mode) order by id;
+id
+drop table if exists js2;
+create table js2(id bigint primary key, j1 json, j2 json);
+insert into js2 values
+(0,'{"x":"red"}','{"y":"winter"}'),
+(1,'{"x":"blue"}','{"y":"summer"}');
+create fulltext2 index ft on js2(j1, j2) with parser json_value;
+select id from js2 where match(j1, j2) against('+red +winter' in boolean mode) order by id;
+id
+0
+select id from js2 where match(j1, j2) against('summer' in boolean mode) order by id;
+id
+1
+drop table if exists jt;
+create table jt(id bigint primary key, doc text);
+insert into jt values
+(0,'{"a":"red..blue--brown@@yellow::orange"}'),
+(1,'{"a":"兒童中文"}');
+create fulltext2 index ft on jt(doc) with parser json_value;
+select id from jt where match(doc) against('red..blue--brown@@yellow::orange' in boolean mode) order by id;
+id
+0
+select id from jt where match(doc) against('兒童中文' in boolean mode) order by id;
+id
+1
+select id from jt where match(doc) against('red' in boolean mode) order by id;
+id
+drop database fulltext2_jsonvalue;
