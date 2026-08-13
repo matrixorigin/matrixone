@@ -311,8 +311,8 @@ type AppendCheckpoint struct {
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	binaryStringRowsUniform := false
 	if v.binaryStringRowsActive {
-		binaryCount := v.binaryStringRows.Count()
-		nonNullCount := v.length - v.nsp.Count()
+		binaryCount := v.binaryStringRows.CountRange(0, uint64(v.length))
+		nonNullCount := v.length - v.nsp.GetBitmap().CountRange(0, uint64(v.length))
 		binaryStringRowsUniform = binaryCount == 0 || binaryCount == nonNullCount
 	}
 	return AppendCheckpoint{

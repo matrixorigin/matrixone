@@ -2042,6 +2042,35 @@ func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {
 	require.True(t, vec.GetBinaryStringMetadataAt(1))
 }
 
+func TestRollbackAppendIgnoresStaleNullExtent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	vec := NewVec(types.T_text.ToType())
+	for row := 0; row < 130; row++ {
+		require.NoError(t, AppendBytes(vec, []byte("v"), row == 129, mp))
+	}
+	defer vec.Free(mp)
+	vec.SetLength(2)
+	require.True(t, vec.GetNulls().Contains(129), "SetLength preserves stale bitmap extent")
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	defer source.Free(mp)
+	require.NoError(t, vec.UnionBatch(source, 0, 1, nil, mp))
+	require.False(t, vec.HasBinaryStringRows())
+
+	require.NotPanics(t, func() { vec.RollbackAppend(checkpoint, 1) })
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+}
+
 func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	tests := []struct {
