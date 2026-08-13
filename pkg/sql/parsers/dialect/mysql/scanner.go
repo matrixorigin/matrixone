@@ -939,59 +939,53 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 // remain an identifier when it follows a qualified name or a comma-separated
 // table factor, even if comments occur between the tokens.
 func (s *Scanner) previousSignificantPos(pos int) int {
-	for pos >= 0 {
-		for pos >= 0 && (s.buf[pos] == ' ' || s.buf[pos] == '\n' || s.buf[pos] == '\r' || s.buf[pos] == '\t') {
-			pos--
-		}
-		if pos >= 1 && s.buf[pos-1] == '*' && s.buf[pos] == '/' {
-			pos -= 2
-			for pos >= 1 && !(s.buf[pos-1] == '/' && s.buf[pos] == '*') {
-				pos--
+	quote, comment := byte(0), byte(0)
+	escaped := false
+	last := -1
+	for i := 0; i <= pos; i++ {
+		if comment != 0 {
+			if comment == 'b' && i > 0 && s.buf[i-1] == '*' && s.buf[i] == '/' {
+				comment = 0
 			}
-			if pos >= 1 {
-				pos -= 2
-				continue
+			if comment != 'b' && s.buf[i] == '\n' {
+				comment = 0
 			}
-		}
-		lineStart := pos
-		for lineStart >= 0 && s.buf[lineStart] != '\n' {
-			lineStart--
-		}
-		line := s.buf[lineStart+1 : pos+1]
-		quote := byte(0)
-		escaped := false
-		for i := 0; i < len(line); i++ {
-			ch := line[i]
-			if quote != 0 {
-				if escaped {
-					escaped = false
-					continue
-				}
-				if ch == '\\' {
-					escaped = true
-					continue
-				}
-				if ch == quote {
-					quote = 0
-				}
-				continue
-			}
-			if ch == '\'' || ch == '"' || ch == '`' {
-				quote = ch
-				continue
-			}
-			if strings.HasPrefix(line[i:], "//") || ch == '#' ||
-				(strings.HasPrefix(line[i:], "--") && (i+2 == len(line) || isMySQLDashCommentBlank(line[i+2]))) {
-				pos = lineStart + i - 1
-				break
-			}
-		}
-		if pos < lineStart {
 			continue
 		}
-		return pos
+		ch := s.buf[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if ch == '\'' || ch == '"' || ch == '`' {
+			quote = ch
+			continue
+		}
+		if ch == '#' || strings.HasPrefix(s.buf[i:], "//") ||
+			(strings.HasPrefix(s.buf[i:], "--") && (i+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[i+2]))) {
+			comment = 'l'
+			continue
+		}
+		if strings.HasPrefix(s.buf[i:], "/*") {
+			comment = 'b'
+			i++
+			continue
+		}
+		if ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' {
+			last = i
+		}
 	}
-	return -1
+	return last
 }
 
 func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {

@@ -96,6 +96,8 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofCompare            compare.Compare
+	asofIndexes            map[uint64][]int32
+	asofIndexValues        [][]int32
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -298,11 +300,22 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	ctr.cleanAsofIndexes(proc)
 	ctr.cleanBatch(proc)
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
+}
+
+func (ctr *container) cleanAsofIndexes(proc *process.Process) {
+	if proc != nil {
+		for _, values := range ctr.asofIndexValues {
+			mpool.FreeSlice(proc.Mp(), values)
+		}
+	}
+	ctr.asofIndexes = nil
+	ctr.asofIndexValues = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {
