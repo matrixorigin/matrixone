@@ -299,6 +299,10 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	source := newBatchAllocationTestSource(t, mp, nil)
 	source.Vecs[0].GetGrouping().Add(1, 7, 31)
 	source.Vecs[1].GetGrouping().Add(2, 9)
+	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
+	kinds := make([]vector.PrepareParamKind, source.RowCount())
+	kinds[0] = vector.PrepareParamInteger
+	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP(kinds, mp))
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
@@ -316,6 +320,9 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	for i := range source.Vecs {
 		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
 	}
+	require.True(t, decoded.Vecs[1].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[1].GetIsBinaryStringAt(1))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[1].GetPrepareParamKindAt(0))
 	withoutGrouping := newBatchAllocationTestSource(t, mp, nil)
 	encoded.Reset()
 	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
@@ -355,8 +362,12 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 			source := NewWithSize(0)
 			source.Attrs = test.attrs
 			source.ExtraBuf = test.extra
+			var payload bytes.Buffer
+			require.NoError(t, source.MarshalBinaryTo(&payload))
 			var encoded bytes.Buffer
-			require.NoError(t, source.MarshalBinaryTo(&encoded))
+			payloadSize := int64(payload.Len())
+			encoded.Write(types.EncodeInt64(&payloadSize))
+			encoded.Write(payload.Bytes())
 
 			decoded := NewOffHeapEmpty()
 			require.NoError(t, decoded.SetAllocationAccount(state.selection))

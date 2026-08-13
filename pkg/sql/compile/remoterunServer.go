@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -920,6 +922,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		mpool.DeleteMPool(mp)
 		return nil, err
 	}
+	binaryStringMetadata, err := process.BinaryStringPrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.IsBinaryString,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -938,7 +950,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, prepareParamMetadata)
+		proc.SetOwnedPrepareParamsWithMetadata(
+			prepareParams,
+			prepareParamMetadata,
+			binaryStringMetadata,
+		)
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
@@ -1045,7 +1061,26 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	data, err := b.MarshalBinary()
+	service := ""
+	if receiver.cnInformation.lockService != nil {
+		service = receiver.cnInformation.lockService.GetConfig().ServiceID
+	}
+	version := int64(0)
+	if runtime := moruntime.ServiceRuntime(service); runtime != nil {
+		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			version, _ = value.(int64)
+		}
+	}
+	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion18 {
+		return moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion18 for remote results")
+	}
+	if b.HasPrepareParamKindMetadata() && version < defines.MORPCVersion12 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote results")
+	}
+	var transport bytes.Buffer
+	data, err := b.MarshalBinaryWithPrepareParamKinds(&transport, false)
 	if err != nil {
 		return err
 	}
