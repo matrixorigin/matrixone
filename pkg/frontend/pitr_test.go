@@ -3726,3 +3726,123 @@ func TestDoAlterPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	require.NoError(t, doAlterPitr(ctx, ses, stmt))
 	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
 }
+
+// Test_unservableViewErrorIsIdentifiable pins the contract the restore paths rely on.
+//
+// restoreViews (snapshot.go) and restoreViewsWithPitr (pitr.go) DROP a view before
+// re-creating it from the snapshot. Since #27027, a defining SELECT whose MATCH() no
+// FULLTEXT index can serve is refused at CREATE -- and such views could be created before
+// that guard existed, so a snapshot may legitimately hold one. If the refusal escaped, a
+// single unrunnable legacy view would abort the entire account restore with the view
+// already dropped, which is strictly worse than the bug being fixed. Both paths therefore
+// skip on this specific error, identified BY CODE so the wording can change freely.
+//
+// canSkipRestoreViewError must NOT claim it: that predicate means "a dependency is
+// missing", it is gated on skipIfDependencyMissing, and RESTORE ACCOUNT passes false --
+// routing this error through it would leave the abort in place for the case that matters.
+func Test_unservableViewErrorIsIdentifiable(t *testing.T) {
+	ctx := context.Background()
+
+	refusal := moerr.NewFtMatchingKeyNotFound(ctx)
+	require.True(t, moerr.IsMoErrCode(refusal, moerr.ErrFtMatchingKeyNotFound))
+	require.False(t, canSkipRestoreViewError(refusal),
+		"the refusal is skipped on its own terms, not as a missing dependency")
+
+	// Unrelated invalid-input errors must stay fatal during restore -- swallowing them
+	// would hide real corruption.
+	require.False(t, moerr.IsMoErrCode(moerr.NewInvalidInput(ctx, "something else"),
+		moerr.ErrFtMatchingKeyNotFound))
+	require.False(t, moerr.IsMoErrCode(moerr.NewInternalError(ctx, "boom"),
+		moerr.ErrFtMatchingKeyNotFound))
+
+	// It carries MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191) wording and code, which is
+	// what MySQL returns for the same rejected CREATE / ALTER / REPLACE VIEW.
+	require.Contains(t, refusal.Error(), "Can't find FULLTEXT index matching the column list")
+	require.Equal(t, moerr.ER_FT_MATCHING_KEY_NOT_FOUND, refusal.MySQLCode(),
+		"clients must see MySQL's 1191 for this rejection, as MySQL does")
+}
+
+// Test_restoreViewsSkipsUnservableView is the regression for the worst failure this guard
+// could cause.
+//
+// Since #27027 a view whose MATCH() no FULLTEXT index can serve is refused at CREATE. Such
+// views could be created before that guard existed, so a snapshot may hold one. restoreViews
+// DROPS each view before re-creating it from the snapshot, so if the refusal escaped, one
+// unrunnable legacy view would abort the entire account restore WITH THE VIEW ALREADY GONE
+// -- strictly worse than the bug being fixed, and unrecoverable, since the definition only
+// exists inside the snapshot.
+//
+// The skipIfDependencyMissing=false case is the one that matters: RESTORE ACCOUNT passes
+// false (snapshot.go), so a fix routed through canSkipRestoreViewError would not have helped
+// it. Both flag values must continue past the refusal and restore the remaining views.
+//
+// restoreViewsWithPitr (pitr.go) carries the identical tolerance -- it had no skip at all
+// before, just `return err` after the drop -- but is not covered by an executable test here:
+// it calls GetSubscriptionMeta before reaching the view loop, which this mock session cannot
+// satisfy (nil dereference at pitr.go:1787). Its contract is pinned instead by
+// Test_unservableViewErrorIsIdentifiable, which is what both paths key on.
+func Test_restoreViewsSkipsUnservableView(t *testing.T) {
+	convey.Convey("restoreViews skips a view that can never run", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		setPu("", pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+		badSQL := "create view ft_v as select id from docs where match(body) against('x')"
+		okSQL := "create view ok_v as select 1"
+
+		viewMap := map[string]*tableInfo{
+			genKey("db01", "ft_v"): {
+				dbName: "db01", tblName: "ft_v", typ: "VIEW", createSql: badSQL,
+			},
+			genKey("db01", "ok_v"): {
+				dbName: "db01", tblName: "ok_v", typ: "VIEW", createSql: okSQL,
+			},
+		}
+		sortedViews := []string{genKey("db01", "ft_v"), genKey("db01", "ok_v")}
+
+		for _, skipIfDependencyMissing := range []bool{false, true} {
+			bh.sql2err = map[string]error{badSQL: moerr.NewFtMatchingKeyNotFound(ctx)}
+			bh.executedSQLs = nil
+
+			err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, skipIfDependencyMissing)
+			require.NoError(t, err,
+				"an unrunnable legacy view must not abort the restore (skip=%v)", skipIfDependencyMissing)
+			require.Contains(t, bh.executedSQLs, okSQL,
+				"the remaining views must still be restored (skip=%v)", skipIfDependencyMissing)
+		}
+
+		// An unrelated failure must still abort: only the specific refusal is tolerated,
+		// so genuine corruption is never silently swallowed.
+		bh.sql2err = map[string]error{badSQL: moerr.NewInternalError(ctx, "boom")}
+		bh.executedSQLs = nil
+		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
+		require.Error(t, err, "an unrelated error must remain fatal")
+	})
+}

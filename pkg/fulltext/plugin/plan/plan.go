@@ -85,13 +85,5 @@ var matchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
 // Covers classic fulltext and fulltext2 alike: both bind MATCH to the same placeholders
 // and share the same matcher.
 func (Hooks) ValidateViewDefinition(ctx planplugin.CompilerContext, query *plan.Query) error {
-	if !planplugin.PlanCallsAnyFunc(query, matchPlaceholderFuncs...) {
-		return nil
-	}
-	// Mirrors MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191) text, which rejects the same
-	// no-index CREATE / ALTER / REPLACE VIEW. The numeric code stays MatrixOne's own:
-	// moerr.MysqlErrorMsgRefer is consumed by the frontend and proxy, not by planner
-	// error constructors.
-	return moerr.NewInvalidInput(ctx.GetContext(),
-		"Can't find FULLTEXT index matching the column list")
+	return planplugin.RefuseUnservableMatch(ctx, query)
 }

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -42,6 +43,8 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 	}
 
 	found := false
+	// Declared up front: checkExpr follows a subquery's NodeId edge back into walk.
+	var walk func(nodeID int32)
 	var checkExpr func(expr *plan.Expr)
 	checkExpr = func(expr *plan.Expr) {
 		if expr == nil || found {
@@ -68,8 +71,7 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 		// A window spec is an Expr in its own right, carrying the window function plus its
 		// PARTITION BY and ORDER BY. Stopping at Expr_F/Expr_List leaves those unread, and
 		// `OVER (ORDER BY MATCH(...))` hides there -- visiting the node's WinSpecList is not
-		// enough if the walk will not descend into the spec it finds. cuVS-style nesting
-		// aside, this is the only Expr variant that contains further expressions.
+		// enough if the walk will not descend into the spec it finds.
 		if w := expr.GetW(); w != nil {
 			checkExpr(w.WindowFunc)
 			for _, part := range w.PartitionBy {
@@ -80,6 +82,17 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 					checkExpr(order.Expr)
 				}
 			}
+			return
+		}
+		// A subquery reference nests in two directions at once: Child is an expression, and
+		// NodeId points at a whole subtree that Children does not list. Flattening normally
+		// removes these before the optimized plan, but "normally" is not a guarantee this
+		// function can rely on -- if one survives, a MATCH inside it would be invisible and
+		// the unusable view would persist. Following both edges costs nothing when there are
+		// none.
+		if sub := expr.GetSub(); sub != nil {
+			checkExpr(sub.Child)
+			walk(sub.NodeId)
 		}
 	}
 	checkExprs := func(exprs []*plan.Expr) {
@@ -89,7 +102,6 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 	}
 
 	visited := make(map[int32]bool, len(query.Nodes))
-	var walk func(nodeID int32)
 	walk = func(nodeID int32) {
 		if found || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
 			return
@@ -139,4 +151,31 @@ func PlanCallsAnyFunc(query *plan.Query, names ...string) bool {
 		}
 	}
 	return found
+}
+
+// MatchPlaceholderFuncs are the plan functions MATCH() AGAINST() binds to. Neither has an
+// evaluable implementation: pkg/sql/plan/function/func_fulltext.go raises "MATCH() AGAINST()
+// function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is
+// not supported yet" for both. They are placeholders the fulltext rewrite is expected to
+// replace with an index scan.
+//
+// fulltext_match is what a WHERE MATCH binds to and what survives when no index matches;
+// fulltext_match_score is what an unmatched SELECT MATCH is converted into
+// (getFullTextMatchFromProject). Either one surviving optimization means the query throws.
+var MatchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
+
+// RefuseUnservableMatch is the shared body of the fulltext family's ValidateViewDefinition.
+//
+// Classic fulltext and fulltext2 bind MATCH to the same placeholders and are resolved by
+// the same findMatchFullTextIndex, so their policy is identical by construction; each
+// plugin still declares the hook so the registry stays the single source of truth for what
+// an algorithm does, but the body lives here rather than being copied and left to drift.
+func RefuseUnservableMatch(ctx CompilerContext, query *plan.Query) error {
+	if !PlanCallsAnyFunc(query, MatchPlaceholderFuncs...) {
+		return nil
+	}
+	// Its own moerr code, mapped to MySQL ER_FT_MATCHING_KEY_NOT_FOUND (1191): snapshot
+	// restore / PITR / CLONE identify this refusal by code and skip the view rather than
+	// aborting the whole restore.
+	return moerr.NewFtMatchingKeyNotFound(ctx.GetContext())
 }

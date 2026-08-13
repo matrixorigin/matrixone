@@ -1830,6 +1830,16 @@ func restoreViewsWithPitr(
 			}
 
 			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {
+				// Same reasoning as restoreViews: the view was dropped just above, and an
+				// unrunnable legacy definition must not make the entire PITR restore fail.
+				// This path has no skip flag at all, so the tolerance is unconditional.
+				if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present after the restore",
+						pitrName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 		}

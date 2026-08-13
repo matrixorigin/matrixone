@@ -1491,6 +1491,20 @@ func restoreViews(
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A view whose MATCH() no FULLTEXT index can serve cannot be re-created
+				// (ValidateViewDefinition refuses it), but such views could be
+				// created before that guard existed, so a snapshot may well contain one.
+				// The view has already been dropped above, and aborting here would leave
+				// the whole account unrestorable over a single object that never worked.
+				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
+				// false, so gating on that flag would not help the case that matters.
+				if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present in the restored account",
+						snapshotName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
 					getLogger(ses.GetService()).Info(fmt.Sprintf(
 						"[%s] skip restore view %v because dependency is missing: %v",

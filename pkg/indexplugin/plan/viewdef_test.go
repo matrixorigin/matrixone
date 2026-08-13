@@ -72,6 +72,13 @@ func TestPlanCallsAnyFunc_FindsReachableCalls(t *testing.T) {
 			WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{
 				WindowFunc: fnExpr("fulltext_match_score"),
 			}}}}}},
+		// A subquery reference nests through its Child expression. Flattening usually
+		// removes these before the optimized plan, but the walker must not depend on that.
+		{"inside a subquery's child expr", &plan.Node{NodeId: 1, Children: []int32{0},
+			FilterList: []*plan.Expr{{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+				Child:  fnExpr("fulltext_match"),
+				NodeId: -1,
+			}}}}}},
 		{"time window partition by", &plan.Node{NodeId: 1, Children: []int32{0},
 			TimeWindowPartitionBy: []*plan.Expr{fnExpr("fulltext_match")}}},
 		{"table function args", &plan.Node{NodeId: 1, Children: []int32{0},
@@ -157,4 +164,24 @@ func TestPlanCallsAnyFunc_MalformedGraph(t *testing.T) {
 	require.NotPanics(t, func() {
 		require.False(t, PlanCallsAnyFunc(outOfRange, "fulltext_match"))
 	})
+}
+
+// TestPlanCallsAnyFunc_FollowsSubqueryNodeEdge: a SubqueryRef points at a whole subtree via
+// NodeId, which is not in the parent's Children. Walking Children alone would never reach
+// it, so a MATCH living there would be invisible and the unusable view would persist.
+func TestPlanCallsAnyFunc_FollowsSubqueryNodeEdge(t *testing.T) {
+	query := &plan.Query{
+		Steps: []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_TABLE_SCAN},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0},
+				FilterList: []*plan.Expr{{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+					NodeId: 2,
+				}}}}},
+			// Reachable ONLY through the subquery edge above.
+			{NodeId: 2, NodeType: plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{fnExpr("fulltext_match")}},
+		},
+	}
+	require.True(t, PlanCallsAnyFunc(query, "fulltext_match", "fulltext_match_score"))
 }

@@ -9,7 +9,7 @@ insert into docs values
 (3, 'hello hello database', 'gamma');
 create view v_create_bad as
 select id, match(body) against('hello') as score from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 select count(*) as leftover from information_schema.views
 where table_schema = 'ft_view_ddl' and table_name = 'v_create_bad';
 ➤ leftover[-5,64,0]  𝄀
@@ -20,7 +20,7 @@ select count(*) as before_alter from v_alter;
 3
 alter view v_alter as
 select id, match(body) against('hello') as score from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 select count(*) as after_alter from v_alter;
 ➤ after_alter[-5,64,0]  𝄀
 3
@@ -30,17 +30,17 @@ select count(*) as before_replace from v_replace;
 3
 create or replace view v_replace as
 select id, match(body) against('hello') as score from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 select count(*) as after_replace from v_replace;
 ➤ after_replace[-5,64,0]  𝄀
 3
 create view v_filter_only as select id from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create view v_project_only as select id, match(body) against('hello') as score from docs;
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create view v_window as
 select id, row_number() over (order by match(body) against('hello')) as rn from docs;
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create view v_window_ok as select id, row_number() over (order by id) as rn from docs;
 select id, rn from v_window_ok order by id;
 ➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
@@ -49,7 +49,7 @@ select id, rn from v_window_ok order by id;
 3  ¦  3
 create fulltext index ft_title on docs(title);
 create view v_wrong_col as select id from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create fulltext index ft_body on docs(body);
 create view v_good_filter as select id from docs where match(body) against('hello');
 select id from v_good_filter order by id;
@@ -76,10 +76,10 @@ select id from v_good_score order by id;
 3
 create view v_window_idx as
 select id, row_number() over (order by match(body) against('hello')) as rn from docs;
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create view v_window_where as
 select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
-invalid input: Can't find FULLTEXT index matching the column list
+Can't find FULLTEXT index matching the column list
 create view v_window_plain as select id, row_number() over (order by id) as rn from docs;
 select id, rn from v_window_plain order by id;
 ➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
