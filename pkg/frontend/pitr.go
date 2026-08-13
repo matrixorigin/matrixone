@@ -1796,17 +1796,20 @@ func restoreViewsWithPitr(
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
 				// #27027 refusal lands here first and would abort the whole restore -- the
-				// skip further down never gets a chance. Leave the view out of the graph:
-				// the loop below only visits sorted keys, so the view is neither dropped
-				// nor re-created and the restore completes. The view is therefore absent
-				// afterwards whenever the restore rebuilds its database (verified on a
-				// database-level PITR restore); it survives only where the target database
-				// is left standing. Either way the account is restorable, which it was not
-				// before.
+				// skip further down never gets a chance.
+				//
+				// KEEP the vertex and mark the view (same reasoning as sortedViewInfos):
+				// dropping it from the graph meant the restore loop never visited it and so
+				// never ran the DROP, leaving the old object standing wherever the target
+				// database is not rebuilt. Marked, it is dropped and only its CREATE is
+				// skipped. No edges: its plan never built, so its dependencies are unknown.
 				if isUnservableViewError(err) {
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
-						"[%s] skip view %v.%v during restore: its definition can never run (%v)",
+						"[%s] view %v.%v will be dropped but not re-created during restore: "+
+							"its definition can never run (%v)",
 						pitrName, viewEntry.dbName, viewEntry.tblName, err))
+					viewEntry.unservable = true
+					g.addVertex(key)
 					continue
 				}
 				return err
@@ -1842,6 +1845,15 @@ func restoreViewsWithPitr(
 
 			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
+			}
+
+			// Marked by the sort above: the definition can never run. The DROP already
+			// removed any object it would have replaced; only the CREATE is skipped.
+			if tblInfo.unservable {
+				getLogger(ses.GetService()).Warn(fmt.Sprintf(
+					"[%s] view %v.%v dropped but NOT re-created: its definition can never run",
+					pitrName, tblInfo.dbName, tblInfo.tblName))
+				continue
 			}
 
 			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {

@@ -226,6 +226,11 @@ type tableInfo struct {
 	relKind   string
 	viewDef   string
 	createSql string
+	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
+	// raised while the dependency sort plans it. Such a view is still visited by the restore
+	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by
+	// sortedViewInfos and the PITR sort, read by restoreViews and restoreViewsWithPitr.
+	unservable bool
 }
 
 type accountRecord struct {
@@ -1486,6 +1491,23 @@ func restoreViews(
 				return err
 			}
 
+			// Marked by sortedViewInfos: the definition can never run, so re-creating it is
+			// impossible. The DROP above already removed any object it would have replaced,
+			// which is the point of visiting it at all.
+			//
+			// CLONE reaches this too (clone.go calls restoreViews), so a CLONE DATABASE whose
+			// source holds such a view reports success with that view missing from the
+			// destination. Deliberate, and consistent with the skipIfDependencyMissing=true
+			// that clone already passes: the alternative is refusing to clone a database over
+			// one object that never worked in the source either. The WARN below is the record;
+			// a client-visible warning needs frontend support this path does not have.
+			if tblInfo.unservable {
+				getLogger(ses.GetService()).Warn(fmt.Sprintf(
+					"[%s] view %v.%v dropped but NOT re-created: its definition can never run",
+					snapshotName, tblInfo.dbName, tblInfo.tblName))
+				continue
+			}
+
 			getLogger(ses.GetService()).Debug(fmt.Sprintf(
 				"[%s] start to create view: %v, create view sql: %s",
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
@@ -1616,17 +1638,26 @@ func sortedViewInfos(
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
 				// #27027 refusal lands here first and would abort the whole restore -- the
-				// skip further down never gets a chance. Leave the view out of the graph:
-				// the loop below only visits sorted keys, so the view is neither dropped
-				// nor re-created and the restore completes. The view is therefore absent
-				// afterwards whenever the restore rebuilds its database (verified on a
-				// database-level PITR restore); it survives only where the target database
-				// is left standing. Either way the account is restorable, which it was not
-				// before.
+				// skip further down never gets a chance.
+				//
+				// KEEP the vertex and mark the view instead of dropping it from the graph.
+				// Dropping it meant the restore loop never visited it, so it never ran the
+				// DROP either: wherever the target database is not rebuilt (a table-level
+				// restore, a restore into a live account), the OLD view object stayed behind
+				// and the restore reported success over it. Marked, it is dropped like any
+				// other restored view and only its CREATE is skipped, so the target ends up
+				// without the view rather than with a stale one.
+				//
+				// No dependency edges are added: its plan never built, so its dependencies
+				// are unknown. A view that depends on THIS one plans the same definition
+				// through it and trips the same refusal, so it is marked here too.
 				if isUnservableViewError(err) {
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
-						"[%s] skip view %v.%v during restore: its definition can never run (%v)",
+						"[%s] view %v.%v will be dropped but not re-created during restore: "+
+							"its definition can never run (%v)",
 						snapshotName, viewEntry.dbName, viewEntry.tblName, err))
+					viewEntry.unservable = true
+					g.addVertex(key)
 					continue
 				}
 				return nil, err

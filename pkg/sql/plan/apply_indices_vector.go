@@ -1138,26 +1138,46 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 // its own node rather than sharing one that a later pass could mutate.
 //
 // This is the generic half of replaceDistFnInExpr, which does the same for vector distances
-// but decides what to replace using metric- and query-vector-specific tests. Fulltext needs
-// only the function name, so the two share the walk and not the predicate. Both exist for the
+// but decides what to replace using metric- and query-vector-specific tests. Both exist for the
 // same reason: an index placeholder nested inside a larger expression -- a comparison, a cast,
 // arithmetic -- is still a placeholder, and leaving it behind means it reaches execution and
 // throws (#26961 for vector distances, the MATCH-score filter case for fulltext).
+//
+// Matching on the name alone is only correct when every call to fnName in the expression is
+// answered by the SAME index scan. Fulltext is not in that position -- one query can carry
+// several different MATCHes -- so it uses replaceScoreFnInExprBy with an argument-aware
+// predicate instead.
 func replaceScoreFnInExpr(expr *plan.Expr, fnName string, scoreExpr func() *plan.Expr) *plan.Expr {
+	return replaceScoreFnInExprBy(expr, func(fn *plan.Function) *plan.Expr {
+		if fn.Func != nil && fn.Func.ObjName == fnName {
+			return scoreExpr()
+		}
+		return nil
+	})
+}
+
+// replaceScoreFnInExprBy walks expr and offers every function call to rewrite. A non-nil
+// return replaces that call; nil leaves it in place and the walk descends into its arguments.
+// Returns the rewritten expression.
+//
+// Letting the callback see the whole *plan.Function -- not just its name -- is what lets a
+// caller with several candidate index scans decide WHICH one a given call belongs to, and
+// leave alone the ones no scan answers.
+func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.Expr) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if e.F.Func != nil && e.F.Func.ObjName == fnName {
-			return scoreExpr()
+		if repl := rewrite(e.F); repl != nil {
+			return repl
 		}
 		for i, arg := range e.F.Args {
-			e.F.Args[i] = replaceScoreFnInExpr(arg, fnName, scoreExpr)
+			e.F.Args[i] = replaceScoreFnInExprBy(arg, rewrite)
 		}
 	case *plan.Expr_List:
 		for i, sub := range e.List.List {
-			e.List.List[i] = replaceScoreFnInExpr(sub, fnName, scoreExpr)
+			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
 		}
 	}
 	return expr

@@ -175,12 +175,12 @@ func indexRewritesDisabled(ctx CompilerContext) bool {
 	if !ok || len(str) == 0 {
 		return false
 	}
+	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
+	// really get switched off", and only the parser the optimizer itself uses knows that. A
+	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
+	// so the rewrites ran while validation below was skipped as if they had not.
 	for _, kv := range strings.Split(str, ",") {
-		parts := strings.Split(kv, "=")
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) != "applyIndices" {
-			continue
-		}
-		if value, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && value != 0 {
+		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
 			return true
 		}
 	}

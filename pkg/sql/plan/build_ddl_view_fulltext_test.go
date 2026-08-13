@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,7 +44,13 @@ func TestIndexRewritesDisabled(t *testing.T) {
 		{"applyIndices explicitly zero", "applyIndices=0", false},
 		{"among other hints", "aggPushDown=1,applyIndices=1,joinOrdering=0", true},
 		{"other hints only", "aggPushDown=1,joinOrdering=1", false},
-		{"spaces around the pair", " applyIndices = 2 ", true},
+		// Whitespace is NOT trimmed, because handleOptimizerHints does not trim either: the
+		// key here is " applyIndices ", which matches no case, so the optimizer ignores the
+		// hint and the rewrites really do run. An earlier version trimmed and answered true,
+		// which switched the #27027 view guard off while the rewrites it reasons about were
+		// still running -- the two must agree, so both use splitOptimizerHint.
+		{"spaces around the pair", " applyIndices = 2 ", false},
+		{"space after a comma", "aggPushDown=1, applyIndices=1", false},
 		{"not a number", "applyIndices=yes", false},
 		{"malformed", "applyIndices", false},
 	} {
@@ -51,6 +58,16 @@ func TestIndexRewritesDisabled(t *testing.T) {
 			rt.SetGlobalVariables("optimizer_hints", tc.hint)
 			defer rt.SetGlobalVariables("optimizer_hints", "")
 			require.Equal(t, tc.want, indexRewritesDisabled(ctx))
+
+			// Parity with the optimizer itself: whatever the hint string, the guard's answer
+			// must equal what handleOptimizerHints actually did to applyIndices.
+			builder := &QueryBuilder{}
+			for _, kv := range strings.Split(tc.hint, ",") {
+				handleOptimizerHints(kv, builder)
+			}
+			applied := builder.optimizerHints != nil && builder.optimizerHints.applyIndices != 0
+			require.Equal(t, applied, indexRewritesDisabled(ctx),
+				"the view guard and handleOptimizerHints must agree about %q", tc.hint)
 		})
 	}
 

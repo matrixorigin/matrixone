@@ -97,5 +97,62 @@ select id, match(body) against('hello') as sc from docs where match(body) agains
 ➤ id[4,32,0]  𝄀
 1  𝄀
 3
+create table two(id int primary key, body text);
+insert into two values (1,'hello'),(2,'hello hello'),(3,'hello hello hello'),(4,'world'),(5,'hello hello world');
+create fulltext index ft_two on two(body);
+select id, match(body) against('hello') as h from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  h[7,5,0]  𝄀
+1  ¦  0.009391551  𝄀
+2  ¦  0.018783102  𝄀
+3  ¦  0.028174654  𝄀
+5  ¦  0.018783102
+select id, match(body) against('world') as w from two where match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  w[7,5,0]  𝄀
+4  ¦  0.15835625  𝄀
+5  ¦  0.15835625
+select id, round(match(body) against('hello'),3) as h, round(match(body) against('world'),3) as w
+from two where match(body) against('hello') and match(body) against('world') order by id;
+➤ id[4,32,0]  ¦  h[8,53,31]  ¦  w[8,53,31]  𝄀
+5  ¦  0.019  ¦  0.158
+select id, match(body) against('hello') as sc, round(match(body) against('hello'),3) as r
+from two where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.009391551  ¦  0.009  𝄀
+2  ¦  0.018783102  ¦  0.019  𝄀
+3  ¦  0.028174654  ¦  0.028  𝄀
+5  ¦  0.018783102  ¦  0.019
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello');
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select id, round(match(body) against('world'),3) as w from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.1 order by id;
+➤ id[4,32,0]  ¦  w[8,53,31]  𝄀
+5  ¦  0.158
+select id from two
+where match(body) against('hello') and match(body) against('world')
+and match(body) against('world') > 0.9 order by id;
+➤ id[4,32,0]
+select id from two where match(body) against('hello') order by round(match(body) against('hello'),3) desc, id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+2  𝄀
+5  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 limit 1;
+➤ id[4,32,0]  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015;
+➤ id[4,32,0]  𝄀
+1
+select count(*) as n from (
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.02 limit 1
+) q;
+➤ n[-5,64,0]  𝄀
+1
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.02 limit 1;
+➤ id[4,32,0]  𝄀
+3
 drop database ft_wrapped;
 set ft_relevancy_algorithm="TF-IDF";

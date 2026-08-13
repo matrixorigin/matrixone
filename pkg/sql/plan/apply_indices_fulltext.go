@@ -89,7 +89,7 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		return nodeID, nil
 	}
 
-	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+	idxID, filter_node_ids, proj_node_ids, served, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
@@ -185,24 +185,15 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 	// buildFullTextIndexScan, and the same defect the vector side fixed for wrapped distances
 	// in #26961 -- which is why the walk (replaceScoreFnInExpr) is shared with it.
 	//
-	// Single served MATCH only, matching the filter side: with several, choosing WHICH index
-	// scan's score a wrapped projection refers to needs argument matching this does not
-	// attempt, and guessing would silently report the wrong score.
-	if len(filter_node_ids)+len(proj_node_ids) == 1 {
-		id := append(append([]int32{}, filter_node_ids...), proj_node_ids...)[0]
-		if ftnode := builder.qry.Nodes[id]; ftnode != nil && len(ftnode.BindingTags) > 0 {
-			scoreExpr := func() *plan.Expr {
-				return &Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
-					},
-				}
-			}
-			for i := range projNode.ProjectList {
-				projNode.ProjectList[i] = replaceScoreFnInExpr(
-					projNode.ProjectList[i], "fulltext_match", scoreExpr)
-			}
+	// Each wrapped MATCH is rewritten to the score of the scan built for THAT match, compared
+	// on pattern/mode/index parts (servedFullTextScore). Rewriting by function name instead
+	// would hand `round(match(body) against('world'), 3)` the relevance of the accompanying
+	// `where match(body) against('hello')` -- a wrong number, silently, for every row. A MATCH
+	// no scan answers is left untouched and still throws 20105 at execution.
+	if len(served) > 0 {
+		rewriter := builder.fullTextScoreRewriter(served)
+		for i := range projNode.ProjectList {
+			projNode.ProjectList[i] = replaceScoreFnInExprBy(projNode.ProjectList[i], rewriter)
 		}
 	}
 	return nodeID, nil
@@ -232,7 +223,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 
 	eqmap := make(map[int32]int32)
 
-	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+	idxID, _, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
@@ -252,7 +243,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
-	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, []fulltextServedMatch, error) {
 
 	ctx := builder.ctxByNode[nodeID]
 
@@ -273,39 +264,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := len(filterids) - 1; i >= 0; i-- {
 		ftid := filterids[i]
 		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
-	}
-
-	// Predicates that WRAP a MATCH rather than being one -- `MATCH(...) > 0`, or a filter on a
-	// projected score alias that inlining substituted back into its definition -- are invisible
-	// to getFullTextMatchFiltersFromScanNode, which only recognises a bare fulltext_match. Left
-	// on the scan they survive the rewrite and throw at execution, even though the index scan
-	// was built right beside them:
-	//
-	//	Join
-	//	  Table Scan   Filter Cond: (fulltext_match('hello', 0, body) > 0)   <- throws
-	//	  Table Function on fulltext_index_scan                              <- index IS used
-	//
-	// Take them off the scan here; they are re-attached above the join once the score column
-	// exists, with the inner MATCH rewritten to reference it. Removing them before the
-	// pushdown decision below is deliberate: a predicate needing the score can never be
-	// pushed into the index scan, so it must not make the pre-filter path look worthwhile.
-	//
-	// Same defect the vector side fixed for wrapped distances in #26961; the recursive
-	// replacement is shared with it (replaceScoreFnInExpr).
-	wrappedMatchFilters := make([]*plan.Expr, 0)
-	if len(ft_filters) == 1 {
-		// Single served MATCH only. With several, deciding WHICH index scan's score a wrapped
-		// predicate refers to needs argument matching this does not attempt; leaving those
-		// alone keeps today's behaviour rather than risking the wrong score.
-		kept := scanNode.FilterList[:0]
-		for _, expr := range scanNode.FilterList {
-			if exprCallsFunc(expr, "fulltext_match") {
-				wrappedMatchFilters = append(wrappedMatchFilters, expr)
-				continue
-			}
-			kept = append(kept, expr)
-		}
-		scanNode.FilterList = kept
 	}
 
 	indexDefs = append(indexDefs, filter_indexDefs...)
@@ -329,6 +287,48 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			indexDefs = append(indexDefs, proj_indexDefs[i])
 		}
 	}
+
+	// ft_filters is now the complete set of MATCHes this rewrite will build an index scan for.
+	// Record them; the node ids are filled in by the build loop below, after which served
+	// answers "which scan, if any, produces the score for THIS match".
+	served := make([]fulltextServedMatch, len(ft_filters))
+	for i, expr := range ft_filters {
+		served[i] = fulltextServedMatch{fn: expr.GetF(), nodeID: -1}
+	}
+
+	// Predicates that WRAP a MATCH rather than being one -- `MATCH(...) > 0`, or a filter on a
+	// projected score alias that inlining substituted back into its definition -- are invisible
+	// to getFullTextMatchFiltersFromScanNode, which only recognises a bare fulltext_match. Left
+	// on the scan they survive the rewrite and throw at execution, even though the index scan
+	// was built right beside them:
+	//
+	//	Join
+	//	  Table Scan   Filter Cond: (fulltext_match('hello', 0, body) > 0)   <- throws
+	//	  Table Function on fulltext_index_scan                              <- index IS used
+	//
+	// Take them off the scan here; they are re-attached above the join once the score column
+	// exists, with each inner MATCH rewritten to reference the scan built for THAT match.
+	// Removing them before the pushdown decision below is deliberate: a predicate needing the
+	// score can never be pushed into the index scan, so it must not make the pre-filter path
+	// look worthwhile.
+	//
+	// Only predicates whose every MATCH is served are lifted. A predicate mentioning a MATCH no
+	// scan answers stays on the scan and throws exactly as it does today -- lifting it would
+	// either report another match's score or strand a half-rewritten expression below the join.
+	//
+	// Same defect the vector side fixed for wrapped distances in #26961; the recursive
+	// replacement is shared with it (replaceScoreFnInExprBy).
+	wrappedMatchFilters := make([]*plan.Expr, 0)
+	servedByFn := func(fn *plan.Function) bool { return builder.isServedFullTextMatch(fn, served) }
+	kept := scanNode.FilterList[:0]
+	for _, expr := range scanNode.FilterList {
+		if exprCallsFunc(expr, "fulltext_match") && !hasUnservedFullTextMatch(expr, servedByFn) {
+			wrappedMatchFilters = append(wrappedMatchFilters, expr)
+			continue
+		}
+		kept = append(kept, expr)
+	}
+	scanNode.FilterList = kept
 
 	// fulltext2 INCLUDE/pk prefilter pushdown: when the driving index is a fulltext2 index
 	// WITH INCLUDE columns, peel the WHERE predicates on those INCLUDE columns (and the pk)
@@ -355,8 +355,16 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// multiple streams, limiting each input before their intersection can drop
 	// documents that belong to the final top page, so leave those inputs
 	// unbounded until a joint top-k implementation exists.
+	//
+	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan, and
+	// this must be tested AFTER the lift emptied scanNode.FilterList -- otherwise removing the
+	// predicate from the scan is what makes the cap look safe. The predicate now runs in the
+	// FILTER node ABOVE the join, so capping the stream below it hands that filter only the
+	// top-relevance candidates: `where sc < 0.05 limit 1` would cap the stream to its single
+	// highest-scoring document and then reject it, returning nothing while qualifying rows sit
+	// just below the cap.
 	var limitExpr *plan.Expr
-	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
+	if len(scanNode.FilterList) == 0 && len(wrappedMatchFilters) == 0 && len(ft_filters) == 1 {
 		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
 	}
 
@@ -370,10 +378,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
 			scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot)
 		if err != nil {
-			return -1, nil, nil, err
+			return -1, nil, nil, nil, err
 		}
 		if idxObjRef == nil || idxTableDef == nil {
-			return -1, nil, nil, moerr.NewInternalErrorf(
+			return -1, nil, nil, nil, moerr.NewInternalErrorf(
 				builder.GetContext(), "resolved fulltext index table %q without catalog metadata", idxdef.IndexTableName)
 		}
 
@@ -385,7 +393,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		modeLit := fn.Args[1].GetLit()
 		if modeLit == nil {
-			return -1, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
+			return -1, nil, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
 		}
 		mode := modeLit.GetI64Val()
 
@@ -399,7 +407,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
 			cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
 			if cfgErr != nil {
-				return -1, nil, nil, cfgErr
+				return -1, nil, nil, nil, cfgErr
 			}
 			exprs := []*plan.Expr{
 				makePlan2StringConstExprWithType(cfg),
@@ -415,7 +423,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			}
 			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {
-				return -1, nil, nil, err
+				return -1, nil, nil, nil, err
 			}
 		} else {
 			// A literal pattern is pre-compiled to the index-scan SQL now; a runtime
@@ -424,7 +432,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			if patternLit := fn.Args[0].GetLit(); patternLit != nil {
 				fullTextSQL, sqlErr := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
 				if sqlErr != nil {
-					return -1, nil, nil, sqlErr
+					return -1, nil, nil, nil, sqlErr
 				}
 				sql = fullTextSQL
 			}
@@ -437,7 +445,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			}
 			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 			if err != nil {
-				return -1, nil, nil, err
+				return -1, nil, nil, nil, err
 			}
 		}
 		if scanNode.ObjRef.PubInfo != nil {
@@ -445,6 +453,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			fulltextFunc.FulltextSourceRef = DeepCopyObjectRef(scanNode.ObjRef)
 			fulltextFunc.FulltextIndexRef = DeepCopyObjectRef(idxObjRef)
 		}
+		// this scan answers ft_filters[i]; wrapped MATCHes equal to it now resolve to its score
+		served[i].nodeID = curr_ftnode_id
+
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
 		if i < proj_offset {
@@ -461,7 +472,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				ret_proj_node_ids[v] = curr_ftnode_id
 
 			} else {
-				return -1, nil, nil, moerr.NewInternalError(builder.GetContext(), "Invalid ret_proj_node_ids_map")
+				return -1, nil, nil, nil, moerr.NewInternalError(builder.GetContext(), "Invalid ret_proj_node_ids_map")
 			}
 		}
 
@@ -781,23 +792,23 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Re-attach the wrapped-MATCH predicates lifted off the scan, now that the index scan's
 	// score column exists. They go on the JOIN: the score is produced by the table function, so
 	// the predicate cannot be evaluated below the join that brings the two together.
-	if len(wrappedMatchFilters) > 0 && len(ret_filter_node_ids) == 1 {
-		ftnode := builder.qry.Nodes[ret_filter_node_ids[0]]
-		joinNode := builder.qry.Nodes[joinnodeID]
-		if ftnode != nil && joinNode != nil && len(ftnode.BindingTags) > 0 {
-			scoreExpr := func() *plan.Expr {
-				return &plan.Expr{
-					Typ: ftnode.TableDef.Cols[1].Typ, // score column
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
-					},
-				}
+	if len(wrappedMatchFilters) > 0 {
+		// Each MATCH is rewritten to the score of the scan built for THAT match, so a predicate
+		// may reference several different streams; all of them are below this join.
+		servedByScore := func(fn *plan.Function) bool { return builder.servedFullTextScore(fn, served) != nil }
+		rewriter := builder.fullTextScoreRewriter(served)
+		rewritten := make([]*plan.Expr, 0, len(wrappedMatchFilters))
+		for _, expr := range wrappedMatchFilters {
+			if builder.qry.Nodes[joinnodeID] == nil || hasUnservedFullTextMatch(expr, servedByScore) {
+				// Score column unresolvable after all: put it back untouched rather than drop
+				// the predicate (which would silently widen the result set) or leave it half
+				// rewritten. It throws at execution exactly as it did before the lift.
+				scanNode.FilterList = append(scanNode.FilterList, expr)
+				continue
 			}
-			rewritten := make([]*plan.Expr, 0, len(wrappedMatchFilters))
-			for _, expr := range wrappedMatchFilters {
-				rewritten = append(rewritten,
-					replaceScoreFnInExpr(expr, "fulltext_match", scoreExpr))
-			}
+			rewritten = append(rewritten, replaceScoreFnInExprBy(expr, rewriter))
+		}
+		if len(rewritten) > 0 {
 			// A FILTER node above the join, NOT joinNode.FilterList. Nothing in the planner
 			// puts a FilterList on a Node_JOIN and nothing evaluates one: EXPLAIN happily
 			// prints `Filter Cond:` for it, so the plan LOOKS right while the predicate is
@@ -810,19 +821,13 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				Children:   []int32{joinnodeID},
 				FilterList: rewritten,
 			}, ctx)
-		} else {
-			// Could not resolve the score column: put them back rather than drop predicates,
-			// which would silently widen the result set.
-			scanNode.FilterList = append(scanNode.FilterList, wrappedMatchFilters...)
 		}
-	} else if len(wrappedMatchFilters) > 0 {
-		scanNode.FilterList = append(scanNode.FilterList, wrappedMatchFilters...)
 	}
 
 	if err := builder.recordPreparedPluginDependencies(scanNode); err != nil {
-		return -1, nil, nil, err
+		return -1, nil, nil, nil, err
 	}
-	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
+	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, served, nil
 }
 
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
@@ -1034,6 +1039,14 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 	// Remap the projection off the TVF: MATCH -> score (col 1); pk base ColRef -> col 0;
 	// include base ColRef -> col 2+j.
 	scoreType := ftnode.TableDef.Cols[1].Typ
+	// A MATCH nested inside a scalar -- round(match(...), 3) -- is not at a projids position,
+	// so the loop below would leave it for execution to throw on. Sweep those first, exactly as
+	// the JOIN path does, and for the same reason. Equality-matched against the single served
+	// MATCH, so a different MATCH is left alone rather than given this one's score. It runs
+	// BEFORE the base-ColRef remap so a rewritten MATCH's arguments are gone by then instead of
+	// being remapped to TVF columns. (Reachable only when the MATCH's own column arguments are
+	// themselves include columns; otherwise guard (d) already sent the query to the JOIN path.)
+	wrappedRewriter := builder.fullTextScoreRewriter([]fulltextServedMatch{{fn: fn, nodeID: ftnodeID}})
 	for i := range projNode.ProjectList {
 		if isProjIndexPosition(projids, int32(i)) {
 			projNode.ProjectList[i] = &Expr{
@@ -1042,6 +1055,7 @@ func (builder *QueryBuilder) tryApplyCoveredFulltext2(nodeID int32, projNode, so
 			}
 			continue
 		}
+		projNode.ProjectList[i] = replaceScoreFnInExprBy(projNode.ProjectList[i], wrappedRewriter)
 		projNode.ProjectList[i] = remapCoveredBaseColRefs(projNode.ProjectList[i], scanTag, ftTag,
 			pkColPos, incSet, scanNode)
 	}
@@ -1170,7 +1184,7 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	}
 
 	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
-	newNodeID, _, _, err := builder.applyJoinFullTextIndices(
+	newNodeID, _, _, _, err := builder.applyJoinFullTextIndices(
 		ctxNodeID,
 		nil,
 		scanNode,
@@ -1229,6 +1243,106 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 	}
 
 	return true
+}
+
+// fulltextServedMatch pairs a MATCH the rewrite actually built an index scan for with the
+// node that produces its score column. nodeID is -1 until that node exists.
+type fulltextServedMatch struct {
+	fn     *plan.Function
+	nodeID int32
+}
+
+// isServedFullTextMatch reports whether one of served is the SAME MATCH as fn.
+//
+// The comparison is equalsFullTextMatchFunc -- the same pattern/mode/index-parts test that
+// builds eqmap -- NOT the function name. Two MATCHes on one table are two different questions:
+// answering `match(body) against('world')` with the scan built for `against('hello')` reports
+// the wrong relevance for every row, silently. A MATCH nothing serves is left alone, so it
+// reaches execution and raises 20105; an error is the honest answer for a MATCH no index can
+// evaluate, and it is what the same query returns today without the wrapped-MATCH rewrites.
+//
+// This asks only about the match, not about its scan node, so it is usable before the build
+// loop has created them.
+//
+// Index parts are compared by column NAME, so two tables with an identically named column
+// would look equal. Sound here because both sides always belong to the SAME scan node: the
+// served set is built from that scan's filters and projections, and the callers sweep only
+// expressions of the project sitting directly over it. (A MATCH on the other side of a join
+// never reaches this code -- the join path passes no project node, and such a query raises
+// 20105 today.) equalsFullTextMatchFunc carries the same assumption for eqmap.
+func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []fulltextServedMatch) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
+		return false
+	}
+	for _, s := range served {
+		if s.fn != nil && len(s.fn.Args) >= 2 && builder.equalsFullTextMatchFunc(fn, s.fn) {
+			return true
+		}
+	}
+	return false
+}
+
+// servedFullTextScore returns the score column of the index scan built for fn, or nil when no
+// served scan answers this particular MATCH or its node is not usable. Only meaningful after
+// the build loop has filled in the node ids.
+func (builder *QueryBuilder) servedFullTextScore(fn *plan.Function, served []fulltextServedMatch) *plan.Expr {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
+		return nil
+	}
+	for _, s := range served {
+		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFunc(fn, s.fn) {
+			continue
+		}
+		if s.nodeID < 0 || int(s.nodeID) >= len(builder.qry.Nodes) {
+			continue
+		}
+		ftnode := builder.qry.Nodes[s.nodeID]
+		if ftnode == nil || ftnode.TableDef == nil || len(ftnode.TableDef.Cols) < 2 || len(ftnode.BindingTags) == 0 {
+			continue
+		}
+		return &plan.Expr{
+			Typ: ftnode.TableDef.Cols[1].Typ, // score column
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
+			},
+		}
+	}
+	return nil
+}
+
+// fullTextScoreRewriter adapts servedFullTextScore into a replaceScoreFnInExprBy callback.
+func (builder *QueryBuilder) fullTextScoreRewriter(served []fulltextServedMatch) func(*plan.Function) *plan.Expr {
+	return func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScore(fn, served)
+	}
+}
+
+// hasUnservedFullTextMatch reports whether expr contains a fulltext_match that isServed
+// rejects. Callers check this BEFORE rewriting: replaceScoreFnInExprBy mutates in place, so a
+// predicate that is only half rewritable must be recognised while it is still intact --
+// otherwise the served half becomes a column reference the node it is left on cannot resolve.
+func hasUnservedFullTextMatch(expr *plan.Expr, isServed func(*plan.Function) bool) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == "fulltext_match" {
+			return !isServed(e.F)
+		}
+		for _, arg := range e.F.Args {
+			if hasUnservedFullTextMatch(arg, isServed) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, sub := range e.List.List {
+			if hasUnservedFullTextMatch(sub, isServed) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // return map[projid]fiter_id -- position of the projids and filterids but NOT position of ProjectList and FilterList

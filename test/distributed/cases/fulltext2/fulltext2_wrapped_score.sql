@@ -74,6 +74,63 @@ select id from (
     select id, match(body) against('hello') as sc from docs where match(body) against('hello')
 ) x where sc > 0 order by id;
 
+-- ---------------- WHICH match a wrapped score refers to -------------------------
+-- A wrapped MATCH is rewritten to the score of the index scan built for THAT match, compared
+-- on pattern/mode/index parts (the same test that builds eqmap). An earlier version rewrote
+-- by function NAME under a "only one served match" count guard, which handed a wrapped
+-- against('world') the relevance of the accompanying where ... against('hello') -- a wrong
+-- number, silently, on every row.
+create table two(id int primary key, body text);
+insert into two values (1,'hello'),(2,'hello hello'),(3,'hello hello hello'),(4,'world'),(5,'hello hello world');
+create fulltext2 index ft_two on two(body);
+
+-- per-term baselines: 'hello' and 'world' score differently, which is the whole point
+select id, match(body) against('hello') as h from two where match(body) against('hello') order by id;
+select id, match(body) against('world') as w from two where match(body) against('world') order by id;
+
+-- both matches served: each wrapped copy must report ITS OWN score, not the other's
+select id, round(match(body) against('hello'),3) as h, round(match(body) against('world'),3) as w
+from two where match(body) against('hello') and match(body) against('world') order by id;
+
+-- a bare AND a wrapped copy of the SAME match in one projection. The old count guard saw
+-- "2 served matches" here (the filter and the projection copy, already collapsed onto one
+-- index scan by eqmap) and skipped the sweep, so the wrapped copy threw.
+select id, match(body) against('hello') as sc, round(match(body) against('hello'),3) as r
+from two where match(body) against('hello') order by id;
+
+-- a wrapped MATCH that NO index scan answers must not borrow the served match's score: it is
+-- left alone and raises 20105, exactly as it does when no rewrite happens at all.
+select id, round(match(body) against('world'),3) as r from two where match(body) against('hello');
+select id from two where match(body) against('hello') and match(body) against('world') > 0.1;
+
+-- ...but once that second match IS served by its own bare MATCH, the wrapped predicate on it
+-- resolves to ITS stream and is lifted above the join. Two streams with a lifted score filter
+-- was refused outright by the old count guard. The two thresholds must disagree.
+select id, round(match(body) against('world'),3) as w from two
+where match(body) against('hello') and match(body) against('world')
+  and match(body) against('world') > 0.1 order by id;
+select id from two
+where match(body) against('hello') and match(body) against('world')
+  and match(body) against('world') > 0.9 order by id;
+
+-- ORDER BY a wrapped MATCH with no alias to hide behind
+select id from two where match(body) against('hello') order by round(match(body) against('hello'),3) desc, id;
+
+-- ---------------- lifted predicate vs the candidate LIMIT ------------------------
+-- Lifting a wrapped predicate off the scan empties FilterList, which used to re-enable the
+-- LIMIT pushdown into the fulltext TVF. The predicate runs ABOVE the join, so a capped stream
+-- hands it only the top-relevance rows: the threshold below capped the stream to the single
+-- highest-scoring document and then rejected it, returning nothing while id 5 qualified.
+-- Under BM25 length normalisation id 5 is the UNIQUE LOWEST scorer -- with a surviving cap
+-- these return 0 rows.
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118 limit 1;
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0118;
+select count(*) as n from (
+    select id from two where match(body) against('hello') and match(body) against('hello') < 0.0132 limit 1
+) q;
+-- positive control: LIMIT still works at the top of the range, where the cap agreed anyway
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.0132 limit 1;
+
 drop database ft2_wrapped;
 
 -- Restore the default so this case does not leak its setting to whatever runs next --
