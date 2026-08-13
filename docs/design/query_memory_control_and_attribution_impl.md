@@ -391,7 +391,7 @@ Deliverables:
 - no old/new controller aliases or duplicate metrics remain;
 - all existing local/remote/prepared/retry tests pass unchanged in behavior.
 
-This PR is mostly mechanical. It must not also migrate Group.
+The M1 commit is mostly mechanical. It must not also migrate Group.
 
 ### M2. Add bounded owner attribution
 
@@ -534,7 +534,9 @@ path; the same physical allocation is never tracked by two hard ledgers.
 
 ### M4. Migrate Order, MergeOrder, Top, and Fill
 
-These are separate PRs sharing generic utilities, not one combined rewrite.
+These remain independently revertible commits with separate evidence, while
+sharing generic utilities. They may be reviewed in one milestone PR, but no
+operator depends on a coupled all-or-nothing activation.
 
 MergeOrder:
 
@@ -850,9 +852,9 @@ For every spill-capable operator:
 - #26768 owns optimizer decisions based on resource evidence, not executor
   admission.
 
-Each milestone should have focused subissues and independently revertible PRs.
-No single PR should combine controller extraction, a new operator family,
-optimizer changes, and durable pre-OOM storage.
+Each milestone should have focused subissues and independently revertible
+commits. Consecutive, fully gated milestones may be reviewed in one staged PR;
+optimizer changes and durable pre-OOM storage remain separate changes.
 
 ## Definition of done
 
