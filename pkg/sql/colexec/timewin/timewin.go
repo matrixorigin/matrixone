@@ -734,13 +734,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 	bat := batch.NewWithSize(1)
 	if ap.WStart {
-		if ctr.startVec != nil {
-			ctr.startVec.CleanOnlyData()
-		} else {
-			ctr.startVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
-		}
-		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
-		if err != nil {
+		if ctr.startVec, err = ctr.makeWindowBoundaryVec(ctr.startVec, ctr.wStart, ap.TsType, proc); err != nil {
 			return err
 		}
 
@@ -754,13 +748,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 
 	if ap.WEnd {
-		if ctr.endVec != nil {
-			ctr.endVec.CleanOnlyData()
-		} else {
-			ctr.endVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
-		}
-		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
-		if err != nil {
+		if ctr.endVec, err = ctr.makeWindowBoundaryVec(ctr.endVec, ctr.wEnd, ap.TsType, proc); err != nil {
 			return err
 		}
 
@@ -781,6 +769,53 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.wStart = nil
 	ctr.wEnd = nil
 	return nil
+}
+
+func (ctr *container) makeWindowBoundaryVec(
+	reuseVec *vector.Vector,
+	boundaries []types.Datetime,
+	tsType plan.Type,
+	proc *process.Process,
+) (*vector.Vector, error) {
+	if types.T(tsType.Id) == types.T_timestamp {
+		typ := types.T_timestamp.ToTypeWithScale(tsType.Scale)
+		if reuseVec != nil && reuseVec.GetType().Oid != types.T_timestamp {
+			reuseVec.Free(proc.Mp())
+			reuseVec = nil
+		}
+		if reuseVec != nil {
+			reuseVec.CleanOnlyData()
+		} else {
+			reuseVec = vector.NewVec(typ)
+		}
+		values := make([]types.Timestamp, len(boundaries))
+		for i, boundary := range boundaries {
+			if boundary == types.ZeroDatetime {
+				values[i] = types.ZeroTimestamp
+				continue
+			}
+			values[i] = types.Timestamp(boundary)
+		}
+		if err := vector.AppendFixedList(reuseVec, values, nil, proc.Mp()); err != nil {
+			return nil, err
+		}
+		return reuseVec, nil
+	}
+
+	typ := types.T_datetime.ToTypeWithScale(tsType.Scale)
+	if reuseVec != nil && reuseVec.GetType().Oid != types.T_datetime {
+		reuseVec.Free(proc.Mp())
+		reuseVec = nil
+	}
+	if reuseVec != nil {
+		reuseVec.CleanOnlyData()
+	} else {
+		reuseVec = vector.NewVec(typ)
+	}
+	if err := vector.AppendFixedList(reuseVec, boundaries, nil, proc.Mp()); err != nil {
+		return nil, err
+	}
+	return reuseVec, nil
 }
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {

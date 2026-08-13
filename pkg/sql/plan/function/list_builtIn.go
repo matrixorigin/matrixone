@@ -11788,6 +11788,18 @@ var supportedControlBuiltIns = []FuncNew{
 					return Truncate
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_timestamp, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateTimestamp
+				},
+			},
 		},
 	},
 

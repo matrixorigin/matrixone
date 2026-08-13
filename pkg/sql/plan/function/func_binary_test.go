@@ -13149,6 +13149,38 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.DatetimeEpoch, got[1])
 }
 
+func TestMoWinTruncateTimestampReturnsDatetimeInstantKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	first := types.FromClockUTC(2026, 1, 1, 0, 12, 34, 567890)
+	second := first + types.Timestamp(types.SecsPerMinute*types.MicroSecsPerSec)
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, first, second}, nil, proc.Mp()))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(10), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Minute), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	truncateToTenMinutes := func(ts types.Timestamp) types.Datetime {
+		interval := int64(10 * types.SecsPerMinute * types.MicroSecsPerSec)
+		return types.Datetime(int64(ts) - int64(ts)%interval)
+	}
+	require.Equal(t, []types.Datetime{
+		types.ZeroDatetime,
+		truncateToTenMinutes(first),
+		truncateToTenMinutes(second),
+	}, vector.MustFixedColNoTypeCheck[types.Datetime](result.GetResultVector()))
+}
+
 func TestMoWinTruncatePropagatesNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := vector.NewVec(types.T_datetime.ToType())
