@@ -85,6 +85,21 @@ RUN mkdir -p /root/.cache/golangci-lint && \
       || echo "WARNING: static-check warm incomplete; PR CI will compile the misses"; \
     fi
 
+# Fingerprint the native inputs the prebuilt thirdparties were produced
+# from. Consumers restore thirdparties/install only on an exact match, so a
+# PR that changes thirdparties/, a different architecture, or a branch
+# whose native tree diverges from this image all rebuild from source
+# instead of silently testing stale native code. Bump schema= whenever the
+# native build contract (base image, compiler, layout) changes.
+RUN mkdir -p /mo-prebuilt && \
+    { \
+      echo "schema=1"; \
+      echo "os=$(uname -s)"; \
+      echo "arch=$(uname -m)"; \
+      echo "thirdparties_tree=$(git rev-parse HEAD:thirdparties)"; \
+    } > /mo-prebuilt/thirdparties.fingerprint && \
+    cat /mo-prebuilt/thirdparties.fingerprint
+
 # Keep only the caches and prebuilt native artifacts; dropping the source
 # tree (and its .git) keeps the nightly image as small as the caches allow.
 FROM matrixorigin/golang:1.26.4-ubuntu22.04
@@ -101,4 +116,7 @@ COPY --from=warm /root/.cache/go-build /root/.cache/go-build
 COPY --from=warm /root/.cache/golangci-lint /root/.cache/golangci-lint
 # Seeded into the PR tree before make build; the prerequisite-less file
 # targets in thirdparties/Makefile then treat the C libraries as up to date.
+# Consumers must verify thirdparties.fingerprint matches their checkout
+# before restoring the install tree.
 COPY --from=warm /go/src/github.com/matrixorigin/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
+COPY --from=warm /mo-prebuilt/thirdparties.fingerprint /mo-prebuilt/thirdparties.fingerprint
