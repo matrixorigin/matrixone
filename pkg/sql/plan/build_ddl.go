@@ -1785,6 +1785,9 @@ func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool)
 	case *tree.ParenTableExpr:
 		return materializedViewSourceTables(table.Expr)
 	case *tree.JoinTableExpr:
+		if table.Right == nil && table.Cond == nil {
+			return materializedViewSourceTables(table.Left)
+		}
 		left, ok := materializedViewSourceTables(table.Left)
 		if !ok {
 			return nil, false
