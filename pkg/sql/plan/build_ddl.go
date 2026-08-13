@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -155,8 +156,50 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 // This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 // passed into the bind: that hook fires before createQuery, where an index rewrite has not
 // yet had its chance and every candidate expression still looks unresolved.
+// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
+// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
+// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+func indexRewritesDisabled(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return false
+	}
+	str, ok := v.(string)
+	if !ok || len(str) == 0 {
+		return false
+	}
+	for _, kv := range strings.Split(str, ",") {
+		parts := strings.Split(kv, "=")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) != "applyIndices" {
+			continue
+		}
+		if value, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
 	if query == nil {
+		return nil
+	}
+	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
+	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
+	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
+	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// silently turn into a DDL policy, so skip validation entirely while it is set: being
+	// permissive costs an unrunnable view, being wrong here costs working ones.
+	if indexRewritesDisabled(ctx) {
 		return nil
 	}
 	plugins := indexplugin.All()
