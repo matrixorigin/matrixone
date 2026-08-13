@@ -8,7 +8,7 @@ part_id int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
 show create table local_hive_show;
 Table    Create Table
-local_hive_show    CREATE EXTERNAL TABLE `local_hive_show` (\n  `id` int DEFAULT NULL,\n  `part_id` int DEFAULT NULL\n) INFILE{'FILEPATH'='/data/test/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='part_id'} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n'
+local_hive_show    CREATE EXTERNAL TABLE `local_hive_show` (\n  `id` int DEFAULT NULL,\n  `part_id` int DEFAULT NULL\n) INFILE{'FILEPATH'='/data/test/','COMPRESSION'='','FORMAT'='parquet','JSONDATA'='','HIVE_PARTITIONING'='true','HIVE_PARTITION_COLUMNS'='part_id'} FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\\n'
 create external table s3_hive_show (
 id int,
 part_id int
