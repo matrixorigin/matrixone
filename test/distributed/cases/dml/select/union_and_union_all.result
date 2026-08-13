@@ -661,3 +661,23 @@ name    count
 tb1    1
 tb2    2
 tb3    3
+SELECT
+check_id,
+status,
+check_id <> 'excluded' AS should_block
+FROM (
+SELECT
+'bronze' AS gate_name,
+'keep' AS check_id,
+CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status
+FROM (SELECT 1 AS n) t
+UNION ALL
+SELECT
+'bronze',
+'excluded',
+CASE WHEN COUNT(*) >= 2 THEN 'PASS' ELSE 'FAIL' END
+FROM (SELECT 1 AS n) t
+) v
+WHERE status = 'FAIL'
+AND check_id <> 'excluded';
+check_id    status    should_block
