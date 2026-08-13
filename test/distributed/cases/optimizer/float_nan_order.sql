@@ -38,6 +38,12 @@ select id from t_double_order where tenant = 1 order by k desc, id asc;
 select id, rank() over (order by k) as r, dense_rank() over (order by k) as dr
 from t_double_order order by id;
 
+select id, rank() over (partition by tenant order by k) as r
+from t_double_order order by id;
+
+select id, row_number() over (partition by tenant order by k, id) as rn
+from t_double_order order by rn;
+
 create table t_float_order(id int primary key, k float);
 insert into t_float_order values
   (70, bit_cast(unhex('0000c07f') as float)),

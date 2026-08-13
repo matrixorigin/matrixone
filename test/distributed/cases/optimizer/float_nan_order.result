@@ -57,6 +57,28 @@ from t_double_order order by id;
 60  ¦  6  ¦  5  𝄀
 70  ¦  7  ¦  6  𝄀
 71  ¦  7  ¦  6
+select id, rank() over (partition by tenant order by k) as r
+from t_double_order order by id;
+➤ id[4,32,0]  ¦  r[5,64,0]  𝄀
+10  ¦  1  𝄀
+20  ¦  2  𝄀
+30  ¦  3  𝄀
+31  ¦  3  𝄀
+40  ¦  5  𝄀
+60  ¦  6  𝄀
+70  ¦  7  𝄀
+71  ¦  7
+select id, row_number() over (partition by tenant order by k, id) as rn
+from t_double_order order by rn;
+➤ id[4,32,0]  ¦  rn[5,64,0]  𝄀
+10  ¦  1  𝄀
+20  ¦  2  𝄀
+30  ¦  3  𝄀
+31  ¦  4  𝄀
+40  ¦  5  𝄀
+60  ¦  6  𝄀
+70  ¦  7  𝄀
+71  ¦  8
 create table t_float_order(id int primary key, k float);
 insert into t_float_order values
 (70, bit_cast(unhex('0000c07f') as float)),
