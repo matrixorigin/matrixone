@@ -281,7 +281,15 @@ func ExecuteIterationWithRuntime(
 		changeStreams = append(changeStreams, iterationSourceChanges{
 			tableID: sourceRel.GetTableID(ctxWithAccount),
 			rel:     sourceRel,
-			def:     sourceRel.CopyTableDef(ctxWithAccount),
+			// Keep the legacy index path byte-for-byte for single-source jobs.
+			// Multi-source jobs need a per-relation definition because their
+			// source schemas can differ.
+			def: func() *plan.TableDef {
+				if len(sources) == 1 {
+					return nil
+				}
+				return sourceRel.CopyTableDef(ctxWithAccount)
+			}(),
 			changes: sourceChanges,
 		})
 	}
