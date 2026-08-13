@@ -3539,9 +3539,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
 		if types.T(args[0].Typ.Id) != types.T_timestamp {
-			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-				Id: int32(types.T_datetime),
-			})
+			sourceType := makeTypeByPlan2Expr(args[0])
+			targetType := types.T_datetime.ToType()
+			function.SetTargetScaleFromSource(&sourceType, &targetType)
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 			if err != nil {
 				return nil, err
 			}

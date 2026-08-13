@@ -2491,10 +2491,14 @@ func TestQueryBuilder_bindProjection(t *testing.T) {
 
 // genBuilderAndCtxWithColumnType creates a builder and context with a column of specified type
 func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder, *BindContext) {
+	typesType := typ.ToType()
+	return genBuilderAndCtxWithColumnTypesType(typesType, colName)
+}
+
+func genBuilderAndCtxWithColumnTypesType(typesType types.Type, colName string) (*QueryBuilder, *BindContext) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	typesType := typ.ToType()
 	plan2Type := makePlan2Type(&typesType)
 	bind := &Binding{
 		tag:            1,
@@ -2515,6 +2519,83 @@ func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder,
 	bindCtx.bindingByCol[colName] = bind
 	bindCtx.bindingByTag[bind.tag] = bind
 	return builder, bindCtx
+}
+
+func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputType types.Type
+		wantScale int32
+		wantCast  bool
+	}{
+		{
+			name:      "timestamp6",
+			inputType: types.T_timestamp.ToTypeWithScale(6),
+			wantScale: 6,
+			wantCast:  false,
+		},
+		{
+			name:      "datetime6",
+			inputType: types.T_datetime.ToTypeWithScale(6),
+			wantScale: 6,
+			wantCast:  true,
+		},
+		{
+			name:      "varchar",
+			inputType: types.T_varchar.ToType(),
+			wantScale: 6,
+			wantCast:  true,
+		},
+		{
+			name:      "datetime0",
+			inputType: types.T_datetime.ToType(),
+			wantScale: 0,
+			wantCast:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnTypesType(tt.inputType, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: "second",
+				},
+			}
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+
+			truncateExpr, err := projectionBinder.BindExpr(helpFunc.truncate, 0, true)
+			require.NoError(t, err)
+
+			truncateFunc := truncateExpr.GetF()
+			require.NotNil(t, truncateFunc)
+			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
+			require.Len(t, truncateFunc.Args, 3)
+
+			truncateArg := truncateFunc.Args[0]
+			if !tt.wantCast {
+				require.Nil(t, truncateArg.GetF(), "timestamp arguments must not be cast to timezone-less datetime before truncation")
+				require.Equal(t, int32(types.T_timestamp), truncateArg.Typ.Id)
+				require.Equal(t, tt.wantScale, truncateArg.Typ.Scale)
+				return
+			}
+
+			castFunc := truncateArg.GetF()
+			require.NotNil(t, castFunc)
+			require.Equal(t, "cast", castFunc.GetFunc().GetObjName())
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, int32(types.T_datetime), truncateArg.Typ.Id)
+			require.Equal(t, tt.wantScale, truncateArg.Typ.Scale)
+			require.Equal(t, int32(types.T_datetime), castFunc.Args[1].Typ.Id)
+			require.Equal(t, tt.wantScale, castFunc.Args[1].Typ.Scale)
+		})
+	}
 }
 
 func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *testing.T) {
