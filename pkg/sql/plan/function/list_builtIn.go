@@ -13483,6 +13483,53 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `load_text`
+	// Like load_file but returns the datalink's EXTRACTED plain text (PDF/DOCX
+	// parsed via GetPlainText), not the raw bytes — so it yields the same text the
+	// fulltext index build indexes. Used by fulltext2 CDC datalink resolution.
+	{
+		functionId: LOAD_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+		},
+	},
+
 	// function `save_file`
 	// confused function.
 	{

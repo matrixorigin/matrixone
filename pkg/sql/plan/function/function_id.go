@@ -817,15 +817,22 @@ const (
 	PERCENTILE_CONT = 567
 	PERCENTILE_DISC = 568
 
+	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
+	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
+	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
+	LOAD_TEXT = 569
+
 	// Manhattan distance. Completes the op_type set an IVF-FLAT index can be built
 	// with: vector_l1_ops was already accepted at CREATE INDEX, but without this
 	// function neither the user query nor the index's own generated search SQL
 	// (MetricTypeToDistFuncName) could name the metric (#25966).
-	L1_DISTANCE = 569
+	// Takes 570 rather than 569: LOAD_TEXT reached main first, so keeping main's
+	// numbering intact leaves the next merge clean. Ids are referenced by name.
+	L1_DISTANCE = 570
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 570
+	FUNCTION_END_NUMBER = 571
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1152,6 +1159,7 @@ var functionIdRegister = map[string]int32{
 	"uuid_to_bin":                    UUID_TO_BIN,
 	"bin_to_uuid":                    BIN_TO_UUID,
 	"load_file":                      LOAD_FILE,
+	"load_text":                      LOAD_TEXT,
 	"save_file":                      SAVE_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,

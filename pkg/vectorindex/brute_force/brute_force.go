@@ -314,10 +314,6 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	return
 }
 
-func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	if idx.deallocator != nil {
 		idx.deallocator.Deallocate()
@@ -329,10 +325,6 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 }
 
 func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
-	return nil
-}
-
-func (idx *GoBruteForceIndex[T, R]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
 	return nil
 }
 
@@ -514,4 +506,16 @@ func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries an
 	}
 
 	return retKeys64, retDistances, nil
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *UsearchBruteForceIndex[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}
+
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (idx *GoBruteForceIndex[T, R]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }
