@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -607,7 +608,7 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -695,7 +696,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -1179,6 +1180,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
 			if !partsEqual(pkeyNames, referencedNames) {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
@@ -1260,6 +1264,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					}
 				}
 			} else {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {

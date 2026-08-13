@@ -817,6 +817,16 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+		} else if node.Offset == nil &&
+			child.NodeType == plan.Node_FUNCTION_SCAN &&
+			child.TableDef != nil && child.TableDef.TblFunc != nil &&
+			child.TableDef.TblFunc.Name == "mo_check_constraints" {
+			// CHECK_CONSTRAINTS is a source function whose rows have no
+			// ordering contract.  A plain LIMIT can therefore be evaluated
+			// by the producer, but OFFSET (or a sort above it) must remain
+			// outside so that the result semantics are unchanged.
+			child.Limit = node.Limit
+			node.Limit = nil
 		}
 	}
 }

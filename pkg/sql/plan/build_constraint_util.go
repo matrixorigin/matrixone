@@ -206,13 +206,46 @@ func requireCheckConstraintProtocol(ctx context.Context, proc *process.Process) 
 	if proc == nil {
 		return nil
 	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).
-		GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	if !ok || !valid || version < defines.MORPCVersion7 {
 		return moerr.NewNotSupported(
 			ctx,
 			"CHECK constraints require all CNs to support protocol version 7",
+		)
+	}
+	return nil
+}
+
+// requireInformationSchemaCheckConstraintsProtocol protects the persisted
+// information_schema views that reference mo_check_constraints.  A rolling
+// upgrade may leave an older CN in the same version-offset window; the view
+// must not be installed until the deployment-wide protocol rollout has made
+// the table-function contract available to every receiver.
+func requireInformationSchemaCheckConstraintsProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion16 {
+		return moerr.NewNotSupported(
+			ctx,
+			"information_schema CHECK_CONSTRAINTS requires all CNs to support protocol version 16",
 		)
 	}
 	return nil
@@ -499,6 +532,9 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return err
 	}
 
 	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {

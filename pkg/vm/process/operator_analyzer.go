@@ -116,6 +116,10 @@ type classifiedWaitAnalyzer interface {
 	WaitStopKind(time.Time, resource.WaitKind)
 }
 
+type durationWaitAnalyzer interface {
+	WaitDurationKind(time.Duration, resource.WaitKind)
+}
+
 // StopAnalyzerWait records a classified wait when the analyzer supports the
 // new resource extension, while preserving the original Analyzer contract.
 func StopAnalyzerWait(analyzer Analyzer, start time.Time, kind resource.WaitKind) {
@@ -130,10 +134,47 @@ func stopAnalyzerWait(analyzer Analyzer, start time.Time, kind resource.WaitKind
 	analyzer.WaitStop(start)
 }
 
+func stopAnalyzerWaitDuration(analyzer Analyzer, duration time.Duration, kind resource.WaitKind) {
+	if classified, ok := analyzer.(durationWaitAnalyzer); ok {
+		classified.WaitDurationKind(duration, kind)
+		return
+	}
+	stopAnalyzerWait(analyzer, time.Now().Add(-duration), kind)
+}
+
 // MeasureFilesystemWait records the complete duration of a storage boundary,
 // including error and panic exits.
 func MeasureFilesystemWait[T any](analyzer Analyzer, fn func() (T, error)) (T, error) {
 	return MeasureWait(analyzer, resource.WaitFilesystem, fn)
+}
+
+// MeasureFilesystemWaitExcluding records a storage boundary that invokes a
+// synchronous active-work callback. excluded is accumulated by that callback;
+// only the remaining duration is classified as filesystem wait.
+func MeasureFilesystemWaitExcluding[T any](
+	analyzer Analyzer,
+	excluded *time.Duration,
+	fn func() (T, error),
+) (ret T, err error) {
+	start := time.Now()
+	var excludedBefore time.Duration
+	if excluded != nil {
+		excludedBefore = *excluded
+	}
+	defer func() {
+		duration := time.Since(start)
+		if excluded != nil {
+			excludedDuration := *excluded - excludedBefore
+			if excludedDuration < 0 || excludedDuration > duration {
+				analyzer.GetOpStats().ResourceQuality |= resource.QualityInvariantFailure
+				duration = 0
+			} else {
+				duration -= excludedDuration
+			}
+		}
+		stopAnalyzerWaitDuration(analyzer, duration, resource.WaitFilesystem)
+	}()
+	return fn()
 }
 
 // MeasureFilesystemWaitErr is the error-only form of MeasureFilesystemWait.
@@ -412,7 +453,10 @@ func (opAlyzr *operatorAnalyzer) WaitStop(start time.Time) {
 }
 
 func (opAlyzr *operatorAnalyzer) WaitStopKind(start time.Time, kind resource.WaitKind) {
-	duration := time.Since(start)
+	opAlyzr.WaitDurationKind(time.Since(start), kind)
+}
+
+func (opAlyzr *operatorAnalyzer) WaitDurationKind(duration time.Duration, kind resource.WaitKind) {
 	if duration < 0 || kind >= resource.WaitKindCount {
 		opAlyzr.opStats.ResourceQuality |= resource.QualityInvariantFailure
 		return

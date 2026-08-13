@@ -135,6 +135,8 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 	}
 }
 
+func (CatalogHooks) IsVectorIndex() bool { return true }
+
 // SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
@@ -280,6 +282,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.Hour > 0 {
 		res[catalog.Hour] = strconv.FormatInt(idx.IndexOption.Hour, 10)
+	}
+	if idx.IndexOption.Second > 0 {
+		res[catalog.Second] = strconv.FormatInt(idx.IndexOption.Second, 10)
 	}
 
 	if idx.IndexOption.KmeansTrainPercent > 0 {

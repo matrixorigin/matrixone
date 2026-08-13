@@ -438,7 +438,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp,
-		types.T_year,
+		types.T_year, types.T_uuid,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
@@ -605,7 +605,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_timestamp: {
 		types.T_int32, types.T_int64,
-		types.T_date, types.T_datetime,
+		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -1243,6 +1243,8 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[types.Timestamp](result, length, selectList)
 	case types.T_year:
 		return appendNulls[types.MoYear](result, length, selectList)
+	case types.T_uuid:
+		return appendNulls[types.Uuid](result, length, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from NULL to %s", totype))
 }
@@ -2154,6 +2156,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return timestampToTime(source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
@@ -4100,6 +4105,32 @@ func datetimeToTime(
 		}
 	}
 	return nil
+}
+
+func timestampToTime(
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Time], length int, zone *time.Location) error {
+	var i uint64
+	l := uint64(length)
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			to.AppendMustNull()
+		} else {
+			to.AppendMustValue(timestampToSessionClockTime(v, zone, totype.Scale))
+		}
+	}
+	return nil
+}
+
+func timestampToSessionClockTime(v types.Timestamp, zone *time.Location, scale int32) types.Time {
+	dt := v.ToDatetime(zone)
+	if dt == types.ZeroDatetime {
+		return 0
+	}
+	timeOfDay := int64(dt) - int64(dt.ToDate().ToDatetime())
+	return types.Time(timeOfDay).TruncateToScale(scale)
 }
 
 func dateToTimestamp(

@@ -230,3 +230,29 @@ func TestBindTimeWindowFuncRejectsOrderedGroupConcatInSlidingWindow(t *testing.T
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ordered group_concat in sliding time window")
 }
+
+func TestBindOrderedSetPercentileRejectsTimeWindow(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.timeTag = 1
+	binder := &HavingBinder{
+		baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx},
+	}
+
+	_, err := binder.BindAggFunc(NamePercentileCont, &tree.FuncExpr{}, 0, true)
+	require.ErrorContains(t, err, "ordered-set percentile aggregates in time windows")
+}
+
+func TestBindOrderedSetPercentileRejectsNilOrderExpression(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	binder := &HavingBinder{
+		baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx},
+	}
+	ast := &tree.FuncExpr{
+		WithinGroup: true,
+		Exprs:       tree.Exprs{tree.NewNumVal(int64(1), "1", false, tree.P_int64)},
+		OrderBy:     tree.OrderBy{nil},
+	}
+
+	_, err := binder.bindOrderedSetPercentileAgg(NamePercentileCont, ast, 0, true)
+	require.ErrorContains(t, err, "percentile_cont requires an ORDER BY expression")
+}
