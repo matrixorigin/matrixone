@@ -439,7 +439,7 @@ func (op *opBuiltInRegexp) builtInNotRegMatch(parameters []*vector.Vector, resul
 	}, selectList)
 }
 
-func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionStrParameter(parameters[1])
 	regularSubstr := func(
@@ -484,7 +484,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 				if match {
-					result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+					if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -510,7 +512,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 				if match {
-					result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+					if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -538,7 +542,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 				if match {
-					result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+					if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -724,7 +730,7 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 	return nil
 }
 
-func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0]) // expr
 	p2 := vector.GenerateFunctionStrParameter(parameters[1]) // pat
 	p3 := vector.GenerateFunctionStrParameter(parameters[2]) // repl
@@ -765,7 +771,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes(val, false); err != nil {
 					return err
 				}
-				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+				if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -789,7 +797,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes(val, false); err != nil {
 					return err
 				}
-				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+				if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -815,7 +825,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 				if err = rs.AppendBytes(val, false); err != nil {
 					return err
 				}
-				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+				if err = setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+					return err
+				}
 			}
 		}
 	}

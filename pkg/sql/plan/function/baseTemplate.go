@@ -2950,13 +2950,17 @@ func opUnaryBytesToStr(
 }
 
 func opUnaryStrToStr(
-	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
-	resultFn func(v string) string, selectList *FunctionSelectList) error {
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	resultFn func(v string) string, selectList *FunctionSelectList) (err error) {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
 	rsVec := rs.GetResultVector()
-	defer propagateBinaryStringResultRows(parameters, rsVec, length)
+	defer func() {
+		if err == nil {
+			err = propagateBinaryStringResultRows(parameters, rsVec, length, proc)
+		}
+	}()
 
 	c1 := parameters[0].IsConst()
 	rsNull := rsVec.GetNulls()

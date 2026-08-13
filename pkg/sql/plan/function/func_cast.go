@@ -901,10 +901,10 @@ func (m castMode) strictStringWidth() bool {
 
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	err := newCast(parameters, result, proc, length, selectList, castModeNormal, false)
-	if err == nil && isBinaryStringVector(parameters[0]) && parameters[1].GetType().Oid.IsMySQLString() {
-		result.GetResultVector().SetIsBinaryString(true)
+	if err != nil || !parameters[1].GetType().Oid.IsMySQLString() {
+		return err
 	}
-	return err
+	return propagateBinaryStringResultRows(parameters[:1], result.GetResultVector(), length, proc)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

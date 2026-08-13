@@ -200,22 +200,32 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	}
 
 	tests := []struct {
-		value string
-		isBin bool
+		value        string
+		isBin        bool
+		binaryString bool
 	}{
 		{value: "AB\x00\x00", isBin: true},
 		{value: "text", isBin: false},
 		{value: "CD\x00\x00", isBin: true},
+		{value: "\xe4\xbd\xa0", binaryString: true},
 	}
 	for _, test := range tests {
 		filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
-			ParamValue{Value: test.value, IsBin: test.isBin},
+			ParamValue{
+				Value:        test.value,
+				IsBin:        test.isBin,
+				BinaryString: test.binaryString,
+			},
 		})
 		require.NoError(t, err)
 		literal := filled.GetQuery().Nodes[0].Limit.GetLit()
 		require.NotNil(t, literal)
 		require.Equal(t, test.isBin, literal.GetIsBin())
 		require.Equal(t, test.value, literal.GetSval())
+		if test.binaryString {
+			require.Equal(t, int32(types.T_varbinary), filled.GetQuery().Nodes[0].Limit.Typ.Id)
+			require.Equal(t, int32(len(test.value)), filled.GetQuery().Nodes[0].Limit.Typ.Width)
+		}
 		require.NotSame(t, queryPlan, filled)
 		require.NotNil(t, queryPlan.GetQuery().Nodes[0].Limit.GetP())
 		copiedLiteral := filled.GetQuery().Nodes[0].Offset.GetLit()

@@ -2840,6 +2840,24 @@ func TestImplicitStringCastPreservesDynamicBinarySemantics(t *testing.T) {
 	t.Run("explicit cast", func(t *testing.T) { run(t, NewExplicitCast, false) })
 }
 
+func TestImplicitStringCastPreservesPerRowDynamicBinarySemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("text"), {0xe4, 0xbd, 0xa0}}, nil, types.T_text.ToType(), mp)
+	require.NoError(t, input.SetIsBinaryStringAt(1, true, mp))
+	target := vector.NewConstNull(types.T_varchar.ToType(), 2, mp)
+	defer input.Free(mp)
+	defer target.Free(mp)
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 2, nil))
+	require.False(t, result.GetResultVector().GetIsBinaryStringAt(0))
+	require.True(t, result.GetResultVector().GetIsBinaryStringAt(1))
+}
+
 func contains(slice []uint64, item uint64) bool {
 	for _, s := range slice {
 		if s == item {

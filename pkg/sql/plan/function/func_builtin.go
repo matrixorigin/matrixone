@@ -801,8 +801,7 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	defer propagateBinaryStringResult(parameters, result)
+func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
 	for i := range ps {
@@ -812,8 +811,9 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		var vs string
 		apv := true
+		binaryString := false
 
-		for _, p := range ps {
+		for j, p := range ps {
 			v, null := p.GetStrValue(i)
 			if null {
 				if err := rs.AppendBytes(nil, true); err != nil {
@@ -823,10 +823,14 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				break
 			} else {
 				vs += string(v)
+				binaryString = binaryString || parameters[j].GetIsBinaryStringAt(int(i))
 			}
 		}
 		if apv {
 			if err := rs.AppendBytes([]byte(vs), false); err != nil {
+				return err
+			}
+			if err := setBinaryStringResultAt(result, int(i), binaryString, proc); err != nil {
 				return err
 			}
 		}
@@ -1645,13 +1649,16 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 			return err
 		}
 		if !(null1 || null2) {
-			result.GetResultVector().SetIsBinaryStringAt(int(i), parameters[0].GetIsBinaryStringAt(int(i)))
+			if err := setBinaryStringResultAt(
+				result, int(i), parameters[0].GetIsBinaryStringAt(int(i)), proc); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1676,7 +1683,9 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
-				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+				if err := setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+					return err
+				}
 				continue
 			}
 		}
@@ -1687,7 +1696,7 @@ func builtInLpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 	p3 := vector.GenerateFunctionStrParameter(parameters[2])
@@ -1712,7 +1721,9 @@ func builtInRpad(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if err := rs.AppendBytes(rvalue, false); err != nil {
 					return err
 				}
-				result.GetResultVector().SetIsBinaryStringAt(int(i), binaryInput)
+				if err := setBinaryStringResultAt(result, int(i), binaryInput, proc); err != nil {
+					return err
+				}
 				continue
 			}
 		}
@@ -4195,7 +4206,7 @@ func isUTF8Charset(charset []byte) bool {
 
 func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if parameters[0].HasBinaryStringRows() {
-		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, proc, length,
 			func(v []byte) []byte { return v }, bytes.ToUpper, selectList)
 	}
 	if isBinaryStringVector(parameters[0]) {
@@ -4214,7 +4225,7 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if parameters[0].HasBinaryStringRows() {
-		return opUnaryBytesToBytesByBinaryRow(parameters, result, length,
+		return opUnaryBytesToBytesByBinaryRow(parameters, result, proc, length,
 			func(v []byte) []byte { return v }, bytes.ToLower, selectList)
 	}
 	if isBinaryStringVector(parameters[0]) {
@@ -4243,6 +4254,7 @@ func isBinaryStringVector(vec *vector.Vector) bool {
 func opUnaryBytesToBytesByBinaryRow(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
+	proc *process.Process,
 	length int,
 	binaryFn func([]byte) []byte,
 	textFn func([]byte) []byte,
@@ -4272,7 +4284,9 @@ func opUnaryBytesToBytesByBinaryRow(
 		if err := rs.AppendBytes(output, false); err != nil {
 			return err
 		}
-		result.GetResultVector().SetIsBinaryStringAt(row, binaryString)
+		if err := setBinaryStringResultAt(result, row, binaryString, proc); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -4308,16 +4322,12 @@ func opBinaryBytesBytesToFixedByBinaryRow[Tr types.FixedSizeTExceptStrType](
 	return nil
 }
 
-func propagateBinaryStringResult(parameters []*vector.Vector, result vector.FunctionResultWrapper) {
-	for _, parameter := range parameters {
-		if isBinaryStringVector(parameter) {
-			result.GetResultVector().SetIsBinaryString(true)
-			return
-		}
-	}
-}
-
-func propagateBinaryStringResultRows(parameters []*vector.Vector, result *vector.Vector, length int) {
+func propagateBinaryStringResultRows(
+	parameters []*vector.Vector,
+	result *vector.Vector,
+	length int,
+	proc *process.Process,
+) error {
 	for row := 0; row < length && row < result.Length(); row++ {
 		if result.IsNull(uint64(row)) {
 			continue
@@ -4329,8 +4339,32 @@ func propagateBinaryStringResultRows(parameters []*vector.Vector, result *vector
 				break
 			}
 		}
-		result.SetIsBinaryStringAt(row, binaryString)
+		if err := setBinaryStringVectorAt(result, row, binaryString, proc); err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+func setBinaryStringResultAt(
+	result vector.FunctionResultWrapper,
+	row int,
+	binaryString bool,
+	proc *process.Process,
+) error {
+	return setBinaryStringVectorAt(result.GetResultVector(), row, binaryString, proc)
+}
+
+func setBinaryStringVectorAt(
+	result *vector.Vector,
+	row int,
+	binaryString bool,
+	proc *process.Process,
+) error {
+	if proc == nil {
+		return result.SetIsBinaryStringAt(row, binaryString)
+	}
+	return result.SetIsBinaryStringAt(row, binaryString, proc.Mp())
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

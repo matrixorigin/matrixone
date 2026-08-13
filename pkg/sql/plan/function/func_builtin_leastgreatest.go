@@ -763,7 +763,6 @@ func leastGreatestFnVarlen(
 	length int,
 	selectList *FunctionSelectList,
 	compareFn func(v1, v2 []byte) bool) error {
-	defer propagateBinaryStringResult(parameters, result)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	rsVec := rs.GetResultVector()
 	rsNull := rsVec.GetNulls()
@@ -790,6 +789,7 @@ func leastGreatestFnVarlen(
 	for i := uint64(0); i < uint64(length); i++ {
 		var v []byte
 		var isNull bool
+		var selected *vector.Vector
 
 		if selectList != nil && selectList.ShouldEvalAllRow() {
 			if selectList.Contains(i) {
@@ -806,14 +806,24 @@ func leastGreatestFnVarlen(
 				vv := pv.GetBytesAt(int(i))
 				if v == nil {
 					v = vv
+					selected = pv
 				} else {
 					if compareFn(vv, v) {
 						v = vv
+						selected = pv
 					}
 				}
 			}
 		}
-		rs.AppendBytes(v, isNull)
+		if err := rs.AppendBytes(v, isNull); err != nil {
+			return err
+		}
+		if !isNull && selected != nil {
+			if err := setBinaryStringVectorAt(
+				rsVec, int(i), selected.GetIsBinaryStringAt(int(i)), proc); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

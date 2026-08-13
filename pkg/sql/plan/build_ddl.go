@@ -285,6 +285,13 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	for i := range outputColumnProvenance {
 		outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
 	}
+	rootNode := builder.qry.Nodes[rootId]
+	outputBinaryStringTypes := make([]types.Type, len(rootNode.ProjectList))
+	outputHasBinaryString := make([]bool, len(rootNode.ProjectList))
+	for i, expr := range rootNode.ProjectList {
+		outputBinaryStringTypes[i], outputHasBinaryString[i] =
+			ctasBinaryStringTypeInQuery(ctx, builder.qry, expr, nil)
+	}
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	// CTAS metadata must reflect the final query output: outer joins and scalar
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
@@ -292,12 +299,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	if err != nil {
 		return nil, nil, err
 	}
-	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	rootNode = query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
-		if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, query, expr, nil); ok {
+		if outputHasBinaryString[i] {
+			typ = makePlan2Type(&outputBinaryStringTypes[i])
+		} else if binaryType, ok := ctasBinaryStringTypeInQuery(ctx, query, expr, nil); ok {
 			typ = makePlan2Type(&binaryType)
 		}
 		provenance := outputColumnProvenance[i]

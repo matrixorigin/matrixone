@@ -6283,7 +6283,7 @@ func rtrim(xs string) string {
 
 func Reverse(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if ivecs[0].HasBinaryStringRows() {
-		return opUnaryBytesToBytesByBinaryRow(ivecs, result, length,
+		return opUnaryBytesToBytesByBinaryRow(ivecs, result, proc, length,
 			func(v []byte) []byte {
 				out := bytes.Clone(v)
 				for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {

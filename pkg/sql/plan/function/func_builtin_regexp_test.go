@@ -536,7 +536,7 @@ func runBinaryStringRegexpCase(
 ) {
 	t.Helper()
 	tcc := NewFunctionTestCase(proc, inputs, expected, fn)
-	tcc.parameters[0].SetIsBinaryStringAt(0, true)
+	require.NoError(t, tcc.parameters[0].SetIsBinaryStringAt(0, true, proc.Mp()))
 	succeed, errInfo := tcc.Run()
 	require.True(t, succeed, errInfo)
 
@@ -730,7 +730,7 @@ func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, test.inputs,
 				NewFunctionTestResult(types.T_int64.ToType(), false, test.expected, nulls),
 				newOpBuiltInRegexp().builtInRegexpInstr)
-			tcc.parameters[0].SetIsBinaryStringAt(0, true)
+			require.NoError(t, tcc.parameters[0].SetIsBinaryStringAt(0, true, proc.Mp()))
 			succeed, errInfo := tcc.Run()
 			require.True(t, succeed, errInfo)
 		})
