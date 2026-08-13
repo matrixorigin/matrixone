@@ -173,6 +173,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 				cb.CacheBatch(true, cacheID, dst)
 				return nil, false, 0, err
 			}
+			dst.Vecs[i].SetIsBinaryString(vec.GetIsBinaryString())
 		}
 
 		// range src and found the same vector.
