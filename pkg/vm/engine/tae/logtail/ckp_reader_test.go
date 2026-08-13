@@ -444,10 +444,19 @@ func makeCheckpointObjectRanges(
 }
 
 func TestCKPReaderReadMetaEmptyLocation(t *testing.T) {
-	// empty location must be rejected with an error, not panic, on every read path
 	for _, version := range []uint32{CheckpointVersion12, CheckpointCurrentVersion} {
-		reader := NewCKPReader(version, objectio.Location{}, nil, nil)
-		err := reader.ReadMeta(context.Background())
-		require.Error(t, err)
+		for _, test := range []struct {
+			name     string
+			location objectio.Location
+		}{
+			{name: "missing encoding"},
+			{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+		} {
+			t.Run(fmt.Sprintf("version-%d/%s", version, test.name), func(t *testing.T) {
+				reader := NewCKPReader(version, test.location, nil, nil)
+				err := reader.ReadMeta(context.Background())
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			})
+		}
 	}
 }

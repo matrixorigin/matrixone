@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -496,13 +497,23 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 }
 
 func TestLoadColumnsDataEmptyLocation(t *testing.T) {
-	// empty location must be rejected with an error, not panic
-	// (regression for Location.Name() slicing an empty slice)
-	_, _, _, err := LoadColumnsData(
-		context.Background(),
-		nil, nil, nil,
-		objectio.Location{},
-		nil, nil, 0,
-	)
-	require.Error(t, err)
+	for _, test := range []struct {
+		name     string
+		location objectio.Location
+	}{
+		{name: "missing encoding"},
+		{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, release, fromCache, err := LoadColumnsData(
+				context.Background(),
+				nil, nil, nil,
+				test.location,
+				nil, nil, 0,
+			)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Nil(t, release)
+			require.False(t, fromCache)
+		})
+	}
 }
