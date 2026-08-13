@@ -81,13 +81,24 @@ GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s -run '^TestXxx$' ./pk
 
 For CGo-transitive or CGo-direct packages, do not guess flags. Read [references/cgo-build-test.md](references/cgo-build-test.md).
 
-For local CPU CGo tests, prefer the controlled wrapper. It normalizes the
+For local CGo tests, prefer the controlled wrapper. It normalizes the
 repository module/CGo/load paths; `GOFLAGS`, `GOEXPERIMENT`, `CC`, and `CXX`
 remain caller-owned inputs and must be recorded when relevant:
 
 ```bash
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=120s ./pkg/target/...
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
+```
+
+`MO_CL_CUDA=1` selects the GPU build, the same switch `make` uses: it adds the
+CUDA/cuvs link flags and implies `-tags gpu`. It is required both for gpu-tagged
+packages AND for any package once `cgo/libmo.so` has been built with CUDA, since
+a CUDA libmo carries undefined `cu*` symbols that every test binary linking it
+must resolve. The wrapper detects that libmo and says so rather than letting the
+linker emit a page of `undefined reference to cuInit`:
+
+```bash
+MO_CL_CUDA=1 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=300s ./pkg/vectorindex/metric/
 ```
 
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.

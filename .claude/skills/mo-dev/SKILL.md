@@ -70,11 +70,20 @@ go test -v -count=1 -run TestXxx ./pkg/target/...
 
 For CGo-transitive or CGo-direct packages, do not guess flags. Read [references/cgo-build-test.md](references/cgo-build-test.md).
 
-For local CPU CGo tests, prefer the deterministic wrapper:
+For local CGo tests, prefer the deterministic wrapper:
 
 ```bash
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=120s ./pkg/target/...
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
+```
+
+`MO_CL_CUDA=1` selects the GPU build, the same switch `make` uses. It adds the CUDA/cuvs
+link flags and implies `-tags gpu`, so it is required both for gpu-tagged packages AND for
+any package at all once `cgo/libmo.so` has been built with CUDA (a CUDA libmo carries
+undefined `cu*` symbols that every test binary linking it must resolve):
+
+```bash
+MO_CL_CUDA=1 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=300s ./pkg/vectorindex/metric/
 ```
 
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.
