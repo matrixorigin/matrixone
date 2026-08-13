@@ -39,6 +39,10 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
+	if location.IsEmpty() {
+		err = moerr.NewInvalidInput(ctx, "object location is empty")
+		return
+	}
 	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector

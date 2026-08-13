@@ -494,3 +494,15 @@ func TestLoadColumns2NeedCopyReleasesSourceCachedData(t *testing.T) {
 	require.Equal(t, types.BuildTS(42, 0), vectors[0].Get(0))
 	vectors[0].Close()
 }
+
+func TestLoadColumnsDataEmptyLocation(t *testing.T) {
+	// empty location must be rejected with an error, not panic
+	// (regression for Location.Name() slicing an empty slice)
+	_, _, _, err := LoadColumnsData(
+		context.Background(),
+		nil, nil, nil,
+		objectio.Location{},
+		nil, nil, 0,
+	)
+	require.Error(t, err)
+}

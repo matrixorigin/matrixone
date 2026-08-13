@@ -5759,6 +5759,10 @@ func TestReadCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	require.NotEmpty(t, entries)
 	for _, entry := range entries {
+		if !entry.IsFinished() {
+			t.Logf("skipping unfinished checkpoint entry: %s", entry.String())
+			continue
+		}
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
 		readCheckpoint(entry)

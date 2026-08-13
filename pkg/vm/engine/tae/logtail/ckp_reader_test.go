@@ -442,3 +442,12 @@ func makeCheckpointObjectRanges(
 			ckputil.ObjectType_Tombstone,
 		)
 }
+
+func TestCKPReaderReadMetaEmptyLocation(t *testing.T) {
+	// empty location must be rejected with an error, not panic, on every read path
+	for _, version := range []uint32{CheckpointVersion12, CheckpointCurrentVersion} {
+		reader := NewCKPReader(version, objectio.Location{}, nil, nil)
+		err := reader.ReadMeta(context.Background())
+		require.Error(t, err)
+	}
+}
