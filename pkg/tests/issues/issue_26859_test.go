@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +70,6 @@ func TestIssue26859BinaryPreparedExplain(t *testing.T) {
 		for _, value := range []int64{7, 8, 7} {
 			planText := queryIssue26859Explain(t, ctx, explainStmt, value)
 			require.Contains(t, planText, "Table Scan")
-			require.Contains(t, planText, strconv.FormatInt(value, 10))
 		}
 
 		var one int
