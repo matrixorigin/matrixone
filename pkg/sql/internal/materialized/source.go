@@ -331,7 +331,7 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) (int64, error) {
 	}
 	defer memoryReservation.Release()
 	buf := bytes.NewBuffer(make([]byte, 0, int(serializedBytes)))
-	data, err := bat.MarshalBinaryWithBuffer(buf, false)
+	data, err := bat.MarshalBinaryWithPrepareParamKinds(buf, false)
 	if err != nil {
 		return 0, err
 	}
@@ -429,7 +429,7 @@ func readSpilledBatch(file *os.File, offset, availableBytes int64, mp *mpool.MPo
 		return nil, offset, err
 	}
 	decoded := batch.NewWithSize(0)
-	if err := decoded.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
+	if err := decoded.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
 		decoded.Clean(mp)
 		return nil, offset, err
 	}
@@ -625,12 +625,28 @@ func spillBatchSize(bat *batch.Batch) (serialized, scratch uint64, err error) {
 			return 0, 0, err
 		}
 	}
-	serialized, err = checkedAdd(serialized, uint64(len(bat.ExtraBuf)))
+	metadataBytes, metadataErr := bat.PrepareParamKindMetadataSize()
+	if metadataErr != nil {
+		return 0, 0, metadataErr
+	}
+	serialized, err = addSpillBatchTail(
+		serialized,
+		uint64(len(bat.ExtraBuf)),
+		uint64(metadataBytes),
+	)
 	if err != nil || serialized > maxSpillBatchBytes || serialized > uint64(math.MaxInt) {
 		return 0, 0, moerr.NewInternalErrorNoCtx("materialized sink spill batch exceeds runtime limit")
 	}
 	scratch, err = checkedAdd(scratch, serialized)
 	return serialized, scratch, err
+}
+
+func addSpillBatchTail(serialized, extraBytes, metadataBytes uint64) (uint64, error) {
+	withExtra, err := checkedAdd(serialized, extraBytes)
+	if err != nil {
+		return 0, err
+	}
+	return checkedAdd(withExtra, metadataBytes)
 }
 
 func checkedAdd(values ...uint64) (uint64, error) {

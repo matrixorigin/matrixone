@@ -15,6 +15,7 @@
 package materialized
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -375,6 +376,38 @@ func TestSharedMaterializedSourceBoundsTinyBatchMetadataWithSpill(t *testing.T) 
 	bat.Clean(mp)
 }
 
+func TestSharedMaterializedSourceSpillPreservesBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, bat.Vecs[0].SetIsBinaryStringAt(0, true))
+	bat.SetRowCount(2)
+
+	source := newSource(1, 0)
+	budget := newTestSpillBudget(math.MaxUint64, math.MaxUint64, 1)
+	require.NoError(t, source.Begin(mp, budget.config(testSpillFactory(t.TempDir()))))
+	require.NoError(t, source.Append(bat))
+	require.Equal(t, 1, source.spillBatchCount)
+	bat.Clean(mp)
+	source.Finish(nil)
+
+	got, end, err := source.Next(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.False(t, end)
+	require.True(t, got.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, got.Vecs[0].GetIsBinaryStringAt(1))
+	got.Clean(mp)
+	_, end, err = source.Next(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.True(t, end)
+	source.ReleaseReader(0)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestSharedMaterializedSourceSpillBudgetExactBoundaryAndCleanup(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
@@ -594,6 +627,10 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("materialized"), false, mp))
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("spill"), false, mp))
+	require.NoError(t, bat.Vecs[1].SetIsBinaryStringAt(0, true))
+	require.NoError(t, bat.Vecs[1].SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	}, mp))
 	bat.Attrs = []string{"number", "word"}
 	bat.ExtraBuf = []byte("extra")
 	bat.SetRowCount(2)
@@ -601,10 +638,16 @@ func TestSpillBatchSizeMatchesEncoding(t *testing.T) {
 
 	serialized, scratch, err := spillBatchSize(bat)
 	require.NoError(t, err)
-	data, err := bat.MarshalBinary()
+	var encoded bytes.Buffer
+	data, err := bat.MarshalBinaryWithPrepareParamKinds(&encoded, false)
 	require.NoError(t, err)
 	require.Equal(t, uint64(len(data)), serialized)
 	require.GreaterOrEqual(t, scratch, serialized)
+}
+
+func TestAddSpillBatchTailPreservesFirstOverflow(t *testing.T) {
+	_, err := addSpillBatchTail(math.MaxUint64, 1, 0)
+	require.ErrorContains(t, err, "spill batch size overflow")
 }
 
 func TestReadSpilledBatchRejectsRuntimeOversizeBeforeAllocation(t *testing.T) {
