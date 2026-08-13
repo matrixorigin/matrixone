@@ -764,9 +764,11 @@ func (s *Scanner) scanBindVar() (int, string) {
 func (s *Scanner) scanNumber() (int, string) {
 	start := s.Pos
 	token := INTEGRAL
+	canPromoteToIdentifier := true
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 		goto exponent
@@ -783,8 +785,10 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
-					return typ, str
+				if s.cur() != eofChar {
+					if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+						return typ, str
+					}
 				}
 				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
@@ -798,8 +802,10 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
-					return typ, str
+				if s.cur() != eofChar {
+					if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+						return typ, str
+					}
 				}
 				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
@@ -812,6 +818,7 @@ func (s *Scanner) scanNumber() (int, string) {
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 	}
@@ -820,6 +827,7 @@ exponent:
 	if s.cur() == 'e' || s.cur() == 'E' {
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
+			canPromoteToIdentifier = false
 			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
@@ -831,7 +839,7 @@ exponent:
 	}
 
 exit:
-	if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
+	if canPromoteToIdentifier && isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
 		// TODO: optimize
 		token = ID
 		s.scanIdentifier(false)
@@ -841,9 +849,13 @@ exit:
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	start := s.Pos
 	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
-		start := s.Pos
 		s.incN(size)
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
+	if ch := s.cur(); !isUnquotedIdentifierLetterAt(s.buf, s.Pos) && !isDigit(ch) && !(isVariable && isCarat(ch)) {
+		s.inc()
 		return LEX_ERROR, s.buf[start:s.Pos]
 	}
 
@@ -851,7 +863,6 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	if s.cur() == '$' {
 		dollarFlag = true
 	}
-	start := s.Pos
 	s.inc()
 
 	for {

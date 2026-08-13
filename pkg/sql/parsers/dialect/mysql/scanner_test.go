@@ -110,6 +110,7 @@ func TestUnquotedExtendedIdentifier(t *testing.T) {
 		{name: "UTF-8 leading", input: "数量", value: "数量"},
 		{name: "maximum BMP code point", input: "\uFFFF", value: "\uFFFF"},
 		{name: "digit leading", input: "1数量", value: "1数量"},
+		{name: "digit leading with exponent letter", input: "1e数量", value: "1e数量"},
 		{name: "raw latin1 client byte", input: "t_\xe9g", value: "t_\xe9g"},
 		{name: "digit leading raw latin1 client byte", input: "1\xe9A", value: "1\xe9a"},
 		{name: "keyword prefix", input: "selectã", value: "selectã"},
@@ -199,6 +200,44 @@ func TestUnquotedRawByteDirectIdentifierEntries(t *testing.T) {
 			if token != test.wantToken || value != test.wantValue {
 				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
 					test.input, tokenName(token), value, tokenName(test.wantToken), test.wantValue)
+			}
+		})
+	}
+}
+
+func TestUnquotedIdentifierRejectsPunctuationBeforeUnicode(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantToken     int
+		wantValue     string
+		wantNextToken int
+		wantNextValue string
+	}{
+		{name: "decimal point", input: "1.数量", wantToken: FLOAT, wantValue: "1.", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "positive exponent", input: "1e+数量", wantToken: FLOAT, wantValue: "1e+", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "negative exponent", input: "1e-数量", wantToken: FLOAT, wantValue: "1e-", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "hex prefix", input: "0x.数量", wantToken: LEX_ERROR, wantValue: "."},
+		{name: "bit prefix", input: "0b+数量", wantToken: LEX_ERROR, wantValue: "+"},
+		{name: "user variable", input: "@+数量", wantToken: LEX_ERROR},
+		{name: "system variable", input: "@@-数量", wantToken: LEX_ERROR},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != test.wantToken || value != test.wantValue {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(test.wantToken), test.wantValue)
+			}
+			if test.wantNextToken != 0 {
+				token, value = scanner.Scan()
+				if token != test.wantNextToken || value != test.wantNextValue {
+					t.Fatalf("Scan(%q) next = (%s, %q), want (%s, %q)",
+						test.input, tokenName(token), value, tokenName(test.wantNextToken), test.wantNextValue)
+				}
 			}
 		})
 	}

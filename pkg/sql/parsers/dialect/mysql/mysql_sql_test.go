@@ -5090,6 +5090,11 @@ func TestUnquotedExtendedIdentifiers(t *testing.T) {
 			want: "create table 1数量 (a int)",
 		},
 		{
+			name: "digit leading with exponent letter",
+			sql:  "CREATE TABLE 1e数量 (a INT)",
+			want: "create table 1e数量 (a int)",
+		},
+		{
 			name: "digit leading raw latin1 client byte",
 			sql:  "CREATE TABLE 1\xe9A (a INT)",
 			want: "create table 1\xe9a (a int)",
@@ -5138,6 +5143,23 @@ func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
 		"SELECT @😀",
 		"SELECT @@😀",
 		"SELECT _utf8mb4😀",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestUnquotedIdentifiersRejectPunctuationBeforeUnicode(t *testing.T) {
+	for _, sql := range []string{
+		"CREATE TABLE 1.数量 (a INT)",
+		"CREATE TABLE 1e+数量 (a INT)",
+		"CREATE TABLE 1e-数量 (a INT)",
+		"CREATE TABLE 0x.数量 (a INT)",
+		"CREATE TABLE 0b+数量 (a INT)",
+		"SELECT @+数量",
+		"SELECT @@-数量",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := ParseOne(context.Background(), sql, 1)
