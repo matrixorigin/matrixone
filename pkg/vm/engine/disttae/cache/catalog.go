@@ -907,6 +907,11 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 			Value: tblItem.CreateSql,
 		})
 		Createsql = tblItem.CreateSql
+		// Keep the planner-visible materialized-view kind distinct from the
+		// ordinary physical relation kind used by the storage layer.
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(Createsql)), "create materialized view") {
+			TableType = catalog.SystemMaterializedRel
+		}
 
 		props.Properties = append(props.Properties, engine.Property{
 			Key:   catalog.SystemRelAttr_CreateSQL,

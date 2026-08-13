@@ -17,6 +17,8 @@ package plan
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -37,6 +39,11 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	}
 	if err = validateDeleteTargetSubqueries(ctx, stmt, tblInfo.objRef, tblInfo.tableDefs); err != nil {
 		return nil, err
+	}
+	for _, tableDef := range tblInfo.tableDefs {
+		if IsMaterializedViewTableDef(tableDef) && ctx.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+			return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "delete from materialized view")
+		}
 	}
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 

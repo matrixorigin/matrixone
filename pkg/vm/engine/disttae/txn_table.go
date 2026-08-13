@@ -1553,6 +1553,14 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Value: tbl.createSql,
 			})
 			Createsql = tbl.createSql
+			// Materialized views are stored as ordinary physical relations so
+			// that the refresh consumer can use the normal storage DML path.
+			// Restore the logical kind on the planner definition so user DML
+			// can still reject writes to the refresh target after a catalog
+			// reload.
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(Createsql)), "create materialized view") {
+				TableType = catalog.SystemMaterializedRel
+			}
 		}
 
 		if len(properties) > 0 {

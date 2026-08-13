@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -91,6 +92,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 	if err = builder.validateDistinctUpdateForeignKeyMutationTargets(bindCtx, dmlCtx); err != nil {
 		return 0, err
+	}
+	for _, tableDef := range dmlCtx.tableDefs {
+		if IsMaterializedViewTableDef(tableDef) && builder.GetContext().Value(defines.MaterializedViewRefreshKey{}) == nil {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update materialized view")
+		}
 	}
 	targetAliases := make([]string, len(dmlCtx.tableDefs))
 	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
