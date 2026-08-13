@@ -54,7 +54,8 @@ const (
 	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
 	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
-	MORPCLatestVersion       = MORPCVersion18
+	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
+	MORPCLatestVersion       = MORPCVersion19
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
