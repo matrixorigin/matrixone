@@ -56,3 +56,27 @@ func TestBuildCandidateLimit(t *testing.T) {
 		})
 	}
 }
+
+func TestShouldPushFulltextCandidateLimit(t *testing.T) {
+	tests := []struct {
+		name              string
+		fulltextStreams   int
+		residualFilters   int
+		prefilterPushdown bool
+		exactPrefilter    bool
+		want              bool
+	}{
+		{name: "single stream without residual filter", fulltextStreams: 1, want: true},
+		{name: "single stream with exact pushed residual filter", fulltextStreams: 1, residualFilters: 1, prefilterPushdown: true, exactPrefilter: true, want: true},
+		{name: "single stream with approximate pushed residual filter", fulltextStreams: 1, residualFilters: 1, prefilterPushdown: true, want: false},
+		{name: "single stream with unpushed residual filter", fulltextStreams: 1, residualFilters: 1, want: false},
+		{name: "multiple streams without residual filter", fulltextStreams: 2, want: false},
+		{name: "multiple streams with exact pushed residual filter", fulltextStreams: 2, residualFilters: 1, prefilterPushdown: true, exactPrefilter: true, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldPushFulltextCandidateLimit(tc.fulltextStreams, tc.residualFilters, tc.prefilterPushdown, tc.exactPrefilter))
+		})
+	}
+}

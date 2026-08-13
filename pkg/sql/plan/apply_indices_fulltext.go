@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -286,12 +287,27 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 	}
 
-	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
-	// multiple streams, limiting each input before their intersection can drop
-	// documents that belong to the final top page, so leave those inputs
-	// unbounded until a joint top-k implementation exists.
+	// Resolve the residual-WHERE prefilter before deciding whether the internal
+	// fulltext stream may keep only LIMIT+OFFSET candidates. The early LIMIT is
+	// correctness-safe only when that prefilter is exact.
+	pushdownEnabled := len(scanNode.FilterList) > 0
+	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
+		!localProtocolEnablesSortedMembershipFilter(builder.compCtx.GetProcess().GetService()) {
+		pushdownEnabled = false
+	}
+	if pushdownEnabled {
+		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
+			if v, ok := val.(int8); ok && v == 0 {
+				pushdownEnabled = false
+			}
+		}
+	}
+
+	// Multiple fulltext streams remain unbounded: limiting each input before
+	// their intersection can drop documents belonging to the final top page.
 	var limitExpr *plan.Expr
-	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
+	exactPrefilter := docfilter.SupportsBitset(types.T(pkType.Id).ToType())
+	if shouldPushFulltextCandidateLimit(len(ft_filters), len(scanNode.FilterList), pushdownEnabled, exactPrefilter) {
 		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
 	}
 
@@ -452,20 +468,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Determine join structure based on whether scanNode still has non-fulltext filters.
 	// When filters remain, use pre-filter pushdown (nested JOIN + runtime filter)
 	// to reduce the number of doc_ids that fulltext_index_scan must process.
-	pushdownEnabled := len(scanNode.FilterList) > 0
-	if pushdownEnabled && types.T(pkType.Id).IsInteger() &&
-		!localProtocolEnablesSortedMembershipFilter(
-			builder.compCtx.GetProcess().GetService()) {
-		pushdownEnabled = false
-	}
-	if pushdownEnabled {
-		if val, err := builder.compCtx.ResolveVariable("fulltext_bloom_filter_pushdown", true, false); err == nil {
-			if v, ok := val.(int8); ok && v == 0 {
-				pushdownEnabled = false
-			}
-		}
-	}
-
 	var joinnodeID int32
 
 	if pushdownEnabled {

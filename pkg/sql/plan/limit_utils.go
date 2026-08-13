@@ -20,6 +20,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// shouldPushFulltextCandidateLimit reports whether one fulltext stream sees the
+// complete candidate domain for LIMIT+OFFSET. A residual source predicate is
+// safe only when prefilter pushdown applies an exact membership filter inside
+// search. A Bloom false positive can otherwise displace a true top-k row before
+// the final join removes it.
+func shouldPushFulltextCandidateLimit(fulltextStreams, residualFilters int, prefilterPushdown, exactPrefilter bool) bool {
+	return fulltextStreams == 1 && (residualFilters == 0 || prefilterPushdown && exactPrefilter)
+}
+
 // getLiteralUint64 returns a LIMIT/OFFSET value only when it is already a
 // uint64 literal. Optimizer rules must not treat a non-literal expression as
 // zero: prepared parameters and variables are evaluated at execution time.
