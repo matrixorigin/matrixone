@@ -8902,7 +8902,11 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 	return h, nil
 }
 
-const unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+const (
+	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+	timeWindowIntervalMustBePositive  = "time window interval must be greater than zero"
+	timeWindowSlidingMustBePositive   = "time window sliding value must be greater than zero"
+)
 
 func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
 	if astTimeWindow == nil {
@@ -8911,10 +8915,31 @@ func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.Ti
 	if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Interval.Unit); err != nil {
 		return err
 	}
+	if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Interval.Val, timeWindowIntervalMustBePositive); err != nil {
+		return err
+	}
 	if astTimeWindow.Sliding != nil {
 		if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Sliding.Unit); err != nil {
 			return err
 		}
+		if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Sliding.Val, timeWindowSlidingMustBePositive); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalValue(ctx context.Context, expr tree.Expr, message string) error {
+	val, ok := expr.(*tree.NumVal)
+	if !ok {
+		return nil
+	}
+	n, ok := val.Int64()
+	if !ok {
+		return nil
+	}
+	if n <= 0 {
+		return moerr.NewInvalidInput(ctx, message)
 	}
 	return nil
 }

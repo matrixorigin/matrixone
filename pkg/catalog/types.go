@@ -440,6 +440,39 @@ const (
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
 
+	/************ 3c. FULLTEXT v2 (VERSION=2) Index **************/
+
+	// Fulltext v2 (CREATE FULLTEXT INDEX ... VERSION=2, the WAND positional engine)
+	// uses the same chunked storage + metadata layout as bm25 — segments are built
+	// and CDC-maintained, no postings table — as opposed to classic v1's single
+	// (word,doc_id,pos) postings table. The index stays algo="fulltext"; the version
+	// param selects the engine and these hidden tables. Values are <= 11 chars
+	// (IndexAlgoTableType varchar(11) limit), so "ftv2_*" not "fulltext2_*".
+	FullText2Index_TblType_Metadata = "ftv2_meta"
+	FullText2Index_TblType_Storage  = "ftv2_index"
+
+	FullText2Index_TblCol_Storage_Index_Id = "index_id"
+	FullText2Index_TblCol_Storage_Chunk_Id = "chunk_id"
+	FullText2Index_TblCol_Storage_Data     = "data"
+	FullText2Index_TblCol_Storage_Tag      = "tag"
+
+	FullText2Index_TblCol_Metadata_Index_Id  = "index_id"
+	FullText2Index_TblCol_Metadata_Timestamp = "timestamp"
+	FullText2Index_TblCol_Metadata_Checksum  = "checksum"
+	FullText2Index_TblCol_Metadata_Filesize  = "filesize"
+	FullText2Index_TblCol_Metadata_Recency   = "recency"
+	FullText2Index_TblCol_Metadata_Nrow      = "nrow"
+
+	// fulltext2_search TVF RESERVED output-column names. Unlike FullTextIndex_TabCol_Id
+	// ("doc_id", a PHYSICAL classic-index column), these are plan-level output ALIASES of
+	// the fulltext2_search TVF (its storage is segments, not a doc_id column). The covered
+	// fast path emits INCLUDE columns as sibling outputs and the runtime classifies the
+	// output batch BY NAME, so the pk/relevance outputs must use names no user INCLUDE
+	// column can equal — hence the reserved "__mo_ft_" prefix. Referenced by the coldef
+	// builders (tablefunc.go, apply_indices_fulltext2.go) and the classifier (fulltext2_search.go).
+	FullText2Search_OutCol_DocId = "__mo_ft_doc_id"
+	FullText2Search_OutCol_Score = "__mo_ft_score"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

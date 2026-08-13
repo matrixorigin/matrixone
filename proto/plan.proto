@@ -309,6 +309,9 @@ message ColDef {
   // Whether the column is part of a unique key. This is also used by result
   // column metadata to populate the MySQL UNIQUE_KEY_FLAG.
   bool unique = 21;
+  // Physical table name for result-column origin metadata. tbl_name is the
+  // visible table name (and can therefore be an alias).
+  string origin_tbl_name = 22;
 }
 
 message Default {
@@ -1657,6 +1660,7 @@ message AlterTableAlterReIndex {
   string index_name = 3;
   int64 index_algo_param_list = 4;
   bool force_sync = 5;
+  bool merge = 6;
 }
 
 message AlterTableAlterAutoUpdate {
