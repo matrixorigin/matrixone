@@ -320,7 +320,9 @@ func (c *Config) createFileService(
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	metricScope := fmt.Sprintf("%s/%s", serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
+		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,

@@ -172,11 +172,21 @@ func NewMemCache(
 	counterSets []*perfcounter.CounterSet,
 	name string,
 ) *MemCache {
+	return newMemCacheWithMetricScope(capacity, callbacks, counterSets, name, "")
+}
 
-	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
-	logicalInuseBytes := metric.GetFsCacheLogicalBytesGauge(name, "mem")
-	backingOverheadBytes := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
-	allocatorGauges := metric.GetFsCacheAllocatorStatsGauges(name, "mem")
+func newMemCacheWithMetricScope(
+	capacity fscache.CapacityFunc,
+	callbacks *CacheCallbacks,
+	counterSets []*perfcounter.CounterSet,
+	name string,
+	metricScope string,
+) *MemCache {
+
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGaugeWithScope(metricScope, name, "mem")
+	logicalInuseBytes := metric.GetFsCacheLogicalBytesGaugeWithScope(metricScope, name, "mem")
+	backingOverheadBytes := metric.GetFsCacheBackingOverheadBytesGaugeWithScope(metricScope, name, "mem")
+	allocatorGauges := metric.GetFsCacheAllocatorStatsGaugesWithScope(metricScope, name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {

@@ -229,6 +229,36 @@ func TestMemCacheAllocatorMetricsAggregateSameComponent(t *testing.T) {
 	require.GreaterOrEqual(t, testutil.ToFloat64(allocator.Allocated), expected)
 }
 
+func TestMemCacheAllocatorMetricsSeparateServiceScopes(t *testing.T) {
+	ctx := context.Background()
+	name := t.Name()
+	cn := newMemCacheWithMetricScope(fscache.ConstCapacity(2<<20), nil, nil, name, "CN/cn-1")
+	defer cn.Close(ctx)
+	tn := newMemCacheWithMetricScope(fscache.ConstCapacity(4<<20), nil, nil, name, "TN/tn-1")
+	defer tn.Close(ctx)
+
+	for index, cache := range []*MemCache{cn, tn} {
+		vector := &IOVector{
+			FilePath: "shared:/object",
+			Entries: []IOEntry{{
+				Offset:     int64(index) << 20,
+				Size:       700 << 10,
+				CachedData: NewBytes(make([]byte, 700<<10)),
+			}},
+		}
+		require.NoError(t, cache.Update(ctx, vector, false))
+		vector.Release()
+		cache.refreshAllocatorMetrics(true)
+	}
+
+	cnInuse, cnCap := metric.GetFsCacheBytesGaugeWithScope("CN/cn-1", name, "mem")
+	tnInuse, tnCap := metric.GetFsCacheBytesGaugeWithScope("TN/tn-1", name, "mem")
+	require.Equal(t, float64(cn.cache.Used()), testutil.ToFloat64(cnInuse))
+	require.Equal(t, float64(tn.cache.Used()), testutil.ToFloat64(tnInuse))
+	require.Equal(t, float64(2<<20), testutil.ToFloat64(cnCap))
+	require.Equal(t, float64(4<<20), testutil.ToFloat64(tnCap))
+}
+
 func TestMemCacheSeparatesPhysicalAndLogicalBytesMetrics(t *testing.T) {
 	ctx := context.Background()
 	name := t.Name()

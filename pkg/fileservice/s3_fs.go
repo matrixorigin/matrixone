@@ -292,11 +292,12 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if config.MemoryCapacity != nil &&
 		*config.MemoryCapacity > DisableCacheCapacity {
-		s.memCache = NewMemCache(
+		s.memCache = newMemCacheWithMetricScope(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			s.perfCounterSets,
 			s.name,
+			config.MetricScope,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
@@ -313,7 +314,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 		if s.memCache != nil {
 			cacheDataAllocator = s.memCache
 		}
-		s.diskCache, err = NewDiskCache(
+		s.diskCache, err = newDiskCacheWithMetricScope(
 			ctx,
 			*config.DiskPath,
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
@@ -321,6 +322,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			true,
 			cacheDataAllocator,
 			s.name,
+			config.MetricScope,
 		)
 		if err != nil {
 			return err

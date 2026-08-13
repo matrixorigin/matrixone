@@ -62,6 +62,19 @@ func NewDiskCache(
 	cacheDataAllocator CacheDataAllocator,
 	name string,
 ) (ret *DiskCache, err error) {
+	return newDiskCacheWithMetricScope(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, "")
+}
+
+func newDiskCacheWithMetricScope(
+	ctx context.Context,
+	path string,
+	capacity fscache.CapacityFunc,
+	perfCounterSets []*perfcounter.CounterSet,
+	asyncLoad bool,
+	cacheDataAllocator CacheDataAllocator,
+	name string,
+	metricScope string,
+) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
 	if err != nil {
@@ -74,7 +87,7 @@ func NewDiskCache(
 
 	seed := maphash.MakeSeed()
 
-	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "disk")
+	inuseBytes, capacityBytes := metric.GetFsCacheBytesGaugeWithScope(metricScope, name, "disk")
 	capacityBytes.Set(float64(capacity()))
 
 	capacityFunc := func() int64 {

@@ -288,11 +288,12 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory
 	if config.MemoryCapacity != nil &&
 		*config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
-		l.memCache = NewMemCache(
+		l.memCache = newMemCacheWithMetricScope(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			l.perfCounterSets,
 			l.name,
+			config.MetricScope,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -310,7 +311,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 		if l.memCache != nil {
 			cacheDataAllocator = l.memCache
 		}
-		l.diskCache, err = NewDiskCache(
+		l.diskCache, err = newDiskCacheWithMetricScope(
 			ctx,
 			*config.DiskPath,
 			fscache.ConstCapacity(int64(*config.DiskCapacity)),
@@ -318,6 +319,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			true,
 			cacheDataAllocator,
 			l.name,
+			config.MetricScope,
 		)
 		if err != nil {
 			return err

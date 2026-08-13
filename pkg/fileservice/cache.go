@@ -51,6 +51,10 @@ type CacheConfig struct {
 	InitKeyRouter    *sync.Once                    `json:"-"`
 	CacheCallbacks   `json:"-"`
 
+	// MetricScope is assigned by the service launcher. It keeps cache metrics
+	// distinct when one mo-service process hosts multiple CN, TN, or LOG nodes.
+	MetricScope string `toml:"-" json:"-"`
+
 	enableDiskCacheForLocalFS bool // for testing only
 }
 

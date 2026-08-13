@@ -163,14 +163,14 @@ var (
 			Subsystem: "fs",
 			Name:      "cache_bytes",
 			Help:      "Total bytes of fs cache.",
-		}, []string{"component", "type"})
+		}, []string{"service", "component", "type"})
 	fsCacheAllocatorArenas = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "mo",
 			Subsystem: "fs_cache",
 			Name:      "allocator_arenas",
 			Help:      "Number of jemalloc arenas contributing to an fs cache component.",
-		}, []string{"component"})
+		}, []string{"service", "component"})
 )
 
 var (
@@ -206,21 +206,40 @@ var (
 // GetFsCacheBytesGauge returns physical in-use and capacity gauges.
 // {typ} should be [mem, disk, meta].
 func GetFsCacheBytesGauge(name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
-	return getFsCacheBytesGauge(name, typ, "inuse"),
-		getFsCacheBytesGauge(name, typ, "cap")
+	return GetFsCacheBytesGaugeWithScope("", name, typ)
+}
+
+// GetFsCacheBytesGaugeWithScope returns physical in-use and capacity gauges
+// for one service. scope is empty for callers that do not have a service
+// identity, such as standalone tools and unit tests.
+func GetFsCacheBytesGaugeWithScope(scope, name, typ string) (inuse prometheus.Gauge, capacity prometheus.Gauge) {
+	return getFsCacheBytesGauge(scope, name, typ, "inuse"),
+		getFsCacheBytesGauge(scope, name, typ, "cap")
 }
 
 // GetFsCacheLogicalBytesGauge returns the logical payload gauge for a cache.
 // Physical cache capacity and admission are exposed through GetFsCacheBytesGauge.
 func GetFsCacheLogicalBytesGauge(name, typ string) prometheus.Gauge {
-	return getFsCacheBytesGauge(name, typ, "logical")
+	return GetFsCacheLogicalBytesGaugeWithScope("", name, typ)
+}
+
+// GetFsCacheLogicalBytesGaugeWithScope returns the logical payload gauge for
+// one service cache.
+func GetFsCacheLogicalBytesGaugeWithScope(scope, name, typ string) prometheus.Gauge {
+	return getFsCacheBytesGauge(scope, name, typ, "logical")
 }
 
 // GetFsCacheBackingOverheadBytesGauge returns capacity retained by the cache
 // but not used by its logical payload. It includes allocator size-class
 // rounding and any caller-supplied slice capacity beyond the payload length.
 func GetFsCacheBackingOverheadBytesGauge(name, typ string) prometheus.Gauge {
-	return getFsCacheBytesGauge(name, typ, "backing-overhead")
+	return GetFsCacheBackingOverheadBytesGaugeWithScope("", name, typ)
+}
+
+// GetFsCacheBackingOverheadBytesGaugeWithScope returns the bytes retained by
+// one service cache beyond its logical payload.
+func GetFsCacheBackingOverheadBytesGaugeWithScope(scope, name, typ string) prometheus.Gauge {
+	return getFsCacheBytesGauge(scope, name, typ, "backing-overhead")
 }
 
 // FsCacheAllocatorStatsGauges expose allocator state for one cache component.
@@ -243,23 +262,29 @@ type FsCacheAllocatorStatsGauges struct {
 // GetFsCacheAllocatorStatsGauges returns allocator gauges for a cache. The
 // values describe only the cache's dedicated allocator arena.
 func GetFsCacheAllocatorStatsGauges(name, typ string) FsCacheAllocatorStatsGauges {
+	return GetFsCacheAllocatorStatsGaugesWithScope("", name, typ)
+}
+
+// GetFsCacheAllocatorStatsGaugesWithScope returns allocator gauges for one
+// cache in one service.
+func GetFsCacheAllocatorStatsGaugesWithScope(scope, name, typ string) FsCacheAllocatorStatsGauges {
 	component := fsCacheComponent(name, typ)
 	return FsCacheAllocatorStatsGauges{
-		Arenas:        fsCacheAllocatorArenas.WithLabelValues(component),
-		Allocated:     getFsCacheBytesGauge(name, typ, "allocator-allocated"),
-		Active:        getFsCacheBytesGauge(name, typ, "allocator-active"),
-		Fragmentation: getFsCacheBytesGauge(name, typ, "allocator-fragmentation"),
-		Metadata:      getFsCacheBytesGauge(name, typ, "allocator-metadata"),
-		Resident:      getFsCacheBytesGauge(name, typ, "allocator-resident"),
-		Mapped:        getFsCacheBytesGauge(name, typ, "allocator-mapped"),
-		Retained:      getFsCacheBytesGauge(name, typ, "allocator-retained"),
-		Dirty:         getFsCacheBytesGauge(name, typ, "allocator-dirty"),
-		Muzzy:         getFsCacheBytesGauge(name, typ, "allocator-muzzy"),
+		Arenas:        fsCacheAllocatorArenas.WithLabelValues(scope, component),
+		Allocated:     getFsCacheBytesGauge(scope, name, typ, "allocator-allocated"),
+		Active:        getFsCacheBytesGauge(scope, name, typ, "allocator-active"),
+		Fragmentation: getFsCacheBytesGauge(scope, name, typ, "allocator-fragmentation"),
+		Metadata:      getFsCacheBytesGauge(scope, name, typ, "allocator-metadata"),
+		Resident:      getFsCacheBytesGauge(scope, name, typ, "allocator-resident"),
+		Mapped:        getFsCacheBytesGauge(scope, name, typ, "allocator-mapped"),
+		Retained:      getFsCacheBytesGauge(scope, name, typ, "allocator-retained"),
+		Dirty:         getFsCacheBytesGauge(scope, name, typ, "allocator-dirty"),
+		Muzzy:         getFsCacheBytesGauge(scope, name, typ, "allocator-muzzy"),
 	}
 }
 
-func getFsCacheBytesGauge(name, typ, metricType string) prometheus.Gauge {
-	return fsCacheBytes.WithLabelValues(fsCacheComponent(name, typ), metricType)
+func getFsCacheBytesGauge(scope, name, typ, metricType string) prometheus.Gauge {
+	return fsCacheBytes.WithLabelValues(scope, fsCacheComponent(name, typ), metricType)
 }
 
 func fsCacheComponent(name, typ string) string {
