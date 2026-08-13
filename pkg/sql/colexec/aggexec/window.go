@@ -776,9 +776,10 @@ type valueWindowExec struct {
 
 // valueEntry stores a single value from the window frame
 type valueEntry struct {
-	isNull bool
-	data   []byte
-	kind   vector.PrepareParamKind
+	isNull       bool
+	binaryString bool
+	data         []byte
+	kind         vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -813,6 +814,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	if !entry.isNull {
 		entry.kind = vec.GetPrepareParamKindAt(row)
+		entry.binaryString = vec.GetBinaryStringMetadataAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -897,10 +899,10 @@ func (exec *valueWindowExec) Free() {
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
 	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
-	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	// valueEntry{two bools, data []byte, kind byte} occupies 40 bytes after alignment.
 	const sliceHeaderSize = 24
 	const ptrSize = 8
-	const entrySize = 32
+	const entrySize = 40
 	const intSize = 8
 
 	size += int64(cap(exec.frameValues)) * sliceHeaderSize
@@ -959,11 +961,7 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				row := result.Length()
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1016,11 +1014,7 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				row := result.Length()
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1055,11 +1049,7 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 				return nil, err
 			}
 		} else {
-			row := result.Length()
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-				return nil, err
-			}
-			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1093,11 +1083,7 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 				return nil, err
 			}
 		} else {
-			row := result.Length()
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-				return nil, err
-			}
-			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1111,6 +1097,17 @@ func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 	// For now, we default to n=1 (same as FIRST_VALUE)
 	// TODO: properly handle the n parameter from the function arguments
 	return exec.flushFirstValue()
+}
+
+func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valueEntry) error {
+	row := result.Length()
+	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+		return err
+	}
+	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+		return err
+	}
+	return result.SetIsBinaryStringAt(row, entry.binaryString, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

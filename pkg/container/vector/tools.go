@@ -248,6 +248,11 @@ func extendWithBitmaps(
 			return err
 		}
 	}
+	if v.binaryStringRowsActive {
+		if err := v.ensureBinaryStringCapacity(tgtLen, m); err != nil {
+			return err
+		}
+	}
 	v.data = v.data[:cap(v.data)]
 	return nil
 }
