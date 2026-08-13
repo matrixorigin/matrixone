@@ -84,6 +84,42 @@ payload  ¦  CREATE TABLE `payload` (
 select * from clone_existence_snapshot_dst.payload;
 ➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
 1  ¦  source row
+drop account if exists clone_existence_tenant;
+create account clone_existence_tenant admin_name "root" identified by "111";
+create database clone_existence_account_collision;
+create table clone_existence_account_collision.tenant_sentinel(v int);
+insert into clone_existence_account_collision.tenant_sentinel values (7);
+create database clone_existence_tenant_only_source;
+create snapshot clone_existence_cross_account_snapshot for database clone_existence_tenant_only_source;
+create database clone_existence_account_collision_source;
+create table clone_existence_account_collision_source.payload(id int primary key);
+insert into clone_existence_account_collision_source.payload values (2);
+create database if not exists clone_existence_account_collision clone clone_existence_account_collision_source;
+select * from clone_existence_account_collision.payload;
+➤ id[4,32,0]  𝄀
+2
+create database clone_existence_tenant_only_destination clone clone_existence_tenant_only_source;
+Unknown database clone_existence_tenant_only_source
+select count(*) from mo_catalog.mo_database
+where datname = 'clone_existence_tenant_only_destination' and account_id = 0;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop account if exists clone_existence_target;
+create account clone_existence_target admin_name "root" identified by "111";
+create database clone_existence_target_probe;
+create table clone_existence_target_probe.sentinel(v int);
+insert into clone_existence_target_probe.sentinel values (8);
+create database if not exists clone_existence_target_probe clone clone_existence_tenant_only_source {snapshot = 'clone_existence_cross_account_snapshot'} to account clone_existence_target;
+internal error: only sys can clone table to another account
+select * from clone_existence_target_probe.sentinel;
+➤ v[4,32,0]  𝄀
+8
+drop snapshot clone_existence_cross_account_snapshot;
+drop database clone_existence_account_collision;
+drop database clone_existence_account_collision_source;
+drop database if exists clone_existence_tenant_only_destination;
+drop account clone_existence_target;
+drop account clone_existence_tenant;
 drop snapshot clone_existence_snapshot;
 drop database clone_existence_snapshot_dst;
 drop database clone_existence_table_dst;

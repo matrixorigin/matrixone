@@ -45,11 +45,16 @@ func checkDatabaseExistsAtSnapshot(
 			newCtx = defines.AttachAccountId(newCtx, snapshot.Tenant.TenantID)
 		}
 	}
+	accountID, err := defines.GetAccountId(newCtx)
+	if err != nil {
+		return false, err
+	}
 
 	sql := fmt.Sprintf(
-		"SELECT 1 FROM mo_catalog.mo_database%s WHERE datname = %s LIMIT 1",
+		"SELECT 1 FROM mo_catalog.mo_database%s WHERE datname = %s AND account_id = %d LIMIT 1",
 		snapshotSpec,
 		quoteSQLStringLiteral(dbName),
+		accountID,
 	)
 	bh.ClearExecResultSet()
 	if err := bh.Exec(newCtx, sql); err != nil {

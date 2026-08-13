@@ -69,6 +69,51 @@ create database clone_existence_snapshot_dst clone clone_existence_src {snapshot
 show create table clone_existence_snapshot_dst.payload;
 select * from clone_existence_snapshot_dst.payload;
 
+-- A database owned only by another tenant must not suppress a sys-account
+-- clone target with the same name.
+drop account if exists clone_existence_tenant;
+create account clone_existence_tenant admin_name "root" identified by "111";
+-- @session:id=7&user=clone_existence_tenant:root&password=111
+create database clone_existence_account_collision;
+create table clone_existence_account_collision.tenant_sentinel(v int);
+insert into clone_existence_account_collision.tenant_sentinel values (7);
+create database clone_existence_tenant_only_source;
+create snapshot clone_existence_cross_account_snapshot for database clone_existence_tenant_only_source;
+-- @session
+
+create database clone_existence_account_collision_source;
+create table clone_existence_account_collision_source.payload(id int primary key);
+insert into clone_existence_account_collision_source.payload values (2);
+create database if not exists clone_existence_account_collision clone clone_existence_account_collision_source;
+select * from clone_existence_account_collision.payload;
+
+-- A source visible only in another tenant must remain missing to sys and must
+-- not leave an empty destination behind.
+create database clone_existence_tenant_only_destination clone clone_existence_tenant_only_source;
+select count(*) from mo_catalog.mo_database
+where datname = 'clone_existence_tenant_only_destination' and account_id = 0;
+
+-- Target authorization is checked before IF NOT EXISTS can make this a no-op.
+drop account if exists clone_existence_target;
+create account clone_existence_target admin_name "root" identified by "111";
+-- @session:id=8&user=clone_existence_target:root&password=111
+create database clone_existence_target_probe;
+create table clone_existence_target_probe.sentinel(v int);
+insert into clone_existence_target_probe.sentinel values (8);
+-- @session:id=7&user=clone_existence_tenant:root&password=111
+create database if not exists clone_existence_target_probe clone clone_existence_tenant_only_source {snapshot = 'clone_existence_cross_account_snapshot'} to account clone_existence_target;
+-- @session:id=8&user=clone_existence_target:root&password=111
+select * from clone_existence_target_probe.sentinel;
+-- @session:id=7&user=clone_existence_tenant:root&password=111
+drop snapshot clone_existence_cross_account_snapshot;
+-- @session
+
+drop database clone_existence_account_collision;
+drop database clone_existence_account_collision_source;
+drop database if exists clone_existence_tenant_only_destination;
+drop account clone_existence_target;
+drop account clone_existence_tenant;
+
 drop snapshot clone_existence_snapshot;
 drop database clone_existence_snapshot_dst;
 drop database clone_existence_table_dst;

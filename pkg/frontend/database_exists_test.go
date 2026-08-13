@@ -43,7 +43,7 @@ func TestCheckDatabaseExistsAtSnapshot(t *testing.T) {
 	bh.EXPECT().ClearExecResultSet()
 	bh.EXPECT().Exec(
 		gomock.Any(),
-		"SELECT 1 FROM mo_catalog.mo_database {MO_TS = 42} WHERE datname = 'db''name' LIMIT 1",
+		"SELECT 1 FROM mo_catalog.mo_database {MO_TS = 42} WHERE datname = 'db''name' AND account_id = 7 LIMIT 1",
 	).DoAndReturn(func(gotCtx context.Context, _ string) error {
 		accountID, err := defines.GetAccountId(gotCtx)
 		require.NoError(t, err)
@@ -58,7 +58,7 @@ func TestCheckDatabaseExistsAtSnapshot(t *testing.T) {
 }
 
 func TestCheckDatabaseExistsAtSnapshotPropagatesErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), 1)
 
 	t.Run("catalog query fails", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -67,7 +67,7 @@ func TestCheckDatabaseExistsAtSnapshotPropagatesErrors(t *testing.T) {
 		bh.EXPECT().ClearExecResultSet()
 		bh.EXPECT().Exec(
 			gomock.Any(),
-			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' LIMIT 1",
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' AND account_id = 1 LIMIT 1",
 		).Return(wantErr)
 
 		exists, err := checkDatabaseExistsAtSnapshot(ctx, bh, nil, "source")
@@ -81,7 +81,7 @@ func TestCheckDatabaseExistsAtSnapshotPropagatesErrors(t *testing.T) {
 		bh.EXPECT().ClearExecResultSet()
 		bh.EXPECT().Exec(
 			gomock.Any(),
-			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' LIMIT 1",
+			"SELECT 1 FROM mo_catalog.mo_database WHERE datname = 'source' AND account_id = 1 LIMIT 1",
 		).Return(nil)
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{"not an ExecResult"})
 
@@ -89,4 +89,13 @@ func TestCheckDatabaseExistsAtSnapshotPropagatesErrors(t *testing.T) {
 		require.False(t, exists)
 		require.Error(t, err)
 	})
+}
+
+func TestCheckDatabaseExistsAtSnapshotRequiresAccountContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+
+	exists, err := checkDatabaseExistsAtSnapshot(context.Background(), bh, nil, "source")
+	require.False(t, exists)
+	require.Error(t, err)
 }

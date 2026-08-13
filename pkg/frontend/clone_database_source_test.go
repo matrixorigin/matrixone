@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
@@ -34,6 +35,57 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	}
 
 	require.Equal(t, int64(2), source.branchTableCount())
+}
+
+func TestValidateCloneDatabaseAccounts(t *testing.T) {
+	tests := []struct {
+		name     string
+		accounts cloneDatabaseAccountResolution
+		wantErr  string
+	}{
+		{
+			name: "same tenant",
+			accounts: cloneDatabaseAccountResolution{
+				opAccountId: 1,
+				toAccountId: 1,
+			},
+		},
+		{
+			name: "cross tenant without snapshot",
+			accounts: cloneDatabaseAccountResolution{
+				opAccountId: sysAccountID,
+				toAccountId: 1,
+			},
+			wantErr: "clone database between different accounts need a snapshot",
+		},
+		{
+			name: "non sys cross tenant with snapshot",
+			accounts: cloneDatabaseAccountResolution{
+				opAccountId: 1,
+				toAccountId: 2,
+				snapshot:    &plan.Snapshot{},
+			},
+			wantErr: "only sys can clone table to another account",
+		},
+		{
+			name: "sys cross tenant with snapshot",
+			accounts: cloneDatabaseAccountResolution{
+				opAccountId: sysAccountID,
+				toAccountId: 1,
+				snapshot:    &plan.Snapshot{},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateCloneDatabaseAccounts(context.Background(), test.accounts)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestLockDataBranchCloneDatabaseSourcesSkipsSourcesWithoutTables(t *testing.T) {
@@ -104,5 +156,22 @@ func TestDataBranchCloneLockProcessUsesOwningBackgroundTxn(t *testing.T) {
 	lockProc := newDataBranchCloneLockProcess(context.Background(), ses, bh)
 	defer lockProc.Free()
 	require.Same(t, branchTxn, lockProc.GetTxnOperator())
+	require.Same(t, outerTxn, ses.proc.GetTxnOperator())
+}
+
+func TestCloneDatabaseTargetLockProcessUsesOwningBackgroundTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	cloneTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	ses := newFeatureLimitTestSession(t)
+	ses.proc.Base.TxnOperator = outerTxn
+	bh := ses.InitBackExec(cloneTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+		forcePessimisticRC: true,
+	})
+
+	lockProc, err := newCloneDatabaseTargetLockProcess(context.Background(), ses, bh)
+	require.NoError(t, err)
+	defer lockProc.Free()
+	require.Same(t, cloneTxn, lockProc.GetTxnOperator())
 	require.Same(t, outerTxn, ses.proc.GetTxnOperator())
 }
