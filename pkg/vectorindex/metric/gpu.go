@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -213,6 +214,25 @@ func gpuPairwiseLaunch[C cuvs.VectorType](
 	elemSize int,
 ) (PairwiseJobHandle, error) {
 	nX, nY := len(x), len(y)
+
+	// Every row must be exactly `dim` long. The flatten below copies each row into a
+	// dim-sized slot of a NoClear buffer, so a SHORT row leaves the tail of its slot
+	// holding whatever was in that memory and a LONG row is silently truncated -- either
+	// way cuVS returns a plausible but wrong distance with no error at all, and the
+	// leftover bytes make it nondeterministic. The CPU kernel rejects the same input, and
+	// CPU and GPU must not disagree, so reject it here with the CPU kernel's error rather
+	// than measuring against uninitialized memory.
+	for _, v := range x {
+		if len(v) != dim {
+			return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+		}
+	}
+	for _, v := range y {
+		if len(v) != dim {
+			return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+		}
+	}
+
 	allocator := malloc.NewCAllocator()
 
 	// 1. Flatten Y
