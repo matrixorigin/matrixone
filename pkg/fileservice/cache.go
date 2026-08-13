@@ -188,9 +188,14 @@ var (
 	GlobalMemoryCacheSizeHint atomic.Int64
 	GlobalDiskCacheSizeHint   atomic.Int64
 
-	allMemoryCaches sync.Map // *MemCache -> name
+	allMemoryCaches sync.Map // *MemCache -> memoryCacheRegistration
 	allDiskCaches   sync.Map // *DiskCache -> name
 )
+
+type memoryCacheRegistration struct {
+	name      string
+	metricKey memoryCacheMetricKey
+}
 
 func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 	ret := make(map[string]int64)
@@ -198,7 +203,7 @@ func EvictMemoryCaches(ctx context.Context) map[string]int64 {
 
 	allMemoryCaches.Range(func(k, v any) bool {
 		cache := k.(*MemCache)
-		name := v.(string)
+		name := v.(memoryCacheRegistration).name
 		cache.Evict(ctx, ch)
 		target := <-ch
 		ret[name] = target
@@ -225,7 +230,7 @@ func EvictMemoryCachesToCapacityPercent(ctx context.Context, percent int64) map[
 
 	allMemoryCaches.Range(func(k, v any) bool {
 		cache := k.(*MemCache)
-		name := v.(string)
+		name := v.(memoryCacheRegistration).name
 		capacity := cache.cache.Capacity()
 		target := capacity * percent / 100
 		beforeUsed := cache.cache.Used()

@@ -41,10 +41,15 @@ type MemCache struct {
 	allocator           *bytesAllocator
 	jemalloc            *malloc.JemallocAllocator
 	allocatorGauges     metric.FsCacheAllocatorStatsGauges
-	metricName          string
+	metricKey           memoryCacheMetricKey
 	lastStatsUpdate     atomic.Int64
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
+}
+
+type memoryCacheMetricKey struct {
+	scope string
+	name  string
 }
 
 var memCacheCallbackSeed = maphash.MakeSeed()
@@ -205,7 +210,7 @@ func newMemCacheWithMetricScope(
 		allocator:       cacheAllocator,
 		jemalloc:        jemallocAllocator,
 		allocatorGauges: allocatorGauges,
-		metricName:      name,
+		metricKey:       memoryCacheMetricKey{scope: metricScope, name: name},
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -309,7 +314,10 @@ func newMemCacheWithMetricScope(
 	ret.refreshAllocatorMetrics(true)
 
 	if name != "" {
-		allMemoryCaches.Store(ret, name)
+		allMemoryCaches.Store(ret, memoryCacheRegistration{
+			name:      name,
+			metricKey: ret.metricKey,
+		})
 		ret.refreshAllocatorMetrics(true)
 	}
 
@@ -389,14 +397,14 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 // publishing only the last arena would make allocator fragmentation appear
 // smaller than the logical cache it is meant to explain.
 func (m *MemCache) allocatorStats() (malloc.JemallocStats, error) {
-	if m.metricName == "" {
+	if m.metricKey.name == "" {
 		return m.jemalloc.Stats()
 	}
 
 	var total malloc.JemallocStats
 	var statsErr error
 	allMemoryCaches.Range(func(key, value any) bool {
-		if value.(string) != m.metricName {
+		if value.(memoryCacheRegistration).metricKey != m.metricKey {
 			return true
 		}
 		stats, err := key.(*MemCache).jemalloc.Stats()
@@ -421,12 +429,12 @@ func (m *MemCache) allocatorStats() (malloc.JemallocStats, error) {
 }
 
 func (m *MemCache) allocatorArenaCount() int {
-	if m.metricName == "" {
+	if m.metricKey.name == "" {
 		return 1
 	}
 	count := 0
 	allMemoryCaches.Range(func(_, value any) bool {
-		if value.(string) == m.metricName {
+		if value.(memoryCacheRegistration).metricKey == m.metricKey {
 			count++
 		}
 		return true
