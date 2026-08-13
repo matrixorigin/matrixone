@@ -697,6 +697,46 @@ func TestCheckCloneDatabaseTargetSerializesConcurrentIfNotExistsDecisions(t *tes
 	require.True(t, second.exists)
 }
 
+func TestCheckCloneDatabaseTargetReturnsLockErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "unretryable", err: errors.New("target lock failed")},
+		{name: "retryable without owning background transaction", err: moerr.NewTxnNeedRetryNoCtx()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stub := gostub.Stub(&lockCloneDatabaseTarget, func(context.Context, *Session, BackgroundExec, uint32, string) error {
+				return test.err
+			})
+			t.Cleanup(stub.Reset)
+
+			exists, err := checkCloneDatabaseTarget(
+				context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl), 7, "destination",
+			)
+			require.False(t, exists)
+			require.ErrorIs(t, err, test.err)
+		})
+	}
+}
+
+func TestNewCloneDatabaseTargetLockProcessRequiresBackgroundExecutor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_, err := newCloneDatabaseTargetLockProcess(
+		context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl),
+	)
+	require.EqualError(t, err, "internal error: database clone target lock requires a background executor")
+}
+
+func TestLockCloneDatabaseTargetRequiresBackgroundExecutor(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	err := lockCloneDatabaseTarget(
+		context.Background(), nil, mock_frontend.NewMockBackgroundExec(ctrl), 7, "destination",
+	)
+	require.EqualError(t, err, "internal error: database clone target lock requires a background executor")
+}
+
 func TestIsCloneDatabaseTargetLockRetry(t *testing.T) {
 	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryNoCtx()))
 	require.True(t, isCloneDatabaseTargetLockRetry(moerr.NewTxnNeedRetryWithDefChangedNoCtx()))
