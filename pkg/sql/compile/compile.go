@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -174,6 +175,12 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
+			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
+		}
+		c.siriusRead = nil
+	}
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
@@ -210,6 +217,12 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil {
+			return err
+		}
+		c.siriusRead = nil
+	}
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -783,18 +796,45 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillDisk(size)
+			reservation, err := budget.ReserveSpillDisk(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return &materializedSpillDiskReservation{
+				GrowingReservation: reservation,
+				ctx:                proc.Ctx,
+			}, nil
 		},
 		ReserveFD: func(size uint64) (materialized.Reservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillFD(size)
+			reservation, err := budget.ReserveSpillFD(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return reservation, nil
 		},
 	}
+}
+
+// materializedSpillDiskReservation converts a terminal capacity rejection on
+// every growth attempt before the materialized source publishes it to readers.
+// The source cannot recover from a rejected spill write, so the raw admission
+// error must not escape through either the producer or a dependent consumer.
+type materializedSpillDiskReservation struct {
+	materialized.GrowingReservation
+	ctx context.Context
+}
+
+func (r *materializedSpillDiskReservation) Grow(size uint64) error {
+	if err := r.GrowingReservation.Grow(size); err != nil {
+		return hashbuild.TerminalBudgetError(r.ctx, err)
+	}
+	return nil
 }
 
 // run once
@@ -3584,6 +3624,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		op.CanOpt = canOpt
 		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: node}
