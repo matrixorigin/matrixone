@@ -1248,16 +1248,13 @@ func TestFindAsofPredecessor(t *testing.T) {
 	right.Vecs[1].CleanOnlyData()
 	require.NoError(t, vector.AppendFixedList(right.Vecs[1], []types.Timestamp{9, 9}, nil, proc.Mp()))
 	right.SetRowCount(2)
-	arg.ctr.asofIndexes = nil
 	best, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, int32(0), best)
-	indexesBefore := len(arg.ctr.asofIndexes)
 	_, found, err = arg.ctr.findAsofPredecessor(arg, proc, 0, 0, []int32{0, 1})
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, indexesBefore, len(arg.ctr.asofIndexes))
 
 	arg.ctr.leftBat = nil
 	arg.ctr.rightBats = nil

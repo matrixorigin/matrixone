@@ -444,7 +444,6 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 		return
 	}
 	ctr.rightBats = ctr.mp.GetBatches()
-	ctr.cleanAsofIndexes(proc)
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
 	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
@@ -506,7 +505,6 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 					if res == spillutil.BucketReady {
 						ctr.mp = jm
 						ctr.rightBats = jm.GetBatches()
-						ctr.cleanAsofIndexes(proc)
 						ctr.rightRowCnt = jm.GetRowCount()
 						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
@@ -865,7 +863,7 @@ func (ctr *container) findAsofPredecessor(
 	hashJoin *HashJoin,
 	proc *process.Process,
 	leftRow int64,
-	groupKey uint64,
+	_ uint64,
 	candidates []int32,
 ) (best int32, found bool, err error) {
 	if len(candidates) == 0 {
@@ -890,56 +888,35 @@ func (ctr *container) findAsofPredecessor(
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		return candidate, qualified, evalErr
 	}
-	if ctr.asofIndexes == nil {
-		ctr.asofIndexes = make(map[uint64][]int32)
+	// The ordered row numbers are temporary, off-heap and fully accounted.
+	// Do not retain Go-heap maps or slice headers per equality group.
+	ordered, err := mpool.MakeSliceAccounted[int32](
+		len(candidates), proc.Mp(), hashJoin.allocationAccount,
+		hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
+	)
+	if err != nil {
+		return -1, false, err
 	}
-	ordered, ok := ctr.asofIndexes[groupKey]
-	if !ok {
-		// Each probe scope owns at most one ordered copy per equality group.
-		// The row-index backing storage is charged to the build allocation
-		// account, so this bounded per-scope cache participates in spill and
-		// memory-limit decisions and is released when the scope is reset.
-		ordered, err = mpool.MakeSliceAccounted[int32](
-			len(candidates), proc.Mp(), hashJoin.allocationAccount,
-			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
-		)
-		if err != nil {
-			return -1, false, err
+	defer mpool.FreeSlice(proc.Mp(), ordered)
+	copy(ordered, candidates)
+	// Equal timestamps are arbitrary by the ASOF contract; choosing the
+	// lowest materialized row ordinal makes the result repeatable for one
+	// materialized build map without promising producer-arrival ordering.
+	sort.Slice(ordered, func(i, j int) bool {
+		left := ordered[i]
+		right := ordered[j]
+		lb, lr := int64(left/colexec.DefaultBatchSize), int64(left%colexec.DefaultBatchSize)
+		rb, rr := int64(right/colexec.DefaultBatchSize), int64(right%colexec.DefaultBatchSize)
+		lv := ctr.rightBats[lb].Vecs[hashJoin.AsofRightCol]
+		rv := ctr.rightBats[rb].Vecs[hashJoin.AsofRightCol]
+		ctr.asofCompare.Set(0, lv)
+		ctr.asofCompare.Set(1, rv)
+		cmp := ctr.asofCompare.Compare(0, 1, lr, rr)
+		if cmp != 0 {
+			return cmp < 0
 		}
-		copy(ordered, candidates)
-		// Charge the Go-heap map entry and slice-header bookkeeping. The
-		// backing []int32 is accounted separately above; this fixed charge
-		// bounds container overhead for every retained multi-row group.
-		charge, chargeErr := proc.Mp().AllocAccounted(
-			64, hashJoin.allocationAccount,
-			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
-		)
-		if chargeErr != nil {
-			mpool.FreeSlice(proc.Mp(), ordered)
-			return -1, false, chargeErr
-		}
-		// Equal timestamps are arbitrary by the ASOF contract; choosing the
-		// lowest materialized row ordinal makes the result repeatable for one
-		// materialized build map without promising producer-arrival ordering.
-		sort.Slice(ordered, func(i, j int) bool {
-			left := ordered[i]
-			right := ordered[j]
-			lb, lr := int64(left/colexec.DefaultBatchSize), int64(left%colexec.DefaultBatchSize)
-			rb, rr := int64(right/colexec.DefaultBatchSize), int64(right%colexec.DefaultBatchSize)
-			lv := ctr.rightBats[lb].Vecs[hashJoin.AsofRightCol]
-			rv := ctr.rightBats[rb].Vecs[hashJoin.AsofRightCol]
-			ctr.asofCompare.Set(0, lv)
-			ctr.asofCompare.Set(1, rv)
-			cmp := ctr.asofCompare.Compare(0, 1, lr, rr)
-			if cmp != 0 {
-				return cmp < 0
-			}
-			return left > right
-		})
-		ctr.asofIndexes[groupKey] = ordered
-		ctr.asofIndexValues = append(ctr.asofIndexValues, ordered)
-		ctr.asofIndexCharges = append(ctr.asofIndexCharges, charge)
-	}
+		return left > right
+	})
 
 	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
 	if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
