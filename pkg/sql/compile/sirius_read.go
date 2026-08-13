@@ -30,8 +30,11 @@ import (
 // SiriusReadPlan is an admitted Substrait plan plus the leases its eventual
 // execution owner must release on every terminal path.
 type SiriusReadPlan struct {
-	Plan     []byte
-	ReadRefs [][]byte
+	Plan           []byte
+	ReadRefs       [][]byte
+	OutputTypes    []planpb.Type
+	Headings       []string
+	LeaseExpiresAt time.Time
 }
 
 func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseManager) error {
@@ -49,12 +52,17 @@ func (p *SiriusReadPlan) Release(ctx context.Context, leases *substrait.LeaseMan
 
 // CompileSiriusRead runs at the logical-plan cutpoint, before compileScope.
 // Export validates the whole tree before this function opens any relation.
-// PR #3 will call this opt-in API, pass the selected sidecar client's TLS SPKI
-// hash, and transfer lease ownership to execution. The execution owner must
+// The opt-in compile path passes the selected sidecar client's TLS SPKI hash
+// and transfers lease ownership to execution. The execution owner must
 // cancel and join the sidecar request before calling SiriusReadPlan.Release.
+// If an operational error occurs after admission, the returned plan is
+// non-nil and transfers those leases to the caller for terminal cleanup.
 func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan, accountID uint64, queryID, authorizedClientSPKIHash []byte, dataDir string, ttl time.Duration, leases *substrait.LeaseManager) (*SiriusReadPlan, error) {
-	if c == nil || queryPlan == nil || queryPlan.GetQuery() == nil {
+	if c == nil || queryPlan == nil {
 		return nil, moerr.NewInternalError(ctx, "substrait: compile has no query plan")
+	}
+	if queryPlan.GetQuery() == nil {
+		return nil, substrait.NotEligible(substrait.EligibilityPlanShape, "statement is not a SELECT query")
 	}
 	candidate, err := substrait.Export(queryPlan.GetQuery())
 	if err != nil {
@@ -70,7 +78,7 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	if !readOnly || priorWrites {
 		return nil, substrait.NotEligible(substrait.EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
-	if leases == nil || !leases.Ready() || !leases.Protected() || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
+	if leases == nil || !leases.DurableReady() || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
 		return nil, moerr.NewInternalError(ctx, "substrait: invalid Sirius admission configuration")
 	}
 	relations := make(map[uint64]engine.Relation, len(candidate.Reads()))
@@ -88,31 +96,30 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	if err != nil {
 		return nil, err
 	}
-	wires, err := substrait.Admit(ctx, substrait.AdmissionRequest{Candidate: candidate, Provider: provider, Leases: leases, AccountID: accountID, QueryID: queryID, SnapshotTS: snapshotBytes, AuthorizedClientSPKIHash: authorizedClientSPKIHash, TTL: ttl, ReadOnly: readOnly, PriorWrites: priorWrites})
+	admitted, err := substrait.AdmitReads(ctx, substrait.AdmissionRequest{Candidate: candidate, Provider: provider, Leases: leases, AccountID: accountID, QueryID: queryID, SnapshotTS: snapshotBytes, AuthorizedClientSPKIHash: authorizedClientSPKIHash, TTL: ttl, ReadOnly: readOnly, PriorWrites: priorWrites})
 	if err != nil {
 		return nil, err
 	}
-	result := &SiriusReadPlan{ReadRefs: make([][]byte, 0, len(wires))}
-	for _, candidateRead := range candidate.Reads() {
-		read, decodeErr := substrait.UnmarshalTaeRead(wires[candidateRead.NodeID], 0)
-		if decodeErr != nil {
-			for _, wire := range wires {
-				if admitted, ok := substrait.UnmarshalTaeRead(wire, 0); ok == nil {
-					_ = leases.Release(ctx, admitted.ReadRef)
-				}
-			}
-			return nil, decodeErr
-		}
-		result.ReadRefs = append(result.ReadRefs, read.ReadRef)
+	return buildSiriusReadPlan(ctx, candidate, queryPlan.GetQuery().Headings, admitted)
+}
+
+func buildSiriusReadPlan(ctx context.Context, candidate *substrait.Candidate, headings []string, admitted *substrait.AdmittedReads) (*SiriusReadPlan, error) {
+	if candidate == nil || admitted == nil {
+		return nil, moerr.NewInternalError(ctx, "substrait: missing admitted plan inputs")
 	}
-	result.Plan, err = candidate.Build(wires)
+	result := &SiriusReadPlan{
+		ReadRefs: cloneReadRefs(admitted.ReadRefs), OutputTypes: candidate.OutputTypes(),
+		Headings: append([]string(nil), headings...), LeaseExpiresAt: admitted.ExpiresAt,
+	}
+	plan, err := candidate.Build(admitted.Wires)
+	result.Plan = plan
 	if err != nil {
-		releaseErr := result.Release(ctx, leases)
 		// Export already proved eligibility before any storage work. A Build
 		// failure after admission is operational and must never trigger fallback
-		// after durable leases have been published.
+		// after durable leases have been published. Return the admitted owner so
+		// the runtime can either release synchronously or transfer reconciliation.
 		buildErr := moerr.NewInternalErrorf(ctx, "substrait: build admitted plan: %v", err)
-		return nil, errors.Join(buildErr, releaseErr)
+		return result, buildErr
 	}
 	return result, nil
 }
