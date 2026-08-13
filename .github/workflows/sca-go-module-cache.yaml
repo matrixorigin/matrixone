@@ -1,4 +1,4 @@
-name: Warm SCA Go module cache
+name: Warm SCA caches
 
 on:
   push:
@@ -7,6 +7,13 @@ on:
     paths:
       - go.mod
       - go.sum
+      - Makefile
+      - cgo/*.c
+      - cgo/*.h
+      - cgo/Makefile
+      - thirdparties/Makefile
+      - thirdparties/*.tar.gz
+      - thirdparties/download
       - .github/workflows/sca-go-module-cache.yaml
   schedule:
     - cron: "0 18 * * *"
@@ -20,8 +27,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  warm-go-module-cache:
-    name: Warm Go module cache
+  warm-sca-caches:
+    name: Warm SCA caches
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ vars.SCA_RUNNER_LABEL || 'arm64-mo-shanghai-4c8g' }}
     timeout-minutes: 90
@@ -36,8 +43,13 @@ jobs:
         with:
           cache: false
           setup-java: false
-          setup-cmake: false
+          setup-cmake: true
           go-version-file: "${{ github.workspace }}/go.mod"
+      - name: Clean generated SCA outputs
+        run: |
+          set -euo pipefail
+          make clean
+          rm -rf .sca-go-module-cache .sca-static-check-tools
       - name: Resolve Go module cache metadata
         id: go-module-cache-metadata
         run: |
@@ -67,3 +79,81 @@ jobs:
         with:
           path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
+      - name: Resolve native cache metadata
+        id: native-cache-metadata
+        run: |
+          set -euo pipefail
+          compiler="$(cc -dumpmachine)-$(cc -dumpfullversion -dumpversion)"
+          echo "compiler=${compiler// /_}" >> "$GITHUB_OUTPUT"
+      - name: Restore native SCA prerequisites
+        id: native-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            thirdparties/install
+            cgo/*.o
+            cgo/libmo.a
+            cgo/libmo.so
+          key: matrixone-sca-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-cache-metadata.outputs.compiler }}-${{ hashFiles('cgo/*.c', 'cgo/*.h', 'cgo/Makefile', 'thirdparties/Makefile', 'thirdparties/*.tar.gz', 'thirdparties/download') }}
+      - name: Build native SCA prerequisites
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          make thirdparties
+          test -f thirdparties/install/include/xxhash.h
+          test -f thirdparties/install/include/usearch.h
+          make cgo
+          test -f cgo/libmo.so
+      - name: Verify native SCA prerequisites
+        run: |
+          set -euo pipefail
+          test -f thirdparties/install/include/xxhash.h
+          test -f thirdparties/install/include/usearch.h
+          test -f thirdparties/install/lib/libroaring.a
+          test -f thirdparties/install/lib/libusearch_c.a
+          find thirdparties/install/lib -maxdepth 1 -type f -name 'onnxruntime*.so' -print -quit | grep -q .
+          test -f cgo/libmo.a
+          test -f cgo/libmo.so
+      - name: Save native SCA prerequisites
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            thirdparties/install
+            cgo/*.o
+            cgo/libmo.a
+            cgo/libmo.so
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Resolve static-check tool cache metadata
+        id: static-check-tool-cache-metadata
+        run: |
+          set -euo pipefail
+          recipe_hash="$(sed -n '/^install-static-check-tools:/,/^$/p' Makefile | sha256sum | awk '{print $1}')"
+          test -n "$recipe_hash"
+          echo "recipe-hash=$recipe_hash" >> "$GITHUB_OUTPUT"
+      - name: Restore static-check tools
+        id: static-check-tool-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-static-check-tools
+          key: matrixone-sca-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-module-cache-metadata.outputs.version }}-${{ steps.static-check-tool-cache-metadata.outputs.recipe-hash }}
+      - name: Install static-check tools
+        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          make install-static-check-tools
+          mkdir .sca-static-check-tools
+          tool_bin="$(go env GOPATH)/bin"
+          cp "$tool_bin/golangci-lint" "$tool_bin/molint" "$tool_bin/license-eye" .sca-static-check-tools/
+      - name: Verify static-check tools
+        run: |
+          set -euo pipefail
+          test -x .sca-static-check-tools/golangci-lint
+          test -x .sca-static-check-tools/molint
+          test -x .sca-static-check-tools/license-eye
+      - name: Save static-check tools
+        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-static-check-tools
+          key: ${{ steps.static-check-tool-cache.outputs.cache-primary-key }}
