@@ -225,6 +225,7 @@ func prepareRemoteRunSendingData(
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
+	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
 	if err != nil {
 		return nil, false, nil, false, err
