@@ -43,10 +43,10 @@ func TestValidateSnapshotScope(t *testing.T) {
 		{name: "cluster snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELCLUSTER.String(), 0), databaseID: 1, tableID: 2},
 		{name: "account snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELACCOUNT.String(), 1), databaseID: 1, tableID: 2},
 		{name: "database snapshot same database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 1), databaseID: 1, tableID: 3},
-		{name: "database snapshot other database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 1), databaseID: 2, tableID: 3, err: "database-level snapshot(snapshot) does not belong to the database(db)"},
+		{name: "database snapshot other database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 1), databaseID: 2, tableID: 3, err: "internal error: database-level snapshot(snapshot) does not belong to the database(db)"},
 		{name: "table snapshot same table", snapshot: newSnapshot(tree.SNAPSHOTLEVELTABLE.String(), 2), databaseID: 1, tableID: 2},
-		{name: "table snapshot other table", snapshot: newSnapshot(tree.SNAPSHOTLEVELTABLE.String(), 2), databaseID: 1, tableID: 3, err: "table-level snapshot(snapshot) does not belong to the table(db-table)"},
-		{name: "unknown snapshot level", snapshot: newSnapshot("unknown", 1), databaseID: 1, tableID: 2, err: "unsupported snapshot level \"unknown\""},
+		{name: "table snapshot other table", snapshot: newSnapshot(tree.SNAPSHOTLEVELTABLE.String(), 2), databaseID: 1, tableID: 3, err: "internal error: table-level snapshot(snapshot) does not belong to the table(db-table)"},
+		{name: "unknown snapshot level", snapshot: newSnapshot("unknown", 1), databaseID: 1, tableID: 2, err: "internal error: unsupported snapshot level \"unknown\""},
 	}
 
 	for _, test := range tests {
@@ -79,9 +79,9 @@ func TestValidateSnapshotDatabaseScope(t *testing.T) {
 		{name: "cluster snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELCLUSTER.String(), 0)},
 		{name: "account snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELACCOUNT.String(), 1)},
 		{name: "database snapshot same database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 1)},
-		{name: "database snapshot other database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 2), err: "database-level snapshot(snapshot) does not belong to the database(db)"},
-		{name: "table snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELTABLE.String(), 2), err: "table-level snapshot(snapshot) cannot read database-wide metadata for database(db)"},
-		{name: "unknown snapshot level", snapshot: newSnapshot("unknown", 1), err: "unsupported snapshot level \"unknown\""},
+		{name: "database snapshot other database", snapshot: newSnapshot(tree.SNAPSHOTLEVELDATABASE.String(), 2), err: "internal error: database-level snapshot(snapshot) does not belong to the database(db)"},
+		{name: "table snapshot", snapshot: newSnapshot(tree.SNAPSHOTLEVELTABLE.String(), 2), err: "internal error: table-level snapshot(snapshot) cannot read database-wide metadata for database(db)"},
+		{name: "unknown snapshot level", snapshot: newSnapshot("unknown", 1), err: "internal error: unsupported snapshot level \"unknown\""},
 	}
 
 	for _, test := range tests {

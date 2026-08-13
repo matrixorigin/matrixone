@@ -10151,7 +10151,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, tableDef.TblId)
 		}
 		if err != nil {
-			return 0, moerr.NewInternalError(builder.GetContext(), err.Error())
+			return 0, err
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}

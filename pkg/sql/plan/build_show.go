@@ -62,7 +62,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 			return nil, err
 		}
 		if err = ValidateSnapshotDatabaseScope(snapshot, name, databaseID); err != nil {
-			return nil, moerr.NewInternalError(ctx.GetContext(), err.Error())
+			return nil, err
 		}
 	}
 
@@ -125,7 +125,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, tableDef.TblId); err != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), err.Error())
+		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
@@ -196,7 +196,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, tableDef.TblId); err != nil {
-		return nil, moerr.NewInternalError(ctx.GetContext(), err.Error())
+		return nil, err
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
@@ -331,7 +331,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 			return nil, err
 		}
 		if err = ValidateSnapshotDatabaseScope(snapshot, dbName, databaseID); err != nil {
-			return nil, moerr.NewInternalError(ctx.GetContext(), err.Error())
+			return nil, err
 		}
 	}
 

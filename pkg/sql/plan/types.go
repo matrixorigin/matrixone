@@ -161,7 +161,7 @@ func ValidateSnapshotScope(
 		return nil
 	case tree.SNAPSHOTLEVELDATABASE.String():
 		if snapshot.ExtraInfo.ObjId != databaseID {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"database-level snapshot(%s) does not belong to the database(%s)",
 				snapshot.ExtraInfo.Name,
 				databaseName,
@@ -169,7 +169,7 @@ func ValidateSnapshotScope(
 		}
 	case tree.SNAPSHOTLEVELTABLE.String():
 		if snapshot.ExtraInfo.ObjId != tableID {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"table-level snapshot(%s) does not belong to the table(%s-%s)",
 				snapshot.ExtraInfo.Name,
 				databaseName,
@@ -177,7 +177,7 @@ func ValidateSnapshotScope(
 			)
 		}
 	default:
-		return fmt.Errorf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
 	}
 
 	return nil
@@ -200,20 +200,20 @@ func ValidateSnapshotDatabaseScope(
 		return nil
 	case tree.SNAPSHOTLEVELDATABASE.String():
 		if snapshot.ExtraInfo.ObjId != databaseID {
-			return fmt.Errorf(
+			return moerr.NewInternalErrorNoCtxf(
 				"database-level snapshot(%s) does not belong to the database(%s)",
 				snapshot.ExtraInfo.Name,
 				databaseName,
 			)
 		}
 	case tree.SNAPSHOTLEVELTABLE.String():
-		return fmt.Errorf(
+		return moerr.NewInternalErrorNoCtxf(
 			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
 			snapshot.ExtraInfo.Name,
 			databaseName,
 		)
 	default:
-		return fmt.Errorf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
 	}
 
 	return nil
