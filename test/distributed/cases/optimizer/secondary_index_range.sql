@@ -295,10 +295,14 @@ execute stmt_t9_status_eq_null using @t9_null;
 deallocate prepare stmt_t9_status_eq_null;
 prepare stmt_t9_status_in_null from 'select count(*) as count_prepare_in_null from t9 where status in (?, ?)';
 execute stmt_t9_status_in_null using @t9_null,@t9_missing;
+execute stmt_t9_status_in_null using @t9_null,@t9_active;
 deallocate prepare stmt_t9_status_in_null;
 prepare stmt_t9_status_between_null from 'select count(*) as count_prepare_between_null from t9 where status between ? and ?';
 execute stmt_t9_status_between_null using @t9_null,@t9_active;
 deallocate prepare stmt_t9_status_between_null;
+prepare stmt_t9_status_or_between_null from 'select count(*) as count_prepare_or_between_null from t9 where status between ? and ? or status between ? and ?';
+execute stmt_t9_status_or_between_null using @t9_null,@t9_active,@t9_active,@t9_active;
+deallocate prepare stmt_t9_status_or_between_null;
 
 update t9 set status = 'active', due = '2026-07-05 00:00:00.000004' where id = 'a2';
 select count(*) as count_after_update_into_active from t9 where status = 'active';
