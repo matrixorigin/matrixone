@@ -194,18 +194,11 @@ func (s *Scanner) Scan() (int, string) {
 		}
 
 		if ch == '_' {
-			if s.isCollate() {
+			if s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
-				if s.cur() == '\'' {
-					s.inc()
-					return s.scanString('\'', STRING)
-				} else {
-					typ, str := s.scanIdentifier(false)
-					if typ == LEX_ERROR {
-						return typ, str
-					}
-				}
+				s.inc()
+				return s.scanString('\'', STRING)
 			}
 			return s.scanIdentifier(false)
 		}
@@ -334,11 +327,22 @@ func (s *Scanner) TakeExecutableCommentEnd() int {
 	return end
 }
 
-func (s *Scanner) isCollate() bool {
-	if s.peek(1) == 'u' && s.peek(2) == 't' && s.peek(3) == 'f' && s.peek(4) == '8' && s.peek(5) == 'm' && s.peek(6) == 'b' && s.peek(7) == '4' {
-		return true
+func (s *Scanner) isCharsetIntroducer() bool {
+	if s.peek(1) != 'u' || s.peek(2) != 't' || s.peek(3) != 'f' || s.peek(4) != '8' ||
+		s.peek(5) != 'm' || s.peek(6) != 'b' || s.peek(7) != '4' {
+		return false
 	}
-	return false
+
+	pos := s.Pos + len("_utf8mb4")
+	for pos < len(s.buf) {
+		switch s.buf[pos] {
+		case ' ', '\n', '\r', '\t':
+			pos++
+			continue
+		}
+		break
+	}
+	return pos < len(s.buf) && s.buf[pos] == '\''
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR

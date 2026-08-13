@@ -113,6 +113,11 @@ func TestUnquotedExtendedIdentifier(t *testing.T) {
 		{name: "raw latin1 client byte", input: "t_\xe9g", value: "t_\xe9g"},
 		{name: "digit leading raw latin1 client byte", input: "1\xe9A", value: "1\xe9a"},
 		{name: "keyword prefix", input: "selectã", value: "selectã"},
+		{name: "charset name as identifier", input: "_utf8mb4", value: "_utf8mb4"},
+		{name: "charset prefix with ASCII suffix", input: "_utf8mb4table", value: "_utf8mb4table"},
+		{name: "charset prefix with digit suffix", input: "_utf8mb41", value: "_utf8mb41"},
+		{name: "charset prefix with BMP suffix", input: "_utf8mb4数量", value: "_utf8mb4数量"},
+		{name: "charset prefix with raw latin1 suffix", input: "_utf8mb4\xe9A", value: "_utf8mb4\xe9A"},
 	}
 
 	for _, test := range tests {
@@ -123,6 +128,20 @@ func TestUnquotedExtendedIdentifier(t *testing.T) {
 			if token != ID || value != test.value {
 				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
 					test.input, tokenName(token), value, tokenName(ID), test.value)
+			}
+		})
+	}
+}
+
+func TestCharsetIntroducer(t *testing.T) {
+	for _, input := range []string{"_utf8mb4'test'", "_utf8mb4 \t'test'"} {
+		t.Run(input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != STRING || value != "test" {
+				t.Fatalf("Scan charset introducer = (%s, %q), want (%s, %q)",
+					tokenName(token), value, tokenName(STRING), "test")
 			}
 		})
 	}
@@ -141,7 +160,7 @@ func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
 		{name: "bit prefix then supplementary", input: "0b😀", wantTokens: []int{LEX_ERROR}},
 		{name: "user variable then supplementary", input: "@😀", wantTokens: []int{LEX_ERROR}},
 		{name: "system variable then supplementary", input: "@@😀", wantTokens: []int{LEX_ERROR}},
-		{name: "charset introducer then supplementary", input: "_utf8mb4😀", wantTokens: []int{LEX_ERROR}},
+		{name: "charset prefix then supplementary", input: "_utf8mb4😀", wantTokens: []int{ID, LEX_ERROR}},
 	}
 
 	for _, test := range tests {

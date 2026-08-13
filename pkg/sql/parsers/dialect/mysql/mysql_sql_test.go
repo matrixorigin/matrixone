@@ -5099,6 +5099,16 @@ func TestUnquotedExtendedIdentifiers(t *testing.T) {
 			sql:  "CREATE TABLE t_\xe9A (a INT)",
 			want: "create table t_\xe9a (a int)",
 		},
+		{
+			name: "charset prefix with BMP suffix",
+			sql:  "CREATE TABLE _utf8mb4数量 (a INT)",
+			want: "create table _utf8mb4数量 (a int)",
+		},
+		{
+			name: "charset prefix with raw latin1 suffix",
+			sql:  "CREATE TABLE _utf8mb4\xe9A (a INT)",
+			want: "create table _utf8mb4\xe9a (a int)",
+		},
 	}
 
 	for _, test := range tests {
@@ -5109,6 +5119,12 @@ func TestUnquotedExtendedIdentifiers(t *testing.T) {
 			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
 		})
 	}
+}
+
+func TestCharsetIntroducerParses(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT _utf8mb4'test'", 1)
+	require.NoError(t, err)
+	stmt.Free()
 }
 
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
