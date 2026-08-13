@@ -1348,7 +1348,7 @@ func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {
 		return false
 	}
 	serialFn := fn.Args[1].GetF()
-	return serialFn != nil && serialFn.Func.ObjName == "serial_full" && len(serialFn.Args) == numKeyParts
+	return serialFn != nil && serialFn.Func.ObjName == indexTableComparisonSerialFunc() && len(serialFn.Args) == numKeyParts
 }
 
 func (builder *QueryBuilder) rewriteRegularIndexCursorRangeFilter(scanNode *plan.Node) bool {
@@ -1384,7 +1384,7 @@ func (builder *QueryBuilder) rewriteRegularIndexCursorRangeFilter(scanNode *plan
 	}
 
 	boundArgs := append(DeepCopyExprList(prefixSerial.Args), DeepCopyExpr(cursorValue))
-	bound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", boundArgs)
+	bound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableComparisonSerialFunc(), boundArgs)
 	if err != nil {
 		return false
 	}
@@ -2136,7 +2136,7 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 			compositeFilterSel *= filter.Selectivity
 		}
 	}
-	rightArg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
+	rightArg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableComparisonSerialFunc(), serialArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -2154,15 +2154,19 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 	return expr, nil
 }
 
-func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
+func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *plan.Expr, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	expr := DeepCopyExpr(filter)
 	fn := expr.GetF()
 	if fn.Func.ObjName == "or" {
 		for i := range expr.GetF().Args {
-			expr.GetF().Args[i] = builder.replaceNonEqualCondition(idxDef, expr.GetF().Args[i], idxTag, idxTableDef)
+			var err error
+			expr.GetF().Args[i], err = builder.replaceNonEqualCondition(idxDef, filter.GetF().Args[i], idxTag, idxTableDef)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return expr
+		return expr, nil
 	}
 	comparesByteStringColumn := indexFunctionComparesByteStringColumn(fn)
 
@@ -2189,26 +2193,45 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	fn.Args[0].GetCol().ColPos = 0
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 	if numParts > 1 {
-		serialFunc := indexTableLookupSerialFunc(idxDef)
+		serialFunc := indexTableComparisonSerialFunc()
+		var err error
 		switch fn.Func.ObjName {
 		case "between":
 			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
 			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
+			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
+			if err != nil {
+				return nil, err
+			}
+			fn.Args[2], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
+			if err != nil {
+				return nil, err
+			}
+			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_between", fn.Args)
 		case "in":
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
+			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
+			if err != nil {
+				return nil, err
+			}
+			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in", fn.Args)
 		case ">", ">=", "<", "<=":
 			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
+			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
+			if err != nil {
+				return nil, err
+			}
+			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), fn.Func.ObjName, fn.Args)
 		case "in_range":
 			fn.Args[1] = builder.normalizeDecimalIndexRangeBound(fn.Args[1], indexedPartType)
 			fn.Args[2] = builder.normalizeDecimalIndexRangeBound(fn.Args[2], indexedPartType)
-			fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
-			fn.Args[2], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
+			fn.Args[1], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[1]})
+			if err != nil {
+				return nil, err
+			}
+			fn.Args[2], err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{fn.Args[2]})
+			if err != nil {
+				return nil, err
+			}
 			if comparesByteStringColumn {
 				// PrefixCompare cannot distinguish an encoded byte string from a
 				// longer value for which that encoding is a prefix.  An open lower
@@ -2217,15 +2240,18 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 				// retained as an exact residual on index-only scans or the base scan.
 				fn.Args[3] = closePrefixRangeLowerBound(fn.Args[3])
 			}
-			expr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", fn.Args)
+			expr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_in_range", fn.Args)
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
-	return expr
+	return expr, nil
 }
 
 func (builder *QueryBuilder) replaceLeadingFilter(idxDef *IndexDef, filterList []*plan.Expr, leadingPos []int32, leadingEqualCond bool, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	if !leadingEqualCond { // a IN (1, 2, 3), a BETWEEN 1 AND 2
-		return builder.replaceNonEqualCondition(idxDef, filterList[leadingPos[0]], idxTag, idxTableDef), nil
+		return builder.replaceNonEqualCondition(idxDef, filterList[leadingPos[0]], idxTag, idxTableDef)
 	}
 	return builder.replaceEqualCondition(idxDef, filterList, leadingPos, idxTag, idxTableDef)
 }
@@ -2237,7 +2263,7 @@ func indexOnlyResidualLeadingFilterPositions(idxDef *IndexDef, tableDef *plan.Ta
 }
 
 func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef *plan.TableDef, filterList []*plan.Expr, leadingPos []int32, usesPrefixComparison bool) []int32 {
-	if indexTableLookupSerialFunc(idxDef) != "serial_full" {
+	if indexTableStoredKeySerialFunc(idxDef) != "serial_full" {
 		return nil
 	}
 	residualPos := make([]int32, 0, len(leadingPos))
@@ -2245,7 +2271,7 @@ func indexOnlyResidualLeadingFilterPositionsForPrefix(idxDef *IndexDef, tableDef
 		if pos < 0 || int(pos) >= len(filterList) {
 			continue
 		}
-		if indexFilterMayCompareNullAtRuntime(filterList[pos]) && !slices.Contains(residualPos, pos) {
+		if indexFilterNeedsDecodedNullResidual(filterList[pos]) && !slices.Contains(residualPos, pos) {
 			residualPos = append(residualPos, pos)
 		}
 	}
@@ -2385,7 +2411,12 @@ func closePrefixRangeLowerBound(flagExpr *plan.Expr) *plan.Expr {
 	return MakePlan2Uint8ConstExprWithType(flag &^ 1)
 }
 
-func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
+// indexFilterNeedsDecodedNullResidual reports row-side NULL cases that cannot
+// be represented by the encoded access predicate. Comparison operands use the
+// NULL-propagating serial function, and prefix_in ignores NULL needles. A
+// nullable stored key under a strict upper bound still sorts before a non-NULL
+// bound and therefore needs SQL-semantic row evaluation.
+func indexFilterNeedsDecodedNullResidual(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -2394,18 +2425,9 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 		return false
 	}
 	switch fn.Func.ObjName {
-	case "=":
-		return len(fn.Args) > 1 && (runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]))
-	case "in":
-		return len(fn.Args) > 1 && runtimeConstMayBeNull(fn.Args[1])
-	case "between":
-		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case ">", ">=", "<", "<=":
 		if len(fn.Args) < 2 {
 			return false
-		}
-		if runtimeConstMayBeNull(fn.Args[0]) || runtimeConstMayBeNull(fn.Args[1]) {
-			return true
 		}
 		if canonicalRangeOp(fn) != "<" {
 			return false
@@ -2414,42 +2436,9 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 			return !fn.Args[0].Typ.NotNullable
 		}
 		return isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil && !fn.Args[1].Typ.NotNullable
-	case "in_range":
-		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
 		for _, arg := range fn.Args {
-			if indexFilterMayCompareNullAtRuntime(arg) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func runtimeConstMayBeNull(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_P, *plan.Expr_V:
-		return true
-	case *plan.Expr_Lit:
-		return exprImpl.Lit != nil && exprImpl.Lit.GetIsnull()
-	case *plan.Expr_List:
-		if exprImpl.List == nil {
-			return false
-		}
-		for _, item := range exprImpl.List.List {
-			if runtimeConstMayBeNull(item) {
-				return true
-			}
-		}
-	case *plan.Expr_F:
-		if exprImpl.F == nil {
-			return false
-		}
-		for _, arg := range exprImpl.F.Args {
-			if runtimeConstMayBeNull(arg) {
+			if indexFilterNeedsDecodedNullResidual(arg) {
 				return true
 			}
 		}
@@ -3249,7 +3238,14 @@ func (ctx *encodedRegularIndexCostContext) score(
 		// Retain every stage whose work is independent of the unknown values. The
 		// base upper bound is a complete column-pruned table scan. Rejection is safe
 		// only when the index lower bound still dominates that upper bound.
-		rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, 0)
+		lowerOutputRows := 0.0
+		if shape == encodedRegularIndexCostIndexOnly {
+			// The stable-branch lower estimate entails index-only output rows as
+			// well as lookup rows. Keep the downstream decoding work for those rows
+			// in the uncertainty lower bound.
+			lowerOutputRows = lowerHiddenRows
+		}
+		rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
 		baseComparisonWork = ctx.baseUpperWork
 	}
 	shouldReject = len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000 && !ctx.force &&
@@ -3948,7 +3944,7 @@ func (builder *QueryBuilder) normalizeDecimalIndexRangeBound(bound *plan.Expr, i
 	return normalized
 }
 
-func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef) *plan.Expr {
+func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterList []*plan.Expr, filterIdx []int32, idxTag int32, idxTableDef *plan.TableDef) (*plan.Expr, error) {
 	numParts := len(idxDef.Parts)
 	lowerFn := filterList[filterIdx[0]].GetF()
 	upperFn := filterList[filterIdx[1]].GetF()
@@ -3969,9 +3965,16 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 		if indexedPartType, ok := rangeFilterColumnType(upperFn); ok {
 			upperVal = builder.normalizeDecimalIndexRangeBound(upperVal, indexedPartType)
 		}
-		serialFunc := indexTableLookupSerialFunc(idxDef)
-		lowerVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
-		upperVal, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{upperVal})
+		serialFunc := indexTableComparisonSerialFunc()
+		var err error
+		lowerVal, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{lowerVal})
+		if err != nil {
+			return nil, err
+		}
+		upperVal, err = BindFuncExprImplByPlanExpr(builder.GetContext(), serialFunc, []*plan.Expr{upperVal})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if lowerOp == ">=" && upperOp == "<=" {
@@ -3979,9 +3982,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 		if numParts > 1 {
 			funcName = "prefix_between"
 		}
-		expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
+		expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal})
+		if err != nil {
+			return nil, err
+		}
 		expr.Selectivity = compositeFilterSel
-		return expr
+		return expr, nil
 	}
 
 	var flag uint8
@@ -4000,9 +4006,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 	if numParts > 1 {
 		funcName = "prefix_in_range"
 	}
-	expr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
+	expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{colExpr, lowerVal, upperVal, MakePlan2Uint8ConstExprWithType(flag)})
+	if err != nil {
+		return nil, err
+	}
 	expr.Selectivity = compositeFilterSel
-	return expr
+	return expr, nil
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
@@ -4022,9 +4031,12 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		spatialColMap := buildSpatialIndexColMap(idxDef, node, idxTag, idxTableDef)
 		idxFilter = replaceColumnsForExpr(DeepCopyExpr(node.FilterList[filterIdx[0]]), spatialColMap)
 	} else if filterType == RangeIndexCondition {
-		idxFilter = builder.replaceRangePairCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
+		idxFilter, err = builder.replaceRangePairCondition(idxDef, node.FilterList, filterIdx, idxTag, idxTableDef)
 	} else {
-		idxFilter = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
+		idxFilter, err = builder.replaceNonEqualCondition(idxDef, node.FilterList[filterIdx[0]], idxTag, idxTableDef)
+	}
+	if err != nil {
+		return node.NodeId, -1
 	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -4270,7 +4282,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 					},
 				}
 			}
-			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableLookupSerialFunc(idxDef), serialArgs)
+			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), indexTableStoredKeySerialFunc(idxDef), serialArgs)
 		}
 
 		probeExpr := &plan.Expr{
