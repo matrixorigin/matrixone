@@ -181,7 +181,6 @@ func checkPrivilege(
 	scanSnapshot *Snapshot,
 	cloneType tree.CloneStmtType,
 ) (err error) {
-
 	var (
 		misMsg string
 
@@ -203,23 +202,29 @@ func checkPrivilege(
 			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount {
 				snapshotMisMatch = true
 				misMsg = "cannot use a database-level snapshot to clone cluster/account"
-			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.DbId) {
+			} else if err := ValidateSnapshotScope(
+				scanSnapshot,
+				srcTblDef.DbName,
+				srcTblDef.Name,
+				srcTblDef.DbId,
+				srcTblDef.TblId,
+			); err != nil {
 				snapshotMisMatch = true
-				misMsg = fmt.Sprintf(
-					"database-level snapshot(%s) does not belong to the database(%s)",
-					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName,
-				)
+				misMsg = err.Error()
 			}
 		case tree.SNAPSHOTLEVELTABLE.String():
 			if cloneType == tree.CloneCluster || cloneType == tree.CloneAccount ||
 				cloneType == tree.WithinAccCloneDB || cloneType == tree.BetweenAccCloneDB {
 				snapshotMisMatch = true
 				misMsg = "cannot use a table-level snapshot to clone cluster/account/database"
-			} else if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.TblId) {
-				misMsg = fmt.Sprintf(
-					"table-level snapshot(%s) does not belong to the table(%s-%s)",
-					scanSnapshot.ExtraInfo.Name, srcTblDef.DbName, srcTblDef.Name,
-				)
+			} else if err := ValidateSnapshotScope(
+				scanSnapshot,
+				srcTblDef.DbName,
+				srcTblDef.Name,
+				srcTblDef.DbId,
+				srcTblDef.TblId,
+			); err != nil {
+				misMsg = err.Error()
 				snapshotMisMatch = true
 			}
 		}

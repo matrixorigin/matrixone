@@ -213,6 +213,30 @@ func TestHistoricalRestoreTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing
 	})
 }
 
+func TestCheckRestorePrivEnforcesDatabaseSnapshotScope(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{feSessionImpl: feSessionImpl{
+		tenant: &TenantInfo{Tenant: "tenant"},
+	}}
+	snapshot := &snapshotRecord{
+		level:        tree.SNAPSHOTLEVELDATABASE.String(),
+		accountName:  "tenant",
+		databaseName: "source_db",
+	}
+	stmt := &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "tenant",
+		DatabaseName: "source_db",
+		TableName:    "table",
+	}
+
+	require.NoError(t, checkRestorePriv(ctx, ses, snapshot, stmt))
+
+	stmt.DatabaseName = "other_db"
+	err := checkRestorePriv(ctx, ses, snapshot, stmt)
+	require.EqualError(t, err, "internal error: databaseName(other_db) does not match snapshot.databaseName(source_db)")
+}
+
 func TestCollectRestoreSourceTableInfos(t *testing.T) {
 	t.Run("database restore reads only the selected table", func(t *testing.T) {
 		var listed bool
