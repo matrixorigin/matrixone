@@ -53,7 +53,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+			// A predicate with no column references is not safe below a global
+			// aggregate. If it evaluates to false, filtering the aggregate input
+			// still leaves the single global-aggregate output row alive. This can
+			// happen after set-operation columns are replaced by branch literals.
+			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {

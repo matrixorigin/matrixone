@@ -21,9 +21,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestObjectMetadataReadersRejectEmptyLocation(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := FastLoadObjectMeta(ctx, nil, false, nil)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+	for _, test := range []struct {
+		name     string
+		location Location
+	}{
+		{name: "missing encoding"},
+		{
+			name:     "truncated encoding",
+			location: append(Location{1}, make(Location, LocationLen-2)...),
+		},
+		{name: "zero object name", location: make(Location, LocationLen)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := FastLoadObjectMeta(ctx, &test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = FastLoadBF(ctx, test.location, false, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+
+			_, err = LoadBFWithMeta(ctx, nil, test.location, nil)
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		})
+	}
+}
 
 func TestBuildMetaData(t *testing.T) {
 	objectMeta := BuildMetaData(20, 30)

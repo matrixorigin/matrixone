@@ -80,6 +80,36 @@ p2  ¦  2026-01-01 11:00:00  ¦  7  𝄀
 p3  ¦  2026-01-01 23:59:00  ¦  10  𝄀
 p3  ¦  2026-01-02 00:00:00  ¦  20  𝄀
 p3  ¦  2026-01-02 00:01:00  ¦  30
+create table linear_readings(series_id int, ts datetime, value int);
+insert into linear_readings values
+(1, '2026-03-01 00:00:00', 100),
+(1, '2026-03-01 00:03:00', 130),
+(1, '2026-03-01 00:04:00', 140);
+select _wstart, sum(value) as value_sum
+from linear_readings
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  value_sum[3,38,0]  𝄀
+2026-03-01 00:00:00  ¦  100  𝄀
+2026-03-01 00:01:00  ¦  110  𝄀
+2026-03-01 00:02:00  ¦  120  𝄀
+2026-03-01 00:03:00  ¦  130  𝄀
+2026-03-01 00:04:00  ¦  140
+drop table linear_readings;
+create table linear_decimal256(series_id int, ts datetime, value decimal(65,0));
+insert into linear_decimal256 values
+(1, '2026-03-02 00:00:00', 100),
+(1, '2026-03-02 00:03:00', 130);
+select _wstart, max(value) as value_max
+from linear_decimal256
+group by series_id interval(ts, 1, minute) gapfill(partition) fill(linear)
+order by _wstart;
+➤ _wstart[93,64,0]  ¦  value_max[3,65,0]  𝄀
+2026-03-02 00:00:00  ¦  100  𝄀
+2026-03-02 00:01:00  ¦  110  𝄀
+2026-03-02 00:02:00  ¦  120  𝄀
+2026-03-02 00:03:00  ¦  130
+drop table linear_decimal256;
 select pump, _wstart, sum(value) as value_sum
 from readings
 group by pump interval(ts, 1, minute) fill(null)

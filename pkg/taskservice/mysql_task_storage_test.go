@@ -201,6 +201,23 @@ func TestPingContext(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
+func TestMySQLTaskStorageCloseIsTerminalAfterDriverError(t *testing.T) {
+	for _, closeErr := range []error{
+		errors.New("bad connection"),
+		errors.New("write: broken pipe"),
+	} {
+		t.Run(closeErr.Error(), func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			mock.ExpectClose().WillReturnError(closeErr)
+
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+			require.ErrorContains(t, storage.PingContext(context.Background()), "database is closed")
+			require.NoError(t, storage.Close())
+		})
+	}
+}
+
 func TestAsyncTaskInSqlMock(t *testing.T) {
 	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").

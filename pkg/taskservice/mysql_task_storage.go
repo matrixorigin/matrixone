@@ -309,7 +309,11 @@ func newMysqlTaskStorage(dsn string) (TaskStorage, error) {
 }
 
 func (m *mysqlTaskStorage) Close() error {
-	return m.db.Close()
+	// database/sql closes the DB before collecting errors from the driver
+	// connections. The MySQL driver also cleans up each connection even when
+	// writing COM_QUIT fails, so there is no remaining cleanup to retry here.
+	_ = m.db.Close()
+	return nil
 }
 
 func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
