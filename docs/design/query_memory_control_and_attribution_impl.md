@@ -532,7 +532,7 @@ storage primitives, Group account integration, and spill resource/lifecycle
 closure. The final activation commit deletes the superseded hard-threshold
 path; the same physical allocation is never tracked by two hard ledgers.
 
-### M4. Migrate MergeOrder, Top, and Fill
+### M4. Migrate Order, MergeOrder, Top, and Fill
 
 These are separate PRs sharing generic utilities, not one combined rewrite.
 
@@ -555,6 +555,16 @@ slice is also locally closed and recorded in
 `docs/design/evidence/25866_m4_top_baseline.md`. The final independent Fill
 slice is also locally closed and recorded in
 `docs/design/evidence/25866_m4_fill_baseline.md`.
+
+The local Order stage that feeds MergeOrder is independently closed and
+recorded in `docs/design/evidence/25866_m4_order_baseline.md`. Its retained
+run, computed keys, selector, multi-key partition scratch, append rollback
+state, and final Shuffle replacement use the same `order` owner. The 64 MiB
+logical threshold remains a run-emission policy; the allocation account is
+the hard physical boundary. Local Order does not need a second spill engine:
+it emits sorted bounded runs to the already spill-capable MergeOrder stage and
+returns one controlled resource error if an indivisible local work unit cannot
+be admitted.
 
 Top:
 
@@ -598,7 +608,7 @@ spills retained progress and streams the rejected child only after memory has
 been released. The resident benchmark improved 1.62%, and lifecycle/fault
 tests close memory, disk, and FD ownership at zero.
 
-All three must retain stable result ordering and prepared-value provenance.
+All four must retain stable result ordering and prepared-value provenance.
 
 ### M5. Remove the duplicate CTE memory safety ledger
 
@@ -737,7 +747,7 @@ The stage-specific exit evidence is:
 | M1 | unchanged HashBuild/query/CN caps and recovery decisions under table-driven boundary tests; unchanged local/remote/prepared/retry results; all old controller names, aliases, and duplicate metrics absent; resident benchmark within the 2% gate | any changed pressure decision, compatibility controller, duplicate counter, or unexplained resident regression |
 | M2 | alloc/grow/free/concurrent-free tests prove total current equals the sum of owner currents; owner peaks are monotonic; remote/retry aggregation and unknown-owner serialization are bounded; microbenchmarks show no new Go allocation, lock, stack walk, or dynamic map lookup | owner totals can diverge, attribution changes admission, cardinality is dynamic, or HashBuild exceeds the performance gate |
 | M3 | resident-versus-forced-spill differential tests for H8/HStr and every supported aggregate; exact-cap and one-byte-short tests; skew, DISTINCT, max-pass, disk/FD failure, corrupt spill, cancellation, Reset/Free, and reuse; account/disk/FD terminal zero | any aggregate retains unbounded bypass state, DISTINCT still escapes through 1 TiB, max-pass can retain beyond the account, or a retry makes no measurable progress |
-| M4 | separate evidence for MergeOrder, Top, and Fill: stable results/order, many-run and multi-pass spill, bounded buffer/index/run metadata, disk/FD admission before side effects, short I/O/corruption/cancellation cleanup, and resident benchmark | whole-record or unbounded Go-buffer growth remains, files bypass disk/FD ownership, result order changes, or the three operators are coupled into one non-revertible activation |
+| M4 | separate evidence for Order, MergeOrder, Top, and Fill: stable results/order, many-run and multi-pass spill, bounded buffer/index/run metadata, disk/FD admission before side effects, short I/O/corruption/cancellation cleanup, and resident benchmark | whole-record or unbounded Go-buffer growth remains, files bypass disk/FD ownership, result order changes, or the four operators are coupled into one non-revertible activation |
 | M5 | materialized-source and recursive-CTE tests separately prove exact retained/replacement capacity, spill/error behavior, recursion convergence, cancellation/reuse, and terminal zero; repository search shows the approximate CTE ledger no longer authorizes physical memory | logical payload or a multiplier still creates/releases a physical charge, the same allocation has two safety ledgers, or deletion of the old ledger changes a successful in-budget result |
 | M6 | set-operation differential tests cover empty, NULL, duplicate-heavy, high-cardinality, fixed/varlen, exact-cap, and one-byte-short inputs; hash and counter capacity are accounted; unsupported pressure returns one controlled error and cleans to zero | Go counter/flag capacity remains unbounded, a controlled-error-only implementation claims spill availability, or pressure can reach allocator OOM first |
 | M7 | fulltext incident and adversarial-cardinality tests bound or externalize side maps and top-K state; exact allocator owners pass lifecycle tests; opaque/native/shared domains carry explicit quality flags; hard query rejection no longer uses estimates for migrated state | estimated per-item memory is presented as exact ownership, an unbounded side map remains, or native/shared memory is double-charged to queries without allocator hooks |

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,24 +49,6 @@ const maxWinnerChunkRows = 64
 
 // Bound resident batch/index metadata to two external-merge fan-in levels.
 const maxResidentBatches = spillMergeFanIn * spillMergeFanIn
-
-const (
-	// Sites 32-43 and 60 are shared spillutil sites. Keep MergeOrder-specific
-	// storage in a disjoint range under the same Order owner.
-	mergeOrderAllocationSiteRetainedData mpool.AllocationSite = iota + 64
-	mergeOrderAllocationSiteRetainedArea
-	mergeOrderAllocationSiteRetainedNulls
-	mergeOrderAllocationSiteRetainedGrouping
-	mergeOrderAllocationSiteExpressionData
-	mergeOrderAllocationSiteExpressionArea
-	mergeOrderAllocationSiteExpressionNulls
-	mergeOrderAllocationSiteExpressionGrouping
-	mergeOrderAllocationSiteOutputData
-	mergeOrderAllocationSiteOutputArea
-	mergeOrderAllocationSiteOutputNulls
-	mergeOrderAllocationSiteOutputGrouping
-	mergeOrderAllocationSiteSpillWriteBuffer
-)
 
 var _ vm.Operator = new(MergeOrder)
 
@@ -301,10 +284,10 @@ func (ctr *container) setAllocationAccount(
 	retained, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerOrder,
-		mergeOrderAllocationSiteRetainedData,
-		mergeOrderAllocationSiteRetainedArea,
-		mergeOrderAllocationSiteRetainedNulls,
-		mergeOrderAllocationSiteRetainedGrouping,
+		ordersites.MergeOrderRetainedData,
+		ordersites.MergeOrderRetainedArea,
+		ordersites.MergeOrderRetainedNulls,
+		ordersites.MergeOrderRetainedGrouping,
 	)
 	if err != nil {
 		return err
@@ -312,10 +295,10 @@ func (ctr *container) setAllocationAccount(
 	expression, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerOrder,
-		mergeOrderAllocationSiteExpressionData,
-		mergeOrderAllocationSiteExpressionArea,
-		mergeOrderAllocationSiteExpressionNulls,
-		mergeOrderAllocationSiteExpressionGrouping,
+		ordersites.MergeOrderExpressionData,
+		ordersites.MergeOrderExpressionArea,
+		ordersites.MergeOrderExpressionNulls,
+		ordersites.MergeOrderExpressionGrouping,
 	)
 	if err != nil {
 		return err
@@ -323,10 +306,10 @@ func (ctr *container) setAllocationAccount(
 	output, err := vector.NewAllocationAccountSelection(
 		account,
 		mpool.AllocationOwnerOrder,
-		mergeOrderAllocationSiteOutputData,
-		mergeOrderAllocationSiteOutputArea,
-		mergeOrderAllocationSiteOutputNulls,
-		mergeOrderAllocationSiteOutputGrouping,
+		ordersites.MergeOrderOutputData,
+		ordersites.MergeOrderOutputArea,
+		ordersites.MergeOrderOutputNulls,
+		ordersites.MergeOrderOutputGrouping,
 	)
 	if err != nil {
 		return err

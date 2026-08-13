@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,7 +48,7 @@ func newMergeOrderSpillWriter(
 		proc.Mp(),
 		ctr.allocationAccount,
 		mpool.AllocationOwnerOrder,
-		mergeOrderAllocationSiteSpillWriteBuffer,
+		ordersites.MergeOrderSpillWriteBuffer,
 		spillutil.NewDiskReservationWriter(run.file, run.diskToken),
 		spillWriteBufferSize,
 	)
