@@ -651,7 +651,14 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeInt32(&nAggs))
 	prepareParamKinds := make([][]vector.PrepareParamKind, len(group.ctr.aggList))
 	prepareParamKindSummaries := make([]prepareParamKindSummary, len(group.ctr.aggList))
+	var binaryStringRows [][]bool
+	var binaryStringSummaries []bool
 	for i, ag := range group.ctr.aggList {
+		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok &&
+			accessor.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate binary-string metadata requires MORPCVersion18")
+		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
 			return vm.CancelResult, false, err
 		}
@@ -659,11 +666,21 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			prepareParamKinds[i] = accessor.PrepareParamKindsForChunk(curr)
 			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
 				accessor.PrepareParamKindSummaryForChunk(curr)
+			rows := accessor.BinaryStringRowsForChunk(curr)
+			summary := accessor.BinaryStringSummaryForChunk(curr)
+			if len(rows) != 0 || summary {
+				if binaryStringRows == nil {
+					binaryStringRows = make([][]bool, len(group.ctr.aggList))
+					binaryStringSummaries = make([]bool, len(group.ctr.aggList))
+				}
+				binaryStringRows[i], binaryStringSummaries[i] = rows, summary
+			}
 		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
 		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
-			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries,
+			binaryStringRows, binaryStringSummaries); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}
