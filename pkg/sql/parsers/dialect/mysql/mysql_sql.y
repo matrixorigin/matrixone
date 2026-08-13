@@ -6406,6 +6406,10 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: $4}
     }
+|   select_with_parens time_window offset_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: $5}
+    }
 |   select_with_parens time_window_opt order_by_clause offset_clause rank_opt export_data_param_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}

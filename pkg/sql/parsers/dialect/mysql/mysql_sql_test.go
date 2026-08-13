@@ -5745,6 +5745,53 @@ func TestOffsetWithoutLimit(t *testing.T) {
 	}
 }
 
+func TestParenthesizedTimeWindowPagination(t *testing.T) {
+	testCases := []struct {
+		name       string
+		input      string
+		output     string
+		wantCount  bool
+		wantOffset bool
+		wantOrder  bool
+	}{
+		{
+			name:      "limit",
+			input:     "(SELECT 1) INTERVAL(ts, 1, day) LIMIT 1",
+			output:    "(select 1) interval(ts, 1, day) limit 1",
+			wantCount: true,
+		},
+		{
+			name:       "offset without order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) OFFSET 1",
+			output:     "(select 1) interval(ts, 1, day) offset 1",
+			wantOffset: true,
+		},
+		{
+			name:       "offset with order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) ORDER BY 1 OFFSET 1",
+			output:     "(select 1) order by 1 interval(ts, 1, day) offset 1",
+			wantOffset: true,
+			wantOrder:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.TimeWindow)
+			require.NotNil(t, selectStmt.Limit)
+			require.Equal(t, tc.wantCount, selectStmt.Limit.Count != nil)
+			require.Equal(t, tc.wantOffset, selectStmt.Limit.Offset != nil)
+			require.Equal(t, tc.wantOrder, len(selectStmt.OrderBy) != 0)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestOffsetContextReset(t *testing.T) {
 	parser := &MySQLParser{}
 	stmts, err := parser.Parse(context.Background(), "SELECT * FROM (SELECT 1) offset (c)", 1)
