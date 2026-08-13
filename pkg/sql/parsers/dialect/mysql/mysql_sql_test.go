@@ -5576,6 +5576,11 @@ func TestOffsetWithoutLimit(t *testing.T) {
 			output: "select id from t offset (1)",
 		},
 		{
+			name:   "offset after parenthesized expression",
+			input:  "SELECT (1) OFFSET (c)",
+			output: "select (1) offset (c)",
+		},
+		{
 			name:   "prepared parameter",
 			input:  "SELECT id FROM t ORDER BY id OFFSET ?",
 			output: "select id from t order by id offset ?",
@@ -5584,6 +5589,11 @@ func TestOffsetWithoutLimit(t *testing.T) {
 			name:   "parenthesized select",
 			input:  "(SELECT 1) OFFSET 1",
 			output: "(select 1) offset 1",
+		},
+		{
+			name:   "parenthesized select with parenthesized identifier offset",
+			input:  "(SELECT 1) OFFSET (c)",
+			output: "(select 1) offset (c)",
 		},
 		{
 			name:   "parenthesized select with cte",
@@ -5657,6 +5667,26 @@ func TestOffsetWithoutLimit(t *testing.T) {
 			output: "select * from t as offset where true",
 		},
 		{
+			name:   "implicit projection alias before rank",
+			input:  "SELECT 1 offset BY RANK WITH OPTION 'nprobe=1'",
+			output: "select 1 as offset by rank with option 'nprobe=1'",
+		},
+		{
+			name:   "implicit projection alias before interval",
+			input:  "SELECT 1 offset INTERVAL(ts, 1, day)",
+			output: "select 1 as offset interval(ts, 1, day)",
+		},
+		{
+			name:   "implicit table alias before full join",
+			input:  "SELECT * FROM t offset FULL JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
+			name:   "implicit table alias before full outer join",
+			input:  "SELECT * FROM t offset FULL OUTER JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
 			name:   "implicit projection alias before comment and from",
 			input:  "SELECT 1 offset /* comment */ FROM t",
 			output: "select 1 as offset from t",
@@ -5681,6 +5711,21 @@ func TestOffsetWithoutLimit(t *testing.T) {
 			input:  "SELECT * FROM (SELECT 1) AS offset(c)",
 			output: "select * from (select 1) as offset(c)",
 		},
+		{
+			name:   "implicit derived table alias with spaced columns",
+			input:  "SELECT * FROM (SELECT 1) offset (c)",
+			output: "select * from (select 1) as offset(c)",
+		},
+		{
+			name:   "implicit nested derived table alias with spaced columns",
+			input:  "SELECT * FROM ((SELECT 1)) offset (c)",
+			output: "select * from ((select 1)) as offset(c)",
+		},
+		{
+			name:   "implicit comma derived table alias with spaced columns",
+			input:  "SELECT * FROM t, (SELECT 1) offset (c)",
+			output: "select * from t cross join (select 1) as offset(c)",
+		},
 	}
 
 	for _, tc := range aliases {
@@ -5688,8 +5733,30 @@ func TestOffsetWithoutLimit(t *testing.T) {
 			stmt, err := ParseOne(context.Background(), tc.input, 1)
 			require.NoError(t, err)
 			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			if tc.name != "implicit projection alias before limit" {
+				require.Nil(t, selectStmt.Limit)
+			}
+			if tc.name == "implicit projection alias before interval" {
+				require.NotNil(t, selectStmt.TimeWindow)
+			}
 		})
 	}
+}
+
+func TestOffsetContextReset(t *testing.T) {
+	parser := &MySQLParser{}
+	stmts, err := parser.Parse(context.Background(), "SELECT * FROM (SELECT 1) offset (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "select * from (select 1) as offset(c)", tree.String(stmts[0], dialect.MYSQL))
+
+	stmts, err = parser.Parse(context.Background(), "(SELECT 1) OFFSET (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "(select 1) offset (c)", tree.String(stmts[0], dialect.MYSQL))
+	selectStmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selectStmt.Limit)
 }
 
 // Test WITH clause support for INSERT statement (Issue #22583)

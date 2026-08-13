@@ -174,6 +174,11 @@ type Lexer struct {
 	paramIndex            int
 	lower                 int64
 	lastToken             int
+	syntaxLastToken       int
+	syntaxDepth           int
+	syntaxInFrom          []bool
+	tableParenStack       []bool
+	lastClosedTableParen  bool
 	topLevelSemicolonEnds []int
 	sqlMode               SQLModeFlags
 	parseFirst            bool
@@ -213,6 +218,11 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.syntaxLastToken = 0
+	l.syntaxDepth = 0
+	l.syntaxInFrom = l.syntaxInFrom[:0]
+	l.tableParenStack = l.tableParenStack[:0]
+	l.lastClosedTableParen = false
 	l.topLevelSemicolonEnds = nil
 	l.sqlMode = sqlMode
 	l.parseFirst = false
@@ -236,6 +246,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	typ, str := l.scanner.Scan()
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
+	if typ == OFFSET && l.syntaxLastToken == int(')') && l.lastClosedTableParen && l.scanner.offsetAliasColumnListAhead() {
+		// OFFSET is non-reserved. In a table-factor context, the established
+		// `(...) offset (c1, c2)` syntax is an implicit alias plus column list,
+		// not an offset-only query clause.
+		typ = ID
+	}
 
 	if typ == FOR {
 		snapshot := *l.scanner
@@ -248,6 +264,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 				lval.str = str + " " + nextStr
 				l.scanner.LastToken = lval.str
 				*l.scanner = afterIceberg
+				l.recordSyntaxToken(FOR_ICEBERG)
 				return FOR_ICEBERG
 			}
 		}
@@ -256,8 +273,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	switch typ {
 	case INTEGRAL:
+		l.recordSyntaxToken(typ)
 		return l.toInt(lval, str)
 	case FLOAT:
+		l.recordSyntaxToken(typ)
 		return l.toFloat(lval, str)
 	}
 
@@ -270,7 +289,51 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 	l.lastToken = typ
 	lval.str = str
+	l.recordSyntaxToken(typ)
 	return typ
+}
+
+func (l *Lexer) recordSyntaxToken(token int) {
+	if token == int(';') {
+		l.syntaxLastToken = token
+		l.syntaxDepth = 0
+		l.syntaxInFrom = l.syntaxInFrom[:0]
+		l.tableParenStack = l.tableParenStack[:0]
+		l.lastClosedTableParen = false
+		return
+	}
+	for len(l.syntaxInFrom) <= l.syntaxDepth {
+		l.syntaxInFrom = append(l.syntaxInFrom, false)
+	}
+
+	switch token {
+	case SELECT:
+		l.syntaxInFrom[l.syntaxDepth] = false
+	case FROM:
+		l.syntaxInFrom[l.syntaxDepth] = true
+	case WHERE, GROUP, HAVING, ORDER, LIMIT, OFFSET,
+		UNION, EXCEPT, INTERSECT, MINUS, RETURNING, SET:
+		l.syntaxInFrom[l.syntaxDepth] = false
+	case int('('):
+		tableStart := isTableFactorStart(l.syntaxLastToken) ||
+			(l.syntaxLastToken == int('(') && len(l.tableParenStack) > 0 && l.tableParenStack[len(l.tableParenStack)-1]) ||
+			(l.syntaxLastToken == int(',') && l.syntaxInFrom[l.syntaxDepth])
+		l.tableParenStack = append(l.tableParenStack, tableStart)
+		l.syntaxDepth++
+	case int(')'):
+		l.lastClosedTableParen = false
+		if l.syntaxDepth > 0 {
+			l.syntaxDepth--
+			if len(l.syntaxInFrom) > l.syntaxDepth+1 {
+				l.syntaxInFrom = l.syntaxInFrom[:l.syntaxDepth+1]
+			}
+		}
+		if len(l.tableParenStack) > 0 {
+			l.lastClosedTableParen = l.tableParenStack[len(l.tableParenStack)-1]
+			l.tableParenStack = l.tableParenStack[:len(l.tableParenStack)-1]
+		}
+	}
+	l.syntaxLastToken = token
 }
 
 func (l *Lexer) GetDbOrTblName(origin string) string {
