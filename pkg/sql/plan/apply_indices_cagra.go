@@ -180,7 +180,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			includeCols, len(scanNode.FilterList))
 	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
-		scanNode.FilterList, scanNode, includeCols, pkColName)
+		scanNode.FilterList, scanNode, includeCols, pkColName, false)
 	if err != nil {
 		return nodeID, err
 	}
