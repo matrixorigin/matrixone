@@ -1914,6 +1914,29 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		require.NoError(t, storage.Close())
 	})
 
+	t.Run("pause while resume is being admitted", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_ResumeRequested
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    d.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
 	t.Run("resume running task for table error recovery", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		d := base

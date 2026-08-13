@@ -1955,9 +1955,15 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 			continue
 		}
 		if dTask.TaskStatus != task.TaskStatus_Canceled {
+			pauseAllowed := dTask.TaskStatus == task.TaskStatus_Running ||
+				// Resume is admitted before the asynchronous executor replacement
+				// completes. Accepting PAUSE here queues it behind that resume and
+				// keeps the daemon lifecycle consistent with the public CDC state,
+				// which is already running at this point.
+				(targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus == task.TaskStatus_ResumeRequested)
 			if targetStatus == task.TaskStatus_ResumeRequested &&
-				(dTask.TaskStatus != task.TaskStatus_Paused && dTask.TaskStatus != task.TaskStatus_Running) ||
-				targetStatus == task.TaskStatus_PauseRequested && dTask.TaskStatus != task.TaskStatus_Running {
+				(dTask.TaskStatus != task.TaskStatus_Paused && !pauseAllowed) ||
+				targetStatus == task.TaskStatus_PauseRequested && !pauseAllowed {
 				createCdc := details.CreateCdc
 				logutil.Warn("cdc.task.state.mismatch",
 					zap.String("task-name", createCdc.TaskName),
