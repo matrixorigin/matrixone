@@ -82,8 +82,8 @@ create database sub02 from acc01 publication pub01;
 -- @session
 
 -- @ignore:0,3,4,9
--- @sortkey:1,6
-select * from mo_catalog.mo_subs;
+select * from mo_catalog.mo_subs
+order by sub_account_name, pub_name;
 
 -- @session:id=2&user=acc02:test_account&password=111
 drop database sub02;
