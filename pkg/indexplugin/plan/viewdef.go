@@ -170,6 +170,31 @@ var MatchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
 // the same findMatchFullTextIndex, so their policy is identical by construction; each
 // plugin still declares the hook so the registry stays the single source of truth for what
 // an algorithm does, but the body lives here rather than being copied and left to drift.
+//
+// SCOPE, and why it stops here. This guards the statements that CREATE a view definition:
+// CREATE VIEW, ALTER VIEW, CREATE OR REPLACE VIEW. It deliberately does NOT guard the
+// statements that can later invalidate one -- DROP INDEX above all, but equally ALTER TABLE
+// DROP COLUMN and DROP TABLE. So a persisted view can still become unrunnable; the
+// invariant established here is "view DDL does not CREATE something unrunnable", not "a
+// persisted view is always runnable".
+//
+// That is deliberate, for three reasons:
+//
+//   - MySQL parity. MySQL checks only foreign-key dependencies when dropping an index;
+//     views are not dependency-tracked, and MySQL has no full-scan fallback for MATCH, so
+//     there too the view simply starts failing at query time. #27027 states the same from
+//     MySQL 8.0.45 testing and explicitly scopes this lifecycle out.
+//   - Guarding DROP INDEX alone would buy no invariant. Measured on MatrixOne: with a view
+//     over MATCH(body), both `ALTER TABLE docs DROP COLUMN body` and `DROP TABLE docs`
+//     succeed today and leave the view in the catalog failing on every query. Closing one
+//     of three doors would be inconsistent rather than safe.
+//   - It would break a normal workflow. Dropping a fulltext index, bulk loading, then
+//     recreating it is standard practice; refusing the drop would force every dependent
+//     view to be dropped and recreated around each reindex.
+//
+// The situation is also self-healing: recreating the index makes the stored views work
+// again, verified end to end. If MatrixOne ever wants the stronger guarantee, it needs to
+// cover DROP COLUMN and DROP TABLE in the same change, not DROP INDEX on its own.
 func RefuseUnservableMatch(ctx CompilerContext, query *plan.Query) error {
 	if !PlanCallsAnyFunc(query, MatchPlaceholderFuncs...) {
 		return nil
