@@ -21,6 +21,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -49,6 +50,148 @@ func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
 	}
 }
 
+func TestConnectorE2EWorkflowsUseRevisionPinnedDockerImage(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+	for _, name := range []string{"mongodb-connector.yml", "iceberg-connector.yml"} {
+		data, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", name))
+		require.NoError(t, err)
+		workflow := string(data)
+		require.NotContains(t, workflow, "actions/setup-go", "%s must not download Go modules on the host", name)
+		require.NotContains(t, workflow, "\n  pull_request:", "%s must not run for every PR", name)
+		require.NotContains(t, workflow, "if: ${{ false }}", "%s must remain manually runnable", name)
+		require.NotContains(t, workflow, "github.event.pull_request")
+		require.Contains(t, workflow, "workflow_dispatch:")
+		require.Contains(t, workflow, "MO_CONNECTOR_CI_REVISION: ${{ github.sha }}")
+		require.Contains(t, workflow, "uses: ./.github/actions/build-connector-ci")
+		require.Contains(t, workflow, "ignore-cache-export-error: 'true'")
+	}
+	buildAction, err := os.ReadFile(filepath.Join(repoRoot, ".github", "actions", "build-connector-ci", "action.yml"))
+	require.NoError(t, err)
+	sharedBuild := string(buildAction)
+	require.Contains(t, sharedBuild, "target: connector-ci")
+	require.Contains(t, sharedBuild, "cache-from: |")
+	require.Contains(t, sharedBuild, "type=gha,scope=connector-ci-")
+	require.Contains(t, sharedBuild, "scope=matrixone-native-")
+	require.Contains(t, sharedBuild, "cache-to: type=gha,mode=max,scope=connector-ci-")
+	require.Contains(t, sharedBuild, "ignore-error=${{ inputs['ignore-cache-export-error'] }}")
+	require.Contains(t, sharedBuild, "Retry connector CI image build")
+	require.Contains(t, sharedBuild, "GO_MOD_DOWNLOAD_TIMEOUT=10m")
+	require.Contains(t, sharedBuild, "python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --check")
+
+	cacheWorkflow, err := os.ReadFile(filepath.Join(repoRoot, ".github", "workflows", "connector-ci-cache.yml"))
+	require.NoError(t, err)
+	cacheWarmup := string(cacheWorkflow)
+	require.Contains(t, cacheWarmup, "branches: [main]")
+	require.Contains(t, cacheWarmup, "uses: ./.github/actions/build-connector-ci")
+	require.NotContains(t, cacheWarmup, "ignore-cache-export-error: 'true'")
+
+	dockerfile, err := os.ReadFile(filepath.Join(repoRoot, "optools", "images", "Dockerfile"))
+	require.NoError(t, err)
+	imageContract := string(dockerfile)
+	require.NotContains(t, imageContract, "python3", "the pinned builder image does not contain Python")
+	for _, required := range []string{
+		"FROM builder AS connector-builder",
+		"FROM build-base AS connector-modules",
+		"COPY --from=connector-modules /go/pkg/mod /go/pkg/mod",
+		"FROM runtime-base AS connector-ci",
+		"org.opencontainers.image.revision",
+		"/connector-bin/mongodb-e2e",
+		"/connector-bin/iceberg-e2e",
+		"go test -tags iceberggo",
+		"ENV CGO_LDFLAGS=",
+		"id=matrixone-go-modules",
+		"sharing=locked",
+		"cp -a /tmp/gomod-cache/. /go/pkg/mod/",
+		"ARG GO_MOD_DOWNLOAD_TIMEOUT=0",
+		"timeout \"$GO_MOD_DOWNLOAD_TIMEOUT\" env GOMODCACHE=/tmp/gomod-cache go mod download",
+	} {
+		require.Contains(t, imageContract, required)
+	}
+
+	for _, tc := range []struct {
+		path     string
+		required []string
+	}{
+		{
+			path: "optools/mongodb_ci.bash",
+			required: []string{
+				"--user \"$container_user\"",
+				"--entrypoint /mo-service",
+				"--entrypoint /connector-bin/mongodb-e2e",
+				"--mongo-host \"mongo:27017\"",
+			},
+		},
+		{
+			path: "optools/iceberg_ci.bash",
+			required: []string{
+				"--user \"$container_user\"",
+				"--entrypoint /mo-service",
+				"--entrypoint /connector-bin/iceberg-e2e",
+				"http://nessie:19120/iceberg",
+				"http://minio:9000",
+				"--object-endpoint \"${MO_ICEBERG_E2E_OBJECT_ENDPOINT:-minio}\"",
+			},
+		},
+	} {
+		data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(tc.path)))
+		require.NoError(t, err)
+		for _, required := range tc.required {
+			require.Contains(t, string(data), required, "%s is missing its container contract", tc.path)
+		}
+		require.Equal(t, 2, strings.Count(string(data), `--user "$container_user"`),
+			"%s must run both MatrixOne and its E2E runner as the host user", tc.path)
+	}
+
+	compose, err := os.ReadFile(filepath.Join(repoRoot, "etc", "launch-minio-local", "docker-compose.yml"))
+	require.NoError(t, err)
+	require.NotContains(t, string(compose), "projectnessie/nessie:latest")
+	require.Contains(t, string(compose), "NESSIE_EXTERNAL_ENDPOINT:-http://127.0.0.1:9000")
+}
+
+func TestConnectorContainerConfigGenerators(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+
+	t.Run("mongodb", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cmd := exec.Command("bash", "-c", `source "$1"; TMP_DIR="$2"; MO_PORT=6001; generate_mo_config`,
+			"connector-config-test", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), tmpDir)
+		output, err := cmd.CombinedOutput()
+		require.NoErrorf(t, err, "generate MongoDB container config: %s", output)
+
+		for _, name := range []string{"log.toml", "tn.toml", "cn.toml"} {
+			data, err := os.ReadFile(filepath.Join(tmpDir, "mo-config", name))
+			require.NoError(t, err)
+			require.Contains(t, string(data), filepath.Join(tmpDir, "mo-data"))
+		}
+		cn, err := os.ReadFile(filepath.Join(tmpDir, "mo-config", "cn.toml"))
+		require.NoError(t, err)
+		require.Contains(t, string(cn), "[cn.frontend]\nport = 6001")
+		require.Contains(t, string(cn), "[cn.frontend.mongodb]\n")
+	})
+
+	t.Run("iceberg", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cmd := exec.Command("bash", "-c", `source "$1"; ICEBERG_E2E_TMP_DIR="$2"; generate_iceberg_container_config`,
+			"connector-config-test", filepath.Join(repoRoot, "optools", "iceberg_ci.bash"), tmpDir)
+		output, err := cmd.CombinedOutput()
+		require.NoErrorf(t, err, "generate Iceberg container config: %s", output)
+
+		for _, name := range []string{"log.toml", "tn.toml", "cn.toml"} {
+			data, err := os.ReadFile(filepath.Join(tmpDir, "mo-config", name))
+			require.NoError(t, err)
+			config := string(data)
+			require.Contains(t, config, filepath.Join(tmpDir, "mo-data"))
+			require.NotContains(t, config, "http://127.0.0.1:9000")
+			require.Contains(t, config, "http://minio:9000")
+		}
+		launch, err := os.ReadFile(filepath.Join(tmpDir, "mo-config", "launch.toml"))
+		require.NoError(t, err)
+		for _, name := range []string{"log.toml", "tn.toml", "cn.toml"} {
+			require.Contains(t, string(launch), filepath.Join(tmpDir, "mo-config", name))
+		}
+	})
+}
+
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	previous, err := os.Getwd()
@@ -74,6 +217,9 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	expectMongoDBE2EScalar(mock, "2")
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
 	mock.ExpectQuery("select payload_1").WillReturnError(errors.New("MongoDB decoded batch byte limit exceeded"))
 	// A pre-canceled context is rejected by database/sql before it reaches the
@@ -114,6 +260,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"secret-backed-ddl",
 		"show-create-redaction-roundtrip",
 		"scan-projection-pushdown-null-conversion",
+		"compound-predicate-objectid-null-boundaries",
 		"low-precision-temporal-residual",
 		"decoded-vector-budget-enforced",
 		"multi-batch-cancel-recovery",

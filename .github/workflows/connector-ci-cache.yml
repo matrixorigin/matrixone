@@ -1,0 +1,40 @@
+name: Connector CI Image Cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.dockerignore'
+      - '.github/actions/build-connector-ci/**'
+      - '.github/workflows/connector-ci-cache.yml'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - 'cgo/**'
+      - 'thirdparties/**'
+      - 'optools/images/Dockerfile'
+      - 'pkg/iceberg/**'
+      - 'test/iceberg/**'
+      - 'test/mongodb/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  warm-connector-image-cache:
+    name: Warm connector image cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      MO_CONNECTOR_CI_IMAGE: matrixone-connector-ci:${{ github.sha }}
+      MO_CONNECTOR_CI_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-connector-ci
+        with:
+          image: ${{ env.MO_CONNECTOR_CI_IMAGE }}
+          revision: ${{ env.MO_CONNECTOR_CI_REVISION }}

@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${1:-core}"
 REPORT_DIR="${MO_ICEBERG_REPORT_DIR:-${ROOT_DIR}/test/iceberg/reports/ci_$(date -u +%Y%m%dT%H%M%SZ)}"
+if [[ "$REPORT_DIR" != /* ]]; then
+  REPORT_DIR="${ROOT_DIR}/${REPORT_DIR}"
+fi
 COVER_DIR="${MO_ICEBERG_COVER_DIR:-${ROOT_DIR}/test/iceberg/reports/coverage}"
 THIRDPARTIES_INSTALL_DIR="${ROOT_DIR}/thirdparties/install"
 
@@ -21,6 +24,9 @@ die() {
   printf '[iceberg-ci] ERROR: %s\n' "$*" >&2
   exit 1
 }
+
+# shellcheck source=optools/connector_ci_image.bash
+source "${ROOT_DIR}/optools/connector_ci_image.bash"
 
 run() {
   log "$*"
@@ -124,10 +130,14 @@ PY
 
 ICEBERG_E2E_TMP_DIR=""
 ICEBERG_E2E_MO_PID=""
+ICEBERG_E2E_MO_CONTAINER=""
 
 iceberg_e2e_collect_logs() {
   [[ -n "$ICEBERG_E2E_TMP_DIR" ]] || return
   mkdir -p "$REPORT_DIR"
+  if [[ -n "$ICEBERG_E2E_MO_CONTAINER" ]]; then
+    docker logs "$ICEBERG_E2E_MO_CONTAINER" >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 || true
+  fi
   sanitize_artifact_file "${ICEBERG_E2E_TMP_DIR}/mo-service.log" "${REPORT_DIR}/mo-service.log"
   if command -v docker >/dev/null 2>&1; then
     (cd "${ROOT_DIR}/etc/launch-minio-local" && docker compose logs --no-color nessie >"${ICEBERG_E2E_TMP_DIR}/nessie.log" 2>&1) || true
@@ -139,39 +149,93 @@ iceberg_e2e_collect_logs() {
 
 iceberg_e2e_cleanup() {
   local status=$?
+  set +e
   if [[ -n "$ICEBERG_E2E_MO_PID" ]] && kill -0 "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1; then
     kill "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
     wait "$ICEBERG_E2E_MO_PID" >/dev/null 2>&1 || true
   fi
   iceberg_e2e_collect_logs
+  if [[ -n "$ICEBERG_E2E_MO_CONTAINER" ]]; then
+    docker rm -f "$ICEBERG_E2E_MO_CONTAINER" >/dev/null 2>&1 || true
+  fi
   (cd "$ROOT_DIR" && make dev-down-iceberg-tier-a >/dev/null 2>&1) || true
+  if [[ -d "$ICEBERG_E2E_TMP_DIR" && "$(basename "$ICEBERG_E2E_TMP_DIR")" == mo-iceberg-e2e-local.* ]]; then
+    rm -rf -- "$ICEBERG_E2E_TMP_DIR"
+  else
+    log "refusing to remove unexpected temporary path: $ICEBERG_E2E_TMP_DIR"
+  fi
   return "$status"
+}
+
+generate_iceberg_container_config() {
+  local generated_dir="${ICEBERG_E2E_TMP_DIR}/mo-config"
+  local source_dir="${ROOT_DIR}/etc/launch-minio-local"
+  mkdir -p "$generated_dir"
+  for name in log tn cn; do
+    sed -e "s#\\./etc/launch-minio-local/mo-data#${ICEBERG_E2E_TMP_DIR}/mo-data#g" \
+      -e "s#etc/launch-minio-local/mo-data#${ICEBERG_E2E_TMP_DIR}/mo-data#g" \
+      -e 's#http://127\.0\.0\.1:9000#http://minio:9000#g' \
+      "$source_dir/$name.toml" >"$generated_dir/$name.toml"
+  done
+  sed -e "s#\\./etc/launch-minio-local/log.toml#$generated_dir/log.toml#" \
+    -e "s#\\./etc/launch-minio-local/tn.toml#$generated_dir/tn.toml#" \
+    -e "s#\\./etc/launch-minio-local/cn.toml#$generated_dir/cn.toml#" \
+    "$source_dir/launch.toml" >"$generated_dir/launch.toml"
 }
 
 iceberg_e2e_local() {
   require_cmd docker
   require_cmd curl
   require_cmd python3
+  if connector_ci_enabled; then
+    connector_ci_verify_image
+  fi
 
   mkdir -p "$REPORT_DIR"
   ICEBERG_E2E_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-iceberg-e2e-local.XXXXXX")"
   trap iceberg_e2e_cleanup EXIT
+  export COMPOSE_PROJECT_NAME="mo-iceberg-$(basename "$ICEBERG_E2E_TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
 
-  run make build
-  go_test_adapter
-  go_test_golden
+  if connector_ci_enabled; then
+    export NESSIE_EXTERNAL_ENDPOINT="http://minio:9000"
+    generate_iceberg_container_config
+  else
+    run make build
+    go_test_adapter
+    go_test_golden
+  fi
 
   run make dev-up-iceberg-tier-a
   log "starting mo-service for Iceberg E2E local"
-  MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "${ROOT_DIR}/mo-service" -launch "${ROOT_DIR}/etc/launch-minio-local/launch.toml" \
-    >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
-  ICEBERG_E2E_MO_PID="$!"
+  if connector_ci_enabled; then
+    local network="${COMPOSE_PROJECT_NAME}_mo-minio-network"
+    local container_user="$(id -u):$(id -g)"
+    ICEBERG_E2E_MO_CONTAINER="${COMPOSE_PROJECT_NAME}-mo"
+    docker run -d --name "$ICEBERG_E2E_MO_CONTAINER" --network "$network" --user "$container_user" \
+      --mount "type=bind,source=${ICEBERG_E2E_TMP_DIR},target=${ICEBERG_E2E_TMP_DIR}" \
+      -e MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+      --entrypoint /mo-service "$MO_CONNECTOR_CI_IMAGE" \
+      -launch "${ICEBERG_E2E_TMP_DIR}/mo-config/launch.toml" >/dev/null
+    connector_ci_wait_for_mo "$ICEBERG_E2E_MO_CONTAINER" 6001
+    docker run --rm --network "$network" --user "$container_user" \
+      --mount "type=bind,source=${REPORT_DIR},target=${REPORT_DIR}" \
+      --entrypoint /connector-bin/iceberg-e2e "$MO_CONNECTOR_CI_IMAGE" \
+      --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://nessie:19120/iceberg}" \
+      --warehouse "${MO_ICEBERG_E2E_WAREHOUSE:-s3://mo-iceberg/warehouse}" \
+      --object-endpoint "${MO_ICEBERG_E2E_OBJECT_ENDPOINT:-minio}" \
+      --dsn "${MO_ICEBERG_E2E_DSN:-root:111@tcp(${ICEBERG_E2E_MO_CONTAINER}:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false}" \
+      --report-dir "$REPORT_DIR"
+  else
+    MO_ICEBERG_ALLOW_PLAIN_HTTP=1 "${ROOT_DIR}/mo-service" -launch "${ROOT_DIR}/etc/launch-minio-local/launch.toml" \
+      >"${ICEBERG_E2E_TMP_DIR}/mo-service.log" 2>&1 &
+    ICEBERG_E2E_MO_PID="$!"
 
-  run go run ./test/iceberg/iceberg_e2e_local.go \
-    --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \
-    --warehouse "${MO_ICEBERG_E2E_WAREHOUSE:-s3://mo-iceberg/warehouse}" \
-    --dsn "${MO_ICEBERG_E2E_DSN:-root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false}" \
-    --report-dir "$REPORT_DIR"
+    run go run ./test/iceberg/iceberg_e2e_local.go \
+      --catalog-uri "${MO_ICEBERG_E2E_CATALOG_URI:-http://127.0.0.1:19120/iceberg}" \
+      --warehouse "${MO_ICEBERG_E2E_WAREHOUSE:-s3://mo-iceberg/warehouse}" \
+      --dsn "${MO_ICEBERG_E2E_DSN:-root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false}" \
+      --report-dir "$REPORT_DIR"
+  fi
 
   iceberg_e2e_collect_logs
   verify_report_artifacts "$REPORT_DIR"
@@ -1008,57 +1072,61 @@ Profiles:
 USAGE
 }
 
-cd "$ROOT_DIR"
-require_cmd go
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  cd "$ROOT_DIR"
+  if [[ "$PROFILE" != "e2e-local" ]] || ! connector_ci_enabled; then
+    require_cmd go
+  fi
 
-case "$PROFILE" in
-  core) go_test_core ;;
-  embedded) go_test_embedded ;;
-  adapter) go_test_adapter ;;
-  golden) require_cmd python3; go_test_golden ;;
-  external-templates) require_cmd python3; validate_external_templates ;;
-  coverage) go_test_coverage ;;
-  preflight) preflight ;;
-  artifact) verify_report_artifacts "$REPORT_DIR" ;;
-  external-coverage) require_cmd python3; verify_external_coverage "$REPORT_DIR" ;;
-  dashboard) generate_cap_dashboard "$REPORT_DIR" ;;
-  readiness) generate_external_readiness "$REPORT_DIR" ;;
-  e2e-local) iceberg_e2e_local ;;
-  golden-real)
-    export MO_ICEBERG_CI_PROFILE="${MO_ICEBERG_CI_PROFILE:-golden-real}"
-    preflight
-    run_golden_real_if_enabled
-    verify_report_artifacts "$REPORT_DIR"
-    verify_external_coverage "$REPORT_DIR"
-    ;;
-  nightly)
-    preflight
-    run_tier_a_if_enabled
-    run_cross_engine_if_enabled
-    run_golden_real_if_enabled
-    run_remaining_external_if_enabled
-    go_test_golden
-    generate_cap_dashboard "$REPORT_DIR"
-    generate_external_readiness "$REPORT_DIR"
-    if [[ -d "$REPORT_DIR" ]] && find "$REPORT_DIR" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
+  case "$PROFILE" in
+    core) go_test_core ;;
+    embedded) go_test_embedded ;;
+    adapter) go_test_adapter ;;
+    golden) require_cmd python3; go_test_golden ;;
+    external-templates) require_cmd python3; validate_external_templates ;;
+    coverage) go_test_coverage ;;
+    preflight) preflight ;;
+    artifact) verify_report_artifacts "$REPORT_DIR" ;;
+    external-coverage) require_cmd python3; verify_external_coverage "$REPORT_DIR" ;;
+    dashboard) generate_cap_dashboard "$REPORT_DIR" ;;
+    readiness) generate_external_readiness "$REPORT_DIR" ;;
+    e2e-local) iceberg_e2e_local ;;
+    golden-real)
+      export MO_ICEBERG_CI_PROFILE="${MO_ICEBERG_CI_PROFILE:-golden-real}"
+      preflight
+      run_golden_real_if_enabled
       verify_report_artifacts "$REPORT_DIR"
-      if external_coverage_profile_enabled; then
-        verify_external_coverage "$REPORT_DIR"
+      verify_external_coverage "$REPORT_DIR"
+      ;;
+    nightly)
+      preflight
+      run_tier_a_if_enabled
+      run_cross_engine_if_enabled
+      run_golden_real_if_enabled
+      run_remaining_external_if_enabled
+      go_test_golden
+      generate_cap_dashboard "$REPORT_DIR"
+      generate_external_readiness "$REPORT_DIR"
+      if [[ -d "$REPORT_DIR" ]] && find "$REPORT_DIR" -mindepth 1 -maxdepth 1 -type d | grep -q .; then
+        verify_report_artifacts "$REPORT_DIR"
+        if external_coverage_profile_enabled; then
+          verify_external_coverage "$REPORT_DIR"
+        fi
+      else
+        log "no external report cases found under $REPORT_DIR; artifact verification skipped"
       fi
-    else
-      log "no external report cases found under $REPORT_DIR; artifact verification skipped"
-    fi
-    ;;
-  local)
-    go_test_core
-    go_test_embedded
-    go_test_adapter
-    go_test_golden
-    validate_external_templates
-    go_test_coverage
-    generate_cap_dashboard "$REPORT_DIR"
-    generate_external_readiness "$REPORT_DIR"
-    ;;
-  -h|--help|help) usage ;;
-  *) usage; die "unknown profile: $PROFILE" ;;
-esac
+      ;;
+    local)
+      go_test_core
+      go_test_embedded
+      go_test_adapter
+      go_test_golden
+      validate_external_templates
+      go_test_coverage
+      generate_cap_dashboard "$REPORT_DIR"
+      generate_external_readiness "$REPORT_DIR"
+      ;;
+    -h|--help|help) usage ;;
+    *) usage; die "unknown profile: $PROFILE" ;;
+  esac
+fi

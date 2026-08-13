@@ -41,13 +41,14 @@ import (
 )
 
 type localE2EConfig struct {
-	CatalogURI string
-	Warehouse  string
-	DSN        string
-	ReportDir  string
-	Namespace  string
-	Catalog    string
-	Database   string
+	CatalogURI     string
+	Warehouse      string
+	ObjectEndpoint string
+	DSN            string
+	ReportDir      string
+	Namespace      string
+	Catalog        string
+	Database       string
 }
 
 type caseResult struct {
@@ -75,6 +76,7 @@ func main() {
 	cfg := localE2EConfig{}
 	flag.StringVar(&cfg.CatalogURI, "catalog-uri", envOr("MO_ICEBERG_E2E_CATALOG_URI", "http://127.0.0.1:19120/iceberg"), "Iceberg REST catalog URI")
 	flag.StringVar(&cfg.Warehouse, "warehouse", envOr("MO_ICEBERG_E2E_WAREHOUSE", "s3://mo-iceberg/warehouse"), "Iceberg warehouse location")
+	flag.StringVar(&cfg.ObjectEndpoint, "object-endpoint", envOr("MO_ICEBERG_E2E_OBJECT_ENDPOINT", "localhost"), "object storage endpoint allowed by the Iceberg access policy")
 	flag.StringVar(&cfg.DSN, "dsn", envOr("MO_ICEBERG_E2E_DSN", "root:111@tcp(127.0.0.1:6001)/?timeout=5s&readTimeout=30s&writeTimeout=30s&multiStatements=false"), "MatrixOne MySQL DSN")
 	flag.StringVar(&cfg.ReportDir, "report-dir", envOr("MO_ICEBERG_REPORT_DIR", "test/iceberg/reports/e2e-local"), "report output directory")
 	flag.StringVar(&cfg.Namespace, "namespace", envOr("MO_ICEBERG_E2E_NAMESPACE", ""), "Iceberg namespace to create")
@@ -146,6 +148,7 @@ func main() {
 	cases := []func(context.Context) caseResult{
 		runner.catalogAndMappingCase,
 		runner.appendReadAndTimeTravelCase,
+		runner.aggregateAndEmptyScanCase,
 		runner.partitionFilterCase,
 		runner.mergeOnReadDeleteCase,
 	}
@@ -183,7 +186,7 @@ func (r *caseRunner) setup(ctx context.Context) error {
 			ident(r.cfg.Catalog), sqlString(r.cfg.CatalogURI), sqlString(r.cfg.Warehouse)),
 		fmt.Sprintf("CALL iceberg_register_access(%s, %s)",
 			sqlString(r.cfg.Catalog),
-			sqlString("scope=cluster,account_id=0,external_principal=ci-local,endpoint=localhost,region=us-east-1,bucket=mo-iceberg")),
+			sqlString(fmt.Sprintf("scope=cluster,account_id=0,external_principal=ci-local,endpoint=%s,region=us-east-1,bucket=mo-iceberg", r.cfg.ObjectEndpoint))),
 		fmt.Sprintf(`CREATE EXTERNAL TABLE %s.%s (
   order_id BIGINT,
   bucket INT,
@@ -377,6 +380,28 @@ func (r *caseRunner) partitionFilterCase(ctx context.Context) caseResult {
 		return failedCase("ICE-CI-E2E-030", "partition-filter", sqls, expected, actual, "partition filter result mismatch")
 	}
 	return passedCase("ICE-CI-E2E-030", "partition-filter", sqls, expected, actual, nil)
+}
+
+func (r *caseRunner) aggregateAndEmptyScanCase(ctx context.Context) caseResult {
+	table := fmt.Sprintf("%s.%s", ident(r.cfg.Database), ident("append_orders"))
+	sqls := []string{
+		fmt.Sprintf("SELECT region, COUNT(*), SUM(amount) FROM %s GROUP BY region ORDER BY region", table),
+		fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE order_id > 1000", table),
+	}
+	aggregates, err := queryLines(ctx, r.db, sqls[0])
+	if err != nil {
+		return failedCase("ICE-CI-E2E-025", "aggregate-and-empty-scan", sqls, nil, aggregates, err.Error())
+	}
+	empty, err := queryLines(ctx, r.db, sqls[1])
+	if err != nil {
+		return failedCase("ICE-CI-E2E-025", "aggregate-and-empty-scan", sqls, nil, empty, err.Error())
+	}
+	expected := []string{"ksa\t3\t90", "qat\t1\t40", "uae\t1\t20", "0"}
+	actual := append(append([]string{}, aggregates...), empty...)
+	if !sameLines(expected, actual) {
+		return failedCase("ICE-CI-E2E-025", "aggregate-and-empty-scan", sqls, expected, actual, "aggregate/empty scan result mismatch")
+	}
+	return passedCase("ICE-CI-E2E-025", "aggregate-and-empty-scan", sqls, expected, actual, nil)
 }
 
 func (r *caseRunner) mergeOnReadDeleteCase(ctx context.Context) caseResult {

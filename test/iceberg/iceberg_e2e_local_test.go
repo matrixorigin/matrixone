@@ -380,7 +380,7 @@ func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 		"DROP ICEBERG CATALOG IF EXISTS",
 		"CREATE DATABASE",
 		"CREATE ICEBERG CATALOG",
-		"CALL iceberg_register_access",
+		"CALL iceberg_register_access.*endpoint=localhost",
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
@@ -389,6 +389,32 @@ func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 	}
 	runner := &caseRunner{cfg: localE2ETestConfig(), db: db}
 	if err := runner.setup(context.Background()); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2ESetupUsesConfiguredObjectEndpoint(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	for _, pattern := range []string{
+		"DROP DATABASE IF EXISTS",
+		"DROP ICEBERG CATALOG IF EXISTS",
+		"CREATE DATABASE",
+		"CREATE ICEBERG CATALOG",
+		"CALL iceberg_register_access.*endpoint=minio",
+		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
+	} {
+		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	cfg := localE2ETestConfig()
+	cfg.ObjectEndpoint = "minio"
+	if err := (&caseRunner{cfg: cfg, db: db}).setup(context.Background()); err != nil {
 		t.Fatalf("setup failed: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1067,6 +1093,75 @@ func TestLocalE2EPartitionFilterCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EAggregateAndEmptyScanCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectQuery("GROUP BY region").WillReturnRows(sqlmock.NewRows([]string{"region", "count", "sum"}).
+		AddRow("ksa", int64(3), int64(90)).
+		AddRow("qat", int64(1), int64(40)).
+		AddRow("uae", int64(1), int64(20)))
+	mock.ExpectQuery("order_id > 1000").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(0)))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).aggregateAndEmptyScanCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("aggregate/empty scan case failed: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2EAggregateAndEmptyScanCaseFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		mock   func(sqlmock.Sqlmock)
+		errSub string
+	}{
+		{
+			name: "aggregate query fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("GROUP BY region").WillReturnError(errors.New("aggregate failed"))
+			},
+			errSub: "aggregate failed",
+		},
+		{
+			name: "empty query fails",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("GROUP BY region").WillReturnRows(sqlmock.NewRows([]string{"region", "count", "sum"}).
+					AddRow("ksa", int64(3), int64(90)).
+					AddRow("qat", int64(1), int64(40)).
+					AddRow("uae", int64(1), int64(20)))
+				mock.ExpectQuery("order_id > 1000").WillReturnError(errors.New("empty scan failed"))
+			},
+			errSub: "empty scan failed",
+		},
+		{
+			name: "result mismatch",
+			mock: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("GROUP BY region").WillReturnRows(sqlmock.NewRows([]string{"region", "count", "sum"}).
+					AddRow("ksa", int64(4), int64(100)))
+				mock.ExpectQuery("order_id > 1000").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+			},
+			errSub: "result mismatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			tt.mock(mock)
+			result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).aggregateAndEmptyScanCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.errSub) {
+				t.Fatalf("expected failure containing %q, got %+v", tt.errSub, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestLocalE2EMergeOnReadDeleteCase(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -1244,13 +1339,14 @@ func TestLocalE2ESeedRESTTables(t *testing.T) {
 
 func localE2ETestConfig() localE2EConfig {
 	return localE2EConfig{
-		CatalogURI: "http://127.0.0.1:19120/iceberg",
-		Warehouse:  "s3://mo-iceberg/warehouse",
-		DSN:        "root:111@tcp(127.0.0.1:6001)/",
-		ReportDir:  "test/iceberg/reports/e2e-local",
-		Namespace:  "ci_ns",
-		Catalog:    "ci_catalog",
-		Database:   "ci_db",
+		CatalogURI:     "http://127.0.0.1:19120/iceberg",
+		Warehouse:      "s3://mo-iceberg/warehouse",
+		ObjectEndpoint: "localhost",
+		DSN:            "root:111@tcp(127.0.0.1:6001)/",
+		ReportDir:      "test/iceberg/reports/e2e-local",
+		Namespace:      "ci_ns",
+		Catalog:        "ci_catalog",
+		Database:       "ci_db",
 	}
 }
 

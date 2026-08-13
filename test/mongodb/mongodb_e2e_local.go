@@ -128,6 +128,20 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 	}
 	r.Cases = append(r.Cases, "scan-projection-pushdown-null-conversion")
 
+	// Exercise a compound residual over a try_null numeric conversion, the
+	// ObjectID-to-CHAR mapping boundary, and the distinction between BSON null
+	// or missing values and present strings.
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events where device_id = 'device-001' and site_id = 'site-east' and measurement >= 14 and measurement < 30", "2"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events where mongo_id = '64b000000000000000000003'", "1"); err != nil {
+		return err
+	}
+	if err := expectScalar(ctx, db, "select count(*) from mongodb_ci.events where source_batch is not null", "2"); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "compound-predicate-objectid-null-boundaries")
+
 	// BSON DateTime preserves milliseconds, while DATETIME(0) truncates them.
 	// The source predicate must therefore remain residual-only: an exact MongoDB
 	// equality on 10:00:05.000 would incorrectly exclude this .100 source row.

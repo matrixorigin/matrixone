@@ -24,7 +24,7 @@ services:
       - mo-minio-network
 
   nessie:
-    image: ghcr.io/projectnessie/nessie:latest
+    image: ghcr.io/projectnessie/nessie@sha256:c0f42874c810f28ac30fc991e979c1b8cf5a2cbfa94212086cdddeae49629517
     container_name: mo-nessie-local
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     ports:
@@ -37,7 +37,7 @@ services:
       NESSIE_CATALOG_DEFAULT_WAREHOUSE: warehouse
       NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION: s3://mo-iceberg/warehouse
       NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT: http://minio:9000
-      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_EXTERNAL_ENDPOINT: http://127.0.0.1:9000
+      NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_EXTERNAL_ENDPOINT: ${NESSIE_EXTERNAL_ENDPOINT:-http://127.0.0.1:9000}
       NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION: us-east-1
       NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE: STATIC
       NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY: urn:nessie-secret:quarkus:s3default

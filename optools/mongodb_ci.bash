@@ -7,12 +7,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${1:-e2e-local}"
 REPORT_DIR="${MO_MONGODB_REPORT_DIR:-${ROOT_DIR}/test/mongodb/reports/ci_$(date -u +%Y%m%dT%H%M%SZ)}"
+if [[ "$REPORT_DIR" != /* ]]; then
+  REPORT_DIR="${ROOT_DIR}/${REPORT_DIR}"
+fi
 TMP_DIR=""
 MO_PID=""
+MO_CONTAINER=""
 
 log() { printf '[mongodb-ci] %s\n' "$*"; }
 die() { printf '[mongodb-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+# shellcheck source=optools/connector_ci_image.bash
+source "${ROOT_DIR}/optools/connector_ci_image.bash"
 
 sanitize() {
   local source="$1" target="$2"
@@ -27,6 +34,9 @@ sanitize() {
 collect() {
   [[ -n "$TMP_DIR" ]] || return
   mkdir -p "$REPORT_DIR"
+  if [[ -n "$MO_CONTAINER" ]]; then
+    docker logs "$MO_CONTAINER" >"$TMP_DIR/mo-service.log" 2>&1 || true
+  fi
   sanitize "$TMP_DIR/mo-service.log" "$REPORT_DIR/mo-service.log"
   if command -v docker >/dev/null 2>&1; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
@@ -56,6 +66,9 @@ cleanup() {
     wait "$MO_PID" >/dev/null 2>&1 || true
   fi
   collect
+  if [[ -n "$MO_CONTAINER" ]]; then
+    docker rm -f "$MO_CONTAINER" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$TMP_DIR" ]]; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
       MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE="${MONGODB_KEYFILE:-/dev/null}" \
@@ -139,7 +152,12 @@ generate_mo_config() {
 }
 
 run_e2e() {
-  require docker; require go; require python3; require openssl
+  require docker; require openssl
+  if connector_ci_enabled; then
+    connector_ci_verify_image
+  else
+    require go
+  fi
   mkdir -p "$REPORT_DIR"
   TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-mongodb-e2e.XXXXXX")"
   trap cleanup EXIT
@@ -147,7 +165,12 @@ run_e2e() {
   # Let Docker and MatrixOne bind port 0 themselves. The selected listeners
   # stay owned from allocation through use, eliminating the bind-close-rebind
   # window that let adjacent CI jobs steal either port.
-  export MONGODB_PORT="" MO_PORT="0"
+  export MONGODB_PORT=""
+  if connector_ci_enabled; then
+    export MO_PORT="6001"
+  else
+    export MO_PORT="0"
+  fi
   export MONGODB_ROOT_USER="root_$(openssl rand -hex 6)"
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
@@ -156,7 +179,9 @@ run_e2e() {
   openssl rand -base64 756 >"$MONGODB_KEYFILE"
   chmod 600 "$MONGODB_KEYFILE"
 
-  (cd "$ROOT_DIR" && make build)
+  if ! connector_ci_enabled; then
+    (cd "$ROOT_DIR" && make build)
+  fi
   generate_mo_config
   docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" up -d
   MONGODB_PORT="$(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" port mongo 27017 | sed -nE 's/.*:([0-9]+)$/\1/p' | tail -1)"
@@ -173,19 +198,36 @@ run_e2e() {
     mongosh --quiet -u "$MONGODB_ROOT_USER" -p "$MONGODB_ROOT_PASSWORD" --authenticationDatabase admin \
     <"$ROOT_DIR/etc/launch-mongodb-local/init_and_seed.js" >/dev/null
   export MO_MONGODB_E2E_CREDENTIAL="{\"Username\":\"mo_reader\",\"Password\":\"$MONGODB_READER_PASSWORD\"}"
-	export MO_MONGODB_E2E_CREDENTIAL_NEXT="{\"Username\":\"mo_reader_next\",\"Password\":\"$MONGODB_READER_NEXT_PASSWORD\"}"
-	if [[ "$(uname -s)" == Darwin ]]; then
-		export DYLD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-	else
-		export LD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-	fi
-  "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
-  MO_PID=$!
-  MO_PORT="$(wait_mo_port)"
-  export MO_PORT
-  (cd "$ROOT_DIR" && go run ./test/mongodb/mongodb_e2e_local.go \
-    --dsn "root:111@tcp(127.0.0.1:$MO_PORT)/?timeout=5s&readTimeout=30s&writeTimeout=30s" \
-    --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR")
+  export MO_MONGODB_E2E_CREDENTIAL_NEXT="{\"Username\":\"mo_reader_next\",\"Password\":\"$MONGODB_READER_NEXT_PASSWORD\"}"
+  if connector_ci_enabled; then
+    local network="${COMPOSE_PROJECT_NAME}_mongodb-e2e"
+    local container_user="$(id -u):$(id -g)"
+    MO_CONTAINER="${COMPOSE_PROJECT_NAME}-mo"
+    docker run -d --name "$MO_CONTAINER" --network "$network" --user "$container_user" \
+      --mount "type=bind,source=${TMP_DIR},target=${TMP_DIR}" \
+      -e MO_MONGODB_E2E_CREDENTIAL -e MO_MONGODB_E2E_CREDENTIAL_NEXT \
+      --entrypoint /mo-service "$MO_CONNECTOR_CI_IMAGE" \
+      -launch "$TMP_DIR/mo-config/launch.toml" >/dev/null
+    connector_ci_wait_for_mo "$MO_CONTAINER" "$MO_PORT"
+    docker run --rm --network "$network" --user "$container_user" \
+      --mount "type=bind,source=${REPORT_DIR},target=${REPORT_DIR}" \
+      --entrypoint /connector-bin/mongodb-e2e "$MO_CONNECTOR_CI_IMAGE" \
+      --dsn "root:111@tcp(${MO_CONTAINER}:${MO_PORT})/?timeout=5s&readTimeout=30s&writeTimeout=30s" \
+      --mongo-host "mongo:27017" --report-dir "$REPORT_DIR"
+  else
+    if [[ "$(uname -s)" == Darwin ]]; then
+      export DYLD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    else
+      export LD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
+    MO_PID=$!
+    MO_PORT="$(wait_mo_port)"
+    export MO_PORT
+    (cd "$ROOT_DIR" && go run ./test/mongodb/mongodb_e2e_local.go \
+      --dsn "root:111@tcp(127.0.0.1:$MO_PORT)/?timeout=5s&readTimeout=30s&writeTimeout=30s" \
+      --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR")
+  fi
 }
 
 run_unit() {
@@ -196,12 +238,14 @@ run_unit() {
 		./pkg/sql/parsers/dialect/mysql ./pkg/sql/plan ./pkg/sql/compile ./pkg/frontend)
 }
 
-case "$PROFILE" in
-  unit) run_unit ;;
-  e2e-local) run_e2e ;;
-  nightly)
-	run_unit
-	run_e2e
-	;;
-  *) die "unknown profile: $PROFILE" ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "$PROFILE" in
+    unit) run_unit ;;
+    e2e-local) run_e2e ;;
+    nightly)
+      run_unit
+      run_e2e
+      ;;
+    *) die "unknown profile: $PROFILE" ;;
+  esac
+fi

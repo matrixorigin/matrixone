@@ -15,13 +15,19 @@ jobs:
     timeout-minutes: 45
     env:
       MO_MONGODB_REPORT_DIR: test/mongodb/reports/e2e-${{ github.run_id }}
+      MO_CONNECTOR_CI_IMAGE: matrixone-connector-ci:${{ github.sha }}
+      MO_CONNECTOR_CI_REVISION: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
-          cache: true
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-connector-ci
+        with:
+          image: ${{ env.MO_CONNECTOR_CI_IMAGE }}
+          revision: ${{ env.MO_CONNECTOR_CI_REVISION }}
+          ignore-cache-export-error: 'true'
 
       - name: Run MongoDB connector E2E
         run: make test-mongodb-e2e-local
@@ -32,7 +38,8 @@ jobs:
           {
             echo "## MongoDB connector E2E"
             echo ""
-            echo "Artifact: \`mongodb-e2e-local-${{ github.sha }}-${{ github.run_id }}\`"
+            echo "Source revision: \`${MO_CONNECTOR_CI_REVISION}\`"
+            echo "Artifact: \`mongodb-e2e-local-${MO_CONNECTOR_CI_REVISION}-${{ github.run_id }}\`"
             echo ""
             if [ -f "${MO_MONGODB_REPORT_DIR}/summary.md" ]; then
               cat "${MO_MONGODB_REPORT_DIR}/summary.md"
@@ -44,5 +51,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mongodb-e2e-local-${{ github.sha }}-${{ github.run_id }}
+          name: mongodb-e2e-local-${{ env.MO_CONNECTOR_CI_REVISION }}-${{ github.run_id }}
           path: test/mongodb/reports/**

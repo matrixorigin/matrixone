@@ -1,0 +1,58 @@
+name: Build connector CI image
+description: Build the revision-pinned MongoDB and Iceberg CI image with a shared GHA cache.
+
+inputs:
+  image:
+    description: Local Docker image tag to load.
+    required: true
+  revision:
+    description: Exact Git revision embedded in the image.
+    required: true
+  ignore-cache-export-error:
+    description: Whether a successful image build may continue when only GHA cache export fails.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Iceberg golden vectors
+      shell: bash
+      run: python3 pkg/iceberg/metadata/testdata/generate_golden_vectors.py --check
+
+    - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+    - name: Build connector CI image
+      id: build-primary
+      continue-on-error: true
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: .
+        file: optools/images/Dockerfile
+        target: connector-ci
+        load: true
+        tags: ${{ inputs.image }}
+        build-args: |
+          SOURCE_REVISION=${{ inputs.revision }}
+          GO_MOD_DOWNLOAD_TIMEOUT=10m
+        cache-from: |
+          type=gha,scope=connector-ci-${{ runner.arch }}
+          type=gha,scope=matrixone-native-${{ runner.arch == 'X64' && 'amd64' || 'arm64' }}
+        cache-to: type=gha,mode=max,scope=connector-ci-${{ runner.arch }},ignore-error=${{ inputs['ignore-cache-export-error'] }}
+
+    - name: Retry connector CI image build
+      if: steps.build-primary.outcome == 'failure'
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: .
+        file: optools/images/Dockerfile
+        target: connector-ci
+        load: true
+        tags: ${{ inputs.image }}
+        build-args: |
+          SOURCE_REVISION=${{ inputs.revision }}
+          GO_MOD_DOWNLOAD_TIMEOUT=10m
+        cache-from: |
+          type=gha,scope=connector-ci-${{ runner.arch }}
+          type=gha,scope=matrixone-native-${{ runner.arch == 'X64' && 'amd64' || 'arm64' }}
+        cache-to: type=gha,mode=max,scope=connector-ci-${{ runner.arch }},ignore-error=${{ inputs['ignore-cache-export-error'] }}

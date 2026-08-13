@@ -13,8 +13,14 @@ logs/
 *.md
 !README.md
 
-# Ignore test files
+# Ignore test files except the connector runners and their contract tests. The
+# connector-ci image compiles both runners from the exact checked-out source.
 test/
+!test/
+!test/mongodb/
+!test/mongodb/**
+!test/iceberg/
+!test/iceberg/**
 report/
 
 # Ignore temporary files
