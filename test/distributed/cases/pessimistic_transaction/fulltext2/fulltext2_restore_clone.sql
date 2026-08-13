@@ -46,7 +46,7 @@ set @src_ft2_index = (
     limit 1
 );
 set @src_ft2_ready_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 1 as ready from `', database(), '`.`', @src_ft2_index,
+    'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @src_ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1'
 );
 prepare wait_src_ft2 from @src_ft2_ready_sql;
@@ -83,12 +83,15 @@ set @dst_ft2_index = (
 -- 'epsilon' query would read it stale on multi-CN.
 insert into dst values (5,'epsilon fresh');
 
--- The four-row source fixture is one CDC tail chunk at chunk 1; the post-clone
--- insert appends chunk 2. Wait for that durable tail transition before the first
--- dst MATCH, so a copied source tail cannot satisfy the condition early.
+-- The clone copies the source tail. Wait until the destination tail advances past
+-- the source tail, which proves the post-clone insert was persisted without relying
+-- on a hard-coded chunk number.
 set @dst_ft2_ready_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 2 as ready from `', database(), '`.`', @dst_ft2_index,
-    '` where index_id = ''cdc_tail'' and tag = 1'
+    'select coalesce(max(d.chunk_id), -1) > coalesce((select max(s.chunk_id) from `',
+    database(), '`.`', @src_ft2_index,
+    '` s where s.index_id = ''cdc_tail'' and s.tag = 1), -1) as ready from `',
+    database(), '`.`', @dst_ft2_index,
+    '` d where d.index_id = ''cdc_tail'' and d.tag = 1'
 );
 prepare wait_dst_ft2 from @dst_ft2_ready_sql;
 -- @wait_expect(2, 45)
@@ -128,7 +131,7 @@ set @restored_ft2_index = (
     limit 1
 );
 set @restored_ft2_ready_sql = concat(
-    'select coalesce(max(chunk_id), -1) >= 1 as ready from `', database(), '`.`', @restored_ft2_index,
+    'select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @restored_ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1'
 );
 prepare wait_restored_ft2 from @restored_ft2_ready_sql;
