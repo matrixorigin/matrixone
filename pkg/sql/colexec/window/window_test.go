@@ -1472,6 +1472,53 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 2}, nil, proc.Mp())
+	// Deliberately reuse the same order values in both groups. Without the
+	// partition-key prefix this would look like one peer stream.
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	second.SetRowCount(2)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, arg.Fs, 2)
+	require.Len(t, arg.ctr.orderVecs, 2)
+	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowOrderHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name   string
