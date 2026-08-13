@@ -900,9 +900,9 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	// ASOF following FROM/AS/INTO/etc. is an existing table or alias name.
 	// Only allow the contextual join modifier after an already parsed table
 	// factor. This preserves `FROM asof JOIN ...` and `t AS asof JOIN ...`.
-	prev := start - 1
-	for prev >= 0 && (s.buf[prev] == ' ' || s.buf[prev] == '\n' || s.buf[prev] == '\r' || s.buf[prev] == '\t') {
-		prev--
+	prev := s.previousSignificantPos(start - 1)
+	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',') {
+		return false
 	}
 	end := prev + 1
 	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
@@ -933,6 +933,29 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	pos += len("outer")
 	pos = s.skipBlankAndCommentsFrom(pos)
 	return hasKeywordAt(s.buf, pos, "join")
+}
+
+// previousSignificantPos walks over whitespace and SQL comments.  ASOF must
+// remain an identifier when it follows a qualified name or a comma-separated
+// table factor, even if comments occur between the tokens.
+func (s *Scanner) previousSignificantPos(pos int) int {
+	for pos >= 0 {
+		for pos >= 0 && (s.buf[pos] == ' ' || s.buf[pos] == '\n' || s.buf[pos] == '\r' || s.buf[pos] == '\t') {
+			pos--
+		}
+		if pos >= 1 && s.buf[pos-1] == '*' && s.buf[pos] == '/' {
+			pos -= 2
+			for pos >= 1 && !(s.buf[pos-1] == '/' && s.buf[pos] == '*') {
+				pos--
+			}
+			if pos >= 1 {
+				pos -= 2
+				continue
+			}
+		}
+		return pos
+	}
+	return -1
 }
 
 func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {

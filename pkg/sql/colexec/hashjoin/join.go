@@ -871,6 +871,25 @@ func (ctr *container) findAsofPredecessor(
 	if len(candidates) == 0 {
 		return -1, false, nil
 	}
+	// Singleton groups do not benefit from an index. Avoid retaining map and
+	// slice headers for the overwhelmingly common high-cardinality case.
+	if len(candidates) == 1 {
+		candidate := candidates[0]
+		batchIdx := int64(candidate / colexec.DefaultBatchSize)
+		rowIdx := int64(candidate % colexec.DefaultBatchSize)
+		leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)
+		if leftCol < 0 || leftCol >= len(ctr.leftBat.Vecs) {
+			return -1, false, moerr.NewInternalErrorNoCtx("ASOF left temporal column is out of range")
+		}
+		ctr.asofCompare.Set(0, ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol])
+		ctr.asofCompare.Set(1, ctr.leftBat.Vecs[leftCol])
+		cmp := ctr.asofCompare.Compare(0, 1, rowIdx, leftRow)
+		if (strict && cmp >= 0) || (!strict && cmp > 0) {
+			return -1, false, nil
+		}
+		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
+		return candidate, qualified, evalErr
+	}
 	if ctr.asofIndexes == nil {
 		ctr.asofIndexes = make(map[uint64][]int32)
 	}
