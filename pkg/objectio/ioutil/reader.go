@@ -17,6 +17,7 @@ package ioutil
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +35,9 @@ func NewObjectReader(
 	key objectio.Location,
 	opts ...objectio.ReaderOptionFunc,
 ) (*BlockReader, error) {
+	if key.IsEmpty() {
+		return nil, moerr.NewInvalidInputNoCtx("object location is empty")
+	}
 	name := key.Name()
 	metaExt := key.Extent()
 	var reader *objectio.ObjectReader
