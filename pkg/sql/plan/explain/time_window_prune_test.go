@@ -296,6 +296,30 @@ func TestGapFillLeavesOneSidedPredicateUnbounded(t *testing.T) {
 	require.Nil(t, node.GapFillEnd)
 }
 
+func TestGapFillDoesNotInferVolatileBounds(t *testing.T) {
+	queries := map[string]string{
+		"volatile range": " where updated_at >= sysdate(6)" +
+			" and updated_at < date_add(sysdate(6), interval 5 minute)",
+		"volatile repeated lower bound": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at >= sysdate(6)" +
+			" and updated_at < '2026-01-01 00:05:00'",
+		"volatile repeated upper bound": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:05:00'" +
+			" and updated_at < date_add(sysdate(6), interval 5 minute)",
+	}
+	for name, predicates := range queries {
+		t.Run(name, func(t *testing.T) {
+			node := timeWindowNode(t,
+				"select _wstart, count(*) from "+twTable+predicates+
+					" interval(updated_at, 1, second) gapfill(partition)")
+
+			require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+			require.Nil(t, node.GapFillStart)
+			require.Nil(t, node.GapFillEnd)
+		})
+	}
+}
+
 func TestGapFillCombinesRepeatedBounds(t *testing.T) {
 	node := timeWindowNode(t,
 		"select _wstart, count(*) from "+twTable+

@@ -7888,6 +7888,10 @@ func inferGapFillBounds(
 		return nil, nil, nil
 	}
 
+	// Do not merely skip a volatile constraint when stable repeated bounds are
+	// also present: the remaining fixed domain could then be wider than the
+	// WHERE range evaluated at execution time. Any volatile range edge makes the
+	// whole inferred grid unsafe, so retain the legacy observed-range behavior.
 	var starts, finishes []*Expr
 	for _, filter := range filters {
 		fn := filter.GetF()
@@ -7897,21 +7901,41 @@ func inferGapFillBounds(
 		left, right := fn.Args[0], fn.Args[1]
 		name := strings.ToLower(fn.Func.ObjName)
 		switch {
-		case gapFillBoundColumnMatches(left, tsCol) && gapFillBoundIsConstant(right):
+		case gapFillBoundColumnMatches(left, tsCol):
 			switch name {
 			case ">=":
-				starts = append(starts, right)
+				if containsVolatileFunction(right) {
+					return nil, nil, nil
+				}
+				if gapFillBoundIsConstant(right) {
+					starts = append(starts, right)
+				}
 			case "<":
-				finishes = append(finishes, right)
+				if containsVolatileFunction(right) {
+					return nil, nil, nil
+				}
+				if gapFillBoundIsConstant(right) {
+					finishes = append(finishes, right)
+				}
 			}
-		case gapFillBoundColumnMatches(right, tsCol) && gapFillBoundIsConstant(left):
+		case gapFillBoundColumnMatches(right, tsCol):
 			// constant <= timestamp and constant > timestamp are the reversed
 			// spellings of the same canonical half-open predicates.
 			switch name {
 			case "<=":
-				starts = append(starts, left)
+				if containsVolatileFunction(left) {
+					return nil, nil, nil
+				}
+				if gapFillBoundIsConstant(left) {
+					starts = append(starts, left)
+				}
 			case ">":
-				finishes = append(finishes, left)
+				if containsVolatileFunction(left) {
+					return nil, nil, nil
+				}
+				if gapFillBoundIsConstant(left) {
+					finishes = append(finishes, left)
+				}
 			}
 		}
 	}
@@ -7951,7 +7975,8 @@ func gapFillBoundColumnMatches(expr *Expr, timestamp *plan.ColRef) bool {
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
-	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) && !hasSubquery(expr)
+	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
+		!hasSubquery(expr) && !containsVolatileFunction(expr)
 }
 
 func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
