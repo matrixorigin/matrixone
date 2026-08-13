@@ -340,17 +340,13 @@ retained state can still bypass the account.
 
 ### M0. Freeze the inventory and baseline
 
-Status (2026-08-11): complete at baseline `494d77c8443b`; reproducible evidence
-is stored in `docs/design/evidence/25866_m0_execution_resource_baseline.md`.
+Status (2026-08-11): complete at baseline `494d77c8443b`.
 
 This document is the initial inventory. Before changing a family, its PR adds a
 focused ownership table covering every data-scaled field in that family and a
 baseline benchmark for its resident path. The table may live in the PR body or
 next to the package tests; it does not require a runtime registration
 framework.
-
-The M1 baseline is recorded in
-`docs/design/evidence/25866_m0_execution_resource_baseline.md`.
 
 Baseline artifacts include:
 
@@ -364,9 +360,8 @@ Baseline artifacts include:
 
 Status (2026-08-11): locally complete on baseline `494d77c8443b`. The final
 normal/race/build/vet matrix and adjacent baseline/candidate performance
-comparison are recorded in
-`docs/design/evidence/25866_m0_execution_resource_baseline.md`. M2 is the next
-implementation boundary; no M2 attribution state is included in M1.
+comparison close the M1 gate. M2 is the next implementation boundary; no M2
+attribution state is included in M1.
 
 Primary files:
 
@@ -423,8 +418,7 @@ implementation is complete for the Group aggregate capability matrix below.
 `Group` and `MergeGroup` implement the compile-time allocation-owner contract,
 so compile attaches the statement account before `Prepare`; there is no
 aggregate-dependent shadow execution path. Local correctness, failure-path,
-lifecycle, and resident-performance evidence is recorded in the M3 evidence
-document.
+lifecycle, and resident-performance gates are closed.
 
 Within `aggexec`, `GroupAggFuncExec` is the single static contract for Group's
 allocation ownership, capacity preflight, bounded spill codec, decoded group
@@ -549,21 +543,15 @@ MergeOrder:
   metadata bounded;
 - retain `spillMemUsage + Batch.Size` only as an early hint.
 
-Local status (2026-08-13): the MergeOrder slice is implemented and locally
-closed; its ownership inventory, fault/lifecycle matrix, terminal-zero checks,
-and resident benchmark are recorded in
-`docs/design/evidence/25866_m4_mergeorder_baseline.md`. The independent Top
-slice is also locally closed and recorded in
-`docs/design/evidence/25866_m4_top_baseline.md`. The final independent Fill
-slice is also locally closed and recorded in
-`docs/design/evidence/25866_m4_fill_baseline.md`.
+Local status (2026-08-13): the MergeOrder, Top, and Fill slices are implemented
+and locally closed, including their ownership inventories, fault/lifecycle
+matrices, terminal-zero checks, and resident benchmarks.
 
-The local Order stage that feeds MergeOrder is independently closed and
-recorded in `docs/design/evidence/25866_m4_order_baseline.md`. Its retained
-run, computed keys, selector, multi-key partition scratch, append rollback
-state, and final Shuffle replacement use the same `order` owner. The 64 MiB
-logical threshold remains a run-emission policy; the allocation account is
-the hard physical boundary. Local Order does not need a second spill engine:
+The local Order stage that feeds MergeOrder is independently closed. Its
+retained run, computed keys, selector, multi-key partition scratch, append
+rollback state, and final Shuffle replacement use the same `order` owner. The
+64 MiB logical threshold remains a run-emission policy; the allocation account
+is the hard physical boundary. Local Order does not need a second spill engine:
 it emits sorted bounded runs to the already spill-capable MergeOrder stage and
 returns one controlled resource error if an indivisible local work unit cannot
 be admitted.
