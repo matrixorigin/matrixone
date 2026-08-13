@@ -257,6 +257,9 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 			tempCtx = context.WithValue(tempCtx, defines.TenantIDKey{}, snapshot.Tenant.TenantID)
 		}
 	}
+	if queryingSubscription := tcc.GetQueryingSubscription(); queryingSubscription != nil && name != queryingSubscription.SubName {
+		tempCtx = defines.AttachAccountId(tempCtx, uint32(queryingSubscription.AccountId))
+	}
 
 	//open database
 	ses := tcc.GetSession()
@@ -1225,6 +1228,12 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if queryingSubscription := tcc.GetQueryingSubscription(); queryingSubscription != nil && dbName != queryingSubscription.SubName {
+		publisherBinding := *queryingSubscription
+		publisherBinding.DbName = dbName
+		publisherBinding.Tables = pubsub.TableAll
+		return &publisherBinding, nil
+	}
 
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()

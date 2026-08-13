@@ -174,6 +174,7 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 			"create account `"+account+"` admin_name 'admin' identified by '111'")
 		execSQLRequire(t, ctx, sysDB, "create database `"+database+"`")
 		execSQLRequire(t, ctx, sysDB, "create table `"+database+"`.source_table (value bigint)")
+		execSQLRequire(t, ctx, sysDB, "insert into `"+database+"`.source_table values (1)")
 		execSQLRequire(t, ctx, sysDB,
 			"create view `"+database+"`.published_view as select value from `"+database+"`.source_table")
 		execSQLRequire(t, ctx, sysDB,
@@ -185,8 +186,10 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 		defer subscriberDB.Close()
 		execSQLRequire(t, ctx, subscriberDB,
 			"create database `"+subDatabase+"` from sys publication `"+publication+"`")
+		waitForViewMetadataRevalidation(t, ctx, sysDB)
 
 		for _, statement := range []string{
+			"select * from `" + subDatabase + "`.published_view",
 			"desc `" + subDatabase + "`.published_view",
 			"show columns from `" + subDatabase + "`.published_view",
 		} {
@@ -202,10 +205,25 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 			}
 			require.NoError(t, rows.Scan(dest...))
 			require.NoError(t, rows.Close())
+			if strings.HasPrefix(statement, "select") {
+				continue
+			}
 			require.Equal(t, "value", string(values[0]))
 			require.True(t, strings.Contains(strings.ToLower(string(values[1])), "bigint"), string(values[1]))
 		}
 	})
+}
+
+func waitForViewMetadataRevalidation(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var count int
+		err := db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_view_dependencies where target_relation_id=0 "+
+				"and dependency_ordinal=0 and source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')").
+			Scan(&count)
+		return err == nil && count == 0
+	}, 30*time.Second, 100*time.Millisecond)
 }
 
 func viewRefreshStatus(t *testing.T, ctx context.Context, db *sql.DB, database, view string) string {

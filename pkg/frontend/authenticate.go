@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -10171,6 +10172,9 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
+		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses.GetService(), newTenant.GetTenantID()); rtnErr != nil {
+			return rtnErr
+		}
 
 		return rtnErr
 	}
@@ -10185,6 +10189,31 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		}
 	}
 	return err
+}
+
+func inheritViewMetadataRevalidation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+	accountID uint32,
+) error {
+	if !compile.ViewMetadataRefreshEnabled(serviceID) {
+		return nil
+	}
+	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	return bh.Exec(ctx, fmt.Sprintf(
+		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,d.dependency_generation "+
+			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
+			"and d.source_relation_kind in ('%s','%s') and not exists (select 1 from %s.%s a "+
+			"where a.account_id=%d and a.target_relation_id=0 and a.dependency_ordinal=0)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.ViewRefreshStatusRevalidateScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
