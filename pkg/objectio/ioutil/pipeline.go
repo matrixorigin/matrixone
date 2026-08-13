@@ -383,6 +383,9 @@ func (p *IoPipeline) doAsyncFetch(
 }
 
 func (p *IoPipeline) Prefetch(params PrefetchParams) (err error) {
+	if err = validatePrefetchLocation(params.key); err != nil {
+		return err
+	}
 	return p.prefetchFunc(params)
 }
 
