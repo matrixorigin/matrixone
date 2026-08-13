@@ -376,6 +376,55 @@ func TestDecideQueryPlacementDoesNotUseAddressAliasAsIngressIdentity(t *testing.
 	require.Empty(t, decision.Workers)
 }
 
+func TestDecideQueryPlacementDoesNotFallbackToResolvedDrainingIngress(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "ingress:6001", Mcpu: 8}
+	resolvedIngress := ingress
+	resolvedIngress.State = WorkerStateDraining
+
+	for _, requireCurrentCN := range []bool{false, true} {
+		decision := DecideQueryPlacement(QueryRequest{
+			ExecKind:         QueryExecAPMultiCN,
+			CurrentCN:        ingress,
+			Candidates:       Workers{resolvedIngress},
+			RequireCurrentCN: requireCurrentCN,
+		})
+
+		require.False(t, decision.Satisfied)
+		require.Equal(t, ReasonCurrentCNDraining, decision.Reason)
+		require.Empty(t, decision.Workers)
+		require.Equal(t, DroppedWorkers{{
+			Worker: resolvedIngress,
+			Reason: ReasonDroppedDrainingCN,
+		}}, decision.Dropped)
+	}
+}
+
+func TestDecideQueryPlacementRejectsConflictingIngressStateInAnyOrder(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "ingress:6001", Mcpu: 8}
+	working := ingress
+	working.State = WorkerStateWorking
+	draining := ingress
+	draining.State = WorkerStateDraining
+
+	for _, candidates := range []Workers{
+		{working, draining},
+		{draining, working},
+	} {
+		decision := DecideQueryPlacement(QueryRequest{
+			ExecKind:         QueryExecAPMultiCN,
+			CurrentCN:        ingress,
+			Candidates:       candidates,
+			RequireCurrentCN: true,
+		})
+
+		require.False(t, decision.Satisfied)
+		require.Equal(t, ReasonCurrentCNDraining, decision.Reason)
+		// Unsatisfied decisions retain eligible candidates for diagnostics; the
+		// caller gates execution on Satisfied and must not materialize them.
+		require.Equal(t, Workers{working}, decision.Workers)
+	}
+}
+
 func TestDecideQueryPlacementRejectsLoadDataLocalOutsideResolvedPool(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 	remote := Worker{ID: "remote", Addr: "remote:6001", Mcpu: 16}

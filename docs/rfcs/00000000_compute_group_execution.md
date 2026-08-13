@@ -98,7 +98,10 @@ execution capabilities and topology constraints only.
 | Group ID | Opaque, immutable identifier assigned once by the control plane. Names and labels are not IDs. |
 | Group name | Human-readable, cluster-scoped lookup name. It is an alias, not an authorization token. |
 | Membership generation | Monotonic version of membership and execution-relevant group metadata. |
-| Group snapshot | Immutable tuple of group ID, name, generation, eligible CN identities, addresses, work states, and capabilities. |
+| Execution incarnation | Opaque CN process-boot identity that changes before RPC admission on every restart and is never reused for a service ID. |
+| Authority epoch | Durable control-plane leadership/process epoch advanced before a replacement authority publishes liveness proofs. |
+| Liveness revision | Monotonic version within an authority epoch for lease refreshes that preserve a sealed topology; routine renewal does not advance membership generation. |
+| Group snapshot | Immutable tuple of group ID, name, membership generation, authority epoch/liveness revision, eligible CN service IDs and execution incarnations, addresses, work states, authority liveness leases, capabilities, and a bounded validity deadline. |
 | Binding | Authorized mapping from trusted request identity to a group ID. |
 | Ingress binding | Group chosen after authentication for the connection's ingress CN; fixed for that connection and revalidated before statements. |
 | Execution selection | Optional session or statement choice used only for statements whose hard constraints permit execution away from ingress. |
@@ -106,7 +109,7 @@ execution capabilities and topology constraints only.
 | Admission | Capacity reservation and bounded queue ownership. It is a later milestone and is not implied by placement. |
 | Ingress CN | CN that owns the client connection, session, result writer, and transaction workspace. |
 | Execution worker | Authorized group member that may run relational, DML, table-function, or user-expression operators for an attempt. |
-| Ingress control path | Authentication, transaction coordination, remote-pipeline fan-in, result serialization, and protocol forwarding retained by ingress; it is not an execution worker grant. |
+| Ingress control path | Authentication, SQL parse/bind/optimize and topology coordination, transaction coordination, remote-pipeline fan-in, result serialization, and protocol forwarding retained by ingress; it is not an execution worker grant. |
 
 # Contract Invariants
 
@@ -140,6 +143,8 @@ ComputeGroupRef {
     owner_account_id       immutable MatrixOne account ID
     display_name           cluster-scoped unique alias
     membership_generation  monotonic uint64
+    authority_epoch        durable monotonic uint64
+    liveness_revision      monotonic uint64 within authority epoch
     lifecycle              Provisioning | Ready | Incompatible | Draining | Deleting
     capability_version     monotonic or content-addressed version
 }
@@ -158,32 +163,45 @@ audit log as one control-plane operation.
 Membership generation increments when any placement-relevant fact changes:
 
 - CN membership or CN service identity;
+- CN execution incarnation, including a restart that retains the same service
+  ID and address;
 - routable pipeline/query address;
-- Working/Draining/Drained eligibility;
+- a member crossing an authority-liveness eligibility boundary or changing
+  Working/Draining/Drained state;
 - capability compatibility;
 - static capacity used for DOP calculation.
 
-Live load is not part of this generation in the static MVP.
+Live load and routine renewal of an otherwise unchanged authority lease are not
+part of this generation in the static MVP.
 
-The control plane durably persists group ID and the last issued generation
-before publication. After leader/process restart it may reuse the last sealed
-snapshot, but it must never reset or reuse a generation. A reconciled change is
-published at a strictly greater generation; missing or ambiguous durable state
+The control plane durably persists group ID, the last issued membership
+generation, and authority epoch before publication. A replacement authority
+advances the epoch with a durable compare-and-swap before accepting or
+publishing lease renewals; revision comparison is lexicographic by
+`(authority_epoch, liveness_revision)`. After leader/process restart it may
+reuse the last sealed topology, but it must never reset or reuse a membership
+generation or authority epoch. A reconciled topology change is published at a
+strictly greater membership generation; missing or ambiguous durable state
 keeps the group Provisioning/unavailable rather than reconstructing identity
 from labels.
 
 ## 2. Propagation and registry
 
 The control plane publishes `ComputeGroupRef` to both Proxy and MatrixOne's CN
-topology inventory. Every CN heartbeat carries `group_id` and the observed
-membership/capability generation in addition to labels.
+topology inventory. Every CN heartbeat carries `group_id`, its current
+`execution_incarnation`, and the observed membership/capability generation in
+addition to labels. The authority turns accepted heartbeats into an
+epoch-fenced liveness proof in the registry; a CN cannot self-extend that
+lease. A CN creates its incarnation before opening execution RPCs; it is not
+restored from service configuration or a previous process.
 
 Proxy and SQL consume the same versioned registry snapshot. They may maintain
 local immutable copies, but they must agree on `(group_id, generation, member
-service IDs)`; neither side independently recomputes membership from request
-labels. Connection-cache reuse, tunnel rebalance, and scale-down migration
-carry that tuple and may target only a member of the same group generation (or
-a later generation of the same group ID after revalidation).
+service IDs, execution incarnations)`; neither side independently recomputes
+membership from request labels. Connection-cache reuse, tunnel rebalance, and
+scale-down migration carry that tuple and may target only a member of the same
+group generation (or a later generation of the same group ID after
+revalidation).
 
 An idle connection is migratable only when all state needed by the destination
 has a defined transfer protocol. At minimum it has no in-flight statement,
@@ -198,10 +216,42 @@ The group registry publishes lifecycle records for every state. A snapshot is
 usable for a new execution only after all of these gates are true:
 
 1. the group ID and lifecycle are known;
-2. each listed member proves the same group ID;
+2. each listed member proves the same group ID and current execution
+   incarnation;
 3. membership and addresses form one sealed generation;
 4. required execution protocol capabilities are present;
-5. the group is not Draining or Deleting for new attempts.
+5. every member's authority liveness lease and the snapshot validity deadline
+   cover new-attempt resolution;
+6. the group is not Draining or Deleting for new attempts.
+
+Cached `WorkState=Working` is not a liveness proof after its authority lease
+expires. A consumer refreshes within a bounded deadline or rejects the group as
+unavailable; it never executes from an indefinitely stale snapshot. Member
+timeout either makes the group unavailable or is sealed as an explicit removal
+in a greater generation—never as a silent smaller view of the old generation.
+
+A routine heartbeat that proves the same service/incarnation, route, work
+state, and capability may advance only `(authority_epoch,
+liveness_revision)` and the bounded lease deadline while retaining the same
+membership generation. The refreshed registry view is immutable at
+`(membership_generation, authority_epoch, liveness_revision)`;
+it cannot alter the worker tuple pinned by an attempt. Crossing from live to
+expired, or back to live after expiry, is an eligibility transition and cannot
+be hidden as a same-generation lease refresh. This separation prevents every
+heartbeat from invalidating prepared topology, tickets, and routes while still
+making stale `Working` metadata unusable for a new attempt or route claim.
+
+Two live execution incarnations claiming one service ID are ambiguous, not a
+last-heartbeat-wins update. The group is unavailable for new attempts until the
+authority proves one incarnation terminal and seals the survivor in a greater
+generation. A delayed heartbeat or callback from the old incarnation cannot
+overwrite that sealed state.
+
+The sealed member-to-route mapping is one-to-one. Two live member tuples that
+advertise the same execution address, or one tuple with two unresolved current
+addresses, make the generation unavailable; a consumer must not de-duplicate
+the collision into a smaller apparently healthy group. Address fallback is a
+legacy compatibility behavior and is forbidden for canonical identity proof.
 
 Labels remain useful Operator implementation attributes, but SQL cannot accept
 them from a user or use them to reconstruct a missing group. A CN with matching
@@ -275,6 +325,14 @@ removal invalidates dependent grants, while role revoke follows the same
 fail-new-and-transaction-boundary policy defined below. Exact table and SQL
 spelling remain unresolved; durable ownership and generation semantics do not.
 
+The sealed snapshot is trusted server state, not fields copied from a user
+context. Its CN-to-CN use carries a verifiable Security assertion or opaque
+authorization handle bound to the immutable account, role, group, and
+generation tuple. The concrete signature/MAC/handle mechanism is a Milestone B
+security-and-pipeline decision, but a receiver must be able to distinguish a
+grant derived from that snapshot from one fabricated by an authenticated CN
+that merely knows the public metadata.
+
 Binding creation and update use compare-and-swap on `binding_generation` and
 validate that every group is Ready and owned by `account_id`. MatrixOne's
 account-lifecycle owner must publish create/delete events keyed by immutable
@@ -296,24 +354,36 @@ connection selection requires this authenticated handoff:
 3. Security resolves one sealed `AuthorizationSnapshot` and issues
    a short-lived, single-use handoff ticket containing cluster, account, role,
    group, binding generation, role-grant generation, membership generation,
-   capability version, expiry, and nonce.
+   capability version, ticket-issuer epoch, expiry, and nonce.
 4. Proxy atomically claims the ticket against the same group-registry
-   generation and routes it; the target CN validates and consumes it before
+   generation, binding the claim to a target service ID and execution
+   incarnation, and routes it; the target CN validates and consumes it before
    publishing the session.
 
 The security ticket service owns this state machine:
 
 ```text
-Issued -> Claimed(proxy, bounded lease) -> Consumed(target session ID)
-                                    \---> Aborted/Expired
+Issued --claim--> Claimed(proxy service/incarnation, target service/incarnation, bounded lease)
+Issued --expiry--> Expired
+Claimed --consume--> Consumed(target service/incarnation, session ID)
+Claimed --abort/lease expiry--> Aborted/Expired
+Consumed --attach/revoke/attach lease expiry--> Terminal
 ```
 
 Claim is atomic and generation-fenced. Target validation and durable consume
-linearize before target session publication; only the consuming target may
-publish that session. Consume records `(target service ID, session ID)` and
-starts a bounded, renewable attach lease. Proxy acknowledges attach by
-comparing that tuple through an idempotent ticket-status query; repeated
-attach/status messages return the same tuple and never create another session.
+linearize before target session publication; only the consuming target
+incarnation may publish that session. Consume records `(target service ID,
+execution incarnation, session ID)` and starts a bounded, renewable attach
+lease. Proxy acknowledges attach by comparing that tuple through an idempotent
+ticket-status query; repeated attach/status messages return the same tuple and
+never create another session.
+
+Claim, status, attach, abort, and revoke are authenticated operations bound to
+the claiming Proxy service/incarnation. Another Proxy or CN cannot observe the
+tuple or take over the session merely by knowing the nonce. If the claimant
+process dies, its bounded leases drive revoke/cleanup; any future Proxy failover
+requires an explicit issuer-authorized ownership-transfer CAS and is not
+implicitly granted by transport authentication.
 
 If cancellation, route/dial failure, generation change, or a lost validation
 response prevents consume, Proxy aborts the claim or its bounded claim lease
@@ -327,6 +397,18 @@ old ticket is confirmed Aborted/Expired or its consumed session is terminal.
 A late consume after abort/expiry and any replay fail before session creation.
 Ticket/session records are bounded by issue rate times TTL and attach-lease
 tombstone retention.
+
+Ticket-service restart is a protocol transition, not permission to forget
+anti-replay state. Before issuing after restart, the service durably advances
+its issuer epoch; every pre-restart Issued/Claimed ticket is then rejected and
+cannot consume late. Consumed tuples and their terminal anti-replay records are
+durable through restart until attach, revoke, or lease-expiry cleanup reaches a
+recorded terminal state. A terminal tombstone remains for at least the maximum
+ticket validity plus clock-skew allowance before bounded reclamation. The epoch
+advance is a durable cluster-wide compare-and-swap, so process replacement or
+leader re-election cannot reuse it. A target restart changes its execution
+incarnation, so an attach/status operation can never bind a consumed tuple to a
+replacement process that reused the same service ID or address.
 
 No SQL statement, session restoration, or user side effect may start before
 the target CN completes validation and ticket consume. Proxy never substitutes
@@ -452,12 +534,16 @@ The following constraints are derived internally and are not user settings:
 
 The selected compute group bounds execution workers, not the connection's
 ingress control path. When ingress is outside the selected group, it may only
-authenticate, coordinate the transaction, fan in already-produced remote
-results, serialize them, and forward the client protocol. It may not execute a
-scan, DML expression, join, aggregate, sort, window, table function, user
-expression, or fallback fragment for that attempt. Traces account for ingress
-control bytes/CPU separately from group worker activity, and the MVP makes no
-resource-isolation claim for this unavoidable protocol overhead.
+authenticate, parse/bind/optimize and materialize topology, coordinate the
+transaction, fan in already-produced remote results, serialize them, and
+forward the client protocol. It may not execute a scan, DML expression, join,
+aggregate, sort, window, table function, runtime user expression, or fallback
+fragment for that attempt. Planning may retain existing semantics-preserving
+folding of deterministic built-ins, but it must not invoke a volatile,
+side-effecting, or user-defined function as a substitute for worker execution.
+Traces account for ingress planning/control bytes and CPU separately from group
+worker activity, and the MVP makes no resource-isolation claim for this
+unavoidable control overhead.
 
 If a statement requires ingress participation and ingress is a member of the
 authorized group, placement includes the canonical ingress worker. If ingress
@@ -479,15 +565,26 @@ mutation, or remote start. It never changes DDL topology or migrates ingress.
 |---|---|---|---|---|
 | absent | Operator creates ID | Provisioning | reject unavailable | none |
 | Provisioning | sealed compatible snapshot | Ready | admit | none |
-| Ready | sealed membership/address/capability change | Ready, generation + 1 | use new snapshot | retain pinned snapshot |
-| Ready | current executable member loses capability | Incompatible | reject incompatible | receiver validates pinned protocol and fails closed if necessary |
+| Ready | sealed membership/address/capability/eligibility change | Ready, generation + 1 | use new snapshot | retain pinned snapshot |
+| Ready | member process restarts with a new execution incarnation | Ready, generation + 1 after sealing | use new incarnation | old-incarnation routes fail closed; started work follows failure/retry fencing |
+| Ready | current executable member loses capability | Incompatible, generation + 1 | reject incompatible | receiver validates pinned protocol and fails closed if necessary |
 | Incompatible | sealed compatible snapshot | Ready, generation + 1 | admit on new snapshot | none from incompatible generation |
-| Ready | drain requested | Draining | reject | finish until bounded drain deadline, then cancel |
-| Draining | deletion begins | Deleting | reject | bounded cancellation/cleanup |
+| Ready | drain requested | Draining, generation + 1 | reject | routes already Claimed/Started may finish until the bounded deadline; unclaimed routes fail closed |
+| Draining | deletion begins | Deleting, generation + 1 | reject | bounded cancellation/cleanup |
 | Deleting | generation-scoped deletion barrier completes | absent | reject unknown | none |
 
 A group name may be reused only with a new ID. Bindings to the old ID remain
 dangling and fail until explicitly updated.
+
+The static MVP has no distributed attempt registry that could safely backdate
+new route starts after a drain barrier. Therefore a route materialized but not
+yet claimed when Draining publishes is rejected before operator construction,
+even if its coordinator resolved the attempt earlier. The attempt unwinds its
+other routes, and a replacement attempt remains unavailable while the group is
+Draining. Only a receiver claim that linearized before the barrier may advance
+to Started and run until the drain deadline. A future design may relax this
+only with a generation-fenced attempt-admission record owned by the drain
+authority.
 
 The control plane owns the deletion barrier. Operator, Proxy, authentication,
 and SQL registry participants acknowledge that a specific group ID/generation
@@ -602,19 +699,40 @@ RemoteExecutionGrant {
     account_id, role_id, group_id
     binding_generation, role_grant_generation
     membership_generation, capability_version
-    attempt_id, route_id, target_service_id, expiry
+    root_coordinator_service_id, root_coordinator_execution_incarnation
+    attempt_id, route_id, parent_route_id
+    expected_sender_service_id, expected_sender_execution_incarnation
+    target_service_id
+    target_execution_incarnation, expiry
+    authorization_proof_or_handle
 }
 ```
 
-The attempt resolver issues the grant locally from its sealed authorization
-snapshot over an authenticated CN-to-CN channel; it does not add a per-query
-control-plane RPC. `(attempt_id, route_id)` is unique per target and claimed
-once. Before operator construction, the receiver verifies the target service,
-account/group identity, current executable generation/capability, expiry, and
-one-time route claim. A route from another group, a route whose target was
-removed before start, a stale generation, missing fields from an old sender, or
-a replay fails before any operator/side effect. Route state is
+Before any operator starts, the root coordinator closes the materialized
+remote-route DAG and derives one target-specific grant for every edge from the
+same sealed authorization snapshot; this does not add a per-query control-plane
+RPC. In a nested A -> B -> C topology, B may forward C's opaque pre-derived
+grant but cannot mint a child grant, change its target, or widen the group. The
+grant binds the root coordinator, expected authenticated immediate sender,
+parent route, target, and shared attempt. A topology that cannot be closed this
+way is unsupported in the static MVP and fails before start.
+
+The envelope is bound to the authenticated root coordinator
+service/incarnation and its Security assertion—it is not accepted merely
+because its protobuf fields are internally consistent. `(attempt_id, route_id)`
+is unique per target and claimed once. Before operator construction, the
+receiver verifies the root coordinator identity and authorization proof, the
+transport peer against the expected sender/parent edge, target
+service/incarnation, account/group identity, current executable membership
+generation/capability/liveness and lifecycle, expiry, and one-time route claim.
+A fabricated or altered grant, a route from another group, a route whose
+target was removed or restarted before start, a stale generation/incarnation,
+missing fields from an old sender, or a replay fails before any operator/side
+effect. Route state is
 `Issued -> Claimed -> Started -> Terminal`, and status/cancel are idempotent.
+Claim is the start barrier for lifecycle purposes: once it has linearized, a
+later Draining publication may let that claim reach Started under the pinned
+snapshot until the drain deadline; an unclaimed grant receives no such right.
 Once a route has started, its attempt owns the pinned snapshot and follows
 normal drain/cancel rules. If a start response is lost, the coordinator queries
 status and either rejoins that exact attempt or cancels and observes its
@@ -624,6 +742,14 @@ after every predecessor route is terminal. DML retry also retains the
 transaction/idempotency fence; it cannot duplicate a committed side effect.
 Route-claim state is released at attempt completion and bounded by active
 routes plus expiry tombstones; reaching the bound fails closed.
+
+Route claims and tombstones are scoped to the receiver execution incarnation.
+After restart, the new process rejects every old-incarnation grant even though
+it does not retain the old process's in-memory claim table. A route that had
+started in the failed incarnation is non-rejoinable: the coordinator observes
+that incarnation's terminal loss, then resolves the durable transaction or
+idempotency outcome before it may create replacement work. Process death alone
+is not proof that a DML side effect did not commit.
 
 ## 11. Observability
 

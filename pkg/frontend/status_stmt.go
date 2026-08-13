@@ -55,7 +55,7 @@ func grantDatabaseOwnershipAfterCreate(
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
-	var loadLocalReader *io.PipeReader
+	var loadLocalWaited bool
 	var columns []interface{}
 	execCtx.persistentDropTableTargets = nil
 
@@ -225,11 +225,24 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				// Create it only after compile/placement succeeds so a fail-closed
 				// scheduling decision cannot leave an unattached pipe behind.
 				reader, writer := io.Pipe()
-				loadLocalReader = reader
 				execCtx.proc.Base.LoadLocalReader = reader
 				execCtx.loadLocalWriter = writer
 				defer func() {
-					_ = reader.Close()
+					if closeErr := reader.Close(); closeErr != nil {
+						ses.Error(execCtx.reqCtx,
+							"processLoadLocal goroutine failed",
+							zap.Error(closeErr))
+					}
+					// The statement executor is recovered above this function. Join
+					// the upload owner here as well so a runner panic cannot leave it
+					// using session or ExecCtx state after statement cleanup begins.
+					if !loadLocalWaited {
+						if waitErr := loadLocalErrGroup.Wait(); waitErr != nil {
+							ses.Error(execCtx.reqCtx,
+								"processLoadLocal goroutine failed",
+								zap.Error(waitErr))
+						}
+					}
 					if execCtx.proc.Base.LoadLocalReader == reader {
 						execCtx.proc.Base.LoadLocalReader = nil
 					}
@@ -245,25 +258,13 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
-			if loadLocalErrGroup != nil { // release resources
-				err2 := loadLocalReader.Close()
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-			}
 			return
 		}
 
 		if loadLocalErrGroup != nil {
-			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
+			err = loadLocalErrGroup.Wait()
+			loadLocalWaited = true
+			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
 		}
