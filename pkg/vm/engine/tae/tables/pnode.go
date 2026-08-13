@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -116,7 +117,7 @@ func (node *persistedNode) Scan(
 	}
 	vecs, deletes, release, err := LoadPersistedColumnData(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
-		!isScanNoCopy(ctx),
+		!isScanNoCopy(ctx), node.object.meta.Load().IsTombstone,
 	)
 	replaceCommitts := func(vecs []containers.Vector, i int) {
 		createTS := node.object.meta.Load().GetCreatedAt()
@@ -235,6 +236,8 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 	}
 	colIdxes := objectio.TombstoneColumns_TN_Created
 	readSchema := node.object.meta.Load().GetTable().GetLastestSchema(true)
+	pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
+	pkType := readSchema.ColDefs[pkIdx].GetType()
 	var startTS types.TS
 	if !node.object.meta.Load().IsAppendable() {
 		startTS = node.object.meta.Load().GetCreatedAt()
@@ -286,22 +289,28 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		}
 		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxes, location, mp, nil,
-			true,
+			true, true,
 		)
 		if err != nil {
 			return err
 		}
-		var commitTSs []types.TS
 		if !persistedByCN {
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](vecs[2].GetDownstreamVector())
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := 0; i < len(commitTSs); i++ {
-				commitTS := commitTSs[i]
+			commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs),
+				vecs[2].GetDownstreamVector(),
+			)
+			if err != nil {
+				for i := range vecs {
+					vecs[i].Close()
+				}
+				return err
+			}
+			for i := range rowIDs {
+				commitTS := commitTSs.At(i)
 				if commitTS.GE(&start) && commitTS.LE(&end) &&
 					types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
-						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
 					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
@@ -311,11 +320,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 			}
 		} else {
 			rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
-			for i := 0; i < len(rowIDs); i++ {
+			for i := range rowIDs {
 				if types.PrefixCompare(rowIDs[i][:], objID[:]) == 0 { // TODO
 					if *bat == nil {
-						pkIdx := readSchema.GetColIdx(objectio.TombstoneAttr_PK_Attr)
-						pkType := readSchema.ColDefs[pkIdx].GetType()
 						*bat = catalog.NewTombstoneBatchByPKType(pkType, mp)
 					}
 					(*bat).GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).Append(rowIDs[i], false)
@@ -359,7 +366,16 @@ func (node *persistedNode) FillBlockTombstones(
 	); err != nil {
 		return err
 	}
+	isAppendable := node.object.meta.Load().IsAppendable()
 	colIdxs := []int{0}
+	if !isAppendable {
+		// A non-appendable tombstone can contain rows committed at different
+		// timestamps.  The object CreatedAt check above is only a coarse object
+		// visibility gate; use the hidden per-row commitTS for snapshot filtering.
+		// LoadPersistedColumnData also maps the affected Backup layout and leaves
+		// the exact two-column CN layout as const-null (CreatedAt semantics).
+		colIdxs = append(colIdxs, objectio.SEQNUM_COMMITTS)
+	}
 	for tombstoneBlkID := 0; tombstoneBlkID < node.object.meta.Load().BlockCnt(); tombstoneBlkID++ {
 		buf := bf.GetBloomFilter(uint32(tombstoneBlkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
@@ -380,14 +396,13 @@ func (node *persistedNode) FillBlockTombstones(
 		}
 		vecs, _, _, err := LoadPersistedColumnData(
 			ctx, readSchema, node.object.rt, id, colIdxs, location, mp, nil,
-			true,
+			true, true,
 		)
 		if err != nil {
 			return err
 		}
-		var commitTSs []types.TS
 		var commitTSVec containers.Vector
-		if node.object.meta.Load().IsAppendable() {
+		if isAppendable {
 			commitTSVec, err = node.object.LoadPersistedCommitTS(uint16(tombstoneBlkID))
 			if err != nil {
 				for i := range vecs {
@@ -395,13 +410,32 @@ func (node *persistedNode) FillBlockTombstones(
 				}
 				return err
 			}
-			commitTSs = vector.MustFixedColWithTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+		var commitTSs ioutil.TombstoneCommitTSColumn
+		if isAppendable {
+			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs), commitTSVec.GetDownstreamVector(),
+			)
+		} else if !vecs[1].IsConstNull() {
+			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs), vecs[1].GetDownstreamVector(),
+			)
+		}
+		if err != nil {
+			if commitTSVec != nil {
+				commitTSVec.Close()
+			}
+			for i := range vecs {
+				vecs[i].Close()
+			}
+			return err
+		}
 		// TODO: biselect, check visibility
 		for i := 0; i < len(rowIDs); i++ {
-			if node.object.meta.Load().IsAppendable() {
-				if commitTSs[i].GT(&startTS) {
+			if commitTSs.IsPresent() {
+				commitTS := commitTSs.At(i)
+				if commitTS.GT(&startTS) {
 					continue
 				}
 			}

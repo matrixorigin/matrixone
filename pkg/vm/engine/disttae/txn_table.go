@@ -2629,20 +2629,19 @@ func pkCommitTSMatchedInRange(
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	rowCount := commitTSVec.Length()
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
+	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		ts := timestamps[sel]
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}
@@ -3001,6 +3000,29 @@ func tombstonePKExistsInRange(
 					mp,
 					fileservice.Policy(0),
 				)
+				if err == nil && !usable {
+					objectMeta, metaErr := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+					if metaErr != nil {
+						err = metaErr
+					} else if legacyCommitTS, ok := ioutil.ResolveLegacyBackupTombstoneCommitTS(
+						objectMeta.MustDataMeta().GetBlockMeta(uint32(loc.ID())),
+					); ok {
+						changed, usable, _, err = ioutil.LoadColumnDataBySearchAndCheckTS(
+							ctx,
+							objectio.TombstoneAttr_PK_SeqNum,
+							pkType,
+							fs,
+							loc,
+							cachedSearch,
+							false,
+							legacyCommitTS,
+							from,
+							to,
+							mp,
+							fileservice.Policy(0),
+						)
+					}
+				}
 				if err != nil {
 					return true, "tombstone_read_error", nil
 				}
