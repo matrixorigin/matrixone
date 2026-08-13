@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -166,7 +167,7 @@ func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r Dat
 			if !ok {
 				return fmt.Errorf("materialized view retriever does not expose iteration boundary")
 			}
-			refreshSQL, err := materializedViewRefreshAtInDatabase(c.info.RefreshSQL, c.info.SourceSQL, c.jobID.DBName, boundary.GetToTS())
+			refreshSQL, err := materializedViewRefreshAtSources(c.info.RefreshSQL, c.info.SourceTableInfos(), boundary.GetToTS())
 			if err != nil {
 				return err
 			}
@@ -534,6 +535,32 @@ func materializedViewRefreshAtInDatabase(query, source, database string, ts type
 	refresh := strings.Replace(query, needle, replacement, 1)
 	if refresh == query {
 		return "", fmt.Errorf("materialized view source %q not found in refresh query", source)
+	}
+	return refresh, nil
+}
+
+// materializedViewRefreshAtSources adds the same snapshot boundary to every
+// direct source relation in a refresh query. The planner only emits direct
+// base-table FROM/JOIN expressions for MVs, so keeping this rewrite lexical
+// avoids reparsing SQL in the background consumer.
+func materializedViewRefreshAtSources(query string, sources []TableInfo, ts types.TS) (string, error) {
+	if len(sources) == 0 {
+		return "", fmt.Errorf("materialized view has no source tables")
+	}
+	refresh := query
+	for _, source := range sources {
+		if source.DBName == "" || source.TableName == "" {
+			return "", fmt.Errorf("materialized view has incomplete source table")
+		}
+		qualified := fmt.Sprintf("`%s`.`%s`", strings.ReplaceAll(source.DBName, "`", "``"), strings.ReplaceAll(source.TableName, "`", "``"))
+		replacement := fmt.Sprintf("${1} %s{MO_TS = '%s'}", qualified, ts.ToString())
+		name := regexp.QuoteMeta(source.TableName)
+		pattern := regexp.MustCompile(`(?i)(\bfrom\b|\bjoin\b|,)\s+(?:` + regexp.QuoteMeta(source.DBName) + `\s*\.\s*)?` + name + `\b`)
+		updated := pattern.ReplaceAllString(refresh, replacement)
+		if updated == refresh {
+			return "", fmt.Errorf("materialized view source %q not found in refresh query", source.TableName)
+		}
+		refresh = updated
 	}
 	return refresh, nil
 }

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -1275,6 +1276,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if req.Kind == api.AlterKind_RenameTable {
 			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
 			if ok {
+				if err = iscp.MarkJobsErrorBySourceTable(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), req.TableId, "source table was renamed"); err != nil {
+					return err
+				}
 				// iscp
 				err = iscp.RenameSrcTable(c.proc.Ctx,
 					c.proc.GetService(),
@@ -2545,7 +2549,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		); err != nil {
 			return err
 		}
-		var sourceDB, sourceTable, sourceSQL, refreshSQL, incrementalSpec string
+		var sourceDB, sourceTable, sourceSQL, refreshSQL, incrementalSpec, sourceTablesEncoded string
 		for _, def := range qry.GetTableDef().GetDefs() {
 			props := def.GetProperties()
 			if props == nil {
@@ -2563,6 +2567,8 @@ func (s *Scope) CreateView(c *Compile) error {
 					incrementalSpec = prop.GetValue()
 				case "mv_source_sql":
 					sourceSQL = prop.GetValue()
+				case "mv_source_tables":
+					sourceTablesEncoded = prop.GetValue()
 				}
 			}
 		}
@@ -2579,6 +2585,20 @@ func (s *Scope) CreateView(c *Compile) error {
 			ConsumerType: int8(iscp.ConsumerType_MaterializedView),
 			DBName:       dbName, TableName: viewName, Columns: columns, RefreshSQL: refreshSQL, SourceSQL: sourceSQL, IncrementalSpec: incrementalSpec,
 		}}
+		if sourceTablesEncoded != "" {
+			var names []struct{ Database, Table string }
+			decoded, decodeErr := base64.StdEncoding.DecodeString(sourceTablesEncoded)
+			if decodeErr != nil || json.Unmarshal(decoded, &names) != nil || len(names) == 0 {
+				return moerr.NewInternalError(c.proc.Ctx, "invalid materialized view source table metadata")
+			}
+			spec.SrcTables = make([]iscp.TableInfo, 0, len(names))
+			for _, name := range names {
+				spec.SrcTables = append(spec.SrcTables, iscp.TableInfo{DBName: name.Database, TableName: name.Table})
+			}
+			if len(spec.SrcTables) > 1 && !supportsMultiSourceISCP(c.proc.GetService()) {
+				return moerr.NewNotSupported(c.proc.Ctx, "cross-table materialized view requires all services to support multi-source ISCP")
+			}
+		}
 		job := &iscp.JobID{DBName: sourceDB, TableName: sourceTable, JobName: "materialized_view_" + dbName + "_" + viewName}
 		if _, err = CreateCdcTask(c, spec, job, false); err != nil {
 			return err
@@ -3650,6 +3670,11 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			return nil
 		}
 		return err
+	}
+	if !isTemp && !isView {
+		if err = iscp.MarkJobsErrorBySourceTable(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), rel.GetTableID(c.proc.Ctx), "source table was dropped"); err != nil {
+			return err
+		}
 	}
 
 	// Check if the table is a CCPR shared table

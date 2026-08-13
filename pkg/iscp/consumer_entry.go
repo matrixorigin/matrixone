@@ -66,6 +66,7 @@ func NewJobEntryWithStatus(
 		jobName:            jobName,
 		jobID:              jobID,
 		jobSpec:            &jobSpec.TriggerSpec,
+		sourceTables:       append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...),
 		watermark:          watermark,
 		persistedWatermark: watermark,
 		state:              state,
@@ -84,6 +85,7 @@ func (jobEntry *JobEntry) update(
 	dropAt types.Timestamp,
 ) {
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
+	jobEntry.sourceTables = append([]TableInfo(nil), jobSpec.ConsumerInfo.SourceTableInfos()...)
 	jobEntry.dropAt = dropAt
 	if jobEntry.state == ISCPJobState_Error {
 		return

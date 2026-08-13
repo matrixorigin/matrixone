@@ -5640,6 +5640,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	return ok && protocolVersion >= defines.MORPCVersion19
 }
 
+func supportsMultiSourceISCP(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion23
+}
+
 func supportsRemoteTextCollationAggregates(service string) bool {
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)

@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -133,6 +134,69 @@ func UnregisterJobsByDBName(
 		DefaultRetryInterval,
 		DefaultRetryDuration,
 	)
+}
+
+// MarkJobsErrorBySourceTable preserves materialized results when a source
+// relation is dropped. Multi-source jobs are anchored on one source table, so
+// ordinary anchor-table cleanup cannot find jobs that depend on another one.
+func MarkJobsErrorBySourceTable(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	sourceTableID uint64,
+	errMsg string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("SELECT table_id, job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d", accountID)
+	result, err := ExecWithResult(ctx, query, cnUUID, txn)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	type jobRef struct {
+		tableID, jobID uint64
+		name           string
+	}
+	refs := make([]jobRef, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		names := executor.GetStringRows(cols[1])
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[2])
+		for i := 0; i < rows; i++ {
+			spec, decodeErr := UnmarshalJobSpec([]byte(cols[3].GetStringAt(i)))
+			if decodeErr != nil {
+				continue
+			}
+			if spec.ConsumerType != int8(ConsumerType_MaterializedView) || len(spec.ConsumerInfo.SourceTableInfos()) < 2 {
+				continue
+			}
+			for _, source := range spec.ConsumerInfo.SourceTableInfos() {
+				if source.TableID == sourceTableID {
+					refs = append(refs, jobRef{tableID: tableIDs[i], jobID: jobIDs[i], name: names[i]})
+					break
+				}
+			}
+		}
+		return true
+	})
+	status, err := json.Marshal(&JobStatus{ErrorCode: 1, ErrorMsg: errMsg})
+	if err != nil {
+		return err
+	}
+	quotedStatus := strings.ReplaceAll(string(status), "'", "''")
+	for _, ref := range refs {
+		update := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET job_state = %d, job_status = '%s' WHERE account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d",
+			ISCPJobState_Error, quotedStatus, accountID, ref.tableID, strings.ReplaceAll(ref.name, "'", "''"), ref.jobID)
+		updated, updateErr := ExecWithResult(ctx, update, cnUUID, txn)
+		if updateErr != nil {
+			return updateErr
+		}
+		updated.Close()
+	}
+	return nil
 }
 
 func unregisterJobsByDBName(
@@ -266,6 +330,38 @@ func registerJob(
 		DBName:    jobID.DBName,
 		TableName: jobID.TableName,
 	}
+	// Resolve every source in the same transaction as the anchor. The anchor
+	// remains SrcTable for compatibility with existing log readers.
+	sources := jobSpec.ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		sources = []TableInfo{jobSpec.SrcTable}
+	}
+	if len(sources) > MaxSourceTables {
+		return false, moerr.NewInternalErrorNoCtxf("too many ISCP source tables: %d", len(sources))
+	}
+	resolved := make([]TableInfo, 0, len(sources))
+	seenSources := make(map[[2]uint64]struct{}, len(sources))
+	for _, source := range sources {
+		if source.TableID == 0 {
+			source.TableID, source.DBID, err = getTableID(
+				ctxWithSysAccount, cnUUID, txn, tenantId, source.DBName, source.TableName)
+			if err != nil {
+				return
+			}
+		}
+		key := [2]uint64{source.DBID, source.TableID}
+		if _, exists := seenSources[key]; exists {
+			continue
+		}
+		seenSources[key] = struct{}{}
+		resolved = append(resolved, source)
+	}
+	if len(resolved) == 0 {
+		resolved = []TableInfo{jobSpec.SrcTable}
+	}
+	jobSpec.SrcTables = resolved
+	jobSpec.SrcTable = resolved[0]
+	tableID, dbID = jobSpec.SrcTable.TableID, jobSpec.SrcTable.DBID
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,

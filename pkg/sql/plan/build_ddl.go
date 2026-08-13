@@ -1489,13 +1489,21 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.Defs = tableDef.Defs
 	if stmt.Materialized {
 		clause, ok := stmt.AsSource.Select.(*tree.SelectClause)
-		if !ok || clause.From == nil || len(clause.From.Tables) != 1 {
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires exactly one base table")
+		if !ok || clause.From == nil || len(clause.From.Tables) == 0 {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "materialized view requires at least one base table")
 		}
-		source := materializedViewSourceTable(clause.From.Tables[0])
-		if source == nil {
-			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view requires exactly one base table (table=%T)", clause.From.Tables[0])
+		sources := make([]*tree.TableName, 0, len(clause.From.Tables))
+		for _, expr := range clause.From.Tables {
+			found, supported := materializedViewSourceTables(expr)
+			if !supported {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view source must be a direct base table (table=%T)", expr)
+			}
+			sources = append(sources, found...)
 		}
+		if len(sources) == 0 || len(sources) > 16 {
+			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "materialized view supports 1 to 16 base tables, got %d", len(sources))
+		}
+		source := sources[0]
 		sourceDB := string(source.SchemaName)
 		if sourceDB == "" {
 			sourceDB = ctx.DefaultDatabase()
@@ -1545,12 +1553,30 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 				&plan.Property{Key: "mv_source_sql", Value: tree.String(source, dialect.MYSQL)},
 				&plan.Property{Key: "mv_refresh_sql", Value: tree.String(stmt.AsSource, dialect.MYSQL)},
 			)
+			if len(sources) > 1 {
+				type sourceName struct{ Database, Table string }
+				names := make([]sourceName, 0, len(sources))
+				for _, item := range sources {
+					db := string(item.SchemaName)
+					if db == "" {
+						db = ctx.DefaultDatabase()
+					}
+					names = append(names, sourceName{Database: db, Table: string(item.ObjectName)})
+				}
+				encoded, marshalErr := json.Marshal(names)
+				if marshalErr != nil {
+					return nil, marshalErr
+				}
+				props.Properties = append(props.Properties, &plan.Property{Key: "mv_source_tables", Value: base64.StdEncoding.EncodeToString(encoded)})
+			}
 			visibleOutputCols := createView.TableDef.Cols
 			if len(visibleOutputCols) > 0 && visibleOutputCols[len(visibleOutputCols)-1].Name == catalog.FakePrimaryKeyColName {
 				visibleOutputCols = visibleOutputCols[:len(visibleOutputCols)-1]
 			}
-			if incrementalSpec := materializedViewIncrementalSpec(clause, visibleOutputCols); incrementalSpec != "" {
-				props.Properties = append(props.Properties, &plan.Property{Key: "mv_incremental_spec", Value: incrementalSpec})
+			if len(sources) == 1 {
+				if incrementalSpec := materializedViewIncrementalSpec(clause, visibleOutputCols); incrementalSpec != "" {
+					props.Properties = append(props.Properties, &plan.Property{Key: "mv_incremental_spec", Value: incrementalSpec})
+				}
 			}
 		}
 	}
@@ -1744,6 +1770,32 @@ func materializedViewSourceTable(expr tree.TableExpr) *tree.TableName {
 		return nil
 	default:
 		return nil
+	}
+}
+
+func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool) {
+	switch table := expr.(type) {
+	case *tree.TableName:
+		if table.AtTsExpr != nil {
+			return nil, false
+		}
+		return []*tree.TableName{table}, true
+	case *tree.AliasedTableExpr:
+		return materializedViewSourceTables(table.Expr)
+	case *tree.ParenTableExpr:
+		return materializedViewSourceTables(table.Expr)
+	case *tree.JoinTableExpr:
+		left, ok := materializedViewSourceTables(table.Left)
+		if !ok {
+			return nil, false
+		}
+		right, ok := materializedViewSourceTables(table.Right)
+		if !ok {
+			return nil, false
+		}
+		return append(left, right...), true
+	default:
+		return nil, false
 	}
 }
 

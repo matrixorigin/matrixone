@@ -59,6 +59,13 @@ func NewISCPData(
 	return d
 }
 
+func (d *ISCPData) SetSourceTableID(tableID uint64) *ISCPData {
+	if d != nil {
+		d.SourceTableID = tableID
+	}
+	return d
+}
+
 func (d *ISCPData) Set(cnt int) {
 	d.refcnt.Add(int32(cnt))
 }

@@ -41,3 +41,14 @@ func TestMaterializedViewRefreshAtIterationBoundary(t *testing.T) {
 	_, err = materializedViewRefreshAt("select 1", "src", ts)
 	require.Error(t, err)
 }
+
+func TestMaterializedViewRefreshAtMultipleSources(t *testing.T) {
+	ts := types.BuildTS(100, 7)
+	query, err := materializedViewRefreshAtSources(
+		"select * from db1.a as x join db2.b as y on x.id = y.id",
+		[]TableInfo{{DBName: "db1", TableName: "a"}, {DBName: "db2", TableName: "b"}}, ts)
+	require.NoError(t, err)
+	require.Equal(t,
+		"select * from `db1`.`a`{MO_TS = '100-7'} as x join `db2`.`b`{MO_TS = '100-7'} as y on x.id = y.id",
+		query)
+}

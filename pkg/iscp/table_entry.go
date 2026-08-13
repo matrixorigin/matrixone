@@ -110,6 +110,36 @@ func (t *TableEntry) IsEmpty() bool {
 	return len(t.jobs) == 0
 }
 
+// sourceTableInfos returns the union of source relations used by active jobs
+// on this anchor. The anchor itself is retained for legacy jobs.
+func (t *TableEntry) sourceTableInfos() []TableInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	seen := make(map[[2]uint64]struct{})
+	result := make([]TableInfo, 0)
+	for _, job := range t.jobs {
+		if job.dropAt != 0 {
+			continue
+		}
+		sources := job.sourceTables
+		if len(sources) == 0 {
+			sources = []TableInfo{{DBID: t.dbID, TableID: t.tableID, DBName: t.dbName, TableName: t.tableName}}
+		}
+		for _, source := range sources {
+			key := [2]uint64{source.DBID, source.TableID}
+			if source.TableID == 0 {
+				key[0], key[1] = 0, uint64(len(result)+1)
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			result = append(result, source)
+		}
+	}
+	return result
+}
+
 func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -161,13 +191,14 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
 			iterations = append(iterations, &IterationContext{
-				tableID:   t.tableID,
-				accountID: t.accountID,
-				jobNames:  []string{sinker.jobName},
-				jobIDs:    []uint64{sinker.jobID},
-				lsn:       []uint64{sinker.currentLSN + 1},
-				fromTS:    types.TS{},
-				toTS:      types.TS{},
+				tableID:      t.tableID,
+				accountID:    t.accountID,
+				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				jobNames:     []string{sinker.jobName},
+				jobIDs:       []uint64{sinker.jobID},
+				lsn:          []uint64{sinker.currentLSN + 1},
+				fromTS:       types.TS{},
+				toTS:         types.TS{},
 			})
 			continue
 		}
@@ -182,6 +213,16 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+					seen := make(map[[2]uint64]struct{}, len(iter.sourceTables))
+					for _, source := range iter.sourceTables {
+						seen[[2]uint64{source.DBID, source.TableID}] = struct{}{}
+					}
+					for _, source := range sinker.sourceTables {
+						key := [2]uint64{source.DBID, source.TableID}
+						if _, exists := seen[key]; !exists {
+							iter.sourceTables = append(iter.sourceTables, source)
+						}
+					}
 					foundIteration = true
 					break
 				}
@@ -189,13 +230,14 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 		if !foundIteration {
 			iterations = append(iterations, &IterationContext{
-				tableID:   t.tableID,
-				accountID: t.accountID,
-				jobNames:  []string{sinker.jobName},
-				jobIDs:    []uint64{sinker.jobID},
-				lsn:       []uint64{sinker.currentLSN + 1},
-				fromTS:    from,
-				toTS:      to,
+				tableID:      t.tableID,
+				accountID:    t.accountID,
+				sourceTables: append([]TableInfo(nil), sinker.sourceTables...),
+				jobNames:     []string{sinker.jobName},
+				jobIDs:       []uint64{sinker.jobID},
+				lsn:          []uint64{sinker.currentLSN + 1},
+				fromTS:       from,
+				toTS:         to,
 			})
 			if from.LT(&minFromTS) {
 				minFromTS = from

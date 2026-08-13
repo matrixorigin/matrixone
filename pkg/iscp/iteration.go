@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -48,6 +49,13 @@ type DataRetrieverConsumer interface {
 	Cancel(error)
 	IsCanceled() bool
 	Close()
+}
+
+type iterationSourceChanges struct {
+	tableID uint64
+	rel     engine.Relation
+	def     *plan.TableDef
+	changes engine.ChangesHandle
 }
 
 func (iterCtx *IterationContext) String() string {
@@ -246,13 +254,44 @@ func ExecuteIterationWithRuntime(
 			break
 		}
 	}
-	changes, err := CollectChanges(collectCtx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
-	if err != nil {
-		return
+	sources := jobSpecs[0].ConsumerInfo.SourceTableInfos()
+	if len(sources) == 0 {
+		sources = []TableInfo{jobSpecs[0].ConsumerInfo.SrcTable}
 	}
-	if changes != nil {
-		defer changes.Close()
+	if len(sources) > MaxSourceTables {
+		return moerr.NewInternalErrorNoCtxf("too many ISCP source tables: %d", len(sources))
 	}
+	changeStreams := make([]iterationSourceChanges, 0, len(sources))
+	for _, source := range sources {
+		sourceDB, sourceErr := cnEngine.Database(ctxWithAccount, source.DBName, txnOp)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		sourceRel, sourceErr := sourceDB.Relation(ctxWithAccount, source.TableName, nil)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		if source.TableID != 0 && sourceRel.GetTableID(ctxWithAccount) != source.TableID {
+			return moerr.NewInternalErrorNoCtx("source table id mismatch")
+		}
+		sourceChanges, sourceErr := CollectChanges(collectCtx, sourceRel, iterCtx.fromTS, iterCtx.toTS, mp)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		changeStreams = append(changeStreams, iterationSourceChanges{
+			tableID: sourceRel.GetTableID(ctxWithAccount),
+			rel:     sourceRel,
+			def:     sourceRel.CopyTableDef(ctxWithAccount),
+			changes: sourceChanges,
+		})
+	}
+	defer func() {
+		for i := range changeStreams {
+			if changeStreams[i].changes != nil {
+				changeStreams[i].changes.Close()
+			}
+		}
+	}()
 	// injection is for ut
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
@@ -329,7 +368,7 @@ func ExecuteIterationWithRuntime(
 		ctxWithoutTimeout,
 		runtime,
 		iterCtx,
-		changes,
+		changeStreams,
 		consumers,
 		statuses,
 		typ,
@@ -380,7 +419,7 @@ func runISCPTaskIterationConsumers(
 	ctx context.Context,
 	runtime *ISCPTaskExecutor,
 	iterCtx *IterationContext,
-	changes engine.ChangesHandle,
+	changeInput any,
 	consumers []Consumer,
 	statuses []*JobStatus,
 	typ int8,
@@ -391,6 +430,15 @@ func runISCPTaskIterationConsumers(
 	delTSColIdx int,
 	delCompositedPkColIdx int,
 ) {
+	var changeStreams []iterationSourceChanges
+	switch changes := changeInput.(type) {
+	case []iterationSourceChanges:
+		changeStreams = changes
+	case engine.ChangesHandle:
+		changeStreams = []iterationSourceChanges{{tableID: iterCtx.tableID, changes: changes}}
+	default:
+		return
+	}
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -423,6 +471,7 @@ func runISCPTaskIterationConsumers(
 	changeHandelWg.Add(1)
 	go func() {
 		var dataLength int
+		streamIdx := 0
 		defer func() {
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
@@ -434,6 +483,27 @@ func runISCPTaskIterationConsumers(
 			default:
 			}
 			var data *ISCPData
+			stream := changeStreams[streamIdx]
+			changes := stream.changes
+			streamInsTSColIdx := insTSColIdx
+			streamInsPKColIdx := insCompositedPkColIdx
+			streamDelTSColIdx := delTSColIdx
+			streamDelPKColIdx := delCompositedPkColIdx
+			if stream.def != nil {
+				streamInsTSColIdx = len(stream.def.Cols) - 1
+				streamInsPKColIdx = len(stream.def.Cols) - 2
+				streamDelTSColIdx = 1
+				streamDelPKColIdx = 0
+			}
+			if stream.def != nil && engine.RetainRowIDFromContext(ctxWithCancel) {
+				streamInsTSColIdx++
+				streamInsPKColIdx++
+				streamDelTSColIdx = 2
+				streamDelPKColIdx = 1
+			}
+			if stream.def != nil && len(stream.def.Pkey.Names) == 1 {
+				streamInsPKColIdx = int(stream.def.Name2ColIndex[stream.def.Pkey.Names[0]])
+			}
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
 			if insertData != nil {
 				dataLength += insertData.RowCount()
@@ -461,6 +531,10 @@ func runISCPTaskIterationConsumers(
 			} else {
 				// both nil denote no more data (end of this tail)
 				if insertData == nil && deleteData == nil {
+					if streamIdx+1 < len(changeStreams) {
+						streamIdx++
+						continue
+					}
 					data = NewISCPData(true, nil, nil, err)
 				} else {
 					var insertAtmBatch *AtomicBatch
@@ -472,8 +546,9 @@ func runISCPTaskIterationConsumers(
 							data = NewISCPData(true, nil, nil, err)
 						} else {
 							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+							insertAtmBatch.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
 							data = NewISCPData(false, insertAtmBatch, nil, nil)
+							data.SetSourceTableID(stream.tableID)
 						}
 					case engine.ChangesHandle_Tail_wip:
 						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
@@ -485,9 +560,10 @@ func runISCPTaskIterationConsumers(
 						} else {
 							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+							insertAtmBatch.Append(packer, insertData, streamInsTSColIdx, streamInsPKColIdx)
+							deleteAtmBatch.Append(packer, deleteData, streamDelTSColIdx, streamDelPKColIdx)
 							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
+							data.SetSourceTableID(stream.tableID)
 						}
 
 					}

@@ -86,22 +86,26 @@ type DataRetriever interface {
 */
 
 type IterationContext struct {
-	accountID uint32
-	tableID   uint64
-	jobNames  []string
-	jobIDs    []uint64
-	lsn       []uint64
-	fromTS    types.TS
-	toTS      types.TS
+	accountID    uint32
+	tableID      uint64
+	sourceTables []TableInfo
+	jobNames     []string
+	jobIDs       []uint64
+	lsn          []uint64
+	fromTS       types.TS
+	toTS         types.TS
 }
 
 type ISCPData struct {
 	refcnt atomic.Int32
 
-	insertBatch *AtomicBatch
-	deleteBatch *AtomicBatch
-	noMoreData  bool
-	err         error
+	// SourceTableID identifies the source relation that produced this batch.
+	// Zero preserves the legacy single-table shape.
+	SourceTableID uint64
+	insertBatch   *AtomicBatch
+	deleteBatch   *AtomicBatch
+	noMoreData    bool
+	err           error
 }
 
 const (
@@ -196,10 +200,11 @@ type RunningJobConsumer struct {
 
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {
-	tableInfo *TableEntry
-	jobName   string
-	jobSpec   *TriggerSpec
-	jobID     uint64
+	tableInfo    *TableEntry
+	jobName      string
+	jobSpec      *TriggerSpec
+	sourceTables []TableInfo
+	jobID        uint64
 
 	watermark          types.TS
 	persistedWatermark types.TS
@@ -254,9 +259,12 @@ type ConsumerInfo struct {
 	DBName       string
 	Columns      []string
 	SrcTable     TableInfo
-	InitSQL      string
-	RefreshSQL   string
-	SourceSQL    string
+	// SrcTables contains all source relations for a logical job. SrcTable is
+	// retained as the compatibility anchor for legacy single-table jobs.
+	SrcTables  []TableInfo
+	InitSQL    string
+	RefreshSQL string
+	SourceSQL  string
 	// IncrementalSpec is a planner-produced JSON description for the
 	// supported direct-column aggregate subset. Empty means full refresh.
 	IncrementalSpec string
@@ -267,6 +275,21 @@ type TableInfo struct {
 	DBID      uint64
 	TableName string
 	TableID   uint64
+}
+
+const MaxSourceTables = 16
+
+func (info *ConsumerInfo) SourceTableInfos() []TableInfo {
+	if info == nil {
+		return nil
+	}
+	if len(info.SrcTables) == 0 {
+		if info.SrcTable.TableID == 0 {
+			return nil
+		}
+		return []TableInfo{info.SrcTable}
+	}
+	return info.SrcTables
 }
 
 type Consumer interface {

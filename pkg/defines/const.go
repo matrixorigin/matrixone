@@ -58,7 +58,8 @@ const (
 	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
 	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
 	MORPCVersion22     int64 = 22 // typed user-defined variables during connection migration
-	MORPCLatestVersion       = MORPCVersion22
+	MORPCVersion23     int64 = 23 // multi-source ISCP jobs
+	MORPCLatestVersion       = MORPCVersion23
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

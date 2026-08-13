@@ -508,7 +508,16 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 				if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
 					ok = true
 				} else {
-					_, ok = tables[iter.tableID]
+					if len(iter.sourceTables) == 0 {
+						_, ok = tables[iter.tableID]
+					} else {
+						for _, source := range iter.sourceTables {
+							if _, dirty := tables[source.TableID]; dirty {
+								ok = true
+								break
+							}
+						}
+					}
 				}
 				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
 				if !tableExists {
@@ -1092,11 +1101,26 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	dbs := make([]uint64, 0, len(candidateTables))
 	tbls := make([]uint64, 0, len(candidateTables))
 	fromTimestamps := make([]timestamp.Timestamp, 0, len(candidateTables))
+	seen := make(map[[3]uint64]int)
 	for i, t := range candidateTables {
-		accs = append(accs, uint64(t.accountID))
-		dbs = append(dbs, t.dbID)
-		tbls = append(tbls, t.tableID)
-		fromTimestamps = append(fromTimestamps, fromTSs[i].ToTimestamp())
+		sources := t.sourceTableInfos()
+		if len(sources) == 0 {
+			sources = []TableInfo{{DBID: t.dbID, TableID: t.tableID}}
+		}
+		for _, source := range sources {
+			key := [3]uint64{uint64(t.accountID), source.DBID, source.TableID}
+			if at, ok := seen[key]; ok {
+				if fromTSs[i].ToTimestamp().Less(fromTimestamps[at]) {
+					fromTimestamps[at] = fromTSs[i].ToTimestamp()
+				}
+				continue
+			}
+			seen[key] = len(accs)
+			accs = append(accs, uint64(t.accountID))
+			dbs = append(dbs, source.DBID)
+			tbls = append(tbls, source.TableID)
+			fromTimestamps = append(fromTimestamps, fromTSs[i].ToTimestamp())
+		}
 	}
 	// tmpTS := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
 	tables = make(map[uint64]struct{})
