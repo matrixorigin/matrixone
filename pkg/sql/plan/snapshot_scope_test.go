@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -100,4 +101,32 @@ func TestSnapshotTableID(t *testing.T) {
 	require.Zero(t, SnapshotTableID(nil))
 	require.Equal(t, uint64(2), SnapshotTableID(&planpb.TableDef{TblId: 2}))
 	require.Equal(t, uint64(3), SnapshotTableID(&planpb.TableDef{TblId: 2, LogicalId: 3}))
+}
+
+func TestCheckPrivilegeUsesSnapshotLogicalTableID(t *testing.T) {
+	ctx := context.WithValue(
+		context.Background(), tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable,
+	)
+	tableDef := &planpb.TableDef{
+		DbName:    "db",
+		Name:      "table",
+		DbId:      1,
+		TblId:     8,
+		LogicalId: 7,
+	}
+
+	newSnapshot := func(objectID uint64) *Snapshot {
+		return &Snapshot{ExtraInfo: &planpb.SnapshotExtraInfo{
+			Name:  "snapshot",
+			Level: tree.SNAPSHOTLEVELTABLE.String(),
+			ObjId: objectID,
+		}}
+	}
+
+	require.NoError(t, checkPrivilege(
+		ctx, 1, 1, nil, tableDef, "db", newSnapshot(7), tree.WithinDBCloneTable,
+	))
+	require.EqualError(t, checkPrivilege(
+		ctx, 1, 1, nil, tableDef, "db", newSnapshot(8), tree.WithinDBCloneTable,
+	), "internal error: table-level snapshot(snapshot) does not belong to the table(db-table)")
 }
