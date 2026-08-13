@@ -1252,6 +1252,21 @@ func TestIsMaterializedViewTableDefUsesPersistedCreateSQL(t *testing.T) {
 	}))
 }
 
+func TestValidateMaterializedViewSources(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	mv := &plan.TableDef{
+		Name:      "mv",
+		DbName:    "tpch",
+		Createsql: "create materialized view mv as select * from tpch.missing_orders",
+	}
+	err := ValidateMaterializedViewSources(ctx, mv)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "missing_orders")
+
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch"}
+	require.NoError(t, ValidateMaterializedViewSources(ctx, mv))
+}
+
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	const rootSQL = "create view v as select 1"
 	ctx := &rootSQLCompilerContext{

@@ -1648,6 +1648,49 @@ func IsMaterializedViewTableDef(def *plan.TableDef) bool {
 	return false
 }
 
+// ValidateMaterializedViewSources verifies that the source tables recorded in
+// a materialized view's durable CREATE SQL still exist. The MV is a physical
+// table, so resolving the MV itself is not sufficient to establish that its
+// contents are still valid after a source table is dropped.
+func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) error {
+	if !IsMaterializedViewTableDef(def) {
+		return nil
+	}
+	stat, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, def.GetCreatesql(), 1)
+	if err != nil {
+		return moerr.NewInternalErrorf(ctx.GetContext(), "cannot parse materialized view definition: %v", err)
+	}
+	defer stat.Free()
+	create, ok := stat.(*tree.CreateView)
+	if !ok || !create.Materialized || create.AsSource == nil {
+		return moerr.NewInternalError(ctx.GetContext(), "invalid materialized view definition")
+	}
+	clause, ok := create.AsSource.Select.(*tree.SelectClause)
+	if !ok || clause.From == nil || len(clause.From.Tables) == 0 {
+		return moerr.NewInternalError(ctx.GetContext(), "materialized view has no source table")
+	}
+	for _, expr := range clause.From.Tables {
+		sources, supported := materializedViewSourceTables(expr)
+		if !supported {
+			return moerr.NewInternalError(ctx.GetContext(), "invalid materialized view source definition")
+		}
+		for _, source := range sources {
+			dbName := string(source.SchemaName)
+			if dbName == "" {
+				dbName = def.GetDbName()
+			}
+			_, sourceDef, resolveErr := ctx.Resolve(dbName, string(source.ObjectName), nil)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if sourceDef == nil {
+				return moerr.NewNoSuchTablef(ctx.GetContext(), "materialized view source table %q does not exist", string(source.ObjectName))
+			}
+		}
+	}
+	return nil
+}
+
 const materializedViewMarkerComment = "matrixone materialized view"
 
 type materializedViewIncrementalAggregate struct {

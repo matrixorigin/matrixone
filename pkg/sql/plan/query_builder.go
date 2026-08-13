@@ -10887,6 +10887,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
+				return 0, err
+			}
 
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType:     plan.Node_TABLE_SCAN,
@@ -10912,6 +10915,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, err
+		}
+		if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
 			return 0, err
 		}
 
