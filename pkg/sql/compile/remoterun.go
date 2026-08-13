@@ -1568,7 +1568,7 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 	}
 	if proc == nil || !supportsRemoteTargetAwareUpdate(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 18",
+			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 19",
 		)
 	}
 	return nil

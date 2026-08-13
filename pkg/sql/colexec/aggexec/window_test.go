@@ -324,6 +324,60 @@ func TestValueWindowExec_VarlenTypes(t *testing.T) {
 	})
 }
 
+func TestValueWindowExec_BinaryStringProvenance(t *testing.T) {
+	tests := []struct {
+		name string
+		id   int64
+		want []bool
+	}{
+		{name: "lag", id: WinIdOfLag, want: []bool{false, true, false}},
+		{name: "lead", id: WinIdOfLead, want: []bool{false, true, false}},
+		{name: "first_value", id: WinIdOfFirstValue, want: []bool{true, true, true}},
+		{name: "last_value", id: WinIdOfLastValue, want: []bool{true, true, true}},
+		{name: "nth_value", id: WinIdOfNthValue, want: []bool{true, true, true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mp.Free(nil)
+
+			exec, err := makeValueWindowExec(mp, tc.id, false, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			defer exec.Free()
+
+			vec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendStringList(vec, []string{"binary-0", "text-1", "binary-2"}, nil, mp))
+			defer vec.Free(mp)
+			require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+			require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
+
+			require.NoError(t, exec.GroupGrow(3))
+			for outputRow := 0; outputRow < 3; outputRow++ {
+				for frameRow := 0; frameRow < 3; frameRow++ {
+					require.NoError(t, exec.Fill(outputRow, frameRow, []*vector.Vector{vec}))
+				}
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			for row, want := range tc.want {
+				require.Equal(t, want, results[0].GetBinaryStringMetadataAt(row), "row %d", row)
+			}
+			if tc.id == WinIdOfLag {
+				require.True(t, results[0].IsNull(0))
+				require.False(t, results[0].GetBinaryStringMetadataAt(0))
+			}
+			if tc.id == WinIdOfLead {
+				require.True(t, results[0].IsNull(2))
+				require.False(t, results[0].GetBinaryStringMetadataAt(2))
+			}
+		})
+	}
+}
+
 func TestValueWindowExec_NullValues(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)

@@ -650,6 +650,7 @@ message PrepareParamInfo {
   bytes area = 3;
   repeated bool nulls = 4;
   repeated bool is_bin = 5;
+  repeated bool is_binary_string = 6;
 }
 
 message ProcessInfo {

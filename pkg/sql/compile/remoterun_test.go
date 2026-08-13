@@ -481,15 +481,15 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 		}},
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, nil))
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, &pipeline.Pipeline{}))
 	_, _, err := convertToPipelineInstruction(selectorPreInsert, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 18")
+	require.ErrorContains(t, err, "requires MORPC protocol version 19")
 	_, _, err = convertToPipelineInstruction(targetAwareMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 18")
+	require.ErrorContains(t, err, "requires MORPC protocol version 19")
 	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 18")
+	require.ErrorContains(t, err, "requires MORPC protocol version 19")
 	targetAwarePipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
 		InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.PreInsert),
@@ -500,7 +500,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	}}}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline),
-		"requires MORPC protocol version 18")
+		"requires MORPC protocol version 19")
 	targetAwareMultiUpdatePipeline := &pipeline.Pipeline{
 		InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.MultiUpdate),
@@ -511,7 +511,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	}
 	require.ErrorContains(t,
 		validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwareMultiUpdatePipeline),
-		"requires MORPC protocol version 18")
+		"requires MORPC protocol version 19")
 
 	_, _, err = convertToPipelineInstruction(&preinsert.PreInsert{}, proc, ctx, 1)
 	require.NoError(t, err, "legacy PRE_INSERT stays wire-compatible")
@@ -520,7 +520,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	}, proc, ctx, 1)
 	require.NoError(t, err, "non-target-aware MULTI_UPDATE stays wire-compatible")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion18)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
 	_, _, err = convertToPipelineInstruction(selectorPreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	_, _, err = convertToPipelineInstruction(targetAwareMultiUpdate, proc, ctx, 1)
