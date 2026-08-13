@@ -103,6 +103,16 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 	assert.Contains(t, InformationSchemaColumnsDDL, "else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE")
 }
 
+func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
+	assert.Contains(t, InformationSchemaColumnsDDL, "mc.att_is_hidden = 0")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
 func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
 	assert.NoError(t, err)

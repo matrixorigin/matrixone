@@ -57,12 +57,23 @@ select column_name, data_type
 from information_schema.columns
 where table_schema = 'information_schema_data_type_case'
   and table_name = 'type_probe'
-  and column_name not like '__mo%'
 order by ordinal_position;
 select column_name, data_type, column_type
 from information_schema.columns
 where table_schema = 'information_schema_data_type_case'
   and table_name = 'type_probe'
   and column_name in ('c_bool', 'c_tiny_unsigned', 'c_small_unsigned', 'c_int_unsigned', 'c_big_unsigned')
+order by ordinal_position;
+
+create table information_schema_data_type_case.composite_pk_probe (
+    a int not null,
+    b int not null,
+    v varchar(10),
+    primary key (a, b)
+);
+select ordinal_position, column_name, data_type
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case'
+  and table_name = 'composite_pk_probe'
 order by ordinal_position;
 drop database information_schema_data_type_case;

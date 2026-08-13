@@ -305,7 +305,6 @@ partition p04 values less than (400001)
 );
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
-def  ¦  ac_db  ¦  ac_t1  ¦  __mo_fake_pk_col  𝄀
 def  ¦  ac_db  ¦  ac_t1  ¦  c1
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
@@ -350,7 +349,6 @@ select table_catalog,table_schema,table_name,column_name from information_schema
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_name='sys_t1';
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
-def  ¦  sys_db1  ¦  sys_t1  ¦  __mo_fake_pk_col  𝄀
 def  ¦  sys_db1  ¦  sys_t1  ¦  c1
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]
@@ -429,7 +427,6 @@ partition p04 values less than (400001)
 );
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db" and table_name='acuser_t1';
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
-def  ¦  acuser_db  ¦  acuser_t1  ¦  __mo_fake_pk_col  𝄀
 def  ¦  acuser_db  ¦  acuser_t1  ¦  c1  𝄀
 def  ¦  acuser_db  ¦  acuser_t1  ¦  c2
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db";
@@ -465,7 +462,6 @@ select count(*),table_schema,table_name,partition_name  from information_schema.
 [unknown result because it is related to issue#16438]
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db" and table_name='user_t1';
 ➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  column_name[12,-1,0]  𝄀
-def  ¦  user_db  ¦  user_t1  ¦  __mo_fake_pk_col  𝄀
 def  ¦  user_db  ¦  user_t1  ¦  c1  𝄀
 def  ¦  user_db  ¦  user_t1  ¦  c2
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db";
