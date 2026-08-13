@@ -99,6 +99,30 @@ Project  𝄀
               ->  Table Scan on ft_view_ddl.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
               ->  Table Function on fulltext_index_scan
+explain select id from v_good_score where score > 0;
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Filter Cond: (#[12,1] > 0)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_view_ddl.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+select id from v_good_score where score > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from (
+select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
 create view v_plain as select id, body from docs where id > 1;
 select count(*) as plain_rows from v_plain;
 ➤ plain_rows[-5,64,0]  𝄀

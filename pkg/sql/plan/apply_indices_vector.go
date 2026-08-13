@@ -1102,3 +1102,63 @@ func vecTextToBytes(t types.T, s string) ([]byte, bool) {
 	}
 	return b, true
 }
+
+// exprCallsFunc reports whether expr calls fnName anywhere inside it, including nested in
+// another call's arguments or inside an expression list.
+//
+// Used to spot a predicate that WRAPS an index placeholder rather than being one --
+// `MATCH(...) > 0`, `ROUND(l2_distance(...), 2) < 5` -- which the "is this expression exactly
+// the placeholder?" tests used elsewhere step straight past.
+func exprCallsFunc(expr *plan.Expr, fnName string) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == fnName {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if exprCallsFunc(arg, fnName) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, sub := range e.List.List {
+			if exprCallsFunc(sub, fnName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// replaceScoreFnInExpr rewrites every call to fnName inside expr into the index scan's score
+// column, returning the rewritten expression. scoreExpr is called per occurrence so each gets
+// its own node rather than sharing one that a later pass could mutate.
+//
+// This is the generic half of replaceDistFnInExpr, which does the same for vector distances
+// but decides what to replace using metric- and query-vector-specific tests. Fulltext needs
+// only the function name, so the two share the walk and not the predicate. Both exist for the
+// same reason: an index placeholder nested inside a larger expression -- a comparison, a cast,
+// arithmetic -- is still a placeholder, and leaving it behind means it reaches execution and
+// throws (#26961 for vector distances, the MATCH-score filter case for fulltext).
+func replaceScoreFnInExpr(expr *plan.Expr, fnName string, scoreExpr func() *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F.Func != nil && e.F.Func.ObjName == fnName {
+			return scoreExpr()
+		}
+		for i, arg := range e.F.Args {
+			e.F.Args[i] = replaceScoreFnInExpr(arg, fnName, scoreExpr)
+		}
+	case *plan.Expr_List:
+		for i, sub := range e.List.List {
+			e.List.List[i] = replaceScoreFnInExpr(sub, fnName, scoreExpr)
+		}
+	}
+	return expr
+}

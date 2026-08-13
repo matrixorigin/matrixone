@@ -243,6 +243,39 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
 	}
 
+	// Predicates that WRAP a MATCH rather than being one -- `MATCH(...) > 0`, or a filter on a
+	// projected score alias that inlining substituted back into its definition -- are invisible
+	// to getFullTextMatchFiltersFromScanNode, which only recognises a bare fulltext_match. Left
+	// on the scan they survive the rewrite and throw at execution, even though the index scan
+	// was built right beside them:
+	//
+	//	Join
+	//	  Table Scan   Filter Cond: (fulltext_match('hello', 0, body) > 0)   <- throws
+	//	  Table Function on fulltext_index_scan                              <- index IS used
+	//
+	// Take them off the scan here; they are re-attached above the join once the score column
+	// exists, with the inner MATCH rewritten to reference it. Removing them before the
+	// pushdown decision below is deliberate: a predicate needing the score can never be
+	// pushed into the index scan, so it must not make the pre-filter path look worthwhile.
+	//
+	// Same defect the vector side fixed for wrapped distances in #26961; the recursive
+	// replacement is shared with it (replaceScoreFnInExpr).
+	wrappedMatchFilters := make([]*plan.Expr, 0)
+	if len(ft_filters) == 1 {
+		// Single served MATCH only. With several, deciding WHICH index scan's score a wrapped
+		// predicate refers to needs argument matching this does not attempt; leaving those
+		// alone keeps today's behaviour rather than risking the wrong score.
+		kept := scanNode.FilterList[:0]
+		for _, expr := range scanNode.FilterList {
+			if exprCallsFunc(expr, "fulltext_match") {
+				wrappedMatchFilters = append(wrappedMatchFilters, expr)
+				continue
+			}
+			kept = append(kept, expr)
+		}
+		scanNode.FilterList = kept
+	}
+
 	indexDefs = append(indexDefs, filter_indexDefs...)
 
 	// Check Equal fulltext_match function
@@ -712,6 +745,34 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// Note: caller (applyIndicesForProjectionUsingFullTextIndex) may still need
 	// scanNode.Limit to set up the SORT node, so we don't clear it here.
 	// The caller is responsible for clearing scanNode.Limit/Offset after using it.
+
+	// Re-attach the wrapped-MATCH predicates lifted off the scan, now that the index scan's
+	// score column exists. They go on the JOIN: the score is produced by the table function, so
+	// the predicate cannot be evaluated below the join that brings the two together.
+	if len(wrappedMatchFilters) > 0 && len(ret_filter_node_ids) == 1 {
+		ftnode := builder.qry.Nodes[ret_filter_node_ids[0]]
+		joinNode := builder.qry.Nodes[joinnodeID]
+		if ftnode != nil && joinNode != nil && len(ftnode.BindingTags) > 0 {
+			scoreExpr := func() *plan.Expr {
+				return &plan.Expr{
+					Typ: ftnode.TableDef.Cols[1].Typ, // score column
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
+					},
+				}
+			}
+			for _, expr := range wrappedMatchFilters {
+				joinNode.FilterList = append(joinNode.FilterList,
+					replaceScoreFnInExpr(expr, "fulltext_match", scoreExpr))
+			}
+		} else {
+			// Could not resolve the score column: put them back rather than drop predicates,
+			// which would silently widen the result set.
+			scanNode.FilterList = append(scanNode.FilterList, wrappedMatchFilters...)
+		}
+	} else if len(wrappedMatchFilters) > 0 {
+		scanNode.FilterList = append(scanNode.FilterList, wrappedMatchFilters...)
+	}
 
 	if err := builder.recordPreparedPluginDependencies(scanNode); err != nil {
 		return -1, nil, nil, err

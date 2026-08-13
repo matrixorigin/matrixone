@@ -95,6 +95,26 @@ select id, row_number() over (order by match(body) against('hello')) as rn from 
 create view v_window_where as
 select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
 
+-- ---------------- a filter on the projected score, above the view ---------------
+-- `WHERE sc > 0` on a view's score column is a predicate that WRAPS the MATCH rather than
+-- being one. Inlining pushes it onto the base scan, where getFullTextMatchFiltersFromScanNode
+-- -- which only recognises a bare fulltext_match -- cannot see it, so it survived the rewrite
+-- and threw at execution even though the index scan was built right beside it. It is now
+-- lifted onto the join and rewritten to reference the score column.
+--
+-- MATCH returns a FLOAT relevance score in MatrixOne (DESC on such a view reports FLOAT),
+-- as in MySQL, so comparing it is meaningful rather than a bool coercion.
+-- @separator:table
+-- @regex("Table Function on fulltext2_search", true)
+explain select id from v_good_score where score > 0;
+
+select id from v_good_score where score > 0 order by id;
+
+-- the same shape without a view at all, which is where it also failed
+select id from (
+    select id, match(body) against('hello') as sc from docs where match(body) against('hello')
+) x where sc > 0 order by id;
+
 -- ---------------- views with no MATCH are untouched ----------------------------
 create view v_plain as select id, body from docs where id > 1;
 select count(*) as plain_rows from v_plain;
