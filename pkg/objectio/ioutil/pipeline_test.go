@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -149,6 +150,71 @@ func TestStartAfterStopCreatesActivePipeline(t *testing.T) {
 	t.Cleanup(func() { Stop(sid) })
 	require.NotSame(t, first, second)
 	require.True(t, second.active.Load())
+}
+
+func TestPrefetchRejectsInvalidLocationBeforeEnqueue(t *testing.T) {
+	validLocation := makeLocation()
+	params, err := BuildPrefetchParams(nil, validLocation)
+	require.NoError(t, err)
+	require.Equal(t, validLocation, params.key)
+	delegateCalls := 0
+	pipeline := &IoPipeline{
+		prefetchFunc: func(PrefetchParams) error {
+			delegateCalls++
+			return nil
+		},
+	}
+	require.NoError(t, pipeline.Prefetch(params))
+	require.Equal(t, 1, delegateCalls)
+
+	invalidLocations := []struct {
+		name     string
+		location objectio.Location
+	}{
+		{name: "missing encoding"},
+		{
+			name: "truncated encoding",
+			location: append(
+				objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+			),
+		},
+		{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+	}
+	prefetchers := []struct {
+		name     string
+		prefetch func(objectio.Location) error
+	}{
+		{
+			name: "file",
+			prefetch: func(location objectio.Location) error {
+				return Prefetch(t.Name(), nil, location)
+			},
+		},
+		{
+			name: "metadata",
+			prefetch: func(location objectio.Location) error {
+				return PrefetchMeta(t.Name(), nil, location)
+			},
+		},
+		{
+			name: "pipeline admission",
+			prefetch: func(location objectio.Location) error {
+				return pipeline.Prefetch(PrefetchParams{key: location})
+			},
+		},
+	}
+
+	for _, location := range invalidLocations {
+		t.Run(location.name, func(t *testing.T) {
+			for _, prefetcher := range prefetchers {
+				t.Run(prefetcher.name, func(t *testing.T) {
+					err := prefetcher.prefetch(location.location)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+				})
+			}
+		})
+	}
+	require.Equal(t, 1, delegateCalls)
 }
 
 func TestIoPipeline_Prefetch(t *testing.T) {
