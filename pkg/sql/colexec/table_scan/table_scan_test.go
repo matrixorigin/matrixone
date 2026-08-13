@@ -106,6 +106,58 @@ func TestCall(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+func TestPadCharColumnsToFullLength(t *testing.T) {
+	proc := testutil.NewProc(t)
+	charType := types.New(types.T_char, 8, 0)
+	varcharType := types.New(types.T_varchar, 8, 0)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(charType)
+	bat.Vecs[1] = vector.NewVec(varcharType)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("MO"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("你好"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("MO"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("你好"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], nil, true, proc.Mp()))
+	bat.SetRowCount(3)
+
+	require.NoError(t, padCharColumnsToFullLength(bat, proc))
+	require.Equal(t, "MO      ", string(bat.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, "你好      ", string(bat.Vecs[0].GetBytesAt(1)))
+	require.True(t, bat.Vecs[0].GetNulls().Contains(2))
+	require.Equal(t, "MO", string(bat.Vecs[1].GetBytesAt(0)))
+	require.Equal(t, "你好", string(bat.Vecs[1].GetBytesAt(1)))
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+}
+
+func TestPrepareResolvesPadCharToFullLength(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	reader := mock_frontend.NewMockReader(ctrl)
+	reader.EXPECT().Close().Return(nil).AnyTimes()
+	reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
+	proc := testutil.NewProc(t)
+	mode := "STRICT_TRANS_TABLES,PAD_CHAR_TO_FULL_LENGTH"
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		return mode, nil
+	})
+	arg := &TableScan{Reader: reader}
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, arg.ctr.padCharToFullLength)
+
+	arg.Reset(proc, false, nil)
+	mode = "STRICT_TRANS_TABLES"
+	require.NoError(t, arg.Prepare(proc))
+	require.False(t, arg.ctr.padCharToFullLength)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+}
+
 func getReader(t *testing.T, ctrl *gomock.Controller, m *mpool.MPool) engine.Reader {
 	reader := mock_frontend.NewMockReader(ctrl)
 	reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, attrs []string, expr *plan.Expr, b interface{}, bat *batch.Batch) (bool, error) {
