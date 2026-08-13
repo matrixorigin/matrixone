@@ -1,0 +1,21 @@
+drop account if exists ft2tenant;
+create account ft2tenant admin_name 'admin' identified by 'test123';
+set experimental_fulltext2_index = 1;
+create database ft2db;
+use ft2db;
+create stage ft2stage URL='file://$resources/fulltext/';
+create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
+insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id from dl where match(fpath) against('matrixone');
+➤ id[-5,64,0]  𝄀
+0
+select id from dl where match(fpath) against('慢慢地' in natural language mode);
+➤ id[-5,64,0]  𝄀
+1
+drop table dl;
+drop stage ft2stage;
+drop database ft2db;
+drop account ft2tenant;

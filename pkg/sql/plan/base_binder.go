@@ -3304,10 +3304,20 @@ between_fallback:
 }
 
 // validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
-// the offset must be a constant positive integer. Folding first keeps valid
-// constant expressions, such as 1 + 1, compatible with MySQL.
+// the offset must be a constant positive integer or a positional parameter.
+// Folding first keeps valid constant expressions, such as 1 + 1, compatible
+// with MySQL.
 func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if len(args) != 2 || proc == nil {
+	if len(args) != 2 {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+
+	if isDirectDynamicParam(args[1]) {
+		// Keep the marker intact so execution can validate both its source type
+		// and its value after binding.
+		return nil
+	}
+	if proc == nil {
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
@@ -3528,9 +3538,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
-		})
+		sourceType := makeTypeByPlan2Expr(args[0])
+		targetType := types.T_datetime.ToType()
+		function.SetTargetScaleFromSource(&sourceType, &targetType)
+		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 		if err != nil {
 			return nil, err
 		}

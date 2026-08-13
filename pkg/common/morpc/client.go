@@ -519,6 +519,9 @@ func (c *client) maybeInitBackends() error {
 				}
 			}
 		}
+		// Publish only the complete initial pool. Failed construction is closed by
+		// NewClient and must never contribute a partially initialized snapshot.
+		c.updatePoolSizeMetricsLocked()
 	}
 	return nil
 }
@@ -1114,8 +1117,10 @@ func (c *client) getBackendForOperation(
 	// after selection misses; doing a full slice rewrite before every Send/Ping
 	// would add avoidable work to the per-operation hot path.
 	b, err := c.getBackendLockedWithCreate(backend, lock, false)
+	poolChanged := false
 	if b == nil && (err == nil || isBackendClosedError(err)) {
 		if c.detachInactiveForCleanupLocked(backend) > 0 {
+			poolChanged = true
 			// Re-evaluate selection and capacity in the same client-state
 			// snapshot after terminal entries have been removed.
 			b, err = c.getBackendLockedWithCreate(backend, lock, false)
@@ -1128,9 +1133,15 @@ func (c *client) getBackendForOperation(
 			// progress, retire the oldest drain rather than make the remote
 			// permanently unavailable or grow generations without bound.
 			if c.detachOldestDrainingForCleanupLocked(backend) > 0 {
+				poolChanged = true
 				b, err = c.getBackendLockedWithCreate(backend, lock, false)
 			}
 		}
+	}
+	if poolChanged {
+		// Metric snapshots follow actual pool mutations. Keeping this off the
+		// healthy selection path avoids a full-pool scan and metric lock per RPC.
+		c.updatePoolSizeMetricsLocked()
 	}
 	// Cleanup ownership was transferred before each backend was detached. The
 	// foreground operation only releases the state snapshot here; it never waits
@@ -1216,10 +1227,6 @@ func (c *client) getBackendLockedWithCreate(
 	if c.mu.closed {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
-	defer func() {
-		c.updatePoolSizeMetricsLocked()
-	}()
-
 	lockedCnt := 0
 	inactiveCnt := 0
 	if backends, ok := c.mu.backends[backend]; ok {
@@ -1940,7 +1947,7 @@ func (c *client) updatePoolSizeMetricsLocked() {
 	for _, backends := range c.mu.backends {
 		n += len(backends)
 	}
-	c.metrics.poolSizeGauge.Set(float64(n))
+	c.metrics.setBackendPoolSize(n)
 }
 
 func isErrBackendCreating(err error) bool {

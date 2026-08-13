@@ -34,6 +34,8 @@ type sumDecimal64FastExec struct {
 	isSum bool
 }
 
+func (*sumDecimal64FastExec) sourcePreservingMerge() {}
+
 func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumDecimal64FastExec
 	exec.mp = mp
@@ -357,6 +359,8 @@ type sumDecimal128FastExec struct {
 	isSum         bool
 	overflowCheck bool // true when input precision > 28 (SUM can overflow)
 }
+
+func (*sumDecimal128FastExec) sourcePreservingMerge() {}
 
 func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumDecimal128FastExec

@@ -345,6 +345,28 @@ func TestBitmapRemapMaskOrdered(t *testing.T) {
 	require.True(t, value.Contains(125))
 }
 
+func TestBitmapRemapMaskOrderedWithOffset(t *testing.T) {
+	selection := newBm(129)
+	selection.AddMany([]uint64{0, 62, 128})
+
+	var value Bitmap
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, false, 1)
+	require.Equal(t, int64(3), value.Len())
+	require.Equal(t, 3, value.Count())
+	require.True(t, value.Contains(0))
+	require.True(t, value.Contains(1))
+	require.True(t, value.Contains(2))
+
+	value.InitWithSize(130)
+	value.AddMany([]uint64{1, 63, 64, 127, 129})
+	value.RemapMaskOrderedWithOffset(selection, true, 1)
+	require.Equal(t, 2, value.Count())
+	require.True(t, value.Contains(62))
+	require.True(t, value.Contains(125))
+}
+
 func TestBitmapExternalStorageUnmarshal(t *testing.T) {
 	source := newBm(128)
 	source.Add(1)

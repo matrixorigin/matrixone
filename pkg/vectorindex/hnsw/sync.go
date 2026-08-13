@@ -185,8 +185,11 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
-	ts := time.Now().Unix()
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts, idxname: idxname}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname}
+	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
+	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
+	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
+	sync.ts = sync.nextTimestamp()
 
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
@@ -579,9 +582,32 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 	return nil
 }
 
+// nextTimestamp allocates a metadata timestamp strictly greater than every existing model row.
+// The metadata timestamp is the cross-CN cache-freshness generation (MAX(timestamp), see
+// cachegen), so it must be MONOTONIC — not merely microsecond-resolution wall-clock. time.Now()
+// alone is not enough: CREATE and CDC may run on different CNs with clock skew, or a local clock
+// may step backward, in which case a fresh wall-clock value could be <= an unchanged model row's
+// timestamp; since CDC only replaces the dirty model, MAX(timestamp) would then stay == the
+// value a warm remote CN loaded, and IsStale would miss the update. Allocating above the current
+// max enforces the ordering regardless of the clock. Correct because CDC is single-writer per
+// index (ISCP job ownership): s.indexes (loaded at NewHnswSync) reflects the current persisted
+// max and no concurrent writer can insert between this read and the write.
+func (s *HnswSync[T]) nextTimestamp() int64 {
+	var maxTs int64
+	for _, m := range s.indexes {
+		if m != nil && m.Timestamp > maxTs {
+			maxTs = m.Timestamp
+		}
+	}
+	if now := time.Now().UnixMicro(); now > maxTs {
+		return now
+	}
+	return maxTs + 1
+}
+
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
-	s.ts = time.Now().Unix()
+	s.ts = s.nextTimestamp()
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
 		return err

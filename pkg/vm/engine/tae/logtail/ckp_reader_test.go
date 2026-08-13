@@ -442,3 +442,27 @@ func makeCheckpointObjectRanges(
 			ckputil.ObjectType_Tombstone,
 		)
 }
+
+func TestCKPReaderReadMetaEmptyLocation(t *testing.T) {
+	for _, version := range []uint32{CheckpointVersion12, CheckpointCurrentVersion} {
+		for _, test := range []struct {
+			name     string
+			location objectio.Location
+		}{
+			{name: "missing encoding"},
+			{
+				name: "truncated encoding",
+				location: append(
+					objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+				),
+			},
+			{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+		} {
+			t.Run(fmt.Sprintf("version-%d/%s", version, test.name), func(t *testing.T) {
+				reader := NewCKPReader(version, test.location, nil, nil)
+				err := reader.ReadMeta(context.Background())
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			})
+		}
+	}
+}
