@@ -1,3 +1,6 @@
+-- Relevance algorithm pinned FIRST: it is a session variable other cases in this suite
+-- change (fulltext_bm25 sets BM25), and every score value and threshold below depends on it.
+set ft_relevancy_algorithm="TF-IDF";
 -- View DDL must not persist a MATCH() AGAINST() that no FULLTEXT index can serve (#27027).
 -- Unlike a vector index, fulltext has no brute-force fallback: fulltext_match is a
 -- placeholder with no implementation, so such a view is not slow, it is unrunnable --
@@ -123,6 +126,8 @@ explain select id from v_good_filter;
 explain select id from v_good_score where score > 0;
 
 select id from v_good_score where score > 0 order by id;
+-- and a threshold that must EXCLUDE a row, so a never-applied predicate cannot pass:
+select id from v_good_score where score > 0.05 order by id;
 
 -- the same shape without a view at all, which is where it also failed
 select id from (
@@ -134,3 +139,7 @@ create view v_plain as select id, body from docs where id > 1;
 select count(*) as plain_rows from v_plain;
 
 drop database ft_view_ddl;
+
+-- Restore the default so this case does not leak its setting to whatever runs next --
+-- the failure mode that made an earlier version of this file order-dependent.
+set ft_relevancy_algorithm="TF-IDF";

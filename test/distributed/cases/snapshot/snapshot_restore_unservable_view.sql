@@ -14,6 +14,9 @@ create account acc_ftview admin_name = 'test_account' identified by '111';
 
 -- @session:id=1&user=acc_ftview:test_account&password=111
 set experimental_fulltext_index = 1;
+-- Pinned inside THIS session: the pin must live where the fulltext queries run, not in the
+-- outer sys session.
+set ft_relevancy_algorithm="TF-IDF";
 create database ftv;
 use ftv;
 create table docs(id int primary key, body text);
@@ -47,6 +50,8 @@ restore account acc_ftview{snapshot="sp_ftview"};
 -- the ordinary view and the table data came back
 select count(*) as plain_rows_after from ftv.v_plain;
 select count(*) as docs_rows_after from ftv.docs;
+-- restore the default in the session that changed it
+set ft_relevancy_algorithm="TF-IDF";
 -- @session
 
 drop snapshot sp_ftview;

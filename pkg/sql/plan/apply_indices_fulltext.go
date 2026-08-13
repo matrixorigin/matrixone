@@ -793,10 +793,23 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 					},
 				}
 			}
+			rewritten := make([]*plan.Expr, 0, len(wrappedMatchFilters))
 			for _, expr := range wrappedMatchFilters {
-				joinNode.FilterList = append(joinNode.FilterList,
+				rewritten = append(rewritten,
 					replaceScoreFnInExpr(expr, "fulltext_match", scoreExpr))
 			}
+			// A FILTER node above the join, NOT joinNode.FilterList. Nothing in the planner
+			// puts a FilterList on a Node_JOIN and nothing evaluates one: EXPLAIN happily
+			// prints `Filter Cond:` for it, so the plan LOOKS right while the predicate is
+			// never applied. That silently returned rows the predicate excludes -- strictly
+			// worse than the error this lift replaced, and invisible to any test whose
+			// threshold every matching row passes (`sc > 0`). Use the node type the executor
+			// actually runs.
+			joinnodeID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{joinnodeID},
+				FilterList: rewritten,
+			}, ctx)
 		} else {
 			// Could not resolve the score column: put them back rather than drop predicates,
 			// which would silently widen the result set.

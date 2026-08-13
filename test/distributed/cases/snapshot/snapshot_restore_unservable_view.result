@@ -1,5 +1,6 @@
 create account acc_ftview admin_name = 'test_account' identified by '111';
 set experimental_fulltext_index = 1;
+set ft_relevancy_algorithm="TF-IDF";
 create database ftv;
 use ftv;
 create table docs(id int primary key, body text);
@@ -27,5 +28,6 @@ select count(*) as plain_rows_after from ftv.v_plain;
 select count(*) as docs_rows_after from ftv.docs;
 ➤ docs_rows_after[-5,64,0]  𝄀
 3
+set ft_relevancy_algorithm="TF-IDF";
 drop snapshot sp_ftview;
 drop account acc_ftview;

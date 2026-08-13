@@ -1,3 +1,5 @@
+-- Relevance algorithm pinned FIRST: every score value and threshold below depends on it.
+set ft2_relevancy_algorithm="BM25";
 -- fulltext2 half of #27027. MATCH() AGAINST() binds to the same unevaluable placeholders as
 -- classic fulltext and is resolved by the same matcher, so a view definition no fulltext2
 -- index can serve is equally unrunnable and must be refused rather than persisted.
@@ -109,6 +111,8 @@ select id, row_number() over (order by id) as rn from docs where match(body) aga
 explain select id from v_good_score where score > 0;
 
 select id from v_good_score where score > 0 order by id;
+-- and a threshold that must EXCLUDE a row, so a never-applied predicate cannot pass:
+select id from v_good_score where score > 0.037 order by id;
 
 -- the same shape without a view at all, which is where it also failed
 select id from (
@@ -120,3 +124,7 @@ create view v_plain as select id, body from docs where id > 1;
 select count(*) as plain_rows from v_plain;
 
 drop database ft2_view_ddl;
+
+-- Restore the default so this case does not leak its setting to whatever runs next --
+-- the failure mode that made an earlier version of this file order-dependent.
+set ft2_relevancy_algorithm="BM25";

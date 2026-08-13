@@ -1,5 +1,5 @@
-set experimental_fulltext2_index = 1;
 set ft2_relevancy_algorithm="BM25";
+set experimental_fulltext2_index = 1;
 drop database if exists ft2_wrapped;
 create database ft2_wrapped;
 use ft2_wrapped;
@@ -44,28 +44,27 @@ Project  𝄀
                     Runtime Filter Probe: docs.id  𝄀
               ->  Table Function on fulltext2_search
 create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
-select id from v where sc > 0 order by id;
+select id from v where sc > 0 order by id;              -- baseline: every match
 ➤ id[4,32,0]  𝄀
 1  𝄀
 3
-select id from v where round(sc, 4) > 0 order by id;
-➤ id[4,32,0]  𝄀
-1  𝄀
-3
-select id from v where cast(sc as double) > 0 order by id;
-➤ id[4,32,0]  𝄀
-1  𝄀
-3
-select id from v where sc * 2 > 0 order by id;
-➤ id[4,32,0]  𝄀
-1  𝄀
-3
-select id from v where sc > 0 and id > 1 order by id;
+select id from v where sc > 0.037 order by id;          -- only the higher scorer
 ➤ id[4,32,0]  𝄀
 3
-select id from v where round(cast(sc as double) * 2, 3) > 0 order by id;
+select id from v where round(sc, 4) > 0.037 order by id;
 ➤ id[4,32,0]  𝄀
-1  𝄀
+3
+select id from v where cast(sc as double) > 0.037 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc * 2 > 0.074 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.037 and id > 1 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where round(cast(sc as double) * 2, 3) > 0.074 order by id;
+➤ id[4,32,0]  𝄀
 3
 explain select id from v where round(sc, 4) > 0;
 -- @regex("Table Function on fulltext2_search", true)
@@ -73,14 +72,25 @@ explain select id from v where round(sc, 4) > 0;
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
-              Filter Cond: (round(cast(#[12,1] AS DOUBLE), 4) > 0)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on ft2_wrapped.docs  𝄀
-                    Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext2_search
+        ->  Filter  𝄀
+              Filter Cond: (round(cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE), 4) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_wrapped.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext2_search
+select id from v where sc > 0.037 order by id;      -- only the higher-scoring row
+➤ id[4,32,0]  𝄀
+3
+select id from v where sc > 0.5 order by id;     -- none
+➤ id[4,32,0]
+select id from v where round(sc, 4) > 0.037 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from v where cast(sc as double) > 0.5 order by id;
+➤ id[4,32,0]
 select id from (
 select id, match(body) against('hello') as sc from docs where match(body) against('hello')
 ) x where sc > 0 order by id;
@@ -88,3 +98,4 @@ select id, match(body) against('hello') as sc from docs where match(body) agains
 1  𝄀
 3
 drop database ft2_wrapped;
+set ft2_relevancy_algorithm="BM25";

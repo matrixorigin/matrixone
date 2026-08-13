@@ -1,3 +1,4 @@
+set ft_relevancy_algorithm="TF-IDF";
 set experimental_fulltext_index = 1;
 drop database if exists ft_view_ddl;
 create database ft_view_ddl;
@@ -105,17 +106,21 @@ explain select id from v_good_score where score > 0;
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.score DESC  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
-              Filter Cond: (#[12,1] > 0)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on ft_view_ddl.docs  𝄀
-                    Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext_index_scan
+        ->  Filter  𝄀
+              Filter Cond: (mo_fulltext_alias_0.score > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_view_ddl.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext_index_scan
 select id from v_good_score where score > 0 order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
+3
+select id from v_good_score where score > 0.05 order by id;
+➤ id[4,32,0]  𝄀
 3
 select id from (
 select id, match(body) against('hello') as sc from docs where match(body) against('hello')
@@ -128,3 +133,4 @@ select count(*) as plain_rows from v_plain;
 ➤ plain_rows[-5,64,0]  𝄀
 2
 drop database ft_view_ddl;
+set ft_relevancy_algorithm="TF-IDF";

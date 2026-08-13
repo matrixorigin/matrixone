@@ -1,3 +1,6 @@
+-- Relevance algorithm pinned FIRST: it is a session variable other cases in this suite
+-- change (fulltext_bm25 sets BM25), and every score value and threshold below depends on it.
+set ft_relevancy_algorithm="TF-IDF";
 -- MATCH() returns a FLOAT relevance score, so it can be wrapped like any other scalar
 -- expression: round(match(...), 3), cast(match(...) as decimal), match(...) * 100, or a
 -- comparison on it. The rewrite has to see THROUGH that wrapping, because the placeholder it
@@ -10,9 +13,6 @@
 -- Every EXPLAIN asserts the index is still reached, so a regression that "fixes" these by
 -- silently falling back to a scan fails here too.
 set experimental_fulltext_index = 1;
--- Pin the relevance algorithm: it is a session variable other cases in this suite change
--- (fulltext_bm25 sets BM25), so without this the scores printed below depend on run order.
-set ft_relevancy_algorithm="TF-IDF";
 
 drop database if exists ft_wrapped;
 create database ft_wrapped;
@@ -39,20 +39,36 @@ select id, round(match(body) against('hello'), 3) as r from docs where match(bod
 explain select id, round(match(body) against('hello'), 3) as r from docs where match(body) against('hello');
 
 -- ---------------- wrapped in a FILTER above a view ----------------------------
+-- Thresholds are chosen to EXCLUDE a row. `sc > 0` is satisfied by every matching row, so a
+-- predicate that is silently never applied returns the same rows as a correct one -- which is
+-- exactly how an earlier version of this fix passed while attaching the lifted predicate to a
+-- plan field nothing evaluates. Keep one `> 0` as a baseline; the rest must change the row set.
 -- Inlining substitutes the score alias with its definition and pushes it onto the base scan,
 -- where the bare-match test cannot see it. It is lifted onto the join instead.
 create view v as select id, match(body) against('hello') as sc from docs where match(body) against('hello');
 
-select id from v where sc > 0 order by id;
-select id from v where round(sc, 4) > 0 order by id;
-select id from v where cast(sc as double) > 0 order by id;
-select id from v where sc * 2 > 0 order by id;
-select id from v where sc > 0 and id > 1 order by id;
-select id from v where round(cast(sc as double) * 2, 3) > 0 order by id;
+select id from v where sc > 0 order by id;              -- baseline: every match
+select id from v where sc > 0.05 order by id;           -- only the higher scorer
+select id from v where round(sc, 4) > 0.05 order by id;
+select id from v where cast(sc as double) > 0.05 order by id;
+select id from v where sc * 2 > 0.1 order by id;
+select id from v where sc > 0.05 and id > 1 order by id;
+select id from v where round(cast(sc as double) * 2, 3) > 0.1 order by id;
 
 -- @separator:table
 -- @regex("Table Function on fulltext_index_scan", true)
 explain select id from v where round(sc, 4) > 0;
+
+-- ---------------- DISCRIMINATING thresholds ------------------------------------
+-- `sc > 0` is worthless as a test: every matching row satisfies it, so a predicate that is
+-- silently never applied returns exactly the same rows as a correct one. That is how an
+-- earlier version of this fix -- which attached the lifted predicate to a Node_JOIN
+-- FilterList, a field nothing evaluates -- passed a whole suite of shapes while returning
+-- rows the predicate excluded. These thresholds must CHANGE the row set.
+select id from v where sc > 0.05 order by id;      -- only the higher-scoring row
+select id from v where sc > 0.5 order by id;     -- none
+select id from v where round(sc, 4) > 0.05 order by id;
+select id from v where cast(sc as double) > 0.5 order by id;
 
 -- the same shape with no view at all
 select id from (
@@ -60,3 +76,7 @@ select id from (
 ) x where sc > 0 order by id;
 
 drop database ft_wrapped;
+
+-- Restore the default so this case does not leak its setting to whatever runs next --
+-- the failure mode that made an earlier version of this file order-dependent.
+set ft_relevancy_algorithm="TF-IDF";
