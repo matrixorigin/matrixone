@@ -151,24 +151,45 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	return nil
 }
 
+// AppendStats describes the storage effect of one successful append. RetainedBytes
+// is the source's current in-memory footprint; SpilledBytes and SpilledRows are
+// deltas for the batch written by this call.
+type AppendStats struct {
+	RetainedBytes int64
+	SpilledBytes  int64
+	SpilledRows   int64
+}
+
 func (s *Source) Append(bat *batch.Batch) error {
+	_, err := s.AppendWithStats(bat)
+	return err
+}
+
+// AppendWithStats stores one producer batch and returns the exact storage delta
+// owned by that producer. Spill deltas become visible only after the complete
+// framed record has been written successfully.
+func (s *Source) AppendWithStats(bat *batch.Batch) (stats AppendStats, err error) {
 	if s == nil || bat == nil {
-		return nil
+		return stats, nil
 	}
 	reserved := int64(max(bat.Size(), bat.Allocated()))
 	s.mu.Lock()
 	if !s.active || s.done {
+		stats.RetainedBytes = s.bytes
 		s.mu.Unlock()
-		return moerr.NewInternalErrorNoCtx("materialized sink source is not accepting data")
+		return stats, moerr.NewInternalErrorNoCtx("materialized sink source is not accepting data")
 	}
 	if s.spillFile != nil || reserved < 0 || reserved > s.memoryLimit || s.bytes > s.memoryLimit-reserved ||
 		len(s.batches) >= s.memoryBatchLimit {
-		err := s.appendSpilledLocked(bat)
+		stats.SpilledBytes, err = s.appendSpilledLocked(bat)
 		if err != nil {
 			s.failLocked(err)
+		} else {
+			stats.SpilledRows = int64(bat.RowCount())
 		}
+		stats.RetainedBytes = s.bytes
 		s.mu.Unlock()
-		return err
+		return stats, err
 	}
 	s.bytes += reserved
 	mp := s.mp
@@ -187,8 +208,9 @@ func (s *Source) Append(bat *batch.Batch) error {
 				err = s.err
 			}
 		}
+		stats.RetainedBytes = s.bytes
 		s.mu.Unlock()
-		return err
+		return stats, err
 	}
 	actual := int64(max(cloned.Size(), cloned.Allocated()))
 
@@ -198,25 +220,30 @@ func (s *Source) Append(bat *batch.Batch) error {
 		if s.generation == generation && s.active {
 			s.bytes -= reserved
 		}
+		stats.RetainedBytes = s.bytes
 		cloned.Clean(mp)
 		if s.generation == generation && s.err != nil {
-			return s.err
+			return stats, s.err
 		}
-		return moerr.NewInternalErrorNoCtx("materialized sink source stopped while copying data")
+		return stats, moerr.NewInternalErrorNoCtx("materialized sink source stopped while copying data")
 	}
 	if actual > reserved && (actual-reserved > s.memoryLimit || s.bytes > s.memoryLimit-(actual-reserved)) {
 		s.bytes -= reserved
 		cloned.Clean(mp)
-		err = s.appendSpilledLocked(bat)
+		stats.SpilledBytes, err = s.appendSpilledLocked(bat)
 		if err != nil {
 			s.failLocked(err)
+		} else {
+			stats.SpilledRows = int64(bat.RowCount())
 		}
-		return err
+		stats.RetainedBytes = s.bytes
+		return stats, err
 	}
 	s.bytes += actual - reserved
 	s.batches = append(s.batches, cloned)
 	s.wakeLocked()
-	return nil
+	stats.RetainedBytes = s.bytes
+	return stats, nil
 }
 
 // Next returns a batch owned by the caller, or end=true after the producer
@@ -286,34 +313,34 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 	}
 }
 
-func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
+func (s *Source) appendSpilledLocked(bat *batch.Batch) (int64, error) {
 	if s.spillConfig.FileFactory == nil || s.spillConfig.Budget.ReserveMemory == nil ||
 		s.spillConfig.Budget.ReserveDisk == nil || s.spillConfig.Budget.ReserveFD == nil {
-		return moerr.NewInternalErrorNoCtx("materialized sink source spill is unavailable")
+		return 0, moerr.NewInternalErrorNoCtx("materialized sink source spill is unavailable")
 	}
 	serializedBytes, scratchBytes, err := spillBatchSize(bat)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	memoryReservation, err := s.spillConfig.Budget.ReserveMemory(scratchBytes)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if memoryReservation == nil {
-		return moerr.NewInternalErrorNoCtx("materialized sink spill memory reservation is nil")
+		return 0, moerr.NewInternalErrorNoCtx("materialized sink spill memory reservation is nil")
 	}
 	defer memoryReservation.Release()
 	buf := bytes.NewBuffer(make([]byte, 0, int(serializedBytes)))
 	data, err := bat.MarshalBinaryWithPrepareParamKinds(buf, false)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if uint64(len(data)) != serializedBytes {
-		return moerr.NewInternalErrorNoCtxf("materialized sink spill batch size changed while serializing: expected=%d actual=%d", serializedBytes, len(data))
+		return 0, moerr.NewInternalErrorNoCtxf("materialized sink spill batch size changed while serializing: expected=%d actual=%d", serializedBytes, len(data))
 	}
 	recordBytes := uint64(spillBatchHeaderSize) + serializedBytes
 	if recordBytes > math.MaxInt64 || s.spillBytes > math.MaxInt64-int64(recordBytes) || s.spillBatchCount == math.MaxInt {
-		return moerr.NewInternalErrorNoCtx("materialized sink spill position overflow")
+		return 0, moerr.NewInternalErrorNoCtx("materialized sink spill position overflow")
 	}
 	newFile := s.spillFile == nil
 	if newFile {
@@ -322,22 +349,22 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 		err = s.spillDisk.Grow(recordBytes)
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if s.spillDisk == nil {
-		return moerr.NewInternalErrorNoCtx("materialized sink spill disk reservation is nil")
+		return 0, moerr.NewInternalErrorNoCtx("materialized sink spill disk reservation is nil")
 	}
 	if newFile {
 		s.spillFD, err = s.spillConfig.Budget.ReserveFD(1)
 		if err != nil {
 			s.spillDisk.Release()
 			s.spillDisk = nil
-			return err
+			return 0, err
 		}
 		if s.spillFD == nil {
 			s.spillDisk.Release()
 			s.spillDisk = nil
-			return moerr.NewInternalErrorNoCtx("materialized sink spill file reservation is nil")
+			return 0, moerr.NewInternalErrorNoCtx("materialized sink spill file reservation is nil")
 		}
 		file, fileErr := s.spillConfig.FileFactory(fmt.Sprintf("cte_materialized_%s", uuid.NewString()))
 		if fileErr != nil || file == nil {
@@ -349,9 +376,9 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 			s.spillDisk.Release()
 			s.spillDisk = nil
 			if fileErr != nil {
-				return fileErr
+				return 0, fileErr
 			}
-			return moerr.NewInternalErrorNoCtx("materialized sink spill file is nil")
+			return 0, moerr.NewInternalErrorNoCtx("materialized sink spill file is nil")
 		}
 		s.spillFile = file
 		s.spillStartPosition = len(s.batches)
@@ -359,19 +386,19 @@ func (s *Source) appendSpilledLocked(bat *batch.Batch) error {
 	var header [spillBatchHeaderSize]byte
 	binary.LittleEndian.PutUint64(header[:], uint64(len(data)))
 	if n, writeErr := s.spillFile.Write(header[:]); writeErr != nil {
-		return writeErr
+		return 0, writeErr
 	} else if n != len(header) {
-		return io.ErrShortWrite
+		return 0, io.ErrShortWrite
 	}
 	if n, writeErr := s.spillFile.Write(data); writeErr != nil {
-		return writeErr
+		return 0, writeErr
 	} else if n != len(data) {
-		return io.ErrShortWrite
+		return 0, io.ErrShortWrite
 	}
 	s.spillBatchCount++
 	s.spillBytes += spillBatchHeaderSize + int64(len(data))
 	s.wakeLocked()
-	return nil
+	return int64(recordBytes), nil
 }
 
 func readSpilledBatch(file *os.File, offset, availableBytes int64, mp *mpool.MPool, budget SpillBudget) (*batch.Batch, int64, error) {
