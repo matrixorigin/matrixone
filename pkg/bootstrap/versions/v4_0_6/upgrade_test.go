@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 11)
+	require.Len(t, tenantUpgEntries, 12)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -72,10 +72,16 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion16), tableConstraints.RequiredProtocolVersion)
 	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
+	hideInternalColumns := tenantUpgEntries[11]
+	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
+	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
+	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 11)
+	require.Len(t, tenantUpgEntries, 12)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
