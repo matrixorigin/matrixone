@@ -6043,25 +6043,58 @@ func TestProcessLoadLocal(t *testing.T) {
 	})
 }
 
+type trackedLoadLocalMysqlWriter struct {
+	*testMysqlWriter
+	started        chan struct{}
+	cleanupEntered chan struct{}
+	releaseCleanup chan struct{}
+	completed      atomic.Bool
+}
+
+func (w *trackedLoadLocalMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	return w.testMysqlWriter.WriteLocalInfileRequest(filename)
+}
+
+func (w *trackedLoadLocalMysqlWriter) FreeLoadLocal() {
+	if w.cleanupEntered != nil {
+		select {
+		case w.cleanupEntered <- struct{}{}:
+		default:
+		}
+		<-w.releaseCleanup
+	}
+	w.testMysqlWriter.FreeLoadLocal()
+	w.completed.Store(true)
+}
+
 func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		runnerErr error
-		payload   []byte
+		name        string
+		runnerErr   error
+		runnerPanic any
+		payload     []byte
 	}{
 		{name: "success", payload: []byte("helloworld")},
 		{name: "runner failure", runnerErr: moerr.NewInternalErrorNoCtx("runner failed")},
+		{name: "runner panic", runnerPanic: "runner panicked"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
+			reqCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			proc := testutil.NewProc(t)
 			tConn := &testConn{}
-			writeExceptResult(tConn, []*Packet{
+			packets := []*Packet{
 				{Length: 5, Payload: []byte("hello"), SequenceID: 1},
 				{Length: 5, Payload: []byte("world"), SequenceID: 2},
 				{Length: 0, Payload: nil, SequenceID: 3},
-			})
+			}
+			writeExceptResult(tConn, packets)
 			sv, err := getSystemVariables("test/system_vars_config.toml")
 			require.NoError(t, err)
 			pu := config.NewParameterUnit(sv, nil, nil, nil)
@@ -6070,22 +6103,38 @@ func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
 			setSessionAlloc("", NewLeakCheckAllocator())
 			ioses, err := NewIOSession(tConn, pu, "")
 			require.NoError(t, err)
+			mysqlWriter := &trackedLoadLocalMysqlWriter{
+				testMysqlWriter: &testMysqlWriter{ioses: ioses},
+				started:         make(chan struct{}, 1),
+			}
+			if test.runnerPanic != nil {
+				mysqlWriter.cleanupEntered = make(chan struct{}, 1)
+				mysqlWriter.releaseCleanup = make(chan struct{})
+			}
 			ses := &Session{feSessionImpl: feSessionImpl{
-				respr: NewMysqlResp(&testMysqlWriter{ioses: ioses}),
+				respr: NewMysqlResp(mysqlWriter),
 			}}
 
 			var payload []byte
 			runner := mock_frontend.NewMockComputationRunner(ctrl)
 			runner.EXPECT().Run(uint64(0)).DoAndReturn(func(uint64) (*util.RunResult, error) {
+				select {
+				case <-mysqlWriter.started:
+				case <-reqCtx.Done():
+					return nil, reqCtx.Err()
+				}
 				reader := proc.GetLoadLocalReader()
 				require.NotNil(t, reader)
+				if test.runnerPanic != nil {
+					panic(test.runnerPanic)
+				}
 				if test.runnerErr != nil {
 					return nil, test.runnerErr
 				}
 				payload, err = io.ReadAll(reader)
 				return &util.RunResult{}, err
 			})
-			execCtx := newTestExecCtx(context.Background(), ctrl)
+			execCtx := newTestExecCtx(reqCtx, ctrl)
 			execCtx.proc = proc
 			execCtx.runner = runner
 			execCtx.stmt = &tree.Load{
@@ -6093,9 +6142,46 @@ func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
 				Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}},
 			}
 
-			err = executeStatusStmt(ses, execCtx)
-			require.ErrorIs(t, err, test.runnerErr)
+			if test.runnerPanic != nil {
+				panicResult := make(chan any, 1)
+				go func() {
+					defer func() {
+						panicResult <- recover()
+					}()
+					_ = executeStatusStmt(ses, execCtx)
+				}()
+				select {
+				case <-mysqlWriter.cleanupEntered:
+				case <-time.After(5 * time.Second):
+					cancel()
+					close(mysqlWriter.releaseCleanup)
+					t.Fatal("upload owner did not reach cleanup")
+				}
+				var panicValue any
+				returnedBeforeCleanup := false
+				select {
+				case panicValue = <-panicResult:
+					returnedBeforeCleanup = true
+				case <-time.After(100 * time.Millisecond):
+				}
+				close(mysqlWriter.releaseCleanup)
+				if !returnedBeforeCleanup {
+					select {
+					case panicValue = <-panicResult:
+					case <-time.After(5 * time.Second):
+						cancel()
+						t.Fatal("statement did not return after upload cleanup")
+					}
+				}
+				require.False(t, returnedBeforeCleanup,
+					"statement returned while upload owner was still cleaning up")
+				require.Equal(t, test.runnerPanic, panicValue)
+			} else {
+				err = executeStatusStmt(ses, execCtx)
+				require.ErrorIs(t, err, test.runnerErr)
+			}
 			require.Equal(t, test.payload, payload)
+			require.True(t, mysqlWriter.completed.Load(), "upload owner must terminate before statement return")
 			require.Nil(t, proc.GetLoadLocalReader())
 			require.Nil(t, execCtx.loadLocalWriter)
 		})

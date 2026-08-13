@@ -391,23 +391,36 @@ func (c *Compile) evaluateQueryPlacement(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var requireCurrentCN, ingressOnly bool
+	var requireCurrentCN, ingressOnly, currentCNOrdinalZero bool
 	// TP and AP_ONECN are already local, so inspecting workspace/AST state
 	// cannot change their placement. Keep their legacy hot path untouched and
 	// derive these guards only for the remotely schedulable execution kind.
 	if c.execType == plan2.ExecTypeAP_MULTICN {
 		requireCurrentCN = c.executionRequiresCurrentCN()
 		ingressOnly = c.ingressOnlyExecution()
+		var qry *plan.Query
+		if c.pn != nil {
+			qry = c.pn.GetQuery()
+		}
+		if queryHasIvfSearchEntriesInternalScan(qry) {
+			// The local partition is the only one that can see the coordinator's
+			// appendable IVF ranges. This is an execution invariant, not a
+			// user-selectable current-CN preference, so give it the same identity
+			// proof and route canonicalization as a writable workspace.
+			requireCurrentCN = true
+			currentCNOrdinalZero = true
+		}
 	}
 	currentCN := c.currentCNWorker()
 	intent := c.effectiveQuerySchedulingIntent()
 	req := schedule.QueryRequest{
-		ExecKind:         toScheduleExecKind(c.execType),
-		CurrentCN:        currentCN,
-		RequireCurrentCN: requireCurrentCN,
-		IngressOnly:      ingressOnly,
-		CurrentCNPolicy:  intent.CurrentCNPolicy,
-		Intent:           intent,
+		ExecKind:             toScheduleExecKind(c.execType),
+		CurrentCN:            currentCN,
+		RequireCurrentCN:     requireCurrentCN,
+		IngressOnly:          ingressOnly,
+		CurrentCNPolicy:      intent.CurrentCNPolicy,
+		CurrentCNOrdinalZero: currentCNOrdinalZero,
+		Intent:               intent,
 	}
 	if (requireCurrentCN || ingressOnly) && intent.CurrentCNPolicy == schedule.CurrentCNExcluded {
 		return schedule.DecideQueryPlacement(req), "", nil
@@ -468,18 +481,6 @@ func (c *Compile) evaluateQueryPlacement(
 	resolved.pool.Workers = markCurrentWorkerRoute(resolved.pool.Workers, currentCN)
 	req.ResolvedPool = resolved.pool
 	req.CandidateResolution = resolved.resolution
-	var qry *plan.Query
-	if c.pn != nil {
-		qry = c.pn.GetQuery()
-	}
-	isIvfEntriesScan := queryHasIvfSearchEntriesInternalScan(qry)
-	// The local partition is the only one that can see the coordinator's
-	// appendable IVF ranges. Keep it at partition zero; persisted ranges remain
-	// distributed by ObjectID across all selected workers.
-	if isIvfEntriesScan {
-		req.CurrentCNPolicy = schedule.CurrentCNRequired
-		req.CurrentCNOrdinalZero = true
-	}
 	return schedule.DecideQueryPlacement(req), "", nil
 }
 

@@ -616,6 +616,59 @@ func TestScheduleQueryWorkersKeepsCurrentCNFirstForIvfEntriesScan(t *testing.T) 
 	require.Equal(t, []string{"z-local:6001", "a-remote:6001"}, []string{nodes[0].Addr, nodes[1].Addr})
 }
 
+func TestScheduleQueryWorkersCanonicalizesIvfIngressByServiceID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: "ingress"}).AnyTimes()
+
+	c := NewMockCompile(t)
+	c.addr = "ingress-real:6001"
+	c.ncpu = 6
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.proc.Base.LockService = lockSvc
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+		}},
+	}}}
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "stale-owner", PipelineServiceAddress: "ingress-stale:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+			{Service: metadata.CNService{
+				ServiceID: "ingress", PipelineServiceAddress: "ingress-stale:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 8},
+			{Service: metadata.CNService{
+				ServiceID: "remote", PipelineServiceAddress: "remote:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 16},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "stale-owner", Addr: "ingress-stale:6001", Mcpu: 4, WorkState: metadata.WorkState_Working},
+			{Id: "ingress", Addr: "ingress-stale:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+			{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+		},
+	}
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{
+		{Id: "ingress", Addr: "ingress-real:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+		{Id: "remote", Addr: "remote:6001", Mcpu: 16, WorkState: metadata.WorkState_Working},
+	}, nodes)
+	require.True(t, c.queryPlacement.RequireCurrentCN)
+	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
 func TestScheduleQueryWorkersForwardsCandidateFilters(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"

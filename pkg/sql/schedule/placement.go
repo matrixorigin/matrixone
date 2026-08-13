@@ -292,6 +292,12 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	resolved := resolvedWorkers(req)
+	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
+	resolvedCurrentStateChecked := false
+	if req.CurrentCNPolicy == CurrentCNRequired && !currentRejected {
+		currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		resolvedCurrentStateChecked = true
+	}
 	if req.RequireCurrentCN {
 		// Candidate de-duplication treats either a repeated service ID or a
 		// repeated address as the same endpoint. Put the exact ingress identity
@@ -300,7 +306,6 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 		resolved = prioritizeIngressCandidate(resolved, req.CurrentCN)
 	}
 	workers, dropped := selectEligibleCandidateWorkers(resolved)
-	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
 	eligibleCount := len(workers)
 	makeDecision := func(decisionWorkers Workers, reason string, satisfied bool) QueryDecision {
 		decision := queryDecision(req, decisionWorkers, dropped, reason, satisfied)
@@ -343,6 +348,9 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 
 	reason := ReasonMultiCN
 	if len(workers) == 0 {
+		if !currentRejected && !resolvedCurrentStateChecked {
+			currentRejectReason, currentRejected = rejectedIngressWorkerReason(req.CurrentCN, resolved)
+		}
 		if currentRejected {
 			return makeDecision(workers, currentRejectReason, false)
 		}
@@ -392,14 +400,15 @@ func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
 	if !hasWorkerIdentity(req.CurrentCN) {
 		return queryDecision(req, nil, nil, ReasonCurrentCNMissingIdentity, false)
 	}
-	if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
-		return queryDecision(req, nil, nil, reason, false)
-	}
 	if !hasAuthoritativeResolvedPool(req) {
+		if reason, rejected := rejectedCurrentWorkerReason(req.CurrentCN); rejected {
+			return queryDecision(req, nil, nil, reason, false)
+		}
 		return queryDecision(req, Workers{req.CurrentCN}, nil, ReasonRequiredCurrentCN, true)
 	}
 
 	resolved := prioritizeIngressCandidate(resolvedWorkers(req), req.CurrentCN)
+	currentRejectReason, currentRejected := rejectedIngressWorkerReason(req.CurrentCN, resolved)
 	workers, dropped := selectEligibleCandidateWorkers(resolved)
 	var found bool
 	workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
@@ -407,6 +416,9 @@ func decideIngressOnlyPlacement(req QueryRequest) QueryDecision {
 		result := queryDecision(req, selected, dropped, reason, satisfied)
 		result.EligibleCount = len(workers)
 		return result
+	}
+	if currentRejected {
+		return decision(nil, currentRejectReason, false)
 	}
 	// Candidate discovery is intentionally skipped for the ordinary ingress
 	// path. An explicit resolved pool, however, is authoritative and must prove
@@ -881,6 +893,42 @@ func rejectedCurrentWorkerReason(worker Worker) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// rejectedIngressWorkerReason combines the in-process view with the resolved
+// candidate snapshot. A caller that has not populated CurrentCN.State must not
+// be able to re-add an explicitly draining ingress through empty-worker
+// fallback after eligibility filtering removes it.
+func rejectedIngressWorkerReason(current Worker, resolved Workers) (string, bool) {
+	if reason, rejected := rejectedCurrentWorkerReason(current); rejected {
+		return reason, true
+	}
+	if current.ID != "" {
+		foundExact := false
+		for _, worker := range resolved {
+			if worker.ID != current.ID {
+				continue
+			}
+			foundExact = true
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+		if foundExact {
+			return "", false
+		}
+	}
+	if current.Addr == "" {
+		return "", false
+	}
+	for _, worker := range resolved {
+		if (current.ID == "" || worker.ID == "") && worker.Addr == current.Addr {
+			if reason, rejected := rejectedCurrentWorkerReason(worker); rejected {
+				return reason, true
+			}
+		}
+	}
+	return "", false
 }
 
 func containsWorker(workers Workers, target Worker) bool {
