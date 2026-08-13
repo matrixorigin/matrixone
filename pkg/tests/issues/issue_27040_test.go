@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,20 +106,8 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		secondStarted = true
 		secondPending = true
 
-		lockService := lockservice.GetLockServiceByServiceID(cn.ServiceID())
 		require.Eventually(t, func() bool {
-			waiting := false
-			lockService.IterLocks(func(tableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-				if tableID != moDatabaseTableID {
-					return true
-				}
-				lock.IterWaiters(func(_ pblock.WaitTxn) bool {
-					waiting = true
-					return false
-				})
-				return !waiting
-			})
-			return waiting
+			return clusterHasLockWaiter(c, moDatabaseTableID)
 		}, 30*time.Second, 10*time.Millisecond,
 			"second clone did not wait for the first clone's mo_database target lock")
 
@@ -150,4 +139,29 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		).Scan(&payloadCount))
 		require.Equal(t, 1, payloadCount)
 	})
+}
+
+// The target catalog table can be bound to any CN's lock service. Observe the
+// owner across the cluster rather than assuming that the SQL frontend CN owns
+// the table binding.
+func clusterHasLockWaiter(c embed.Cluster, tableID uint64) bool {
+	waiting := false
+	c.ForeachServices(func(svc embed.ServiceOperator) bool {
+		if svc.ServiceType() != metadata.ServiceType_CN {
+			return true
+		}
+		lockService := lockservice.GetLockServiceByServiceID(svc.ServiceID())
+		lockService.IterLocks(func(lockedTableID uint64, _ [][]byte, lock lockservice.Lock) bool {
+			if lockedTableID != tableID {
+				return true
+			}
+			lock.IterWaiters(func(_ pblock.WaitTxn) bool {
+				waiting = true
+				return false
+			})
+			return !waiting
+		})
+		return !waiting
+	})
+	return waiting
 }
