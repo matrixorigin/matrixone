@@ -138,6 +138,41 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 	return canonicalCreateTableSQL(stmt)
 }
 
+// validateViewDefinitionPlugins asks every registered index plugin to vet the optimized
+// plan of a view's defining SELECT before it is persisted.
+//
+// View DDL is the one statement that STORES a query without running it, so anything an
+// algorithm cannot execute commits silently and only surfaces when someone selects from
+// the view. Today only the fulltext family refuses anything: MATCH() AGAINST() binds to a
+// placeholder with no implementation, so a definition no FULLTEXT index can serve is
+// unrunnable rather than merely slow. Vector plugins return nil -- their distance
+// functions are real kernels, so a plan that misses the index still executes as a
+// brute-force scan.
+//
+// Plugins are consulted in a stable order so that a definition offending more than one
+// reports the same error every time.
+//
+// This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+// passed into the bind: that hook fires before createQuery, where an index rewrite has not
+// yet had its chance and every candidate expression still looks unresolved.
+func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
+	if query == nil {
+		return nil
+	}
+	plugins := indexplugin.All()
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Algo() < plugins[j].Algo() })
+	for _, p := range plugins {
+		hooks := p.Plan()
+		if hooks == nil {
+			continue
+		}
+		if err := hooks.ValidateViewDefinition(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	validate := func(query *Query) error {
@@ -184,6 +219,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+	// above: that hook fires before createQuery, where every MATCH is still an unresolved
+	// function whether or not an index exists.
+	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
+		return nil, err
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())

@@ -48,3 +48,15 @@ func (Hooks) ApplyForSort(
 ) (int32, bool, error) {
 	return nodeID, false, nil
 }
+
+// ValidateViewDefinition mirrors the classic fulltext plugin: fulltext2 binds MATCH() to
+// the same unevaluable placeholders and is resolved by the same findMatchFullTextIndex, so
+// a view definition it cannot serve is equally unrunnable and must be refused rather than
+// persisted (#27027). See pkg/fulltext/plugin/plan for the reasoning in full.
+func (Hooks) ValidateViewDefinition(ctx planplugin.CompilerContext, query *plan.Query) error {
+	if !planplugin.PlanCallsAnyFunc(query, "fulltext_match", "fulltext_match_score") {
+		return nil
+	}
+	return moerr.NewInvalidInput(ctx.GetContext(),
+		"Can't find FULLTEXT index matching the column list")
+}

@@ -58,3 +58,40 @@ func (Hooks) CanApply(_ planplugin.PlanBuilder, _ *planplugin.VectorSortContext,
 func (Hooks) ApplyForSort(_ planplugin.PlanBuilder, _ *planplugin.VectorSortContext, _ *planplugin.MultiTableIndexRef, nodeID int32, _ planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return nodeID, false, nil
 }
+
+// matchPlaceholderFuncs are the plan functions MATCH() AGAINST() binds to. Neither has an
+// evaluable implementation: pkg/sql/plan/function/func_fulltext.go raises "MATCH() AGAINST()
+// function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is
+// not supported yet" for both. They are placeholders that the fulltext rewrite is expected
+// to replace with an index scan.
+//
+// fulltext_match is what a WHERE MATCH binds to and what survives when no index matches;
+// fulltext_match_score is what an unmatched SELECT MATCH is converted into
+// (getFullTextMatchFromProject). Either one surviving optimization means the query throws.
+var matchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
+
+// ValidateViewDefinition refuses to persist a view whose MATCH() AGAINST() no FULLTEXT
+// index can serve.
+//
+// Unlike a vector index, fulltext has no brute-force fallback, so such a view is not slow,
+// it is unrunnable: every query against it fails with the error above. Before this check
+// the DDL committed anyway, and ALTER / CREATE OR REPLACE reported success while replacing
+// a working definition with a broken one (#27027).
+//
+// The check is on the optimized plan, so the rewrite has already had its chance and a
+// surviving placeholder is proof no index matched. That reuses the planner's own decision
+// rather than restating findMatchFullTextIndex's rules (exact column-set match,
+// storage-vs-metadata index defs, literal-only mode argument), which would drift from it.
+// Covers classic fulltext and fulltext2 alike: both bind MATCH to the same placeholders
+// and share the same matcher.
+func (Hooks) ValidateViewDefinition(ctx planplugin.CompilerContext, query *plan.Query) error {
+	if !planplugin.PlanCallsAnyFunc(query, matchPlaceholderFuncs...) {
+		return nil
+	}
+	// Mirrors MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191) text, which rejects the same
+	// no-index CREATE / ALTER / REPLACE VIEW. The numeric code stays MatrixOne's own:
+	// moerr.MysqlErrorMsgRefer is consumed by the frontend and proxy, not by planner
+	// error constructors.
+	return moerr.NewInvalidInput(ctx.GetContext(),
+		"Can't find FULLTEXT index matching the column list")
+}
