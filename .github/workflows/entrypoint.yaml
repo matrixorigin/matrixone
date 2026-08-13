@@ -59,12 +59,14 @@ jobs:
   # workflows below, instead of each of them spending ~10 minutes on its own
   # identical build. Consumers verify the artifact's sha and fall back to
   # building from source if it is missing or mismatched.
+  # Deliberately NO `secrets: inherit`: this job compiles the untrusted PR
+  # head, so it must run without any inherited credentials; the reusable
+  # workflow caps its token to contents: read and pulls images anonymously.
   matrixone-shared-build:
     name: Matrixone Shared Build
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/build-mo.yaml@main
-    secrets: inherit
 
   # ============ 非 3.0-dev 分支使用 @main ============
   matrixone-ci:
