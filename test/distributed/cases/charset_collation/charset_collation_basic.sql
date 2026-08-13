@@ -28,10 +28,14 @@ SHOW COLLATION WHERE Charset = 'utf8mb4' AND Collation LIKE '%bin%';
 CREATE DATABASE charset_test;
 USE charset_test;
 
+-- @case
+-- @desc: Test information_schema character metadata used by ODBC SQLColumns
+-- @label:bvt
 -- information_schema metadata used by ODBC SQLColumns
 CREATE TABLE charset_metadata_repro (
     c_char CHAR(8),
     c_varchar VARCHAR(128),
+    c_tinytext TINYTEXT,
     c_text TEXT
 );
 SELECT c.data_type, c.character_set_name,
@@ -41,7 +45,7 @@ LEFT JOIN information_schema.character_sets cs
   ON c.character_set_name = cs.character_set_name
 WHERE c.table_schema = 'charset_test'
   AND c.table_name = 'charset_metadata_repro'
-  AND c.column_name IN ('c_char', 'c_varchar', 'c_text')
+  AND c.column_name IN ('c_char', 'c_varchar', 'c_tinytext', 'c_text')
 ORDER BY c.ordinal_position;
 DROP TABLE charset_metadata_repro;
 
