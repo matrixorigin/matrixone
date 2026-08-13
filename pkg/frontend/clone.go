@@ -603,6 +603,11 @@ func handleCloneTable(
 	bh BackgroundExec,
 	resolvedAccounts *cloneAccountResolution,
 ) (receipt cloneReceipt, err error) {
+	if stmt.CreateTable.Temporary && stmt.ToAccountOpt != nil {
+		return receipt, moerr.NewInvalidInputNoCtx(
+			"CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		)
+	}
 
 	var (
 		ctx    context.Context

@@ -153,6 +153,38 @@ select id from temp_vec order by l2_distance(v, '[2,2,3]') limit 2;
 drop temporary table temp_vec;
 set experimental_ivf_index = 0;
 
+-- Temporary aliases and their physical relations are session/account-owned, so
+-- TO ACCOUNT must be rejected before snapshot resolution, background-transaction
+-- creation, or alias publication. Closing the rejected statement's session must
+-- leave neither source-session state nor a target-account physical relation.
+drop account if exists clone_temp_target_account;
+create account clone_temp_target_account admin_name 'admin' identified by '111';
+-- @session:id=4&user=clone_temp_target_account:admin&password=111{
+create database clone_temp_target;
+-- @session
+drop snapshot if exists clone_temp_cross_account_snapshot;
+create snapshot clone_temp_cross_account_snapshot for table clone_temp_target src;
+-- @session:id=5{
+use clone_temp_target;
+create temporary table clone_temp_target.temp_cross_account
+    clone clone_temp_target.src {snapshot = 'clone_temp_cross_account_snapshot'}
+    to account clone_temp_target_account;
+drop temporary table if exists clone_temp_target.temp_cross_account;
+create temporary table clone_temp_target.temp_cross_account (id int primary key);
+insert into temp_cross_account values (10);
+select * from temp_cross_account;
+drop temporary table temp_cross_account;
+-- @session
+-- @session:id=6&user=clone_temp_target_account:admin&password=111{
+use clone_temp_target;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+  and relname like '__mo_tmp_%_clone_temp_target_temp_cross_account';
+select * from temp_cross_account;
+-- @session
+drop snapshot clone_temp_cross_account_snapshot;
+drop account clone_temp_target_account;
+
 drop database clone_temp_target;
 
 -- Suspending an account closes its live sessions. The connection cleanup must

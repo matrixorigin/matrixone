@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
@@ -101,6 +102,21 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
 		dataBranchCtx, namedSnapshotSource,
 	))
+}
+
+func TestHandleCloneTableRejectsTemporaryDestinationToAccountBeforeExecution(t *testing.T) {
+	stmt := tree.NewCloneTable()
+	t.Cleanup(stmt.Free)
+	stmt.CreateTable.Temporary = true
+	stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+
+	// Nil execution dependencies prove this semantic rejection happens before
+	// opening a background transaction, resolving a snapshot/account, or
+	// publishing any temporary-table state.
+	_, err := handleCloneTable(nil, nil, stmt, nil, nil)
+	require.ErrorContains(t, err,
+		"CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 }
 
 func TestRemoveFailedTemporaryCloneAlias(t *testing.T) {

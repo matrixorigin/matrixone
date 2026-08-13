@@ -177,6 +177,33 @@ select id from temp_vec order by l2_distance(v, '[2,2,3]') limit 2;
 1
 drop temporary table temp_vec;
 set experimental_ivf_index = 0;
+drop account if exists clone_temp_target_account;
+create account clone_temp_target_account admin_name 'admin' identified by '111';
+create database clone_temp_target;
+drop snapshot if exists clone_temp_cross_account_snapshot;
+create snapshot clone_temp_cross_account_snapshot for table clone_temp_target src;
+use clone_temp_target;
+create temporary table clone_temp_target.temp_cross_account
+clone clone_temp_target.src {snapshot = 'clone_temp_cross_account_snapshot'}
+to account clone_temp_target_account;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT
+drop temporary table if exists clone_temp_target.temp_cross_account;
+create temporary table clone_temp_target.temp_cross_account (id int primary key);
+insert into temp_cross_account values (10);
+select * from temp_cross_account;
+➤ id[4,32,0]  𝄀
+10
+drop temporary table temp_cross_account;
+use clone_temp_target;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+and relname like '__mo_tmp_%_clone_temp_target_temp_cross_account';
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from temp_cross_account;
+SQL parser error: table "temp_cross_account" does not exist
+drop snapshot clone_temp_cross_account_snapshot;
+drop account clone_temp_target_account;
 drop database clone_temp_target;
 drop account if exists clone_temp_disconnect_account;
 create account clone_temp_disconnect_account admin_name 'admin' identified by '111';
