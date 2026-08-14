@@ -1054,6 +1054,7 @@ message Node {
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
   int32 asof_right_col = 80;
+  int32 partition_by_count = 81;
 }
 
 message SnapshotExtraInfo {
