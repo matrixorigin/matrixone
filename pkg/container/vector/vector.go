@@ -503,7 +503,8 @@ func (v *Vector) HasGrouping() bool {
 }
 
 func (v *Vector) AllNull() bool {
-	return v.IsConstNull() || (v.length != 0 && v.nsp.Count() == v.length)
+	return v.IsConstNull() ||
+		(v.length != 0 && v.nsp.GetBitmap().CountRange(0, uint64(v.length)) == v.length)
 }
 
 func (v *Vector) GetIsBin() bool {
@@ -8803,6 +8804,11 @@ func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
 	}
 
 	varlena := MustFixedColNoTypeCheck[types.Varlena](v)
+	if v.allocationAccount != nil && v.prepareParamKinds != nil {
+		if err := v.ensureBitmapCapacity(v.length, v.prepareParamKindsMP); err != nil {
+			panic(err)
+		}
+	}
 	v.nsp.GetBitmap().TryExpandWithSize(v.length)
 	v.gsp.GetBitmap().TryExpandWithSize(v.length)
 	if v.binaryStringRowsActive {

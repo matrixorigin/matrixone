@@ -2254,6 +2254,49 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestStaleNullExtentDoesNotCorruptBinaryStringMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	makeVector := func(t *testing.T) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_text.ToType())
+		for row := 0; row < 130; row++ {
+			require.NoError(t, AppendBytes(vec, []byte("value"), false, mp))
+		}
+		vec.SetNull(129)
+		vec.SetLength(2)
+		return vec
+	}
+
+	t.Run("single null keeps live row provenance", func(t *testing.T) {
+		vec := makeVector(t)
+		defer vec.Free(mp)
+		require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+
+		vec.SetNull(0)
+
+		require.False(t, vec.AllNull())
+		require.True(t, vec.GetIsBinaryStringAt(1))
+	})
+
+	t.Run("bulk null clears scalar provenance", func(t *testing.T) {
+		vec := makeVector(t)
+		defer vec.Free(mp)
+		vec.SetIsBinaryString(true)
+		nsp := nulls.NewWithSize(130)
+		nsp.Add(0)
+		nsp.Add(1)
+		nsp.Add(129)
+
+		vec.SetNulls(nsp)
+
+		require.True(t, vec.AllNull())
+		require.False(t, vec.GetIsBinaryString())
+		require.False(t, vec.HasBinaryStringRows())
+	})
+}
+
 func TestBinaryStringShuffleWithBufScratchFailureIsAtomic(t *testing.T) {
 	dataMP := mpool.MustNewZero()
 	vec := NewVec(types.T_text.ToType())

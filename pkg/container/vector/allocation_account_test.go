@@ -1444,6 +1444,51 @@ func TestBinaryStringBitmapUsesVectorAllocationAccount(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestAccountedPrepareOnlyInplaceSortReservesBitmapCapacity(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compact=%t", compact), func(t *testing.T) {
+			state := newTestVectorAllocationAccount(t, 1<<20, 16)
+			mp := mpool.MustNewZero()
+			vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+			values := make([]string, 128)
+			kinds := make([]PrepareParamKind, 128)
+			for row := range values {
+				value := len(values) - 1 - row
+				values[row] = fmt.Sprintf("%03d", value)
+				if value%2 == 0 {
+					kinds[row] = PrepareParamInteger
+				} else {
+					kinds[row] = PrepareParamFloat
+				}
+			}
+			require.NoError(t, AppendStringList(vec, values, nil, mp))
+			require.NoError(t, vec.SetPrepareParamKindsWithMP(kinds, mp))
+			require.False(t, vec.HasBinaryStringRows())
+
+			require.NotPanics(t, func() {
+				if compact {
+					vec.InplaceSortAndCompact()
+				} else {
+					vec.InplaceSort()
+				}
+			})
+			require.Equal(t, 128, vec.Length())
+			for row := 0; row < vec.Length(); row++ {
+				require.Equal(t, fmt.Sprintf("%03d", row), string(vec.GetBytesAt(row)))
+				if row%2 == 0 {
+					require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(row))
+				} else {
+					require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(row))
+				}
+			}
+
+			vec.Free(mp)
+			finalizeTestVectorAllocationAccount(t, state)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestAccountedMixedBinaryStringPreExtendCoversSetLength(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 16)
 	mp := mpool.MustNewZero()
