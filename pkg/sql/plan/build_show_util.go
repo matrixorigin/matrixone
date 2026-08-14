@@ -43,7 +43,11 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+	// IndexDef.Visible historically used false both as the proto3 zero value for
+	// default-visible indexes and for explicitly invisible indexes. Public
+	// reconstruction callers do not have authoritative catalog metadata, so they
+	// must keep the legacy default-visible rendering.
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true, false)
 }
 
 func constructCreateTableSQL(
@@ -53,6 +57,7 @@ func constructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
+	indexVisibilityKnown bool,
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
@@ -335,6 +340,9 @@ func constructCreateTableSQL(
 						}
 					}
 				}
+				if indexVisibilityKnown && !indexdef.Visible {
+					indexStr += " INVISIBLE"
+				}
 
 			} else {
 				rewriteIndexStr := ""
@@ -401,6 +409,10 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
+				if indexVisibilityKnown && !indexdef.Visible {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
