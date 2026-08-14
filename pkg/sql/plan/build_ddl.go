@@ -1089,6 +1089,9 @@ func buildCreateTable(
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
+		if sub != nil {
+			ctx.SetQueryingSubscription(previousSubscription)
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
@@ -1096,6 +1099,7 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			sub,
 		)
 		if err != nil {
 			return nil, err
@@ -1104,9 +1108,6 @@ func buildCreateTable(
 			// The subscription binding belongs to the LIKE source only. The
 			// rewritten statement names the local target, so plan it with the
 			// caller's subscription context instead of the publisher binding.
-			if sub != nil {
-				ctx.SetQueryingSubscription(previousSubscription)
-			}
 			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
 			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already

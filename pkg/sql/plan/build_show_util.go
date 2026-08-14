@@ -42,7 +42,14 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+	var sourceSubscription *SubscriptionMeta
+	if ctx != nil {
+		sourceSubscription = ctx.GetQueryingSubscription()
+	}
+	return constructCreateTableSQL(
+		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
+		sourceSubscription,
+	)
 }
 
 func constructCreateTableSQL(
@@ -52,6 +59,7 @@ func constructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
+	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
@@ -424,6 +432,14 @@ func constructCreateTableSQL(
 		}
 	}
 
+	sourceDatabaseName := ""
+	if cloneStmt != nil {
+		sourceDatabaseName = cloneStmt.SrcTable.SchemaName.String()
+		if sourceSubscription != nil {
+			sourceDatabaseName = sourceSubscription.DbName
+		}
+	}
+
 	updateFKTableDef := func(fkDef *TableDef) (*TableDef, error) {
 		if cloneStmt == nil || cloneStmt.StmtType == tree.NoClone {
 			return fkDef, nil
@@ -456,7 +472,7 @@ func constructCreateTableSQL(
 			return err
 		}
 
-		if cloneStmt.SrcTable.SchemaName.String() == fkDef.DbName {
+		if sourceDatabaseName == fkDef.DbName {
 			// within db refer
 			referType = 1
 		} else {
@@ -509,8 +525,8 @@ func constructCreateTableSQL(
 		if fk.ForeignTbl == 0 {
 			fkTableDef = tableDef
 		} else {
-			if ctx.GetQueryingSubscription() != nil {
-				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription()); err != nil {
+			if sourceSubscription != nil {
+				if _, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, sourceSubscription); err != nil {
 					return "", nil, err
 				}
 				if fkTableDef, err = updateFKTableDef(fkTableDef); err != nil {
@@ -550,8 +566,11 @@ func constructCreateTableSQL(
 		}
 
 		fkRefDbName := fkTableDef.DbName
+		if cloneStmt == nil && sourceSubscription != nil && fkRefDbName == sourceSubscription.DbName {
+			fkRefDbName = sourceSubscription.SubName
+		}
 		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
-			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
+			sourceDatabaseName == fkTableDef.DbName {
 			fkRefDbName = schemaName
 		}
 		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)

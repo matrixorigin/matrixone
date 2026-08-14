@@ -210,23 +210,27 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 			"desc `" + subDatabase + "`.published_view",
 			"show columns from `" + subDatabase + "`.published_view",
 		} {
-			rows, queryErr := subscriberDB.QueryContext(ctx, statement)
-			require.NoError(t, queryErr, statement)
-			require.True(t, rows.Next(), statement)
-			columns, columnsErr := rows.Columns()
-			require.NoError(t, columnsErr)
-			values := make([]sql.RawBytes, len(columns))
-			dest := make([]any, len(columns))
-			for index := range values {
-				dest[index] = &values[index]
-			}
-			require.NoError(t, rows.Scan(dest...))
-			require.NoError(t, rows.Close())
-			if strings.HasPrefix(statement, "select") {
-				continue
-			}
-			require.Equal(t, "value", string(values[0]))
-			require.True(t, strings.Contains(strings.ToLower(string(values[1])), "bigint"), string(values[1]))
+			func() {
+				rows, queryErr := subscriberDB.QueryContext(ctx, statement)
+				require.NoError(t, queryErr, statement)
+				defer func() { require.NoError(t, rows.Close()) }()
+				require.True(t, rows.Next(), statement)
+				columns, columnsErr := rows.Columns()
+				require.NoError(t, columnsErr)
+				values := make([]sql.RawBytes, len(columns))
+				dest := make([]any, len(columns))
+				for index := range values {
+					dest[index] = &values[index]
+				}
+				require.NoError(t, rows.Scan(dest...))
+				require.False(t, rows.Next(), statement)
+				require.NoError(t, rows.Err())
+				if strings.HasPrefix(statement, "select") {
+					return
+				}
+				require.Equal(t, "value", string(values[0]))
+				require.True(t, strings.Contains(strings.ToLower(string(values[1])), "bigint"), string(values[1]))
+			}()
 		}
 	})
 }

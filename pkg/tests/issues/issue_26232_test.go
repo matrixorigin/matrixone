@@ -42,6 +42,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return clusterservice.AllKnownCNsSupportViewMetadataRefresh(cn.ServiceID())
 		}, time.Minute, 100*time.Millisecond)
+		waitForViewMetadataRevalidation(t, ctx, dbConn)
 
 		const db = "issue_26232"
 		for _, stmt := range []string{
