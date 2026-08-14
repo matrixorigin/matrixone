@@ -116,6 +116,80 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
+	testCases := []struct {
+		name        string
+		sql         string
+		wantErrCode uint16
+	}{
+		{
+			name:        "rename table changes database and name",
+			sql:         "rename table tpch.nation to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table changes only database",
+			sql:         "rename table tpch.nation to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes database and name",
+			sql:         "alter table tpch.nation rename to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes only database",
+			sql:         "alter table tpch.nation rename to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table resolves source before rejecting target database",
+			sql:         "rename table tpch.missing_table to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name:        "alter table resolves source before rejecting target database",
+			sql:         "alter table tpch.missing_table rename to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name: "rename table keeps explicit database",
+			sql:  "rename table tpch.nation to tpch.renamed",
+		},
+		{
+			name: "rename table inherits source database",
+			sql:  "rename table tpch.nation to renamed",
+		},
+		{
+			name: "alter table keeps explicit database",
+			sql:  "alter table tpch.nation rename to tpch.renamed",
+		},
+		{
+			name: "alter table inherits source database",
+			sql:  "alter table tpch.nation rename to renamed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			if testCase.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, testCase.wantErrCode), err)
+				if testCase.wantErrCode == moerr.ErrNotSupported {
+					require.Contains(t, err.Error(), "cross-database table rename")
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, p)
+		})
+	}
+}
+
 func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 	testCases := []struct {
 		name      string
