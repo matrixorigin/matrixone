@@ -399,8 +399,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
+		typ := plan.Type{Id: int32(types.T_timestamp), NotNullable: true}
+		if b.ctx.timeBoundaryType != nil {
+			typ = *DeepCopyType(b.ctx.timeBoundaryType)
+			typ.NotNullable = true
+		}
 		expr = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_timestamp)},
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -5414,7 +5419,8 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if firstExpr.GetLit() != nil {
 		lit = firstExpr.GetLit()
 		innerExpr = firstExpr
-	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
+	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
+		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
 			lit = funcExpr.F.Args[0].GetLit()
