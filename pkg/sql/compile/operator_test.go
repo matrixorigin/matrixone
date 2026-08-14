@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -366,11 +367,24 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 
 func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	innerOp := multi_update.NewArgument()
-	op := multi_update.NewPartitionMultiUpdate(innerOp, 1)
+	op := multi_update.NewPartitionMultiUpdate(innerOp)
 	result := dupOperator(op, 0, 1)
 	if result == nil {
 		t.Fatal("dupOperator returned nil for PartitionMultiUpdate")
 	}
+}
+
+func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
+	contexts := []*plan.UpdateCtx{
+		{TableDef: &plan.TableDef{TblId: 1}},
+		{TableDef: &plan.TableDef{TblId: 2, FeatureFlag: features.Partitioned}},
+		{TableDef: &plan.TableDef{TblId: 3, FeatureFlag: features.IndexTable}},
+	}
+	require.True(t, hasPartitionedUpdateTarget(contexts))
+
+	contexts[1].TableDef.FeatureFlag = 0
+	contexts[2].TableDef.FeatureFlag = features.Partitioned | features.IndexTable
+	require.False(t, hasPartitionedUpdateTarget(contexts))
 }
 
 func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
@@ -399,12 +413,21 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 	}
 }
 
-func TestDupOperatorPreInsertRejectZeroTemporal(t *testing.T) {
+func TestDupOperatorPreInsertState(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.HasTargetSelector = true
+	op.TargetRowNumberCol = 7
+	op.TargetActiveCol = 8
+	op.TargetRowIDCol = 9
 	result := dupOperator(op, 0, 1)
 	require.NotNil(t, result)
-	require.True(t, result.(*preinsert.PreInsert).RejectZeroTemporal)
+	cloned := result.(*preinsert.PreInsert)
+	require.True(t, cloned.RejectZeroTemporal)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIDCol)
 }
 
 func TestRefreshZeroTemporalWritePolicy(t *testing.T) {
