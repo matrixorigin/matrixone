@@ -5103,6 +5103,111 @@ func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
 	}
 }
 
+func TestUnquotedExtendedIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "UTF-8 continuation",
+			sql:  "CREATE TABLE t_ãg (a INT)",
+			want: "create table t_ãg (a int)",
+		},
+		{
+			name: "UTF-8 leading table and column",
+			sql:  "CREATE TABLE 数量 (值 INT)",
+			want: "create table 数量 (值 int)",
+		},
+		{
+			name: "maximum BMP code point",
+			sql:  "CREATE TABLE \uFFFF (a INT)",
+			want: "create table \uFFFF (a int)",
+		},
+		{
+			name: "digit leading",
+			sql:  "CREATE TABLE 1数量 (a INT)",
+			want: "create table 1数量 (a int)",
+		},
+		{
+			name: "digit leading with exponent letter",
+			sql:  "CREATE TABLE 1e数量 (a INT)",
+			want: "create table 1e数量 (a int)",
+		},
+		{
+			name: "digit leading raw latin1 client byte",
+			sql:  "CREATE TABLE 1\xe9A (a INT)",
+			want: "create table 1\xe9a (a int)",
+		},
+		{
+			name: "raw latin1 client byte",
+			sql:  "CREATE TABLE t_\xe9A (a INT)",
+			want: "create table t_\xe9a (a int)",
+		},
+		{
+			name: "charset prefix with BMP suffix",
+			sql:  "CREATE TABLE _utf8mb4数量 (a INT)",
+			want: "create table _utf8mb4数量 (a int)",
+		},
+		{
+			name: "charset prefix with raw latin1 suffix",
+			sql:  "CREATE TABLE _utf8mb4\xe9A (a INT)",
+			want: "create table _utf8mb4\xe9a (a int)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestCharsetIntroducerParses(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT _utf8mb4'test'", 1)
+	require.NoError(t, err)
+	stmt.Free()
+}
+
+func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
+	for _, sql := range []string{
+		"CREATE TABLE 😀 (a INT)",
+		"CREATE TABLE t😀 (a INT)",
+		"CREATE TABLE 1😀 (a INT)",
+		"CREATE TABLE \U00010000 (a INT)",
+		"CREATE TABLE 0x😀 (a INT)",
+		"CREATE TABLE 0b😀 (a INT)",
+		"SELECT @😀",
+		"SELECT @@😀",
+		"SELECT _utf8mb4😀",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestUnquotedIdentifiersRejectPunctuationBeforeUnicode(t *testing.T) {
+	for _, sql := range []string{
+		"CREATE TABLE 1.数量 (a INT)",
+		"CREATE TABLE 1e+数量 (a INT)",
+		"CREATE TABLE 1e-数量 (a INT)",
+		"CREATE TABLE 0x.数量 (a INT)",
+		"CREATE TABLE 0b+数量 (a INT)",
+		"SELECT @+数量",
+		"SELECT @@-数量",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestShowVariablesGlobalFlag(t *testing.T) {
 	ctx := context.TODO()
 	stmt, err := ParseOne(ctx, "show global variables like 'interactive_timeout'", 1)
