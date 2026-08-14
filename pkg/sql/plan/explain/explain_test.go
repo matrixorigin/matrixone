@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,6 +83,44 @@ func TestAssertConditionExplainLabel(t *testing.T) {
 	if len(labels) != 1 || labels[0].Name != Label_Assert {
 		t.Fatalf("expected one Assert label without duplicate Filter conditions, got %#v", labels)
 	}
+}
+
+func TestPartitionTopNExplain(t *testing.T) {
+	column := func(pos int32) *plan2.Expr {
+		return &plan2.Expr{
+			Typ:  plan2.Type{Id: int32(types.T_int64)},
+			Expr: &plan2.Expr_Col{Col: &plan2.ColRef{RelPos: 0, ColPos: pos, Name: fmt.Sprintf("c%d", pos)}},
+		}
+	}
+	node := &plan2.Node{
+		NodeType: plan2.Node_PARTITION,
+		OrderBy: []*plan2.OrderBySpec{
+			{Expr: column(0)},
+			{Expr: column(1), Flag: plan2.OrderBySpec_DESC},
+		},
+		Limit:            plan.MakePlan2Uint64ConstExprWithType(2),
+		PartitionByCount: 1,
+	}
+	opts := &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT}
+	description := NewNodeDescriptionImpl(node)
+	name, err := description.GetNodeBasicInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Equal(t, "Partition Top N", name)
+	lines, err := description.GetExtraInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Contains(t, lines[0], "Partition Key:")
+	require.Contains(t, lines[1], "Sort Key:")
+	require.Contains(t, lines, "Limit: 2")
+
+	marshal := NewMarshalNodeImpl(node)
+	jsonName, err := marshal.GetNodeName(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Partition Top N", jsonName)
+	title, err := marshal.GetNodeTitle(context.Background(), opts)
+	require.NoError(t, err)
+	require.Contains(t, title, "Partition Keys:")
+	require.Contains(t, title, "Sort Keys:")
+	require.Contains(t, title, "N: 2")
 }
 
 func TestSingleSql(t *testing.T) {
