@@ -40,6 +40,15 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	require.Error(t, parameters.Validate(t.Context()))
 }
 
+func TestMongoDBParametersProgrammaticOptOutSurvivesRepeatedDefaulting(t *testing.T) {
+	parameters := NewMongoDBParameters()
+	parameters.SetDefaultValues()
+	parameters.Enable = false
+
+	parameters.SetDefaultValues()
+	require.False(t, parameters.Enable)
+}
+
 func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -55,9 +64,9 @@ func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
 		{name: "explicit enable", input: "[mongodb]\nenable = true\n", wantEnabled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var parameters struct {
+			parameters := struct {
 				MongoDB MongoDBParameters `toml:"mongodb"`
-			}
+			}{MongoDB: *NewMongoDBParameters()}
 			_, err := toml.Decode(tc.input, &parameters)
 			require.NoError(t, err)
 			parameters.MongoDB.SetDefaultValues()

@@ -281,15 +281,23 @@ type MongoDBParameters struct {
 	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
 	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
 
-	// enableConfigured preserves the distinction between an omitted enable
-	// value and an explicit operator opt-out. It is intentionally unexported so
-	// it is neither emitted as configuration nor included in config reporting.
+	// enableConfigured records a TOML-provided value. enableDefaulted makes
+	// defaulting idempotent so a later programmatic false remains an opt-out.
 	enableConfigured bool
+	enableDefaulted  bool
 }
 
-// UnmarshalTOML records whether enable was explicitly configured while leaving
-// the public configuration shape as a bool. The alias prevents recursive calls
-// back into this method when decoding the remaining MongoDB settings.
+// NewMongoDBParameters returns MongoDB parameters with defaults that must be
+// established before TOML decoding. Initializing Enable here lets an explicit
+// false from either TOML or programmatic configuration remain meaningful when
+// SetDefaultValues is called again later in the service lifecycle.
+func NewMongoDBParameters() *MongoDBParameters {
+	return &MongoDBParameters{Enable: true, enableDefaulted: true}
+}
+
+// UnmarshalTOML rejects ambiguous case variants while preserving defaults that
+// were initialized before decoding. The alias prevents recursive calls back
+// into this method when decoding the remaining MongoDB settings.
 func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
 	table, ok := value.(map[string]interface{})
 	if !ok {
@@ -321,9 +329,10 @@ func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
 }
 
 func (parameters *MongoDBParameters) SetDefaultValues() {
-	if !parameters.enableConfigured {
+	if !parameters.enableConfigured && !parameters.enableDefaulted {
 		parameters.Enable = true
 	}
+	parameters.enableDefaulted = true
 	if parameters.ConnectTimeout.Duration == 0 {
 		parameters.ConnectTimeout.Duration = 10 * time.Second
 	}
