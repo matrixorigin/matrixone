@@ -776,6 +776,69 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 	require.False(t, lockCalled)
 }
 
+func TestHandleCloneDatabaseWithSourceRestoresStoredProcedures(t *testing.T) {
+	newSource := func() *cloneDatabaseSource {
+		return &cloneDatabaseSource{
+			srcResolveDBName: "source",
+			opAccountId:      sysAccountID,
+			toAccountId:      sysAccountID,
+			storedProcedures: []storedProcedureDefinition{{
+				name:    "p_answer",
+				args:    "[]",
+				lang:    "sql",
+				body:    "begin select 42; end",
+				sqlMode: "",
+				dbName:  "source",
+			}},
+		}
+	}
+	newStatement := func() *tree.CloneDatabase {
+		return &tree.CloneDatabase{
+			DstDatabase: tree.Identifier("destination"),
+			SrcDatabase: tree.Identifier("source"),
+			AtTsExpr:    &tree.AtTimeStamp{},
+		}
+	}
+
+	t.Run("restores procedure after creating destination", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.NoError(t, err)
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Equal(t, checkSQL, bh.executedSQLs[1])
+		require.Contains(t, bh.executedSQLs[2], "insert into mo_catalog.mo_stored_procedure")
+	})
+
+	t.Run("propagates procedure restoration failures", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		bh := &backgroundExecTest{}
+		bh.init()
+		checkSQL := getSqlForCheckProcedureExistence("p_answer", "destination")
+		wantErr := errors.New("procedure lookup failed")
+		bh.sql2err[checkSQL] = wantErr
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), newSource(),
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{"create database `destination`", checkSQL}, bh.executedSQLs)
+	})
+}
+
 func TestCheckCloneDatabaseTargetSerializesConcurrentIfNotExistsDecisions(t *testing.T) {
 	firstLocked := make(chan struct{})
 	secondWaiting := make(chan struct{})

@@ -22,11 +22,78 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
+
+type accountRecordingBackgroundExec struct {
+	*backgroundExecTest
+	accountID uint32
+}
+
+func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err == nil {
+		bt.accountID = accountID
+	}
+	return bt.backgroundExecTest.Exec(ctx, sql)
+}
+
+func newStoredProcedureMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"name", "args", "lang", "body", "sql_mode"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(column)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
+	const dbName = "source_db"
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+	querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure {MO_TS = 42} where db = 'source_db' order by name"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+		{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
+	})
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), bh.accountID)
+	require.Equal(t, []storedProcedureDefinition{{
+		name:    "p_answer",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 42; end",
+		sqlMode: "PIPES_AS_CONCAT",
+		dbName:  dbName,
+	}}, procedures)
+
+	t.Run("catalog query failure is propagated", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("stored procedure query failed")
+		bh.sql2err[querySQL] = wantErr
+
+		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, procedures)
+	})
+}
 
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	ctx := context.Background()

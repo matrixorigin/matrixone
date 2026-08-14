@@ -9981,6 +9981,50 @@ func TestInitProcedurePersistsDeclaredArgumentType(t *testing.T) {
 	require.Contains(t, createSQL, `"Scale":2`)
 }
 
+func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	definition := storedProcedureDefinition{
+		name:    "p_replace",
+		args:    "[]",
+		lang:    "sql",
+		body:    "begin select 1; end",
+		sqlMode: "",
+		dbName:  "procedure_db",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(definition.name, definition.dbName)
+
+	t.Run("replace updates the existing catalog row", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.NoError(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, checkSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "update mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[1], "where proc_id = 99")
+	})
+
+	t.Run("non replace rejects an existing catalog row before persistence", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(99)}})
+
+		require.ErrorContains(t, upsertStoredProcedure(ctx, bh, tenant, definition, false), "procedure p_replace already exists")
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+
+	t.Run("replace rejects an invalid existing catalog id", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
+
+		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
+		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+	})
+}
+
 func Test_initProcedure(t *testing.T) {
 	convey.Convey("init precedure fail", t, func() {
 		ctrl := gomock.NewController(t)
