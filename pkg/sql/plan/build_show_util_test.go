@@ -595,6 +595,52 @@ func TestConstructCreateTableSQLPreservesPropertyQuotes(t *testing.T) {
 	}, tablePropertiesForTest(replayedDef))
 }
 
+func TestConstructCreateTableSQLPreservesPropertiesAcrossSQLModes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      string
+		sourceSQL string
+	}{
+		{
+			name:      "default",
+			mode:      "",
+			sourceSQL: `create table property_default (id int) properties('key"with''quote\\slash' = 'value"with''quote\\slash')`,
+		},
+		{
+			name:      "no backslash escapes",
+			mode:      "NO_BACKSLASH_ESCAPES",
+			sourceSQL: `create table property_no_backslash (id int) properties('key"with''quote\slash' = 'value"with''quote\slash')`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(tc.mode)
+			sourceStmt, err := mysql.ParseOneWithSQLMode(t.Context(), tc.sourceSQL, 1, tc.mode)
+			require.NoError(t, err)
+			t.Cleanup(sourceStmt.Free)
+			sourcePlan, err := BuildPlan(&mock.ctxt, sourceStmt, false)
+			require.NoError(t, err)
+			sourceDef := sourcePlan.GetDdl().GetCreateTable().GetTableDef()
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+
+			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.mode)
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replayedStmt.Free)
+			replayedPlan, err := BuildPlan(&mock.ctxt, replayedStmt, false)
+			require.NoError(t, err)
+			replayedDef := replayedPlan.GetDdl().GetCreateTable().GetTableDef()
+
+			require.Equal(t, tablePropertiesForTest(sourceDef), tablePropertiesForTest(replayedDef))
+			internalPlan, err := BuildPlan(&mock.ctxt, rewritten, false)
+			require.NoError(t, err)
+			require.Equal(t, tablePropertiesForTest(sourceDef), tablePropertiesForTest(internalPlan.GetDdl().GetCreateTable().GetTableDef()))
+		})
+	}
+}
+
 func tablePropertiesForTest(tableDef *plan.TableDef) map[string]string {
 	properties := make(map[string]string)
 	for _, def := range tableDef.Defs {
@@ -974,13 +1020,62 @@ func TestFormatStrInSingleQuotes(t *testing.T) {
 
 // TestFormatLinesTerminatedBy: SHOW CREATE must keep \n and \r\n distinct so a
 // CRLF writable external table recreates as CRLF (not silently downgraded to
-// LF). Both render as doubled-backslash escape sequences; other values flow
-// through formatStrInSingleQuotes.
+// LF). The generated source is formatted for the parser mode that replays it.
 func TestFormatLinesTerminatedBy(t *testing.T) {
-	require.Equal(t, `\\n`, formatLinesTerminatedBy("\n"))
-	require.Equal(t, `\\r\\n`, formatLinesTerminatedBy("\r\n"))
-	require.NotEqual(t, formatLinesTerminatedBy("\n"), formatLinesTerminatedBy("\r\n"))
-	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#"))
+	require.Equal(t, `\n`, formatLinesTerminatedBy("\n", ""))
+	require.Equal(t, `\r\n`, formatLinesTerminatedBy("\r\n", ""))
+	require.NotEqual(t, formatLinesTerminatedBy("\n", ""), formatLinesTerminatedBy("\r\n", ""))
+	require.Equal(t, "#EOL#", formatLinesTerminatedBy("#EOL#", ""))
+	require.Equal(t, "\n", formatLinesTerminatedBy("\n", "NO_BACKSLASH_ESCAPES"))
+	require.Equal(t, "\r\n", formatLinesTerminatedBy("\r\n", "NO_BACKSLASH_ESCAPES"))
+}
+
+func TestConstructCreateTableSQLPreservesExternalLineTerminators(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{name: "lf", value: "\n"},
+		{name: "crlf", value: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Option:   []string{"filepath", "/data/source.csv", "format", tree.CSV},
+				Tail: &tree.TailParameter{Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{Value: tc.value},
+				}},
+			}}
+			createSQL, err := json.Marshal(param)
+			require.NoError(t, err)
+			tableDef := &plan.TableDef{
+				Name:      "line_terminator_" + tc.name,
+				TableType: catalog.SystemExternalRel,
+				Createsql: string(createSQL),
+				Cols: []*plan.ColDef{{
+					Name:    "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+
+			replay, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, "")
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replay.Free)
+			replayed, ok := replay.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Equal(t, tc.value, replayed.Param.Tail.Lines.TerminatedBy.Value)
+
+			internal, ok := rewritten.(*tree.CreateTable)
+			require.True(t, ok)
+			require.Equal(t, tc.value, internal.Param.Tail.Lines.TerminatedBy.Value)
+		})
+	}
 }
 
 func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {

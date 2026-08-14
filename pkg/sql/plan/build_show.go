@@ -1157,7 +1157,11 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 0)
+	return getRewriteSQLStmtWithSQLMode(ctx, sql, "")
+}
+
+func getRewriteSQLStmtWithSQLMode(ctx CompilerContext, sql, sqlMode string) (tree.Statement, error) {
+	newStmts, err := parsers.ParseWithSQLMode(ctx.GetContext(), dialect.MYSQL, sql, 0, sqlMode)
 	if err != nil {
 		return nil, err
 	}

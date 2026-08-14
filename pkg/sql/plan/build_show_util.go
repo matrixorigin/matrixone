@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -55,6 +56,10 @@ func constructCreateTableSQL(
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
+	sqlMode := ""
+	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
+	}
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
@@ -645,7 +650,7 @@ func constructCreateTableSQL(
 			if i > 0 {
 				propsStr += ", "
 			}
-			propsStr += fmt.Sprintf("%s = %s", formatStrLit(prop.Key), formatStrLit(prop.Value))
+			propsStr += fmt.Sprintf("%s = %s", formatStrLitForSQLMode(prop.Key, sqlMode), formatStrLitForSQLMode(prop.Value, sqlMode))
 		}
 		propsStr += ")"
 		createStr += propsStr
@@ -685,7 +690,7 @@ func constructCreateTableSQL(
 			createStr += formatIcebergTableOptionsForShowCreate(env)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
 			return createStr, stmt, err
 		}
@@ -693,7 +698,7 @@ func constructCreateTableSQL(
 			createStr += formatMongoDBTableOptionsForShowCreate(mongoEnvelope)
 			var stmt tree.Statement
 			if ctx != nil {
-				stmt, err = getRewriteSQLStmt(ctx, createStr)
+				stmt, err = getRewriteSQLStmtWithSQLMode(ctx, createStr, sqlMode)
 			}
 			return createStr, stmt, err
 		}
@@ -719,7 +724,7 @@ func constructCreateTableSQL(
 				if param.Tail.Fields.Terminated.Value == "" {
 					fields += " TERMINATED BY \"\""
 				} else {
-					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotes(param.Tail.Fields.Terminated.Value))
+					fields += fmt.Sprintf(" TERMINATED BY '%s'", formatStrInSingleQuotesForSQLMode(param.Tail.Fields.Terminated.Value, sqlMode))
 				}
 			}
 
@@ -751,10 +756,10 @@ func constructCreateTableSQL(
 		line := ""
 		if param.Tail != nil && param.Tail.Lines != nil {
 			if param.Tail.Lines.StartingBy != "" {
-				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotes(param.Tail.Lines.StartingBy))
+				line += fmt.Sprintf(" STARTING BY '%s'", formatStrInSingleQuotesForSQLMode(param.Tail.Lines.StartingBy, sqlMode))
 			}
 			if param.Tail.Lines.TerminatedBy != nil {
-				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value))
+				line += fmt.Sprintf(" TERMINATED BY '%s'", formatLinesTerminatedBy(param.Tail.Lines.TerminatedBy.Value, sqlMode))
 			}
 		}
 
@@ -777,7 +782,7 @@ func constructCreateTableSQL(
 		for _, pair := range rewritePairs {
 			rewriteStr = strings.Replace(rewriteStr, pair.display, pair.rewrite, 1)
 		}
-		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
+		stmt, err = getRewriteSQLStmtWithSQLMode(ctx, rewriteStr, sqlMode)
 	}
 	return createStr, stmt, err
 }
@@ -1204,34 +1209,27 @@ func FormatColType(colType plan.Type) string {
 	return ts + suffix
 }
 
-// formatStrInSingleQuotes escapes s for emission inside a single-quoted SQL
-// string literal. A single quote is written as two single quotes (doubling)
-// rather than backslash-escaped: the
-// SHOW CREATE result embeds the DDL in a double-quoted SELECT literal that
-// consumes one level of backslashes, and quote doubling survives that
-// round-trip both displayable and re-executable.
+// formatStrInSingleQuotes returns the contents of a default-mode SQL string
+// literal. Use formatStrInSingleQuotesForSQLMode when the generated DDL will be
+// reparsed under a specific session SQL mode.
 func formatStrInSingleQuotes(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `'`, `''`)
+	return formatStrInSingleQuotesForSQLMode(s, "")
 }
 
-// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE.
-// TerminatedBy.Value holds the raw bytes, so the newline (\n) and CRLF (\r\n)
-// defaults must be emitted as escape sequences — a literal CR/LF byte in the DDL
-// would be an unparseable embedded newline. The backslashes are doubled because
-// the SHOW CREATE result is delivered through a double-quoted SELECT literal that
-// consumes one backslash level before the DDL is re-parsed (mirrors the \n case
-// that already shipped). \n and \r\n must stay distinct so a CRLF table is
-// recreatable as CRLF, not silently downgraded to LF.
-func formatLinesTerminatedBy(value string) string {
-	switch value {
-	case "\n":
-		return `\\n`
-	case "\r\n":
-		return `\\r\\n`
-	default:
-		return formatStrInSingleQuotes(value)
-	}
+// formatStrInSingleQuotesForSQLMode returns the contents of a string literal
+// that reparses to s under sqlMode. In NO_BACKSLASH_ESCAPES, backslashes must
+// remain single because they are data, while quote doubling remains valid.
+func formatStrInSingleQuotesForSQLMode(s, sqlMode string) string {
+	literal := formatStrLitForSQLMode(s, sqlMode)
+	return literal[1 : len(literal)-1]
+}
+
+// formatLinesTerminatedBy renders a LINES TERMINATED BY value for SHOW CREATE
+// using the same SQL-mode contract as the surrounding generated DDL. In the
+// default mode, LF and CRLF are emitted as \n and \r\n source escapes; under
+// NO_BACKSLASH_ESCAPES their raw bytes are emitted instead.
+func formatLinesTerminatedBy(value, sqlMode string) string {
+	return formatStrInSingleQuotesForSQLMode(value, sqlMode)
 }
 
 func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
@@ -1458,6 +1456,17 @@ func formatStrLit(s string) string {
 	}
 	buf.WriteByte('\'')
 	return buf.String()
+}
+
+// formatStrLitForSQLMode quotes s for a generated SQL statement that will be
+// reparsed under sqlMode. The two MySQL string-literal modes have different
+// meanings for backslashes, so quote doubling alone is sufficient only when
+// NO_BACKSLASH_ESCAPES is active.
+func formatStrLitForSQLMode(s, sqlMode string) string {
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return formatStrLit(s)
 }
 
 func formatStr(str string) string {
