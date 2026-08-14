@@ -267,6 +267,58 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 	}
 }
 
+type sqlSelectLimitReleaseOperator struct {
+	*colexec.MockOperator
+	released bool
+}
+
+func (op *sqlSelectLimitReleaseOperator) Release() {
+	op.released = true
+}
+
+func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return nil, resolverErr
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+	t.Cleanup(proc.Free)
+
+	c := &Compile{
+		proc: proc, anal: &AnalyzeModule{}, ncpu: 1,
+		execType: plan2.ExecTypeAP_ONECN,
+	}
+	owners := []*sqlSelectLimitReleaseOperator{
+		{MockOperator: colexec.NewMockOperator()},
+		{MockOperator: colexec.NewMockOperator()},
+	}
+	scopes := make([]*Scope, len(owners))
+	for i, owner := range owners {
+		scope := newScope(Normal)
+		scope.NodeInfo.Mcpu = 1
+		scope.Proc = proc.NewNoContextChildProc(0)
+		scope.RootOp = owner
+		scopes[i] = scope
+	}
+
+	qry := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+	}
+	compiled, err := c.compileSteps(qry, scopes, 0)
+	require.ErrorIs(t, err, resolverErr)
+	require.Nil(t, compiled)
+	for _, owner := range owners {
+		require.True(t, owner.released)
+	}
+}
+
 func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
 	for _, scope := range scopes {
 		found := false

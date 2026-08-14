@@ -27,8 +27,12 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
+	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
+	"google.golang.org/protobuf/proto"
 )
 
 type siriusRuntimeTestProtector struct{ failUnregister bool }
@@ -162,4 +166,47 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.NoError(t, (*siriusReadOwner)(nil).finish(context.Background(), false))
 	err = (&Compile{}).runSiriusRead(context.Background())
 	require.ErrorContains(t, err, "missing Sirius execution owner")
+}
+
+func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return uint64(3), nil
+		}
+		return nil, nil
+	})
+	t.Cleanup(proc.Free)
+
+	query := &planpb.Query{
+		StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"},
+		ApplySqlSelectLimit: true,
+		Nodes: []*planpb.Node{{
+			NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+			ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"},
+			TableDef: &planpb.TableDef{
+				TblId: 42, Version: 3, Name: "t", TableType: "r",
+				Cols: []*planpb.ColDef{{
+					Name: "a", ColId: 11, Seqnum: 5,
+					Typ: planpb.Type{Id: int32(types.T_int64)},
+				}},
+			},
+		}},
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}
+	c := &Compile{proc: proc}
+	require.NoError(t, c.materializeSQLSelectLimit(queryPlan))
+	require.False(t, query.ApplySqlSelectLimit)
+	require.Equal(t, uint64(3), query.Nodes[0].Limit.GetLit().GetU64Val())
+
+	candidate, err := substrait.Export(query)
+	require.NoError(t, err)
+	wire, err := candidate.Build(map[int32][]byte{0: {1}})
+	require.NoError(t, err)
+	offloadedPlan := new(spb.Plan)
+	require.NoError(t, proto.Unmarshal(wire, offloadedPlan))
+	fetch := offloadedPlan.Relations[0].GetRoot().Input.GetFetch()
+	require.NotNil(t, fetch)
+	require.Equal(t, int64(3), fetch.GetCount())
 }

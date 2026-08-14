@@ -1273,10 +1273,6 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
-			// compilePlanScope transferred these scopes to this loop, but they
-			// have not joined steps yet and therefore are not covered by the
-			// deferred cleanup above.
-			ReleaseScopes(scopes)
 			return nil, err
 		}
 		steps = append(steps, scopes...)
@@ -1381,6 +1377,10 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			c.proc.GetResolveVariableFunc() != nil {
 			limitExpr, err := c.makeSQLSelectLimitExpr()
 			if err != nil {
+				// compileSteps owns rs at this point. A merge scope owns all of
+				// its input scopes through PreScopes, so releasing this root also
+				// releases the complete compiled tree exactly once.
+				ReleaseScopes([]*Scope{rs})
 				return nil, err
 			}
 			if limitExpr != nil {
@@ -1398,6 +1398,45 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		)
 		return []*Scope{rs}, nil
 	}
+}
+
+// materializeSQLSelectLimit resolves an ordinary statement's session limit at
+// the post-optimizer compile boundary. A finite limit becomes part of the final
+// logical root so Sirius export and native physical compilation share it. The
+// marker remains dynamic for prepared statements, which are reused across
+// EXECUTEs and are not eligible for Sirius offload.
+func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) error {
+	if c == nil || c.isPrepare || queryPlan == nil {
+		return nil
+	}
+	qry := queryPlan.GetQuery()
+	if qry == nil || !qry.ApplySqlSelectLimit ||
+		!c.proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		c.proc.GetResolveVariableFunc() == nil {
+		return nil
+	}
+
+	limitExpr, err := c.makeSQLSelectLimitExpr()
+	if err != nil {
+		return err
+	}
+	// Resolution succeeded, so compileSteps must not add a second limit.
+	qry.ApplySqlSelectLimit = false
+	if limitExpr == nil || len(qry.Steps) == 0 {
+		return nil
+	}
+	finalStep := qry.Steps[len(qry.Steps)-1]
+	if finalStep < 0 || int(finalStep) >= len(qry.Nodes) || qry.Nodes[finalStep] == nil {
+		// Leave malformed-plan reporting to the existing compile/export
+		// validation rather than panicking at this optional materialization.
+		return nil
+	}
+	// A false marker is the normal representation of an explicit LIMIT. Keep
+	// the defensive check so an inconsistent plan still preserves SQL syntax.
+	if qry.Nodes[finalStep].Limit == nil {
+		qry.Nodes[finalStep].Limit = limitExpr
+	}
+	return nil
 }
 
 // makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are

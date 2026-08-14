@@ -772,8 +772,9 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 }
 
 // applySQLSelectLimit marks top-level SELECTs whose final result pipeline must
-// enforce the dynamic session row cap. Keeping the cap out of the logical node
-// tree avoids changing optimizer estimates and correlated-subquery rewrites.
+// enforce the session row cap. The compiler materializes ordinary finite caps
+// only after optimization, avoiding changes to estimates and rewrites while
+// still making the cap visible to offload serialization.
 func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
 	query := queryPlan.GetQuery()
 	if query != nil {
