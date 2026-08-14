@@ -2146,6 +2146,15 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 					TableExist: true,
 					Visible:    false,
 				},
+				{
+					IndexName:  "idx_stale_marker",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    true,
+					Option: &plan.IndexOption{
+						Visibility: plan.IndexOption_VISIBILITY_VISIBLE,
+					},
+				},
 			}
 			ctx.tables[sourceName] = source
 			ctx.objects[sourceName] = &plan.ObjectRef{
@@ -2168,10 +2177,10 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 					result := executor.NewMemResult(
 						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
 					)
-					result.NewBatchWithRowCount(2)
+					result.NewBatchWithRowCount(3)
 					require.NoError(t, executor.AppendStringRows(result, 0,
-						[]string{"idx_legacy_visible", "idx_invisible"}))
-					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0}))
+						[]string{"idx_legacy_visible", "idx_invisible", "idx_stale_marker"}))
+					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0, 0}))
 					return result.GetResult(), nil
 				}),
 			)
@@ -2197,9 +2206,10 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 			}
 			require.True(t, visibility["idx_legacy_visible"])
 			require.False(t, visibility["idx_invisible"])
+			require.False(t, visibility["idx_stale_marker"])
 			persistedSQL := strings.ToUpper(tableDefCreateSQL(createTable.TableDef))
 			require.Contains(t, persistedSQL, "IDX_INVISIBLE")
-			require.Equal(t, 1, strings.Count(persistedSQL, " INVISIBLE"))
+			require.Equal(t, 2, strings.Count(persistedSQL, " INVISIBLE"))
 		})
 	}
 }
@@ -4100,6 +4110,23 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 		mock.ctxt.tables[child.Name] = child
 		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
 		mock.ctxt.id2name[child.TblId] = child.Name
+		proc := testutil.NewProc(t)
+		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t,
+					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
+				result := executor.NewMemResult(
+					[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+				)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx1"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+				return result.GetResult(), nil
+			}),
+		)
 
 		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
 		require.Error(t, err)

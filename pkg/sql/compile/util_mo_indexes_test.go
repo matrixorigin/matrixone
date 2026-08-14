@@ -162,11 +162,11 @@ func TestGenInsertMOIndexesSqlPersistsInvisibleIndex(t *testing.T) {
 		Indexes: []*plan.IndexDef{{
 			IndexName: "idx_a",
 			Parts:     []string{"a"},
-			Visible:   false,
 		}},
 	}}}
+	catalog.SetIndexVisibility(ct.Cts[0].(*engine.IndexDef).Indexes[0], false)
 
 	sql, err := genInsertMOIndexesSql(mockEngine, proc, "123456", 272464, ct, tableDef)
 	require.NoError(t, err)
-	require.Contains(t, sql, "'', '', '', 0, 0, ''")
+	require.Contains(t, sql, "'', '', '', 0, 0, '', 'a', 1, "+NULL_VALUE+", "+NULL_VALUE)
 }

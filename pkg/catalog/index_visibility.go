@@ -22,6 +22,12 @@ import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 // ordinary visible indexes, so false alone cannot distinguish legacy default
 // visibility from an invisible index. Callers that need to reconstruct legacy
 // DDL must reconcile an unset value with mo_indexes.is_visible.
+//
+// Callers that can read authoritative catalog metadata must reconcile against
+// it before rendering a persisted source table. A context-free caller must not
+// reinterpret a marker/raw-field disagreement: existing planner code can carry
+// the proto3 zero value alongside a valid marker, and the raw field alone has
+// no freshness guarantee.
 func GetIndexVisibility(indexDef *plan.IndexDef) (visible bool, isSet bool) {
 	if indexDef == nil || indexDef.Option == nil {
 		return true, false

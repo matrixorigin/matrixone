@@ -43,10 +43,12 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	// IndexDef.Visible historically used false both as the proto3 zero value for
-	// default-visible indexes and for explicitly invisible indexes. Public
-	// reconstruction callers do not have authoritative catalog metadata, so they
-	// must keep the legacy default-visible rendering.
+	if ctx != nil && tableDef != nil && tableDef.TblId != 0 {
+		tableDef = DeepCopyTableDef(tableDef, true)
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return "", nil, err
+		}
+	}
 	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
 }
 

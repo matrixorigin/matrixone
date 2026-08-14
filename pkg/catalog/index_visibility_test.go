@@ -41,6 +41,19 @@ func TestIndexVisibilityCompatibility(t *testing.T) {
 	require.True(t, isSet)
 	require.True(t, legacy.Visible)
 	require.Equal(t, plan.IndexOption_VISIBILITY_VISIBLE, legacy.Option.Visibility)
+
+	// A context-free consumer must preserve the explicit marker. The raw bool is
+	// a proto3 compatibility field and cannot establish which state is newer.
+	legacy.Visible = false
+	visible, isSet = GetIndexVisibility(legacy)
+	require.True(t, isSet)
+	require.True(t, visible)
+
+	legacy.Option.Visibility = plan.IndexOption_VISIBILITY_INVISIBLE
+	legacy.Visible = true
+	visible, isSet = GetIndexVisibility(legacy)
+	require.True(t, isSet)
+	require.False(t, visible)
 }
 
 func TestMoTablesLogicalIDIndexHasExplicitVisibility(t *testing.T) {

@@ -157,25 +157,16 @@ func reconcileIndexVisibility(
 		return nil
 	}
 
-	legacyIndexNames := make(map[string]struct{})
 	for _, indexDef := range tableDef.Indexes {
 		if indexDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
 		}
-		if _, isSet := catalog.GetIndexVisibility(indexDef); !isSet {
-			legacyIndexNames[strings.ToLower(indexDef.IndexName)] = struct{}{}
-		}
-	}
-	if len(legacyIndexNames) == 0 {
-		return nil
 	}
 	if catalog.IsSystemTable(tableID) {
 		// Bootstrap catalog indexes are fixed-visible schema and intentionally
 		// have no mo_indexes rows. Their absence is not incomplete metadata.
 		for _, indexDef := range tableDef.Indexes {
-			if _, isSet := catalog.GetIndexVisibility(indexDef); !isSet {
-				catalog.SetIndexVisibility(indexDef, true)
-			}
+			catalog.SetIndexVisibility(indexDef, true)
 		}
 		return nil
 	}
@@ -220,16 +211,17 @@ func reconcileIndexVisibility(
 		return readErr
 	}
 
-	for _, indexDef := range tableDef.Indexes {
-		if _, isSet := catalog.GetIndexVisibility(indexDef); isSet {
-			continue
-		}
+	resolvedVisibility := make([]bool, len(tableDef.Indexes))
+	for i, indexDef := range tableDef.Indexes {
 		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
 		if !ok {
 			return moerr.NewInternalErrorf(ctx.GetContext(),
 				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)
 		}
-		catalog.SetIndexVisibility(indexDef, visible)
+		resolvedVisibility[i] = visible
+	}
+	for i, indexDef := range tableDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, resolvedVisibility[i])
 	}
 	return nil
 }

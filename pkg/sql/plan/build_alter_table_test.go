@@ -155,7 +155,7 @@ func TestExplicitVisibleColumnClausesRemainSupported(t *testing.T) {
 }
 
 func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	const sql = `ALTER TABLE metadata_only CHANGE v v INT NULL COMMENT 'metadata only';`
 	logicPlan, err := buildSingleStmt(
 		mock,
@@ -173,7 +173,7 @@ func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
 }
 
 func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	logicPlan, err := buildSingleStmt(
 		mock,
 		t,
@@ -184,7 +184,7 @@ func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
 }
 
 func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	logicPlan, err := buildSingleStmt(
 		mock,
 		t,
@@ -201,7 +201,7 @@ func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing
 	require.Equal(t, getSqlForRenameColumn("tpch", "metadata_only", "v", "V"), alter.UpdateFkSqls)
 }
 
-func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
+func newMetadataOnlyChangeColumnOptimizer(t *testing.T) *MockOptimizer {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.objects["metadata_only"] = &ObjectRef{
 		SchemaName: "tpch",
@@ -247,6 +247,23 @@ func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
 			TableExist:     true,
 		}},
 	}
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 987654", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_v"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+			return result.GetResult(), nil
+		}),
+	)
 	return mock
 }
 
@@ -564,19 +581,42 @@ func TestReconcileIndexVisibilityRejectsMissingMetadata(t *testing.T) {
 			result := executor.NewMemResult(
 				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
 			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_present"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
 			return result.GetResult(), nil
 		}),
 	)
 
-	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_missing"}}}
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "idx_present", Visible: false},
+		{IndexName: "idx_missing"},
+	}}
 	err := reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil)
 	require.ErrorContains(t, err, "missing visibility metadata for index \"idx_missing\" on table 272464")
+	_, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.False(t, isSet, "incomplete metadata must not partially update the source definition")
 }
 
-func TestReconcileIndexVisibilitySkipsExplicitMarker(t *testing.T) {
+func TestReconcileIndexVisibilityOverridesStaleMarker(t *testing.T) {
 	mock := NewMockOptimizer(false)
-	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_invisible"}}}
-	catalog.SetIndexVisibility(tableDef.Indexes[0], false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_visibility"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{0}))
+			return result.GetResult(), nil
+		}),
+	)
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_visibility"}}}
+	catalog.SetIndexVisibility(tableDef.Indexes[0], true)
 
 	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil))
 	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
@@ -584,8 +624,45 @@ func TestReconcileIndexVisibilitySkipsExplicitMarker(t *testing.T) {
 	require.False(t, visible)
 }
 
+func TestConstructCreateTableSQLReconcilesLegacyIndexVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_legacy_invisible"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{0}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	tableDef := DeepCopyTableDef(mock.ctxt.tables["t1"], true)
+	tableDef.TblId = 272464
+	tableDef.Indexes = []*plan.IndexDef{{
+		IndexName: "idx_legacy_invisible",
+		Parts:     []string{"b"},
+		Visible:   false,
+	}}
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_legacy_invisible` (`b`) INVISIBLE")
+	_, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.False(t, isSet)
+}
+
 func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	const tableID = 272465
+	mock.ctxt.tables["t1"].TblId = tableID
 	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{
 		{
 			IndexName:  "uk_b",
@@ -600,6 +677,23 @@ func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
 			TableExist: true,
 		},
 	}
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272465", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(2)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"uk_b", "idx_b"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 1}))
+			return result.GetResult(), nil
+		}),
+	)
 
 	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 DROP COLUMN b")
 	require.NoError(t, err)
