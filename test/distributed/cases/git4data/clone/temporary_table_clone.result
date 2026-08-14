@@ -1,0 +1,297 @@
+drop database if exists clone_temp_target;
+create database clone_temp_target;
+use clone_temp_target;
+create table src (
+id int primary key,
+v varchar(20) not null,
+unique key uk_v(v),
+key idx_v(v)
+);
+insert into src values (1, 'one'), (2, 'two');
+create temporary table temp_dst clone src;
+show create table temp_dst;
+➤ Table[12,6,0]  ¦  Create Table[12,116,0]  𝄀
+temp_dst  ¦  CREATE TEMPORARY TABLE `temp_dst` (
+  `id` int NOT NULL,
+  `v` varchar(20) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_v` (`v`),
+  KEY `idx_v` (`v`)
+)
+select * from temp_dst order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+create temporary table temp_dst clone src;
+table temp_dst already exists
+create temporary table temp_dst (id int);
+table temp_dst already exists
+create temporary table if not exists temp_dst clone src;
+select count(*) from temp_dst;
+➤ count(*)[-5,64,0]  𝄀
+2
+use clone_temp_target;
+select * from temp_dst;
+SQL parser error: table "temp_dst" does not exist
+create temporary table temp_dst clone src;
+insert into temp_dst values (3, 'three');
+select * from temp_dst order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two  𝄀
+3  ¦  three
+drop temporary table temp_dst;
+select * from temp_dst order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+drop temporary table if exists temp_dst;
+create temporary table temp_dst (id int primary key, v varchar(20));
+insert into temp_dst values (4, 'four');
+select * from temp_dst;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+4  ¦  four
+drop temporary table if exists temp_dst;
+create temporary table temp_dst clone src;
+select count(*) from temp_dst;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop temporary table temp_dst;
+begin;
+create temporary table temp_txn_commit clone src;
+commit;
+select * from temp_txn_commit order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+drop temporary table temp_txn_commit;
+begin;
+create temporary table temp_txn_rollback clone src;
+select count(*) from temp_txn_rollback;
+➤ count(*)[-5,64,0]  𝄀
+2
+rollback;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+and relname like '__mo_tmp_%_clone_temp_target_temp_txn_rollback';
+➤ count(*)[-5,64,0]  𝄀
+0
+create temporary table temp_txn_rollback (id int primary key);
+insert into temp_txn_rollback values (21);
+select * from temp_txn_rollback;
+➤ id[4,32,0]  𝄀
+21
+drop temporary table temp_txn_rollback;
+create temporary table temp_txn_existing (id int primary key);
+insert into temp_txn_existing values (22);
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+rollback;
+select * from temp_txn_existing;
+➤ id[4,32,0]  𝄀
+22
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+commit;
+select * from temp_txn_existing;
+➤ id[4,32,0]  𝄀
+22
+drop temporary table temp_txn_existing;
+create temporary table temp_txn_drop clone src;
+begin;
+drop temporary table temp_txn_drop;
+rollback;
+select * from temp_txn_drop order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+begin;
+drop temporary table temp_txn_drop;
+commit;
+create temporary table temp_txn_drop (id int primary key);
+insert into temp_txn_drop values (23);
+select * from temp_txn_drop;
+➤ id[4,32,0]  𝄀
+23
+drop temporary table temp_txn_drop;
+create temporary table src clone src;
+insert into src values (3, 'temporary shadow');
+select * from src order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two  𝄀
+3  ¦  temporary shadow
+drop temporary table src;
+select * from src order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/clone_fails', ':::', 'echo', 40, 'clone_temp_target.temp_failed');
+➤ add_fault_point(fj/cn/clone_fails, :::, echo, 40, clone_temp_target.temp_failed)[-7,1,0]  𝄀
+1
+create temporary table temp_failed clone src;
+internal error: injected table clone error
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+and relname like '__mo_tmp_%_clone_temp_target_temp_failed';
+➤ count(*)[-5,64,0]  𝄀
+0
+create temporary table temp_failed (id int primary key);
+insert into temp_failed values (42);
+select * from temp_failed;
+➤ id[4,32,0]  𝄀
+42
+drop temporary table temp_failed;
+create table parent (id int primary key);
+create table src_fk (
+id int primary key,
+parent_id int,
+constraint fk_parent foreign key(parent_id) references parent(id)
+);
+create temporary table temp_fk clone src_fk;
+not supported: add foreign key for temporary table
+create temporary table temp_fk (id int primary key);
+insert into temp_fk values (7);
+select * from temp_fk;
+➤ id[4,32,0]  𝄀
+7
+drop temporary table temp_fk;
+create table empty_src (id bigint primary key, payload varchar(10));
+create temporary table empty_dst clone empty_src;
+select count(*) from empty_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop temporary table empty_dst;
+create table partitioned_src (id int primary key) partition by hash(id) partitions 2;
+create temporary table temp_partitioned clone partitioned_src;
+Cannot create temporary table with partitions
+create temporary table temp_partitioned (id int primary key);
+insert into temp_partitioned values (8);
+select * from temp_partitioned;
+➤ id[4,32,0]  𝄀
+8
+drop temporary table temp_partitioned;
+create table auto_src (
+id bigint auto_increment primary key,
+payload varchar(20)
+) auto_increment = 10;
+insert into auto_src(payload) values ('first'), ('second');
+create temporary table auto_dst clone auto_src;
+insert into auto_dst(payload) values ('third');
+select * from auto_dst order by id;
+➤ id[-5,64,0]  ¦  payload[12,15,0]  𝄀
+10  ¦  first  𝄀
+11  ¦  second  𝄀
+10010  ¦  third
+drop temporary table auto_dst;
+create temporary table temp_src (id int primary key, v varchar(20));
+insert into temp_src values (9, 'temporary source');
+create table permanent_dst clone temp_src;
+select * from permanent_dst;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+9  ¦  temporary source
+drop table permanent_dst;
+create temporary table temp_from_temp clone temp_src;
+select * from temp_from_temp;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+9  ¦  temporary source
+drop temporary table temp_from_temp;
+drop temporary table temp_src;
+create table src_ft (
+id int primary key,
+title varchar(100),
+body text,
+fulltext index ft(title, body)
+);
+insert into src_ft values
+(1, 'apple news', 'red apple fruit'),
+(2, 'banana news', 'yellow banana');
+create temporary table temp_ft clone src_ft;
+select id, title from temp_ft where match(title, body) against ('apple') order by id;
+➤ id[4,32,0]  ¦  title[12,75,0]  𝄀
+1  ¦  apple news
+drop temporary table temp_ft;
+set experimental_ivf_index = 1;
+create table src_vec (
+id int primary key,
+v vecf32(3),
+index idx_ivf using ivfflat(v) lists = 1 op_type 'vector_l2_ops'
+);
+insert into src_vec values
+(1, '[1,2,3]'),
+(2, '[2,2,3]'),
+(3, '[5,5,5]');
+create temporary table temp_vec clone src_vec;
+select id from temp_vec order by l2_distance(v, '[2,2,3]') limit 2;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+drop temporary table temp_vec;
+set experimental_ivf_index = 0;
+create temporary table temp_copy_grants clone src copy grants;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS
+drop temporary table if exists temp_copy_grants;
+create temporary table temp_copy_grants (id int primary key);
+insert into temp_copy_grants values (11);
+select * from temp_copy_grants;
+➤ id[4,32,0]  𝄀
+11
+drop temporary table temp_copy_grants;
+create temporary table temp_copy_grants_existing (id int primary key);
+insert into temp_copy_grants_existing values (12);
+create temporary table if not exists temp_copy_grants_existing clone src copy grants;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS
+select * from temp_copy_grants_existing;
+➤ id[4,32,0]  𝄀
+12
+drop temporary table temp_copy_grants_existing;
+drop account if exists clone_temp_target_account;
+create account clone_temp_target_account admin_name 'admin' identified by '111';
+create database clone_temp_target;
+drop snapshot if exists clone_temp_cross_account_snapshot;
+create snapshot clone_temp_cross_account_snapshot for table clone_temp_target src;
+use clone_temp_target;
+create temporary table clone_temp_target.temp_cross_account
+clone clone_temp_target.src {snapshot = 'clone_temp_cross_account_snapshot'}
+to account clone_temp_target_account;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT
+drop temporary table if exists clone_temp_target.temp_cross_account;
+create temporary table clone_temp_target.temp_cross_account (id int primary key);
+insert into temp_cross_account values (10);
+select * from temp_cross_account;
+➤ id[4,32,0]  𝄀
+10
+drop temporary table temp_cross_account;
+use clone_temp_target;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+and relname like '__mo_tmp_%_clone_temp_target_temp_cross_account';
+➤ count(*)[-5,64,0]  𝄀
+0
+select * from temp_cross_account;
+SQL parser error: table "temp_cross_account" does not exist
+drop snapshot clone_temp_cross_account_snapshot;
+drop account clone_temp_target_account;
+drop database clone_temp_target;
+drop account if exists clone_temp_disconnect_account;
+create account clone_temp_disconnect_account admin_name 'admin' identified by '111';
+create database clone_temp_disconnect;
+use clone_temp_disconnect;
+create table src (id int primary key);
+insert into src values (1);
+create temporary table temp_disconnect clone src;
+alter account clone_temp_disconnect_account suspend;
+alter account clone_temp_disconnect_account open;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_disconnect'
+and relname like '__mo_tmp_%_clone_temp_disconnect_temp_disconnect';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database clone_temp_disconnect;
+drop account clone_temp_disconnect_account;
