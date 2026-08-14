@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -529,6 +530,47 @@ func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
 	require.False(t, alter.CopyTableDef.Indexes[1].Visible)
 	require.NotContains(t, alter.CreateTmpTableSql, "KEY `idx_visible` (`b`) INVISIBLE")
 	require.Contains(t, alter.CreateTmpTableSql, "KEY `idx_invisible` (`b`) INVISIBLE")
+}
+
+func TestReconcileAlterCopyIndexVisibilityPropagatesCatalogError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	lookupErr := moerr.NewInternalErrorNoCtx("index visibility lookup failed")
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, lookupErr
+		}),
+	)
+
+	err := reconcileAlterCopyIndexVisibility(&mock.ctxt, 272464, &TableDef{
+		Indexes: []*plan.IndexDef{{IndexName: "idx_a"}},
+	})
+	require.ErrorIs(t, err, lookupErr)
+}
+
+func TestReconcileAlterCopyIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			return result.GetResult(), nil
+		}),
+	)
+
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_missing"}}}
+	require.NoError(t, reconcileAlterCopyIndexVisibility(&mock.ctxt, 272464, tableDef))
+	require.True(t, tableDef.Indexes[0].Visible)
 }
 
 func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {

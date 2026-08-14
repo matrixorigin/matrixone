@@ -195,9 +195,14 @@ func reconcileAlterCopyIndexVisibility(ctx CompilerContext, tableID uint64, tabl
 		if indexDef == nil {
 			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
 		}
-		if visible, ok := visibility[strings.ToLower(indexDef.IndexName)]; ok {
-			indexDef.Visible = visible
+		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
+		if !ok {
+			// Keep the historical default-visible behavior if legacy or synthetic
+			// metadata has no matching catalog row. An explicit catalog value still
+			// wins, including false for an invisible index.
+			visible = true
 		}
+		indexDef.Visible = visible
 	}
 	return nil
 }
