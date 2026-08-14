@@ -135,25 +135,27 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			StmtType: queryType,
 			MaxDop:   int64(maxDop),
 		},
-		compCtx:                ctx,
-		ctxByNode:              []*BindContext{},
-		nameByColRef:           make(map[[2]int32]string),
-		protectedScans:         make(map[int32]int),
-		projectSpecialGuards:   make(map[int32]*specialIndexGuard),
-		setBitmapByDisplayNode: make(map[[2]int32]int32),
-		indexHintOwnerByNode:   make(map[int32]int32),
-		nextBindTag:            0,
-		mysqlCompatible:        mysqlCompatible,
-		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
-		aggSpillMem:            aggSpillMem,
-		joinSpillMem:           joinSpillMem,
-		sortSpillMem:           sortSpillMem,
-		tag2Table:              make(map[int32]*TableDef),
-		tag2NodeID:             make(map[int32]int32),
-		isPrepareStatement:     isPrepareStatement,
-		deleteNode:             make(map[uint64]int32),
-		skipStats:              skipStats,
-		optimizationHistory:    make([]string, 0),
+		compCtx:                  ctx,
+		ctxByNode:                []*BindContext{},
+		nameByColRef:             make(map[[2]int32]string),
+		protectedScans:           make(map[int32]int),
+		projectSpecialGuards:     make(map[int32]*specialIndexGuard),
+		setBitmapByDisplayNode:   make(map[[2]int32]int32),
+		indexHintOwnerByNode:     make(map[int32]int32),
+		userWindowNodes:          make(map[int32]struct{}),
+		partitionTopNWindowNodes: make(map[int32]struct{}),
+		nextBindTag:              0,
+		mysqlCompatible:          mysqlCompatible,
+		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		aggSpillMem:              aggSpillMem,
+		joinSpillMem:             joinSpillMem,
+		sortSpillMem:             sortSpillMem,
+		tag2Table:                make(map[int32]*TableDef),
+		tag2NodeID:               make(map[int32]int32),
+		isPrepareStatement:       isPrepareStatement,
+		deleteNode:               make(map[uint64]int32),
+		skipStats:                skipStats,
+		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
@@ -2149,11 +2151,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+		_, partitionTopN := builder.partitionTopNWindowNodes[nodeID]
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, 1, colRefCnt)
+				}
+			}
+		}
 
 		// remap children node
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, -1, colRefCnt)
+				}
+			}
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -2206,6 +2223,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
+			}
+			if _, ok := builder.partitionTopNWindowNodes[nodeID]; ok {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					if err = builder.remapColRefForExpr(partitionExpr, childRemapping.globalToLocal, &remapInfo); err != nil {
+						return nil, err
+					}
+				}
 			}
 
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
@@ -3226,6 +3250,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
 
@@ -8631,6 +8656,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
 		}, ctx)
+		builder.userWindowNodes[nodeID] = struct{}{}
 	}
 
 	for name, id := range ctx.windowByAst {

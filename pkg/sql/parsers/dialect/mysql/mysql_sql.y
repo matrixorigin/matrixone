@@ -9441,6 +9441,7 @@ create_database_stmt:
 |   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
+		t.IfNotExists = $3
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7

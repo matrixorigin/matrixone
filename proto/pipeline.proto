@@ -600,6 +600,11 @@ message Instruction {
   // FILTER only: execute assertion expressions for their error side effect and
   // pass the input batch through without building a selection vector.
   bool filter_is_assert = 56;
+  // PARTITION only: number of leading order_by entries used as partition keys.
+  int32 partition_by_count = 57;
+  // PARTITION Top-N only: emit local candidates in dense batches for the
+  // global hash reduction rather than as one logical partition per batch.
+  bool partition_top_n_pre_reduce = 58;
 }
 
 message AnalysisList {

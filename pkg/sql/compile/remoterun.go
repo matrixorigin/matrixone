@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
@@ -672,6 +673,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+	case *partition.Partition:
+		in.OrderBy = t.OrderBySpecs
+		in.Limit = t.Limit
+		in.PartitionByCount = t.PartitionByCount
+		in.PartitionTopNPreReduce = t.PreReduce
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -1172,6 +1178,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Order:
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
+		op = arg
+	case vm.Partition:
+		arg := partition.NewArgument()
+		arg.OrderBySpecs = opr.OrderBy
+		arg.Limit = opr.Limit
+		arg.PartitionByCount = opr.PartitionByCount
+		arg.PreReduce = opr.PartitionTopNPreReduce
 		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
