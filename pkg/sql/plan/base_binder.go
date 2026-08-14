@@ -3543,10 +3543,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		if types.T(args[0].Typ.Id) != types.T_timestamp {
+		if types.T(args[0].Typ.Id) == types.T_timestamp {
+			if timeWindowIntervalUsesMicrosecond(args[1]) && args[0].Typ.Scale < 6 {
+				args[0].Typ.Scale = 6
+			}
+		} else {
 			sourceType := makeTypeByPlan2Expr(args[0])
 			targetType := types.T_datetime.ToType()
 			function.SetTargetScaleFromSource(&sourceType, &targetType)
+			if timeWindowIntervalUsesMicrosecond(args[1]) && targetType.Scale < 6 {
+				targetType.Scale = 6
+			}
 			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 			if err != nil {
 				return nil, err
@@ -4407,6 +4414,19 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {
+	list := expr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	lit := list.List[1].GetLit()
+	if lit == nil {
+		return false
+	}
+	unit, err := types.IntervalTypeOf(lit.GetSval())
+	return err == nil && unit == types.MicroSecond
 }
 
 func controlFlowValueIndexes(name string, argsLength int) []int {

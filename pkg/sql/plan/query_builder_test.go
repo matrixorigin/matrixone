@@ -2610,21 +2610,27 @@ func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.
 			require.NotNil(t, truncateFunc)
 			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
 			require.Len(t, truncateFunc.Args, 3)
-
-			truncateArg := truncateFunc.Args[0]
+			wantRetType := int32(types.T_datetime)
 			if !tt.wantCast {
-				require.Nil(t, truncateArg.GetF(), "timestamp arguments must not be cast to timezone-less datetime before truncation")
-				require.Equal(t, int32(types.T_timestamp), truncateArg.Typ.Id)
-				require.Equal(t, tt.wantScale, truncateArg.Typ.Scale)
+				wantRetType = int32(types.T_timestamp)
+			}
+			require.Equal(t, wantRetType, truncateExpr.Typ.Id)
+			require.Equal(t, tt.wantScale, truncateExpr.Typ.Scale)
+
+			castExpr := truncateFunc.Args[0]
+			if !tt.wantCast {
+				require.Nil(t, castExpr.GetF())
+				require.Equal(t, int32(types.T_timestamp), castExpr.Typ.Id)
+				require.Equal(t, tt.wantScale, castExpr.Typ.Scale)
 				return
 			}
 
-			castFunc := truncateArg.GetF()
+			castFunc := castExpr.GetF()
 			require.NotNil(t, castFunc)
 			require.Equal(t, "cast", castFunc.GetFunc().GetObjName())
 			require.Len(t, castFunc.Args, 2)
-			require.Equal(t, int32(types.T_datetime), truncateArg.Typ.Id)
-			require.Equal(t, tt.wantScale, truncateArg.Typ.Scale)
+			require.Equal(t, int32(types.T_datetime), castExpr.Typ.Id)
+			require.Equal(t, tt.wantScale, castExpr.Typ.Scale)
 			require.Equal(t, int32(types.T_datetime), castFunc.Args[1].Typ.Id)
 			require.Equal(t, tt.wantScale, castFunc.Args[1].Typ.Scale)
 		})
@@ -2785,6 +2791,126 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 			)
 			require.ErrorContains(t, err, tt.errorContains)
 		})
+	}
+}
+
+func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "datetime scale 0", typ: types.T_datetime.ToTypeWithScale(0)},
+		{name: "datetime scale 3", typ: types.T_datetime.ToTypeWithScale(3)},
+		{name: "datetime scale 6", typ: types.T_datetime.ToTypeWithScale(6)},
+		{name: "timestamp scale 0", typ: types.T_timestamp.ToTypeWithScale(0)},
+		{name: "timestamp scale 3", typ: types.T_timestamp.ToTypeWithScale(3)},
+		{name: "timestamp scale 6", typ: types.T_timestamp.ToTypeWithScale(6)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mockTimeWindowScaleTable(t, mock, tt.typ)
+
+			logicPlan, err := runOneStmt(mock, t,
+				"select _wstart, _wend, count(*) from tw_scale interval(ts, 1, microsecond)")
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotEmpty(t, query.Steps)
+			root := query.Nodes[query.Steps[0]]
+			require.Equal(t, plan.Node_PROJECT, root.NodeType)
+			require.GreaterOrEqual(t, len(root.ProjectList), 2)
+
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Width)
+			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[1].Typ.Id)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Width)
+
+			var timeWindowNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					timeWindowNode = node
+					break
+				}
+			}
+			require.NotNil(t, timeWindowNode)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.Timestamp.Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Width)
+			require.Len(t, timeWindowNode.GroupBy, 1)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.GroupBy[0].Typ.Id)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
+		})
+	}
+}
+
+func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(3))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select _wstart, _wend, max(v), _wstart from tw_scale interval(ts, 10, minute) sliding(5, minute) fill(linear)")
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotEmpty(t, query.Steps)
+	root := query.Nodes[query.Steps[0]]
+	require.Equal(t, plan.Node_PROJECT, root.NodeType)
+	require.GreaterOrEqual(t, len(root.ProjectList), 4)
+	for _, idx := range []int{0, 1, 3} {
+		require.Equalf(t, int32(types.T_timestamp), root.ProjectList[idx].Typ.Id,
+			"root project %d should expose timestamp boundary", idx)
+		require.GreaterOrEqualf(t, root.ProjectList[idx].Typ.Scale, int32(3),
+			"root project %d should not reduce source timestamp scale", idx)
+	}
+
+	var fillNode *plan.Node
+	var timeWindowNode *plan.Node
+	for _, node := range query.Nodes {
+		switch node.NodeType {
+		case plan.Node_FILL:
+			fillNode = node
+		case plan.Node_TIME_WINDOW:
+			timeWindowNode = node
+		}
+	}
+	require.NotNil(t, fillNode)
+	require.NotNil(t, timeWindowNode)
+
+	assertBoundaryProjects := func(node *plan.Node) {
+		seen := map[string]bool{}
+		for idx, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || (col.Name != TimeWindowStart && col.Name != TimeWindowEnd) {
+				continue
+			}
+			seen[col.Name] = true
+			require.Equalf(t, int32(types.T_timestamp), expr.Typ.Id,
+				"%s project %d %s should expose timestamp boundary", node.NodeType.String(), idx, col.Name)
+			require.GreaterOrEqualf(t, expr.Typ.Scale, int32(3),
+				"%s project %d %s should not reduce source timestamp scale", node.NodeType.String(), idx, col.Name)
+		}
+		require.Truef(t, seen[TimeWindowStart], "%s should project %s", node.NodeType.String(), TimeWindowStart)
+		require.Truef(t, seen[TimeWindowEnd], "%s should project %s", node.NodeType.String(), TimeWindowEnd)
+	}
+	assertBoundaryProjects(fillNode)
+	assertBoundaryProjects(timeWindowNode)
+}
+
+func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
+	t.Helper()
+	tableName := "tw_scale"
+	mock.ctxt.objects[tableName] = &plan.ObjectRef{DbName: "test", ObjName: tableName, Obj: 42}
+	mock.ctxt.tables[tableName] = &plan.TableDef{
+		Name: tableName,
+		Cols: []*plan.ColDef{
+			{Name: "ts", Typ: makePlan2Type(&typ)},
+			{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
 	}
 }
 
@@ -2961,7 +3087,11 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 					require.Equal(t, "cast", castExpr.F.Func.ObjName)
 				} else {
 					// For temporal types, should keep original type
-					require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					if tt.colType == types.T_date {
+						require.Equal(t, int32(types.T_datetime), ts.Typ.Id)
+					} else {
+						require.Equal(t, int32(tt.colType), ts.Typ.Id)
+					}
 				}
 
 				// Verify boundTimeWindowOrderBy

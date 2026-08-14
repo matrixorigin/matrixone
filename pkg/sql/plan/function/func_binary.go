@@ -1783,6 +1783,8 @@ func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 		return num, err
 	}
 	switch iTyp {
+	case types.MicroSecond:
+		num = diff
 	case types.Second:
 		num = diff * types.MicroSecsPerSec
 	case types.Minute:
@@ -1792,29 +1794,7 @@ func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	case types.Day:
 		num = diff * types.SecsPerDay * types.MicroSecsPerSec
 	default:
-		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
-	}
-	return num, nil
-}
-
-func getSecondNum(diff, unit int64, proc *process.Process) (int64, error) {
-	var num int64
-	iTyp := types.IntervalType(unit)
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return num, err
-	}
-	switch iTyp {
-	case types.Second:
-		num = diff
-	case types.Minute:
-		num = diff * types.SecsPerMinute
-	case types.Hour:
-		num = diff * types.SecsPerHour
-	case types.Day:
-		num = diff * types.SecsPerDay
-	default:
-		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
+		return num, moerr.NewNotSupported(proc.Ctx, "now support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
 	return num, nil
 }
@@ -1825,7 +1805,7 @@ func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		return moerr.NewInvalidInput(proc.Ctx, "time window interval must be greater than zero")
 	}
 	unit1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
-	num1, err := getSecondNum(diff1, unit1, proc)
+	num1, err := getIntervalNum(diff1, unit1, proc)
 	if err != nil {
 		return err
 	}
@@ -1834,7 +1814,7 @@ func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		return moerr.NewInvalidInput(proc.Ctx, "time window sliding value must be greater than zero")
 	}
 	unit2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3]).GetValue(0)
-	num2, err := getSecondNum(diff2, unit2, proc)
+	num2, err := getIntervalNum(diff2, unit2, proc)
 	if err != nil {
 		return err
 	}
