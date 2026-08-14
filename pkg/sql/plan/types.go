@@ -608,6 +608,8 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
+	timeBoundaryType *plan.Type
+
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
 	groupByParamAst     map[string]int32
