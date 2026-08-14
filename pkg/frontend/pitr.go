@@ -1843,17 +1843,21 @@ func restoreViewsWithPitr(
 				return err
 			}
 
-			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
-				return err
-			}
-
-			// Marked by the sort above: the definition can never run. The DROP already
-			// removed any object it would have replaced; only the CREATE is skipped.
+			// Marked by the sort above: the stored definition can never run. Leave the target
+			// object alone -- same reasoning as restoreViews: the snapshot may hold an
+			// unservable definition while the target holds a WORKING view of that name (its
+			// FULLTEXT index was recreated after the snapshot), and dropping it would delete a
+			// working view and put nothing back. A stale object beats data loss.
 			if tblInfo.unservable {
 				getLogger(ses.GetService()).Warn(fmt.Sprintf(
-					"[%s] view %v.%v dropped but NOT re-created: its definition can never run",
+					"[%s] view %v.%v left untouched and NOT restored: its stored definition can "+
+						"never run; any existing object of that name is kept",
 					pitrName, tblInfo.dbName, tblInfo.tblName))
 				continue
+			}
+
+			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+				return err
 			}
 
 			if err = executeViewCreateSQLForRestore(ctx, bh, tblInfo); err != nil {

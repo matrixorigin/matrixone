@@ -1637,6 +1637,126 @@ func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Exp
 	return out
 }
 
+// monotoneWrappedFullTextMatch returns the fulltext_match inside expr when expr is that call
+// or a wrapper that preserves ordering of the score (round, cast). Used to decide whether a
+// comparison against a constant tells us anything about index membership; a wrapper that is
+// not order-preserving (negation, subtraction from a constant) must not qualify, because it
+// can make the predicate TRUE for a document the index never returns.
+func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil
+	}
+	switch fn.Func.ObjName {
+	case "fulltext_match":
+		return expr
+	case "round", "cast", "floor", "ceil":
+		if len(fn.Args) == 0 {
+			return nil
+		}
+		return monotoneWrappedFullTextMatch(fn.Args[0])
+	}
+	return nil
+}
+
+// nonNegativeConstValue returns the numeric value of a non-negative literal.
+func nonNegativeConstValue(expr *plan.Expr) (float64, bool) {
+	lit := expr.GetLit()
+	if lit == nil {
+		return 0, false
+	}
+	var v float64
+	switch t := lit.Value.(type) {
+	case *plan.Literal_I64Val:
+		v = float64(t.I64Val)
+	case *plan.Literal_U64Val:
+		v = float64(t.U64Val)
+	case *plan.Literal_Fval:
+		v = float64(t.Fval)
+	case *plan.Literal_Dval:
+		v = t.Dval
+	default:
+		return 0, false
+	}
+	if v < 0 {
+		return 0, false
+	}
+	return v, true
+}
+
+// collectDrivingFullTextMatches appends the MATCHes that may DRIVE an index scan -- those whose
+// predicate can only be true for a document the index actually returns.
+//
+// This distinction exists because a driver's stream is INNER JOINed to the base scan: building
+// one asserts "every result row is in the index result". A MATCH harvested from an OR or a NOT
+// breaks that assertion and silently drops rows:
+//
+//	where match(body) against('hello') > 0.5 or id = 4   -- id 4 has no 'hello' at all
+//	where not match(body) against('hello')
+//
+// Both returned the empty set once any MATCH in them was allowed to drive, instead of id 4.
+// So descend through AND only, and accept a leaf just when it is `score > c` (c >= 0) or
+// `score >= c` (c > 0), either operand order -- exactly the shapes a non-matching document,
+// whose relevance is 0, cannot satisfy.
+//
+// A MATCH in any other position is not harvested: with no bare MATCH to drive the rewrite the
+// query keeps raising 20105, as it did before wrapped matches could drive at all. Supporting
+// `score < c` and friends needs the stream LEFT joined with a 0 default rather than a guard
+// here, which is a different change (it is also what MySQL does, where a non-matching row has
+// relevance 0 rather than no row).
+func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Expr {
+	if expr == nil {
+		return out
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return out
+	}
+	switch fn.Func.ObjName {
+	case "and":
+		for _, arg := range fn.Args {
+			out = collectDrivingFullTextMatches(arg, out)
+		}
+		return out
+
+	case ">", ">=", "<", "<=":
+		if len(fn.Args) != 2 {
+			return out
+		}
+		op := fn.Func.ObjName
+		matchSide, constSide := fn.Args[0], fn.Args[1]
+		if monotoneWrappedFullTextMatch(matchSide) == nil {
+			// reversed form: `0.5 < match(...)` is `match(...) > 0.5`
+			matchSide, constSide = fn.Args[1], fn.Args[0]
+			switch op {
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			default:
+				return out // `match(...) < c` is not membership-implying
+			}
+		}
+		matchExpr := monotoneWrappedFullTextMatch(matchSide)
+		if matchExpr == nil {
+			return out
+		}
+		c, ok := nonNegativeConstValue(constSide)
+		if !ok {
+			return out
+		}
+		// score > c with c >= 0, or score >= c with c > 0: a relevance of 0 fails both.
+		if op == ">" || (op == ">=" && c > 0) {
+			return append(out, matchExpr)
+		}
+		return out
+	}
+	return out
+}
+
 // getWrappedFullTextMatches finds MATCHes that are nested inside a larger expression rather
 // than being one -- `where match(...) > 0.5`, `select round(match(...),3)` -- and resolves an
 // index for each.
@@ -1674,7 +1794,11 @@ func (builder *QueryBuilder) getWrappedFullTextMatches(projNode, scanNode *plan.
 		if isBarePos(filterids, i) {
 			continue // already a driver
 		}
-		candidates = collectNestedFullTextMatches(expr, candidates)
+		// Only from a MEMBERSHIP-IMPLYING position -- see collectDrivingFullTextMatches. The
+		// stream a driver builds is INNER JOINed to the base scan, which ANDs "this document is
+		// in the index result" onto the query; harvesting a MATCH out of an OR or a NOT would
+		// impose a restriction the query never asked for.
+		candidates = collectDrivingFullTextMatches(expr, candidates)
 	}
 	if projNode != nil {
 		for i, expr := range projNode.ProjectList {

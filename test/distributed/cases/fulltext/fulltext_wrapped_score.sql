@@ -145,6 +145,31 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 
+-- ---------------- only a MEMBERSHIP-IMPLYING predicate may drive ------------------
+-- The stream a driver builds is INNER JOINed to the base scan, which ANDs "this document is in
+-- the index result" onto the query. That is sound for `score > c`, which a non-matching
+-- document (relevance 0) cannot satisfy anyway -- and WRONG anywhere else.
+--
+-- Harvesting a MATCH out of an OR or a NOT turned these into the EMPTY SET, dropping id 4
+-- ('world', which contains no 'hello' and so is not in the stream at all) even though both
+-- queries plainly select it. An error is the honest answer until the stream can be LEFT joined
+-- with a relevance of 0 for the missing rows, which is also what MySQL reports.
+select id from two where match(body) against('hello') > 0.5 or id = 4;
+select id from two where not match(body) against('hello');
+select id from two where id = 4 or match(body) against('hello') > 0.5;
+
+-- `score < c` is true for a non-matching document too, so it cannot drive either
+select id from two where match(body) against('hello') < 0.015 order by id;
+
+-- ...but with a bare MATCH already restricting the rows, membership is implied and every
+-- comparison is free to filter among the matching documents
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.015 order by id;
+select id from two where match(body) against('hello') and (match(body) against('hello') < 0.015 or id = 3) order by id;
+select id from two where match(body) against('hello') and not (match(body) against('hello') > 0.015) order by id;
+
+-- a negative or zero threshold is not membership-implying: relevance 0 satisfies both
+select id from two where match(body) against('hello') >= 0 order by id;
+
 -- ---------------- wrapped MATCH on a join child ----------------------------------
 -- Filters on either input of an INNER/SEMI join are rewritten per scan by
 -- applyFullTextFiltersForScanInJoin, which also looked for bare matches only -- so this shape
@@ -157,11 +182,13 @@ select id, match(body) against('hello') as sc from two where match(body) against
 select t.id, jb.note from two t join jb on t.id=jb.id
  where match(t.body) against('hello') > 0.015 order by t.id;
 select t.id from two t join jb on t.id=jb.id
- where match(t.body) against('hello') < 0.015 order by t.id;
-select t.id from two t join jb on t.id=jb.id
  where match(t.body) against('hello') > 0.9 order by t.id;
 -- IN subqueries are flattened to SEMI joins and take the same path
 select id from two where match(body) against('hello') > 0.015 and id in (select id from jb) order by id;
+
+-- and the membership rule holds here too: `< c` cannot drive a join child either
+select t.id from two t join jb on t.id=jb.id
+ where match(t.body) against('hello') < 0.015 order by t.id;
 
 -- ---------------- lifted predicate vs the candidate LIMIT ------------------------
 -- Lifting a wrapped predicate off the scan empties FilterList, which used to re-enable the

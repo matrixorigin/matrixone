@@ -1487,25 +1487,30 @@ func restoreViews(
 				return err
 			}
 
-			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
-				return err
-			}
-
-			// Marked by sortedViewInfos: the definition can never run, so re-creating it is
-			// impossible. The DROP above already removed any object it would have replaced,
-			// which is the point of visiting it at all.
+			// Marked by sortedViewInfos: the stored definition can never run, so it cannot be
+			// re-created. Leave the target object ALONE -- do not drop it either.
 			//
-			// CLONE reaches this too (clone.go calls restoreViews), so a CLONE DATABASE whose
-			// source holds such a view reports success with that view missing from the
-			// destination. Deliberate, and consistent with the skipIfDependencyMissing=true
-			// that clone already passes: the alternative is refusing to clone a database over
-			// one object that never worked in the source either. The WARN below is the record;
-			// a client-visible warning needs frontend support this path does not have.
+			// Dropping first looks more consistent (the target then matches the snapshot, which
+			// has no usable view) but it destroys data: the snapshot may hold an unservable
+			// definition while the TARGET holds a working view of the same name, because the
+			// FULLTEXT index it needs was recreated after the snapshot was taken. A table-level
+			// restore, a PITR, or a CLONE that does not rebuild the database would then delete
+			// a working view and put nothing back, reporting success. Leaving a stale object is
+			// an inconsistency; deleting a working one is data loss, so prefer the former.
+			//
+			// The same reasoning covers a false positive of isUnservableViewError, which has to
+			// match on message text because the background executor strips the moerr code: a
+			// misclassification now costs a skipped view rather than a deleted one.
 			if tblInfo.unservable {
 				getLogger(ses.GetService()).Warn(fmt.Sprintf(
-					"[%s] view %v.%v dropped but NOT re-created: its definition can never run",
+					"[%s] view %v.%v left untouched and NOT restored: its stored definition can "+
+						"never run; any existing object of that name is kept",
 					snapshotName, tblInfo.dbName, tblInfo.tblName))
 				continue
+			}
+
+			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+				return err
 			}
 
 			getLogger(ses.GetService()).Debug(fmt.Sprintf(

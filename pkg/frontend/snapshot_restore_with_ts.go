@@ -679,6 +679,19 @@ func restoreViewsFromTS(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// Same as sortedViewInfos and the PITR sort: a stored definition whose MATCH()
+				// no FULLTEXT index can serve must not make the whole restore fail. This is
+				// the cluster-snapshot path -- restoring an entire account -- so aborting here
+				// is the widest-blast-radius form of #27027. Keep the vertex so dependents
+				// still order against it; the create loop skips it.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%d:%d] view %v.%v will not be restored: its definition can never run (%v)",
+						restoreAccount, snapshotTs, viewEntry.dbName, viewEntry.tblName, err))
+					viewEntry.unservable = true
+					g.addVertex(key)
+					continue
+				}
 				return err
 			}
 		}
@@ -710,12 +723,28 @@ func restoreViewsFromTS(
 				return err
 			}
 
+			// Marked by the sort above: the definition can never run, so leave any existing
+			// object of that name alone rather than dropping something we cannot replace.
+			if tblInfo.unservable {
+				getLogger(ses.GetService()).Warn(fmt.Sprintf(
+					"[%d:%d] view %v.%v left untouched and NOT restored: its stored definition "+
+						"can never run", restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName))
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A refusal can also surface here when the sort's plan happened to succeed.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%d:%d] skip restore view %v.%v: its definition can never run (%v)",
+						restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))
