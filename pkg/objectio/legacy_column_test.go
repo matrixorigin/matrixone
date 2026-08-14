@@ -242,3 +242,53 @@ func TestColumnWindowSpillPathIsAnonymous(t *testing.T) {
 	require.NoError(t, spill.Close())
 	require.True(t, spill.closed)
 }
+
+func TestLegacyColumnDecoderMatchAndFailurePaths(t *testing.T) {
+	var output bytes.Buffer
+	// One literal followed by a three-byte match at offset one.
+	require.NoError(t, decodeLegacyLZ4Block(
+		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00}), &output, 4,
+	))
+	require.Equal(t, "aaaa", output.String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, decodeLegacyLZ4Block(ctx, bufioReader([]byte{0}), io.Discard, 1))
+
+	output.Reset()
+	require.Error(t, decodeLegacyLZ4Block(
+		context.Background(), bufioReader([]byte{0x00, 0x01}), &output, 1,
+	))
+	output.Reset()
+	require.Error(t, decodeLegacyLZ4Block(
+		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00, 0xff}), &output, 4,
+	))
+}
+
+func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	encoded := []byte("legacy")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "legacy-unsupported",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(encoded)), Data: encoded}},
+	}))
+	file, err := os.CreateTemp(t.TempDir(), "legacy-spill-*")
+	require.NoError(t, err)
+	spill := &testColumnWindowSpill{File: file}
+	require.ErrorContains(t, streamLegacyColumnToSpill(
+		ctx, "legacy-unsupported", NewExtent(99, 0, uint32(len(encoded)), uint32(len(encoded))), fs, spill,
+	), "unsupported")
+	require.True(t, spill.closed == false)
+	require.NoError(t, spill.Close())
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	_, err = readLegacyColumnWindow(ctx, "missing", NewExtent(compress.None, 0, 0, 1), 0, 1, fs, mp, func(context.Context) (ColumnWindowSpill, error) {
+		return nil, nil
+	})
+	require.Error(t, err)
+}

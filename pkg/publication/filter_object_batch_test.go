@@ -113,6 +113,16 @@ func TestConvertObjectToBatchSupportsChunkedColumnExtents(t *testing.T) {
 	require.Equal(t, 2, filtered.Length())
 }
 
+func TestDecompressObjectColumnExtentNoneClonesData(t *testing.T) {
+	input := []byte("uncompressed-column")
+	ext := objectio.NewExtent(compress.None, 0, uint32(len(input)), uint32(len(input)))
+	got, err := decompressObjectColumnExtent(context.Background(), input, ext, nil)
+	require.NoError(t, err)
+	require.Equal(t, input, got)
+	got[0] = 'U'
+	require.Equal(t, byte('u'), input[0])
+}
+
 // ============================================================
 // Tests for rewriteTombstoneRowidsBatch (CN batch version)
 // ============================================================

@@ -20,8 +20,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildTableFunctionIncrementalDiscoveryDispatch(t *testing.T) {
+	for _, name := range []string{"change_watermark", "table_changes"} {
+		t.Run(name, func(t *testing.T) {
+			builder := NewQueryBuilder(pbplan.Query_SELECT, NewMockCompilerContext(false), false, true)
+			ctx := NewBindContext(builder, nil)
+			fn := tree.FuncName2ResolvableFunctionReference(
+				tree.NewUnresolvedName(tree.NewCStr(name, 0)),
+			)
+			tbl := &tree.TableFunction{Func: &tree.FuncExpr{
+				Func: fn,
+				Type: tree.FUNC_TYPE_TABLE,
+			}}
+			nodeID, err := builder.buildTableFunction(tbl, ctx, nil)
+			if name == "table_changes" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, name, builder.qry.Nodes[nodeID].TableDef.TblFunc.Name)
+		})
+	}
+}
 
 func TestPreparedTableChangesRecordsSourceSchemaDependency(t *testing.T) {
 	mock := NewMockCompilerContext(false)

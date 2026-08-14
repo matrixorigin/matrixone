@@ -342,3 +342,33 @@ func TestChunkedColumnRejectsMixedLogicalTypes(t *testing.T) {
 		0, 2, fileservice.SkipAllCache, fs, mp)
 	require.ErrorContains(t, err, "payload type mismatch")
 }
+
+func TestChunkedColumnRejectsInvalidPayloadAndEmptySource(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	empty := vector.NewVec(types.T_int32.ToType())
+	_, chunked, err := encodeChunkedColumn(empty)
+	require.Error(t, err)
+	require.False(t, chunked)
+	empty.Free(mp)
+
+	_, err = decompressColumnChunk([]byte{1}, columnChunkMeta{
+		algorithm: compress.None, originSize: 2,
+	})
+	require.ErrorContains(t, err, "uncompressed")
+	_, err = decompressColumnChunk([]byte{1, 2}, columnChunkMeta{
+		algorithm: compress.Lz4, originSize: 8,
+	})
+	require.Error(t, err)
+
+	header := make([]byte, columnChunkHeaderSize+columnChunkEntrySize+1)
+	copy(header, columnChunkMagic[:])
+	binary.LittleEndian.PutUint32(header[8:12], 1)
+	binary.LittleEndian.PutUint32(header[12:16], 1)
+	encodeColumnChunkMeta(header[columnChunkHeaderSize:], columnChunkMeta{
+		rowCount: 1, offset: uint32(columnChunkHeaderSize + columnChunkEntrySize),
+		length: 1, originSize: 1, algorithm: 9,
+	})
+	_, _, err = parseColumnChunkHeader(header, uint32(len(header)))
+	require.ErrorContains(t, err, "invalid chunked object column entry")
+}

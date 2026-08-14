@@ -60,6 +60,20 @@ func TestParseTableChangesTS(t *testing.T) {
 	}
 }
 
+func TestTableFunctionPrepareIncrementalDiscoveryFunctions(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	for _, name := range []string{"change_watermark", "table_changes"} {
+		t.Run(name, func(t *testing.T) {
+			tf := &TableFunction{FuncName: name}
+			require.NoError(t, tf.Prepare(proc))
+			require.NotNil(t, tf.ctr.state)
+			tf.ctr.state.free(tf, proc, false, nil)
+		})
+	}
+}
+
 func TestValidateTableChangesWindow(t *testing.T) {
 	snapshot := types.BuildTS(100, 5)
 
