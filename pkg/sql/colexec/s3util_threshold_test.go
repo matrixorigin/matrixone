@@ -178,6 +178,39 @@ func TestChunkedColumnPolicyProtocolThreshold(t *testing.T) {
 	require.False(t, missingPolicy())
 }
 
+func TestCNS3TombstoneWriterProtocolGate(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	serviceID := fmt.Sprintf("chunked-tombstone-%s", t.Name())
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	legacy := NewCNS3TombstoneWriterForService(
+		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, legacy)
+	require.NoError(t, legacy.Close())
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	chunked := NewCNS3TombstoneWriterForService(
+		serviceID, proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, chunked)
+	require.NoError(t, chunked.Close())
+
+	withoutOwner := NewCNS3TombstoneWriter(
+		proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
+	require.NotNil(t, withoutOwner)
+	require.NoError(t, withoutOwner.Close())
+}
+
 func testCNS3WriterTableDef() *plan.TableDef {
 	return &plan.TableDef{
 		Name: "t1",
