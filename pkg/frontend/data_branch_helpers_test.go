@@ -28,6 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,6 +67,54 @@ func TestDataBranchSQLKeyEqual(t *testing.T) {
 		require.Equal(t, "serial(left_key) = serial(right_key)",
 			dataBranchSQLKeyEqual("left_key", "right_key", typ),
 		)
+	}
+}
+
+func TestValidateDataBranchNamedSnapshotScope(t *testing.T) {
+	ctx := context.Background()
+	snapshot := &plan2.Snapshot{ExtraInfo: &planpb.SnapshotExtraInfo{
+		Name:  "snapshot",
+		Level: tree.SNAPSHOTLEVELTABLE.String(),
+		ObjId: 7,
+	}}
+	namedSnapshot := &tree.AtTimeStamp{Type: tree.ATTIMESTAMPSNAPSHOT}
+
+	t.Run("unnamed source does not require a relation", func(t *testing.T) {
+		require.NoError(t, validateDataBranchNamedSnapshotScope(
+			ctx, nil, snapshot, "db", "table", nil,
+		))
+	})
+
+	tests := []struct {
+		name     string
+		tableDef *planpb.TableDef
+		err      string
+	}{
+		{
+			name:     "matches logical table identity",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 7},
+		},
+		{
+			name:     "rejects another table",
+			tableDef: &planpb.TableDef{DbId: 1, TblId: 8, LogicalId: 9},
+			err:      "internal error: table-level snapshot(snapshot) does not belong to the table(db-table)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			relation.EXPECT().GetTableDef(ctx).Return(test.tableDef)
+
+			err := validateDataBranchNamedSnapshotScope(
+				ctx, namedSnapshot, snapshot, "db", "table", relation,
+			)
+			if test.err == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.err)
+		})
 	}
 }
 
