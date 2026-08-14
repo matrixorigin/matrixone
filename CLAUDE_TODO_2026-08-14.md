@@ -26,3 +26,11 @@ MySQL 8.4.8 并非拒绝所有 binary REGEXP，而是在隐式类型转换前拒
 ## 当前分支说明
 
 开始本轮工作时，专用 worktree 已有未推送但已提交的 `346995432e`（LIKE/REPEAT metadata 修复）以及两次 `mo/main` merge；本轮保留这些既有提交，在其上追加 REGEXP 合法性修复，不改写历史、不 force-push。
+
+## PR #26907 后续冲突修复
+
+- 刷新并 merge 最新 `mo/main`（`263567cf1a`），不 rebase、不 force-push。
+- 冲突预检显示双方重叠在 MySQL parser 生成文件；以 `mysql_sql.y` 为源，保留本 PR 的 binary introducer 语义与 main 的最新语法，再用仓库生成目标重建 `mysql_sql.go`，不手工维护生成文件。
+- 对其他冲突逐一比较 base/ours/theirs，保留双方独立契约，禁止用整文件选边覆盖。
+- merge 后重新检查冲突标记、生成文件一致性，并运行 parser、`moerr`、planner 的 list/build/vet/test 以及 REGEXP focused tests。
+- 自检完整 merge diff 后提交 merge commit并推送到 `origin/issue-25295-binary-planner`。
