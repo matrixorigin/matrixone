@@ -1130,7 +1130,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
 
 			keeper := &lockTableKeeper{
@@ -1148,7 +1148,7 @@ func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()
@@ -1254,7 +1254,7 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 					addTxn := func(txnID []byte, bind pb.LockTable) *activeTxn {
 						txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 						txn.Lock()
-						require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, logger))
+						require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, pb.LockOptions{}, logger))
 						txn.Unlock()
 						return txn
 					}
@@ -1290,7 +1290,7 @@ func TestKeepRemoteLockBindChangedRefreshFailureInvalidatesOldBind(t *testing.T)
 						err := txn.close(
 							txnID,
 							timestamp.Timestamp{},
-							func(uint32, uint64) (lockTable, error) { return nil, nil },
+							func(pb.LockTable) (lockTable, error) { return nil, nil },
 							logger,
 						)
 						txn.Unlock()
@@ -1361,7 +1361,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
 
 			keeper := &lockTableKeeper{
@@ -1379,7 +1379,7 @@ func TestKeepRemoteLockFailureFetchesNewBindAndFencesActiveTxn(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()
@@ -1619,7 +1619,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 			txnID := []byte("txn1")
 			txn := svc.activeTxnHolder.getActiveTxn(txnID, true, "")
 			txn.Lock()
-			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, logger))
+			require.NoError(t, txn.lockAdded(oldBind.Group, oldBind, [][]byte{{1}}, pb.LockOptions{}, logger))
 			txn.Unlock()
 
 			keeper := &lockTableKeeper{
@@ -1639,7 +1639,7 @@ func TestKeepRemoteLockIgnoresNonBindResponseErrors(t *testing.T) {
 
 			require.Equal(t, txn, svc.activeTxnHolder.deleteActiveTxn(txnID))
 			txn.Lock()
-			err := txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			err := txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return nil, nil
 			}, logger)
 			txn.Unlock()

@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -35,6 +36,8 @@ import (
 const (
 	eventsWorkers = 4
 )
+
+var errCoarseningInvalidated = moerr.NewInternalErrorNoCtx("lock coarsening invalidated")
 
 // a localLockTable instance manages the locks on a table
 type localLockTable struct {
@@ -160,6 +163,7 @@ func (l *localLockTable) doLock(
 		// or other concurrent txn method.
 		oldOffset = c.offset
 		oldTxnID := c.txn.txnID
+		oldTxnGeneration := c.txn.generation
 		old = c.w
 		c.txn.Unlock()
 
@@ -215,12 +219,13 @@ func (l *localLockTable) doLock(
 
 		// txn closed between Unlock and get Lock again
 		e := v.err
-		if e == nil && (!bytes.Equal(oldTxnID, c.txn.txnID) ||
-			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
+		if oldTxnGeneration != c.txn.generation ||
+			!bytes.Equal(c.w.txn.TxnID, oldTxnID) {
 			e = ErrTxnNotFound
+		} else if terminalErr := c.txn.terminalLockErrorLocked(oldTxnID); terminalErr != nil {
+			e = terminalErr
 		}
-		if e != nil ||
-			c.txn.deadlockFound {
+		if e != nil {
 			c.closed = true
 			if e != ErrTxnNotFound {
 				c.txn.closeBlockWaiters(l.logger)
@@ -306,16 +311,48 @@ func (l *localLockTable) unlock(
 	ls *cowSlice,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) {
+	_ = l.unlockWithContext(
+		context.Background(),
+		txn,
+		ls,
+		commitTS,
+		mutations...,
+	)
+}
+
+func (l *localLockTable) unlockWithContext(
+	ctx context.Context,
+	txn *activeTxn,
+	ls *cowSlice,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnUnlockBtreeTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	var mutationByKey map[string]int
+	if len(mutations) > 0 {
+		mutationByKey = make(map[string]int, len(mutations))
+	}
+	hasHandoff := false
+	for idx := range mutations {
+		key := string(mutations[idx].Key)
+		if _, ok := mutationByKey[key]; !ok {
+			// Preserve the historical first-mutation-wins behavior if a caller
+			// sends duplicate entries for one physical key.
+			mutationByKey[key] = idx
+		}
+		hasHandoff = hasHandoff || len(mutations[idx].ReplaceTo) > 0
+	}
 	getMutation := func(key []byte) int {
-		for i := range mutations {
-			if bytes.Equal(mutations[i].Key, key) {
-				return i
-			}
+		if idx, ok := mutationByKey[util.UnsafeBytesToString(key)]; ok {
+			return idx
 		}
 		return -1
 	}
@@ -329,17 +366,217 @@ func (l *localLockTable) unlock(
 	locks := ls.slice()
 	defer locks.unref()
 
-	l.mu.Lock()
-	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
-
-	defer l.mu.Unlock()
-	if l.mu.closed {
-		return
+	// A proxy handoff changes two ownership surfaces: the replacement
+	// transaction ledger and the physical holder set. Discover the conditional
+	// mutations first, then prepare every ledger update before changing either
+	// surface. This also keeps failure injection and fixed-slice allocation on
+	// the fail-closed side of the linearization point.
+	type handoffSpec struct {
+		key       []byte
+		replaceTo []byte
+		needsAdd  bool
+	}
+	var handoffs []handoffSpec
+	var discoveredHandoffs map[string]struct{}
+	if hasHandoff {
+		discoveredHandoffs = make(map[string]struct{})
 	}
 
 	b, ok := txn.getHoldLocksLocked(l.bind.Group).tableBinds[l.bind.Table]
 	if !ok {
 		panic("BUG: missing bind")
+	}
+	if hasHandoff {
+		l.mu.Lock()
+		v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
+		if l.mu.closed {
+			l.mu.Unlock()
+			return nil
+		}
+		locks.iter(func(key []byte) bool {
+			idx := getMutation(key)
+			if idx == -1 ||
+				mutations[idx].Skip ||
+				len(mutations[idx].ReplaceTo) == 0 {
+				return true
+			}
+			keyValue := util.UnsafeBytesToString(key)
+			if _, duplicate := discoveredHandoffs[keyValue]; duplicate {
+				return true
+			}
+			lock, ok := l.mu.store.Get(key)
+			if !ok || !lock.holders.contains(txn.txnID) {
+				// A response-lost retry can already observe the replacement (or no
+				// holder after it finished). It is an idempotent no-op below.
+				return true
+			}
+			discoveredHandoffs[string(key)] = struct{}{}
+			handoffs = append(handoffs, handoffSpec{
+				key:       bytes.Clone(key),
+				replaceTo: bytes.Clone(mutations[idx].ReplaceTo),
+				needsAdd:  !lock.holders.contains(mutations[idx].ReplaceTo),
+			})
+			return true
+		})
+		l.mu.Unlock()
+	}
+
+	type replacementUpdate struct {
+		txn          *activeTxn
+		keys         [][]byte
+		existingKeys [][]byte
+		prepared     *preparedTxnLocks
+	}
+	var replacementsByID map[string]*replacementUpdate
+	if len(handoffs) > 0 {
+		replacementsByID = make(map[string]*replacementUpdate)
+	}
+	for idx := range handoffs {
+		h := &handoffs[idx]
+		if bytes.Equal(h.replaceTo, txn.txnID) {
+			return moerr.NewInternalErrorNoCtx(
+				"proxy handoff cannot replace a transaction with itself")
+		}
+		key := string(h.replaceTo)
+		update := replacementsByID[key]
+		if update == nil {
+			update = &replacementUpdate{}
+			replacementsByID[key] = update
+		}
+		// An existing replacement holder still needs its transaction mutex held
+		// through physical publication. Otherwise it can finish after discovery
+		// and the handoff can resurrect its holder without a live ledger.
+		if h.needsAdd {
+			update.keys = append(update.keys, h.key)
+		} else {
+			update.existingKeys = append(update.existingKeys, h.key)
+		}
+	}
+
+	replacementIDs := make([]string, 0, len(replacementsByID))
+	for txnID := range replacementsByID {
+		replacementIDs = append(replacementIDs, txnID)
+	}
+	sort.Strings(replacementIDs)
+	lockedReplacements := make([]*activeTxn, 0, len(replacementIDs))
+	defer func() {
+		for idx := len(lockedReplacements) - 1; idx >= 0; idx-- {
+			lockedReplacements[idx].Unlock()
+		}
+	}()
+	for _, txnID := range replacementIDs {
+		update := replacementsByID[txnID]
+		update.txn = l.txnHolder.getActiveTxn(
+			[]byte(txnID),
+			len(update.keys) > 0,
+			txn.remoteService,
+		)
+		if update.txn == nil {
+			return ErrTxnNotFound
+		}
+		update.txn.Lock()
+		lockedReplacements = append(lockedReplacements, update.txn)
+		if !bytes.Equal(update.txn.txnID, []byte(txnID)) {
+			return ErrTxnNotFound
+		}
+		if l.txnHolder.getActiveTxn([]byte(txnID), false, "") != update.txn ||
+			update.txn.deadlockFound {
+			return ErrTxnNotFound
+		}
+		if update.txn.bindChanged {
+			return ErrLockTableBindChanged
+		}
+		replacementHolder := update.txn.lockHolders[l.bind.Group]
+		replacementTableOpen := replacementHolder != nil &&
+			replacementHolder.tableKeys[l.bind.Table] != nil
+		if update.txn.closing.Load() && !replacementTableOpen {
+			// Closure admission excludes the replacement's table cleanup while this
+			// handoff runs. A closing transaction may therefore accept another key
+			// only if this table is still in its pending cleanup ledger; otherwise the
+			// handoff would resurrect a holder with no future unlock route.
+			return ErrTxnNotFound
+		}
+		if update.txn.remoteService != txn.remoteService {
+			return moerr.NewInternalErrorNoCtx(
+				"proxy handoff replacement belongs to a different origin service")
+		}
+		for _, key := range update.existingKeys {
+			if !txnLedgerContainsKeyLocked(
+				update.txn,
+				l.bind.Group,
+				l.bind.Table,
+				key,
+			) {
+				// Repair a pre-existing holder/ledger divergence before removing
+				// the source. This can be observed across a rolling upgrade from
+				// the former non-atomic handoff implementation.
+				update.keys = append(update.keys, key)
+			}
+		}
+		if len(update.keys) == 0 {
+			continue
+		}
+		prepared, err := update.txn.prepareLockUpdate(
+			l.bind.Group,
+			l.bind,
+			update.keys,
+			// Proxy handoff is used only for compatible Shared holders. Keep
+			// the conservative mode here so this table can never be coarsened
+			// based on an incomplete owner-side view.
+			pb.LockOptions{Mode: pb.LockMode_Shared, Sharding: l.bind.Sharding},
+			nil,
+			l.logger,
+		)
+		if err != nil {
+			return err
+		}
+		update.prepared = prepared
+		defer prepared.close()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !hasHandoff {
+		v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
+	}
+	if l.mu.closed {
+		return nil
+	}
+	for idx := range handoffs {
+		h := &handoffs[idx]
+		lock, ok := l.mu.store.Get(h.key)
+		if !ok || !lock.holders.contains(txn.txnID) {
+			return moerr.NewInternalErrorNoCtx(
+				"proxy handoff source changed while bookkeeping was prepared")
+		}
+		if lock.holders.contains(h.replaceTo) == h.needsAdd {
+			return moerr.NewInternalErrorNoCtx(
+				"proxy handoff replacement changed while bookkeeping was prepared")
+		}
+	}
+	// Every operation from here to holder replacement is allocation-free and
+	// cannot fail. Readers need either the transaction mutex or l.mu, so no
+	// observer can see only one ownership surface committed.
+	for _, txnID := range replacementIDs {
+		if prepared := replacementsByID[txnID].prepared; prepared != nil {
+			prepared.commit()
+		}
+	}
+	for idx := range handoffs {
+		h := &handoffs[idx]
+		lock, _ := l.mu.store.Get(h.key)
+		if lock.holders.contains(h.replaceTo) {
+			lock.holders.remove(txn.txnID)
+		} else {
+			lock.holders.replace(
+				txn.txnID,
+				pb.WaitTxn{TxnID: h.replaceTo, CreatedOn: txn.remoteService},
+			)
+		}
 	}
 
 	var startKey []byte
@@ -388,15 +625,7 @@ func (l *localLockTable) unlock(
 			}
 
 			if idx != -1 && len(mutations[idx].ReplaceTo) > 0 {
-				replaceTo := mutations[idx].ReplaceTo
-				lock.holders.replace(txn.txnID,
-					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})
-				// cannot dead lock here, the replaceTo txn was created on the same cn.
-				replaceToTxn := l.txnHolder.getActiveTxn(mutations[idx].ReplaceTo, true, txn.remoteService)
-				replaceToTxn.Lock()
-				_ = replaceToTxn.lockAdded(l.bind.Group, l.bind, [][]byte{key}, l.logger)
-				replaceToTxn.Unlock()
-				return true
+				panic("BUG: proxy handoff was not prepared")
 			}
 
 			if lock.isLockTableDefChanged() {
@@ -438,6 +667,27 @@ func (l *localLockTable) unlock(
 		changedAt := commitTS
 		l.mu.tableDefChangedAt = &changedAt
 	}
+	return nil
+}
+
+func txnLedgerContainsKeyLocked(
+	txn *activeTxn,
+	group uint32,
+	table uint64,
+	key []byte,
+) bool {
+	holder := txn.lockHolders[group]
+	if holder == nil || holder.tableKeys[table] == nil {
+		return false
+	}
+	keys := holder.tableKeys[table].slice()
+	defer keys.unref()
+	found := false
+	keys.iter(func(current []byte) bool {
+		found = bytes.Equal(current, key)
+		return !found
+	})
+	return found
 }
 
 // setTableDefChangedLocked updates the stored definition bit and, for range
@@ -479,7 +729,7 @@ func (l *localLockTable) getLock(
 	if l.mu.closed {
 		return nil
 	}
-	lock, ok := l.mu.store.Get(key)
+	lock, ok := l.getLockByKeyLocked(key)
 	if ok {
 		fn(lock)
 	}
@@ -495,7 +745,7 @@ func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wait
 	if l.mu.closed {
 		return pb.WaitTxn{}, false, nil
 	}
-	lock, ok := l.mu.store.Get(key)
+	lock, ok := l.getLockByKeyLocked(key)
 	if !ok {
 		return pb.WaitTxn{}, false, nil
 	}
@@ -507,6 +757,29 @@ func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wait
 		return false
 	})
 	return holder, found, nil
+}
+
+// getLockByKeyLocked returns either an exact lock entry or the range covering
+// key. Origin-side snapshots can intentionally retain an old physical key
+// after an indeterminate coarsened RPC; every such key remains inside the
+// possible replacement range and must still locate its live waiter queue.
+func (l *localLockTable) getLockByKeyLocked(key []byte) (Lock, bool) {
+	if lock, ok := l.mu.store.Get(key); ok {
+		return lock, true
+	}
+
+	endKey, endLock, ok := l.mu.store.Seek(key)
+	if !ok || !endLock.isLockRangeEnd() {
+		return Lock{}, false
+	}
+	startKey, startLock, paired := l.findPairedRangeLock(endKey, endLock)
+	if !paired ||
+		startLock.holders != endLock.holders ||
+		startLock.waiters != endLock.waiters ||
+		bytes.Compare(startKey, key) > 0 {
+		return Lock{}, false
+	}
+	return endLock, true
 }
 
 func (l *localLockTable) getBind() pb.LockTable {
@@ -557,17 +830,48 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 		return err
 	}
 
-	switch c.opts.Granularity {
-	case pb.Granularity_Row:
-		return l.acquireRowLockLocked(c)
-	case pb.Granularity_Range:
-		if len(c.rows) == 0 ||
-			len(c.rows)%2 != 0 {
-			panic("invalid range lock")
+	for {
+		var err error
+		switch c.opts.Granularity {
+		case pb.Granularity_Row:
+			err = l.acquireRowLockLocked(c)
+		case pb.Granularity_Range:
+			if len(c.rows) == 0 || len(c.rows)%2 != 0 {
+				panic("invalid range lock")
+			}
+			err = l.acquireRangeLockLocked(c)
+		default:
+			panic(fmt.Sprintf("not support lock granularity %d", c.opts.Granularity))
 		}
-		return l.acquireRangeLockLocked(c)
-	default:
-		panic(fmt.Sprintf("not support lock granularity %d", c.opts.Granularity))
+		if !errors.Is(err, errCoarseningInvalidated) {
+			return err
+		}
+		if len(c.opts.originalRows) == 0 {
+			panic("BUG: invalidated coarsening is missing its original request")
+		}
+		// The range request may have slept on a key that is only inside the
+		// coarsened gap. Retire that wait generation before changing the request
+		// representation; a successful exact-row retry would otherwise leave the
+		// ready waiter at the head of the old range queue forever. Keep the
+		// caller's waiter reference in c.w so a conflicting row retry can reuse
+		// it, but detach the remaining containers owned by the completed range
+		// wait. doLock has already removed the event-checker reference before
+		// reacquiring the transaction mutex.
+		if c.w != nil {
+			c.txn.clearBlocked(c.w, l.logger)
+			l.closeRangeWaiterLocked(c, c.w, true)
+		}
+		// Another call for this transaction made the table non-coarsenable
+		// while this request slept. Retry the caller's exact logical request
+		// under the same table/transaction locks; the staged range merge has
+		// already rolled back and no ownership was published.
+		c.rows = c.opts.originalRows
+		c.opts.LockOptions = c.opts.originalOptions
+		c.opts.replaceTxnLocks = false
+		c.opts.originalRows = nil
+		c.opts.originalOptions = pb.LockOptions{}
+		c.offset = 0
+		c.idx = 0
 	}
 }
 
@@ -588,6 +892,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 						l.bind.Group,
 						l.bind,
 						[][]byte{key},
+						c.opts.LockOptions,
 						l.logger,
 					)
 				},
@@ -689,7 +994,13 @@ func (l *localLockTable) addRowLockLocked(
 
 	// we must first add the lock to txn to ensure that the
 	// lock can be read when the deadlock is detected.
-	err := c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{row}, l.logger)
+	err := c.txn.lockAdded(
+		l.bind.Group,
+		l.bind,
+		[][]byte{row},
+		c.opts.LockOptions,
+		l.logger,
+	)
 	if err != nil {
 		return err
 	}
@@ -720,7 +1031,16 @@ func (l *localLockTable) handleLockConflictLocked(
 	c.w.conflictKey.Store(&key)
 	c.w.lt.Store(l)
 	c.w.waitFor = c.w.waitFor[:0]
+	waitForSharedHolderChange :=
+		conflictWith.isShared() &&
+			conflictWith.holders.contains(c.txn.txnID) &&
+			(c.opts.Granularity == pb.Granularity_Range ||
+				c.opts.Mode == pb.LockMode_Exclusive)
+	c.w.notifyOnSharedHolderChange = waitForSharedHolderChange
 	for _, txn := range conflictWith.holders.txns {
+		if bytes.Equal(txn.TxnID, c.txn.txnID) {
+			continue
+		}
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
 	}
 	c.result.ConflictKey = key
@@ -845,11 +1165,49 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 func (l *localLockTable) addRangeLockLocked(
 	c *lockContext,
 	start, end []byte) ([]byte, Lock, error) {
+	l1, ok1 := l.mu.store.Get(start)
+	l2, ok2 := l.mu.store.Get(end)
+	exactRange := ok1 && ok2 &&
+		l1.isLockRangeStart() && l2.isLockRangeEnd() &&
+		l1.holders == l2.holders && l1.waiters == l2.waiters
+	currentHolder := exactRange && l1.holders.contains(c.txn.txnID)
+	alreadyGranted := currentHolder &&
+		((l1.GetLockMode() == pb.LockMode_Exclusive &&
+			l2.GetLockMode() == pb.LockMode_Exclusive) ||
+			c.opts.Mode == pb.LockMode_Shared)
+	canPromoteExactRange := currentHolder &&
+		l1.isShared() && l2.isShared() &&
+		c.opts.Mode == pb.LockMode_Exclusive &&
+		l1.holders.size() == 1
+	if alreadyGranted || canPromoteExactRange {
+		// The physical range already grants at least the requested mode to this
+		// transaction, or this transaction is the last Shared holder and can
+		// atomically promote both endpoints. Treat it like a re-entrant row lock:
+		// rebuilding the same pair would report false ownership growth to a remote
+		// origin and fill its bounded probe ledger with duplicate endpoints.
+		if c.w != nil {
+			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			c.w = nil
+			c.rangeLastWaitKey = nil
+		}
+		// Re-entry does not add ownership, but it can promote transaction-owned
+		// metadata such as the table-definition fence. Keep both physical range
+		// endpoints in sync just as the row-lock re-entry path does.
+		l.setHolderPropertiesLocked(start, l1, c, false)
+		return nil, Lock{}, nil
+	}
+	if currentHolder &&
+		l1.isShared() && l2.isShared() &&
+		c.opts.Mode == pb.LockMode_Exclusive {
+		// An exact Shared -> Exclusive promotion is not a range merge. Preserve
+		// the existing pair and wait for the other Shared holders to leave; the
+		// shared-holder-change notification will retry this branch and promote
+		// both endpoints once this transaction is the sole holder.
+		return start, l1, nil
+	}
 
 	if c.opts.LockOptions.Mode == pb.LockMode_Shared {
-		l1, ok1 := l.mu.store.Get(start)
-		l2, ok2 := l.mu.store.Get(end)
-		if ok1 && ok2 &&
+		if exactRange &&
 			l1.isShared() && l2.isShared() &&
 			l1.isLockRangeStart() && l2.isLockRangeEnd() {
 			addTxnLock := func() error {
@@ -857,6 +1215,7 @@ func (l *localLockTable) addRangeLockLocked(
 					l.bind.Group,
 					l.bind,
 					[][]byte{start, end},
+					c.opts.LockOptions,
 					l.logger,
 				)
 			}
@@ -885,6 +1244,12 @@ func (l *localLockTable) addRangeLockLocked(
 		}
 	}
 
+	if conflictKey, conflictWith, err := l.preflightRangeMergeLocked(c, start, end); err != nil {
+		return nil, Lock{}, err
+	} else if len(conflictKey) > 0 {
+		return conflictKey, conflictWith, nil
+	}
+
 	wq := newWaiterQueue()
 	wq.init(l.logger)
 	mc := newMergeContext(wq)
@@ -895,6 +1260,7 @@ func (l *localLockTable) addRangeLockLocked(
 	var conflictKey []byte
 	var prevStartKey []byte
 	rangeStartEncountered := false
+	consumedCurrentWaiter := false
 	// TODO: remove mem allocate.
 	upperBounded := nextKey(end, nil)
 
@@ -903,13 +1269,26 @@ func (l *localLockTable) addRangeLockLocked(
 			start,
 			nil,
 			func(key []byte, keyLock Lock) bool {
-				// current txn is not holder, maybe conflict
-				if !keyLock.holders.contains(c.txn.txnID) {
+				// A notified range waiter remains at the head of an empty queue
+				// until it is admitted. If this range subsumes that row, consume
+				// the queue position directly instead of first promoting it to a
+				// row holder: that temporary bookkeeping can exceed the very
+				// MaxFixedSliceSize limit that caused this coarsening.
+				ownedByCurrentTxn := keyLock.holders.contains(c.txn.txnID)
+				consumeCurrentWaiter := !ownedByCurrentTxn &&
+					keyLock.holders.size() == 0 &&
+					keyLock.waiters.first() == c.w
+
+				// Current transaction is not holder, maybe conflict.
+				if !ownedByCurrentTxn && !consumeCurrentWaiter {
 					if hasConflictWithLock(key, keyLock, end) {
 						conflictWith = keyLock
 						conflictKey = key
 					}
 					return false
+				}
+				if consumeCurrentWaiter {
+					consumedCurrentWaiter = true
 				}
 
 				if keyLock.holders.size() > 1 {
@@ -933,6 +1312,8 @@ func (l *localLockTable) addRangeLockLocked(
 					prevStartKey,
 					key, keyLock,
 					mc,
+					c.w,
+					consumeCurrentWaiter,
 				)
 				prevStartKey = nil
 				rangeStartEncountered = false
@@ -952,6 +1333,7 @@ func (l *localLockTable) addRangeLockLocked(
 						l.bind.Group,
 						l.bind,
 						[][]byte{conflictKey},
+						c.opts.LockOptions,
 						l.logger,
 					)
 				},
@@ -962,6 +1344,7 @@ func (l *localLockTable) addRangeLockLocked(
 			}
 			if hold {
 				if c.w != nil {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
 				}
 
@@ -986,27 +1369,74 @@ func (l *localLockTable) addRangeLockLocked(
 			if !ok {
 				panic("BUG, missing range end key")
 			}
+			consumeEndWaiter := keyLock.holders.size() == 0 &&
+				keyLock.waiters.first() == c.w
+			consumedCurrentWaiter = consumedCurrentWaiter || consumeEndWaiter
 			start, end = l.mergeRangeLocked(
 				start, end,
 				prevStartKey,
 				key, keyLock,
 				mc,
+				c.w,
+				consumeEndWaiter,
 			)
 		}
 		break
 	}
 
-	mc.commit(l.bind, c.txn, l.mu.store, l.logger)
-	startLock, endLock := newRangeLock(l.logger, c)
+	if c.opts.replaceTxnLocks &&
+		!c.txn.canCoarsenTableLocked(l.bind.Group, l.bind.Table) {
+		// The request was planned while every retained lock was non-sharded
+		// Exclusive, but the transaction mutex was released during a wait. Do
+		// not let that stale plan absorb/strengthen a concurrently acquired
+		// Shared or sharded lock; retry the original logical request instead.
+		mc.rollback()
+		return nil, Lock{}, errCoarseningInvalidated
+	}
 
+	keep := func(key []byte) bool {
+		_, removed := mc.mergedLocks[util.UnsafeBytesToString(key)]
+		return !removed
+	}
+	if c.opts.replaceTxnLocks {
+		// A budget replacement represents every key in its final interval, but
+		// must preserve same-transaction ownership acquired concurrently outside
+		// that interval while this request was asleep.
+		keep = func(key []byte) bool {
+			return bytes.Compare(key, start) < 0 || bytes.Compare(key, end) > 0
+		}
+	}
+	prepared, err := c.txn.prepareLockUpdate(
+		l.bind.Group,
+		l.bind,
+		[][]byte{start, end},
+		c.opts.LockOptions,
+		keep,
+		l.logger,
+	)
+	if err != nil {
+		mc.rollback()
+		return nil, Lock{}, err
+	}
+	defer prepared.close()
+
+	startLock, endLock := newRangeLock(l.logger, c)
 	wq.resetCommittedAt(l.mu.tableCommittedAt)
 	startLock.waiters = wq
 	endLock.waiters = wq
 
-	// similar to row lock
-	err = c.txn.lockAdded(l.bind.Group, l.bind, [][]byte{start, end}, l.logger)
-	if err != nil {
-		return nil, Lock{}, err
+	// Both commits are now allocation-free and run while the transaction and
+	// lock-table mutexes exclude observers. No failure can expose only one side
+	// of the representation change.
+	prepared.commit()
+	mc.commit(l.mu.store, l.logger)
+	if consumedCurrentWaiter {
+		// The merge committed the source queue without moving this requester
+		// onto its own replacement range. The outer lock loop still releases
+		// its active and waiter-events references on the success path.
+		l.removeOwnerLocalWaitEdgeLocked(c.w)
+		c.w = nil
+		c.rangeLastWaitKey = nil
 	}
 	c.result.NewLockAdd = true
 
@@ -1042,7 +1472,13 @@ func (l *localLockTable) setHolderPropertiesLocked(
 ) {
 	updated := lock
 	changed := false
-	if newHolder {
+	modePromotion :=
+		!newHolder &&
+			updated.isShared() &&
+			c.opts.Mode == pb.LockMode_Exclusive &&
+			updated.holders.contains(c.txn.txnID) &&
+			updated.holders.size() == 1
+	if newHolder || modePromotion {
 		var modeChanged bool
 		updated, modeChanged = updated.setMode(c.opts.Mode)
 		changed = changed || modeChanged
@@ -1064,7 +1500,7 @@ func (l *localLockTable) setHolderPropertiesLocked(
 	if !ok {
 		return
 	}
-	if newHolder {
+	if newHolder || modePromotion {
 		pairedLock, _ = pairedLock.setMode(c.opts.Mode)
 	}
 	if newHolder || c.opts.TableDefChanged {
@@ -1073,12 +1509,82 @@ func (l *localLockTable) setHolderPropertiesLocked(
 	l.mu.store.Add(pairedKey, pairedLock)
 }
 
+// preflightRangeMergeLocked validates a range merge
+// without changing either lock-store ownership or transaction bookkeeping.
+//
+// A merge removes locks already held by the transaction in [start, end]. Its
+// mode must therefore be at least as strong as every removed lock, and a Shared
+// merge cannot absorb a compatible lock owned by another transaction. The
+// latter is used as a non-mutating merge dependency: this transaction waits
+// until the ownership shape is collapsible, then retries. This applies to both
+// ordinary range requests and cumulative budget replacements.
+func (l *localLockTable) preflightRangeMergeLocked(
+	c *lockContext,
+	start, end []byte,
+) ([]byte, Lock, error) {
+	// Exclusive is already the strongest mode, and tryHold cannot mutate a
+	// foreign Shared/Exclusive lock for an Exclusive request. The existing
+	// merge context can therefore roll back every tentative change without an
+	// extra scan. Keep the preflight cost off the common write path.
+	if c.opts.Mode == pb.LockMode_Exclusive {
+		return nil, Lock{}, nil
+	}
+
+	mode := c.opts.Mode
+	var conflictKey []byte
+	var conflictWith Lock
+	l.mu.store.Range(
+		start,
+		nil,
+		func(key []byte, keyLock Lock) bool {
+			cmp := bytes.Compare(key, end)
+			if cmp > 0 {
+				// Range(start, ...) may first encounter the end of a range
+				// whose start precedes start. Inspect it only when that range
+				// overlaps the merge interval; otherwise no later key can
+				// overlap either.
+				if !keyLock.isLockRangeEnd() ||
+					bytes.Compare(l.mustGetRangeStart(key), end) > 0 {
+					return false
+				}
+			}
+
+			if keyLock.holders.contains(c.txn.txnID) {
+				if keyLock.GetLockMode() == pb.LockMode_Exclusive {
+					mode = pb.LockMode_Exclusive
+				}
+				if keyLock.holders.size() > 1 {
+					conflictKey = key
+					conflictWith = keyLock
+					return false
+				}
+			} else if keyLock.isShared() && keyLock.holders.size() > 0 {
+				conflictKey = key
+				conflictWith = keyLock
+				return false
+			}
+
+			return cmp < 0
+		},
+	)
+	if len(conflictKey) > 0 {
+		return conflictKey, conflictWith, nil
+	}
+
+	// Lock strength is monotonic within a transaction: a later Shared request
+	// may widen an existing Exclusive lock, but must never downgrade it.
+	c.opts.Mode = mode
+	return nil, Lock{}, nil
+}
+
 func (l *localLockTable) mergeRangeLocked(
 	start, end []byte,
 	prevStartKey []byte,
 	seekKey []byte,
 	seekLock Lock,
 	mc *mergeContext,
+	currentWaiter *waiter,
+	consumeCurrentWaiter bool,
 ) ([]byte, []byte) {
 	// range lock encountered a row lock
 	if seekLock.isLockRow() {
@@ -1089,7 +1595,7 @@ func (l *localLockTable) mergeRangeLocked(
 
 		// [1~4] + [1, 4] => [1, 4]
 		mc.mergeLocks([][]byte{seekKey})
-		mc.mergeWaiter(seekLock.waiters)
+		mc.mergeWaiter(seekLock.waiters, currentWaiter, consumeCurrentWaiter)
 		return start, end
 	}
 
@@ -1114,7 +1620,7 @@ func (l *localLockTable) mergeRangeLocked(
 	}
 
 	mc.mergeLocks([][]byte{oldStart, oldEnd})
-	mc.mergeWaiter(seekLock.waiters)
+	mc.mergeWaiter(seekLock.waiters, currentWaiter, consumeCurrentWaiter)
 	return min, max
 }
 
@@ -1126,14 +1632,9 @@ func (l *localLockTable) mustGetRangeStart(endKey []byte) []byte {
 	return v
 }
 
-// setModePairedRangeLock updates the mode of the paired range lock entry.
-// A range lock is stored as two entries (range-start and range-end) with
-// independent Lock.value bytes. When setMode updates one end, this helper
-// finds and updates the other end so both entries have a consistent mode.
-// It is a no-op for row locks.
 // setModePairedRangeLock updates the paired range lock entry's mode to keep
 // both ends consistent. For range-end it scans backward to find range-start;
-// for range-start it scans forward to find range-end.
+// for range-start it scans forward to find range-end. It is a no-op for rows.
 func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.LockMode) {
 	if lock.isLockRow() {
 		return
@@ -1220,8 +1721,18 @@ func (c *mergeContext) close() {
 	mergePool.Put(c)
 }
 
-func (c *mergeContext) mergeWaiter(from waiterQueue) {
-	from.moveTo(c.to)
+func (c *mergeContext) mergeWaiter(
+	from waiterQueue,
+	currentWaiter *waiter,
+	consumeCurrentWaiter bool,
+) {
+	from.iter(func(w *waiter) bool {
+		if consumeCurrentWaiter && w == currentWaiter {
+			return true
+		}
+		c.to.put(w)
+		return true
+	})
 	c.mergedWaiters = append(c.mergedWaiters, from)
 }
 
@@ -1232,20 +1743,12 @@ func (c *mergeContext) mergeLocks(locks [][]byte) {
 }
 
 func (c *mergeContext) commit(
-	bind pb.LockTable,
-	txn *activeTxn,
 	s LockStorage,
 	logger *log.MOLogger,
 ) {
 	for k := range c.mergedLocks {
 		s.Delete(util.UnsafeStringToBytes(k))
 	}
-
-	txn.lockRemoved(
-		bind.Group,
-		bind.Table,
-		c.mergedLocks,
-	)
 
 	for _, q := range c.mergedWaiters {
 		// release ref in merged waiters. The ref is moved to c.to.

@@ -59,13 +59,13 @@ func TestCheckWithDeadlock(t *testing.T) {
 
 		// txn1 - txn2 - txn3 - txn1
 		assert.NoError(t, d.check(txn4, pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		assert.Equal(t, txn3, <-abortC)
+		d.txnClosed(txn3)
 
 		// txn2 - txn3 - txn1 - txn2
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn2}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		assert.Equal(t, txn3, <-abortC)
+		d.txnClosed(txn3)
 
 		// txn3 - txn1 - txn2 - txn3
 		assert.NoError(t, d.check(nil, pb.WaitTxn{TxnID: txn3}))
@@ -129,8 +129,10 @@ func TestCheckWithAcyclicBranchReconvergence(t *testing.T) {
 
 func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		root := []byte("root")
-		seed := []byte("seed")
+		// Prefix nodes deliberately sort after every cycle member. Victim
+		// selection must consider the cycle only, not an acyclic path into it.
+		root := []byte("zz-root")
+		seed := []byte("zz-seed")
 		a := []byte("a")
 		b := []byte("b")
 		x := []byte("x")
@@ -138,7 +140,7 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		depends := map[string][]pb.WaitTxn{
 			string(seed): {{TxnID: a}, {TxnID: b}},
 			string(a):    {{TxnID: x}},
-			string(b):    {{TxnID: y}},
+			string(b):    {{TxnID: y, WaiterAddress: "y-service"}},
 			string(x):    {{TxnID: b}},
 			string(y):    {{TxnID: x, WaiterAddress: "closing-service"}},
 		}
@@ -168,8 +170,8 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		hasDeadlock, deadlockTxn, err := d.checkDeadlock(context.Background(), w)
 		require.NoError(t, err)
 		require.True(t, hasDeadlock)
-		require.Equal(t, x, deadlockTxn.TxnID)
-		require.Equal(t, "closing-service", deadlockTxn.WaiterAddress)
+		require.Equal(t, y, deadlockTxn.TxnID)
+		require.Equal(t, "y-service", deadlockTxn.WaiterAddress)
 		require.Equal(t, "78 <= 62 <= 79 <= 78", printPathFromRoot(w.deadlockNode()))
 		require.Equal(t, 1, fetchCount[string(seed)])
 		require.Equal(t, 1, fetchCount[string(a)])
@@ -422,25 +424,23 @@ func TestCheckWithComplexDeadlock(t *testing.T) {
 			})
 		defer d.close()
 
-		// Test case 1: Start with txn1, should detect deadlock and abort txn1
+		// Every traversal of the same cycle selects the same victim.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		assert.Equal(t, txn9, <-abortC)
+		d.txnClosed(txn9)
 
-		// Test case 2: Start with txn5, should detect deadlock and abort txn5
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn5}))
-		assert.Equal(t, txn5, <-abortC)
-		d.txnClosed(txn5)
+		assert.Equal(t, txn9, <-abortC)
+		d.txnClosed(txn9)
 
-		// Test case 3: Start with txn10, should detect deadlock and abort txn10
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn10}))
-		assert.Equal(t, txn10, <-abortC)
-		d.txnClosed(txn10)
+		assert.Equal(t, txn9, <-abortC)
+		d.txnClosed(txn9)
 
-		// Test case 3: Start with txn11, should detect deadlock and abort txn11
+		// txn11 reaches the same cycle but is not itself a cycle member.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn11}))
-		assert.Equal(t, txn1, <-abortC)
-		d.txnClosed(txn1)
+		assert.Equal(t, txn9, <-abortC)
+		d.txnClosed(txn9)
 
 		// Test case 5: Break the cycle by removing txn10's dependency on txn1
 		depends[string(txn10)] = []pb.WaitTxn{} // Remove the dependency that creates the cycle
@@ -503,9 +503,9 @@ func TestCheckDeadlock(t *testing.T) {
 			})
 		defer d.close()
 
-		// Test case 1: Start with txn1, should detect deadlock and abort txn1
+		// The cycle is t2..t10; lexical ordering selects t9 deterministically.
 		assert.NoError(t, d.check([]byte("txn0"), pb.WaitTxn{TxnID: txn1}))
-		assert.Equal(t, txn2, <-abortC)
-		d.txnClosed(txn2)
+		assert.Equal(t, txn9, <-abortC)
+		d.txnClosed(txn9)
 	})
 }
