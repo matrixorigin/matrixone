@@ -1561,6 +1561,30 @@ func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinTy
 	return nil
 }
 
+func validateRemoteTargetAwareUpdatePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.HasTargetSelector {
+			return validateRemoteTargetAwareUpdateProtocol(proc, true)
+		}
+		if multiUpdate := instruction.GetMultiUpdate(); multiUpdate != nil {
+			for _, updateCtx := range multiUpdate.UpdateCtxList {
+				if updateCtx.DedupByTargetRowId || updateCtx.TargetUpdateCtxIdx != 0 {
+					return validateRemoteTargetAwareUpdateProtocol(proc, true)
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteTargetAwareUpdatePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
 	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
 		return false
