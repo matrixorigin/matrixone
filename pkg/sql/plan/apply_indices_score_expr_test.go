@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -287,4 +288,231 @@ func TestFulltext2ScoreRangeFromFilters(t *testing.T) {
 		[]*plan.Expr{scoreFn(">", m(), scoreFn("+", cst(1), cst(2)))}, hello))
 	// no score predicate at all
 	require.Nil(t, builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn(">", scoreLit(), cst(1))}, hello))
+}
+
+// ftScanNodeWithIndex builds a TABLE_SCAN carrying one classic FULLTEXT index on `body`,
+// which is the minimum findMatchFullTextIndex needs to resolve a MATCH.
+func ftScanNodeWithIndex(tag int32) *plan.Node {
+	return &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{tag},
+		TableDef: &plan.TableDef{
+			Name: "docs",
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Name: "body", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			Indexes: []*plan.IndexDef{{
+				IndexName:  "ft",
+				IndexAlgo:  catalog.MOIndexFullTextAlgo.ToString(),
+				TableExist: true,
+				Parts:      []string{"body"},
+			}},
+		},
+	}
+}
+
+// bodyMatch builds `fulltext_match(pattern, 0, docs.body)` bound to scan tag `tag`.
+func bodyMatch(tag int32, pattern string) *plan.Expr {
+	return matchExpr(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+		Args: []*plan.Expr{
+			makePlan2StringConstExprWithType(pattern),
+			makePlan2Int64ConstExprWithType(0),
+			{
+				Typ:  plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: 1, Name: "body"}},
+			},
+		},
+	})
+}
+
+// TestGetWrappedFullTextMatches pins DISCOVERY: which nested MATCHes are allowed to build a
+// stream of their own. The stream is INNER JOINed to the base scan, so harvesting one from a
+// position the query does not require is how `… > 0.5 or id = 4` came to return no rows.
+func TestGetWrappedFullTextMatches(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{}}
+	const tag int32 = 7
+	scan := ftScanNodeWithIndex(tag)
+	cst := func(v float64) *plan.Expr { return makePlan2Float64ConstExprWithType(v) }
+
+	scan.FilterList = []*plan.Expr{
+		bodyMatch(tag, "hello"),                                                     // 0: the bare driver
+		scoreFn(">", bodyMatch(tag, "hello"), cst(0.5)),                             // wrapped copy of the driver
+		scoreFn(">", bodyMatch(tag, "world"), cst(0.5)),                             // a NEW match, membership-implying
+		scoreFn("<", bodyMatch(tag, "other"), cst(0.5)),                             // upper bound: must NOT drive
+		scoreFn("or", scoreFn(">", bodyMatch(tag, "orterm"), cst(0.5)), scoreLit()), // under OR
+		scoreFn("not", scoreFn(">", bodyMatch(tag, "notterm"), cst(0.5))),           // under NOT
+	}
+
+	exprs, defs := builder.getWrappedFullTextMatches(nil, scan, []int32{0}, nil)
+	require.Len(t, exprs, 1, "only the membership-implying NEW match may drive")
+	require.Len(t, defs, 1)
+	require.NotNil(t, defs[0])
+	got := exprs[0].GetF()
+	require.NotNil(t, got)
+	require.Equal(t, "world", got.Args[0].GetLit().GetSval(),
+		"the wrapped copy of the bare driver is deduplicated; 'other'/'orterm'/'notterm' cannot drive")
+
+	// AND-reachable is enough — nesting inside AND still drives.
+	scan2 := ftScanNodeWithIndex(tag)
+	scan2.FilterList = []*plan.Expr{
+		scoreFn("and", scoreFn(">", bodyMatch(tag, "deep"), cst(0.1)), scoreLit()),
+	}
+	exprs, _ = builder.getWrappedFullTextMatches(nil, scan2, nil, nil)
+	require.Len(t, exprs, 1)
+	require.Equal(t, "deep", exprs[0].GetF().Args[0].GetLit().GetSval())
+
+	// A projection MATCH drives too, and a bare projection position is skipped as already served.
+	proj := &plan.Node{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{
+		bodyMatch(tag, "bare"),                                  // projids says this is served
+		scoreFn("round", bodyMatch(tag, "wrapped"), scoreLit()), // this one needs a stream
+	}}
+	exprs, _ = builder.getWrappedFullTextMatches(proj, ftScanNodeWithIndex(tag), nil, []int32{0})
+	require.Len(t, exprs, 1)
+	require.Equal(t, "wrapped", exprs[0].GetF().Args[0].GetLit().GetSval())
+
+	// No scan node, and a MATCH no index can serve, both yield nothing.
+	e, d := builder.getWrappedFullTextMatches(nil, nil, nil, nil)
+	require.Nil(t, e)
+	require.Nil(t, d)
+	noIdx := ftScanNodeWithIndex(tag)
+	noIdx.TableDef.Indexes = nil
+	noIdx.FilterList = []*plan.Expr{scoreFn(">", bodyMatch(tag, "hello"), cst(0.5))}
+	e, _ = builder.getWrappedFullTextMatches(nil, noIdx, nil, nil)
+	require.Empty(t, e, "a MATCH no index serves is left to raise 20105")
+}
+
+// TestResolveProjectMatchesOverJoin: a MATCH in the select list above a JOIN resolves against
+// the streams the join's children built — and only against the stream for ITS OWN table.
+func TestResolveProjectMatchesOverJoin(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{ftScanNode(11)}}}
+	const tagA, tagB int32 = 7, 8
+	builder.ftJoinServed = []fulltextServedMatch{
+		{fn: bodyMatch(tagA, "hello").GetF(), nodeID: 0},
+	}
+
+	proj := &plan.Node{NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{
+		bodyMatch(tagA, "hello"),                               // a's stream
+		scoreFn("round", bodyMatch(tagA, "hello"), scoreLit()), // wrapped, same stream
+		bodyMatch(tagB, "hello"),                               // SAME text, OTHER table
+	}}
+	sort := &plan.Node{NodeType: plan.Node_SORT, OrderBy: []*plan.OrderBySpec{
+		{Expr: bodyMatch(tagA, "hello")},
+	}}
+
+	require.True(t, builder.resolveProjectMatchesOverJoin(proj, sort))
+	require.NotNil(t, proj.ProjectList[0].GetCol(), "bare MATCH becomes the score column")
+	require.Equal(t, int32(11), proj.ProjectList[0].GetCol().RelPos)
+	require.NotNil(t, proj.ProjectList[1].GetF().Args[0].GetCol(), "wrapped MATCH rewritten in place")
+	require.NotNil(t, proj.ProjectList[2].GetF(),
+		"a MATCH on another table must be LEFT ALONE — matching by column name alone would "+
+			"report table a's relevance for table b")
+	require.NotNil(t, sort.OrderBy[0].Expr.GetCol(), "ORDER BY MATCH is its own expression")
+
+	// Nothing to resolve against, or nothing to resolve.
+	require.False(t, builder.resolveProjectMatchesOverJoin(nil, nil))
+	empty := &QueryBuilder{qry: &plan.Query{}}
+	require.False(t, empty.resolveProjectMatchesOverJoin(proj, nil))
+	plainProj := &plan.Node{ProjectList: []*plan.Expr{scoreLit()}}
+	require.False(t, builder.resolveProjectMatchesOverJoin(plainProj, nil))
+}
+
+// TestServedFullTextScoreSameTable: the binding-tag-aware lookup used across a join.
+func TestServedFullTextScoreSameTable(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{ftScanNode(11)}}}
+	served := []fulltextServedMatch{{fn: bodyMatch(7, "hello").GetF(), nodeID: 0}}
+
+	got := builder.servedFullTextScoreSameTable(bodyMatch(7, "hello").GetF(), served)
+	require.NotNil(t, got)
+	require.Equal(t, int32(11), got.GetCol().RelPos)
+	require.Equal(t, int32(1), got.GetCol().ColPos)
+
+	require.Nil(t, builder.servedFullTextScoreSameTable(bodyMatch(8, "hello").GetF(), served),
+		"same column name, different binding — not the same question")
+	require.Nil(t, builder.servedFullTextScoreSameTable(bodyMatch(7, "world").GetF(), served))
+	require.Nil(t, builder.servedFullTextScoreSameTable(nil, served))
+	require.Nil(t, builder.servedFullTextScoreSameTable(
+		&plan.Function{Func: &plan.ObjectRef{ObjName: "round"}}, served))
+
+	// node id out of range resolves to nothing rather than panicking
+	require.Nil(t, builder.servedFullTextScoreSameTable(bodyMatch(7, "hello").GetF(),
+		[]fulltextServedMatch{{fn: bodyMatch(7, "hello").GetF(), nodeID: 99}}))
+}
+
+// TestNonNegativeConstValue: the guard that keeps `score > -1` (true for a relevance of 0)
+// from being treated as membership-implying.
+func TestNonNegativeConstValue(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want float64
+		ok   bool
+	}{
+		{"float", makePlan2Float64ConstExprWithType(0.25), 0.25, true},
+		{"zero", makePlan2Float64ConstExprWithType(0), 0, true},
+		{"int", makePlan2Int64ConstExprWithType(3), 3, true},
+		{"negative float", makePlan2Float64ConstExprWithType(-0.5), 0, false},
+		{"negative int", makePlan2Int64ConstExprWithType(-2), 0, false},
+		{"not a literal", scoreFn("+", scoreLit(), scoreLit()), 0, false},
+		{"string literal", makePlan2StringConstExprWithType("x"), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := nonNegativeConstValue(tc.expr)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.InDelta(t, tc.want, v, 1e-9)
+			}
+		})
+	}
+}
+
+// TestConstValueAsFloat covers the literal kinds a score bound can be written as. Unlike
+// nonNegativeConstValue this one accepts negatives — it answers "what number is this",
+// not "can this predicate imply membership".
+func TestConstValueAsFloat(t *testing.T) {
+	f32 := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: 1.5}}}}
+	u64 := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 7}}}}
+
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want float64
+		ok   bool
+	}{
+		{"dval", makePlan2Float64ConstExprWithType(0.25), 0.25, true},
+		{"i64", makePlan2Int64ConstExprWithType(3), 3, true},
+		{"negative i64", makePlan2Int64ConstExprWithType(-2), -2, true},
+		{"fval", f32, 1.5, true},
+		{"u64", u64, 7, true},
+		{"not a literal", scoreFn("+", scoreLit(), scoreLit()), 0, false},
+		{"string literal", makePlan2StringConstExprWithType("x"), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, ok := constValueAsFloat(tc.expr)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.InDelta(t, tc.want, v, 1e-9)
+			}
+		})
+	}
+}
+
+// TestCollectNestedFullTextMatches: the discovery walk descends through scalars and lists,
+// which is how a MATCH buried in a projection is found at all.
+func TestCollectNestedFullTextMatches(t *testing.T) {
+	m := func() *plan.Expr { return bodyMatch(7, "hello") }
+
+	require.Empty(t, collectNestedFullTextMatches(nil, nil))
+	require.Empty(t, collectNestedFullTextMatches(scoreFn(">", scoreLit(), scoreLit()), nil))
+	require.Len(t, collectNestedFullTextMatches(m(), nil), 1, "the call itself")
+	require.Len(t, collectNestedFullTextMatches(
+		scoreFn("round", scoreFn("+", m(), scoreLit()), scoreLit()), nil), 1, "nested two deep")
+	require.Len(t, collectNestedFullTextMatches(scoreFn("and", m(), m()), nil), 2)
+	require.Len(t, collectNestedFullTextMatches(
+		&plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{m(), scoreLit()}}}},
+		nil), 1, "inside an expression list")
 }

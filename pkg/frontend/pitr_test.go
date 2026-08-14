@@ -3857,5 +3857,91 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.NoError(t, err, "the refusal must be recognised even once its code is lost")
 		require.Contains(t, bh.executedSQLs, okSQL)
+
+		// A view the dependency sort already marked unservable must be left ENTIRELY alone:
+		// not created, and NOT DROPPED either. The snapshot may hold an unrunnable definition
+		// while the target holds a WORKING view of that name (its FULLTEXT index was recreated
+		// after the snapshot was taken), so dropping what we cannot re-create would delete a
+		// working object and put nothing back. A stale object is an inconsistency; deleting a
+		// working one is data loss.
+		marked := map[string]*tableInfo{
+			genKey("db01", "ft_v"): {
+				dbName: "db01", tblName: "ft_v", typ: "VIEW",
+				createSql: badSQL, unservable: true,
+			},
+			genKey("db01", "ok_v"): {
+				dbName: "db01", tblName: "ok_v", typ: "VIEW", createSql: okSQL,
+			},
+		}
+		bh.sql2err = nil
+		bh.executedSQLs = nil
+		err = restoreViews(ctx, ses, bh, "sp01", marked, 0, sortedViews, false)
+		require.NoError(t, err)
+		require.Contains(t, bh.executedSQLs, okSQL, "the other views still restore")
+		require.NotContains(t, bh.executedSQLs, badSQL, "the marked view is not re-created")
+		require.NotContains(t, bh.executedSQLs, dropViewIfExistsSQL("ft_v"),
+			"and it is not dropped: we must not destroy an object we cannot replace")
+		require.Contains(t, bh.executedSQLs, dropViewIfExistsSQL("ok_v"),
+			"an ordinary view is still dropped and re-created")
 	})
+}
+
+// Test_markUnservableViewInSort covers the #27027 tolerance that all three view-restore
+// dependency sorts share (snapshot, PITR, and the cluster-snapshot path). It was three
+// near-verbatim copies, and the third never got the tolerance at all — a cluster restore
+// still aborted on a view the other two skipped.
+func Test_markUnservableViewInSort(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := context.Background()
+
+	newSort := func() toposort { return toposort{next: make(map[string][]string)} }
+
+	t.Run("the refusal marks the view and KEEPS its vertex", func(t *testing.T) {
+		g := newSort()
+		v := &tableInfo{dbName: "db01", tblName: "ft_v"}
+		handled := markUnservableViewInSort(ses, "sp01", v, &g, genKey("db01", "ft_v"),
+			moerr.NewFtMatchingKeyNotFound(ctx))
+		require.True(t, handled)
+		require.True(t, v.unservable)
+		_, ok := g.next[genKey("db01", "ft_v")]
+		require.True(t, ok,
+			"the vertex must stay: dropped from the graph the restore never visits it, and "+
+				"dependents lose their ordering against it")
+		sorted, err := g.sort()
+		require.NoError(t, err)
+		require.Contains(t, sorted, genKey("db01", "ft_v"))
+	})
+
+	t.Run("recognised once the executor has stripped the moerr code", func(t *testing.T) {
+		g := newSort()
+		v := &tableInfo{dbName: "db01", tblName: "ft_v"}
+		require.True(t, markUnservableViewInSort(ses, "sp01", v, &g, genKey("db01", "ft_v"),
+			moerr.NewInternalError(ctx, moerr.FtMatchingKeyNotFoundMsg)))
+		require.True(t, v.unservable)
+	})
+
+	t.Run("any other error is left to abort the restore", func(t *testing.T) {
+		g := newSort()
+		v := &tableInfo{dbName: "db01", tblName: "ft_v"}
+		require.False(t, markUnservableViewInSort(ses, "sp01", v, &g, genKey("db01", "ft_v"),
+			moerr.NewInternalError(ctx, "boom")))
+		require.False(t, v.unservable)
+		require.Empty(t, g.next, "a genuine failure must not be silently absorbed into the graph")
+	})
+}
+
+// Test_skipUnservableViewInRestore: a marked view is left ENTIRELY alone by the create loop.
+func Test_skipUnservableViewInRestore(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	require.True(t, skipUnservableViewInRestore(ses, "sp01",
+		&tableInfo{dbName: "db01", tblName: "ft_v", unservable: true}))
+	require.False(t, skipUnservableViewInRestore(ses, "sp01",
+		&tableInfo{dbName: "db01", tblName: "ok_v"}))
 }

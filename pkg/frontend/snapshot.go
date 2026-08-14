@@ -1487,25 +1487,7 @@ func restoreViews(
 				return err
 			}
 
-			// Marked by sortedViewInfos: the stored definition can never run, so it cannot be
-			// re-created. Leave the target object ALONE -- do not drop it either.
-			//
-			// Dropping first looks more consistent (the target then matches the snapshot, which
-			// has no usable view) but it destroys data: the snapshot may hold an unservable
-			// definition while the TARGET holds a working view of the same name, because the
-			// FULLTEXT index it needs was recreated after the snapshot was taken. A table-level
-			// restore, a PITR, or a CLONE that does not rebuild the database would then delete
-			// a working view and put nothing back, reporting success. Leaving a stale object is
-			// an inconsistency; deleting a working one is data loss, so prefer the former.
-			//
-			// The same reasoning covers a false positive of isUnservableViewError, which has to
-			// match on message text because the background executor strips the moerr code: a
-			// misclassification now costs a skipped view rather than a deleted one.
-			if tblInfo.unservable {
-				getLogger(ses.GetService()).Warn(fmt.Sprintf(
-					"[%s] view %v.%v left untouched and NOT restored: its stored definition can "+
-						"never run; any existing object of that name is kept",
-					snapshotName, tblInfo.dbName, tblInfo.tblName))
+			if skipUnservableViewInRestore(ses, snapshotName, tblInfo) {
 				continue
 			}
 
@@ -1545,6 +1527,52 @@ func restoreViews(
 	}
 
 	return nil
+}
+
+// markUnservableViewInSort is the #27027 tolerance shared by every view-restore dependency
+// sort: restoreViews' sortedViewInfos, restoreViewsWithPitr, and restoreViewsFromTS.
+//
+// The sort plans every stored definition BEFORE the create loop, so the refusal lands here
+// first and would abort the whole restore. Returns true when err is that refusal, having
+// marked the view and KEPT its vertex — dropped from the graph, the restore loop would never
+// visit it, and dependents would lose their ordering against it. No edges are added: its plan
+// never built, so its dependencies are unknown; a view that depends on this one plans the same
+// definition through it and is marked here too.
+//
+// It exists as one function because it was three near-verbatim copies, and the third
+// (restoreViewsFromTS, the cluster-snapshot path) was missed entirely — that restore still
+// aborted on a view the other two paths tolerated.
+func markUnservableViewInSort(ses *Session, label string, viewEntry *tableInfo, g *toposort, key string, err error) bool {
+	if !isUnservableViewError(err) {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v will not be restored: its definition can never run (%v)",
+		label, viewEntry.dbName, viewEntry.tblName, err))
+	viewEntry.unservable = true
+	g.addVertex(key)
+	return true
+}
+
+// skipUnservableViewInRestore reports whether the create loop must leave this view alone.
+//
+// Alone means ALONE: not re-created, and NOT DROPPED either. The snapshot may hold an
+// unservable definition while the target holds a WORKING view of that name, because the
+// FULLTEXT index it needs was recreated after the snapshot was taken. Dropping what cannot be
+// re-created would delete a working view and put nothing back, reporting success. A stale
+// object is an inconsistency; deleting a working one is data loss.
+//
+// The same reasoning covers a false positive of isUnservableViewError, which must match on
+// message text because the background executor strips the moerr code: a misclassification now
+// costs a skipped view rather than a deleted one.
+func skipUnservableViewInRestore(ses *Session, label string, tblInfo *tableInfo) bool {
+	if !tblInfo.unservable {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v left untouched and NOT restored: its stored definition can never run; "+
+			"any existing object of that name is kept", label, tblInfo.dbName, tblInfo.tblName))
+	return true
 }
 
 // isUnservableViewError reports whether err is the #27027 refusal: a view definition whose
@@ -1656,13 +1684,7 @@ func sortedViewInfos(
 				// No dependency edges are added: its plan never built, so its dependencies
 				// are unknown. A view that depends on THIS one plans the same definition
 				// through it and trips the same refusal, so it is marked here too.
-				if isUnservableViewError(err) {
-					getLogger(ses.GetService()).Warn(fmt.Sprintf(
-						"[%s] view %v.%v will be dropped but not re-created during restore: "+
-							"its definition can never run (%v)",
-						snapshotName, viewEntry.dbName, viewEntry.tblName, err))
-					viewEntry.unservable = true
-					g.addVertex(key)
+				if markUnservableViewInSort(ses, snapshotName, viewEntry, &g, key, err) {
 					continue
 				}
 				return nil, err

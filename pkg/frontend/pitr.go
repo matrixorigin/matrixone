@@ -1803,13 +1803,7 @@ func restoreViewsWithPitr(
 				// never ran the DROP, leaving the old object standing wherever the target
 				// database is not rebuilt. Marked, it is dropped and only its CREATE is
 				// skipped. No edges: its plan never built, so its dependencies are unknown.
-				if isUnservableViewError(err) {
-					getLogger(ses.GetService()).Warn(fmt.Sprintf(
-						"[%s] view %v.%v will be dropped but not re-created during restore: "+
-							"its definition can never run (%v)",
-						pitrName, viewEntry.dbName, viewEntry.tblName, err))
-					viewEntry.unservable = true
-					g.addVertex(key)
+				if markUnservableViewInSort(ses, pitrName, viewEntry, &g, key, err) {
 					continue
 				}
 				return err
@@ -1843,16 +1837,7 @@ func restoreViewsWithPitr(
 				return err
 			}
 
-			// Marked by the sort above: the stored definition can never run. Leave the target
-			// object alone -- same reasoning as restoreViews: the snapshot may hold an
-			// unservable definition while the target holds a WORKING view of that name (its
-			// FULLTEXT index was recreated after the snapshot), and dropping it would delete a
-			// working view and put nothing back. A stale object beats data loss.
-			if tblInfo.unservable {
-				getLogger(ses.GetService()).Warn(fmt.Sprintf(
-					"[%s] view %v.%v left untouched and NOT restored: its stored definition can "+
-						"never run; any existing object of that name is kept",
-					pitrName, tblInfo.dbName, tblInfo.tblName))
+			if skipUnservableViewInRestore(ses, pitrName, tblInfo) {
 				continue
 			}
 
