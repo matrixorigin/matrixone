@@ -4108,6 +4108,7 @@ func appendDeleteIndexTablePlan(
 	baseNodeId int32,
 	isUK bool,
 	preserveProjection bool,
+	preserveActionRows bool,
 ) (int32, error) {
 	/********
 	NOTE: make sure to make the major change applied to secondary index, to IVFFLAT index as well.
@@ -4146,7 +4147,7 @@ func appendDeleteIndexTablePlan(
 			}},
 		}
 	}
-	if preserveProjection {
+	if preserveActionRows {
 		indexTag = builder.genNewBindTag()
 		scanNodeProject = nil
 	}
@@ -4340,7 +4341,14 @@ func appendDeleteIndexTablePlan(
 		IsRightJoin: true,
 		OnList:      joinConds,
 	}
-	if !preserveProjection {
+	if preserveActionRows {
+		// Recursive FK maintenance must preserve the action source, not the
+		// complete hidden-index scan. Express that ownership directly as a LEFT
+		// join so the later physical right-join swap cannot invert the row domain.
+		joinNode.Children = []int32{lastNodeId, leftId}
+		joinNode.JoinType = plan.Node_LEFT
+		joinNode.IsRightJoin = false
+	} else if !preserveProjection {
 		joinNode.ProjectList = projectList
 	}
 	if hasRuntimeFilter {
@@ -6161,9 +6169,11 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+		preserveActionRows := delCtx.isFkRecursionCall &&
+			(delCtx.sourceTag != 0 || delCtx.preserveUpdateSourceProjection)
 		lastNodeId, err = appendDeleteIndexTablePlan(
 			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
-			lastNodeId, isUk, preserveIndexProjection,
+			lastNodeId, isUk, preserveIndexProjection, preserveActionRows,
 		)
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1

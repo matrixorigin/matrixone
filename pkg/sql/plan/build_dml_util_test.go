@@ -660,8 +660,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true,
-			true,
+			true, true, false,
 		)
 
 		require.NoError(t, err)
@@ -676,6 +675,29 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.Empty(t, joinNode.RuntimeFilterBuildList)
 		lookupExpr := extractLookupExpr(t, joinNode)
 		requirePrefixExpr(t, lookupExpr, "body", 8, source.BindingTags[0])
+	})
+
+	t.Run("foreign key action preserves source rows", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			false, true, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := extractJoinNode(t, builder, gotNodeID)
+		require.Equal(t, plan.Node_LEFT, joinNode.JoinType)
+		require.False(t, joinNode.IsRightJoin)
+		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
+		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
 	})
 
 	t.Run("composite prefix part", func(t *testing.T) {
@@ -693,8 +715,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false,
-			true,
+			false, true, false,
 		)
 
 		require.NoError(t, err)
@@ -724,8 +745,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true,
-			true,
+			true, true, false,
 		)
 
 		require.NoError(t, err)
