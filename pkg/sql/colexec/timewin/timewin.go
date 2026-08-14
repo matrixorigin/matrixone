@@ -747,13 +747,43 @@ func appendTimestampIntervalBoundaryVector(
 			continue
 		}
 		if end && value != types.ZeroTimestamp {
-			value = types.Timestamp(int64(value) + int64(interval))
+			boundary, ok := addTimestampIntervalBoundary(value, interval)
+			if !ok {
+				if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			value = boundary
+		}
+		if !timestampIntervalBoundaryInDomain(value) {
+			if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if err := vector.AppendFixed(vec, value, false, proc.Mp()); err != nil {
 			return nil, err
 		}
 	}
 	return vec, nil
+}
+
+func addTimestampIntervalBoundary(value types.Timestamp, interval types.Datetime) (types.Timestamp, bool) {
+	raw := int64(value)
+	delta := int64(interval)
+	if delta > 0 && raw > int64(types.TimestampMaxValue)-delta {
+		return 0, false
+	}
+	if delta < 0 && raw < int64(types.TimestampMinValue)-delta {
+		return 0, false
+	}
+	boundary := types.Timestamp(raw + delta)
+	return boundary, timestampIntervalBoundaryInDomain(boundary)
+}
+
+func timestampIntervalBoundaryInDomain(value types.Timestamp) bool {
+	return value == types.ZeroTimestamp || (value >= types.TimestampMinValue && value <= types.TimestampMaxValue)
 }
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {

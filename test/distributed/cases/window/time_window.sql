@@ -359,6 +359,21 @@ select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (
 select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select device_id, _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_telemetry where metric = 'cpu_usage' and event_ts >= '2024-03-01 08:00:00.000000' and event_ts < '2024-03-01 09:00:00.000000' group by device_id interval(event_ts, 1, hour)) q;
 drop table tw_interval_fraction_telemetry;
 
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
+drop table if exists tw_interval_timestamp_domain;
+create table tw_interval_timestamp_domain (
+  id int primary key,
+  event_ts timestamp(6) not null
+);
+insert into tw_interval_timestamp_domain values
+  (1, '9999-12-31 23:59:59.999999'),
+  (2, '1970-01-01 00:00:01.000000');
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour);
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day);
+drop table tw_interval_timestamp_domain;
+set time_zone = @old_time_zone;
+
 -- unsupported calendar units should return a normal SQL error, not enter the compile panic path
 drop table if exists tw_interval_bad_unit;
 create table tw_interval_bad_unit(ts timestamp(6), v int);

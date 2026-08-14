@@ -561,6 +561,55 @@ func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	beforeMin := types.Timestamp(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
+	maxHourStart := types.FromClockUTC(9999, 12, 31, 23, 0, 0, 0)
+
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
+		types.ZeroTimestamp,
+		beforeMin,
+		types.TimestampMinValue,
+		maxHourStart,
+	}, nil, proc.Mp()))
+
+	wstarts, err := appendTimestampIntervalBoundaryVector(starts, 0, false, typ, proc)
+	require.NoError(t, err)
+	wends, err := appendTimestampIntervalBoundaryVector(starts, hour, true, typ, proc)
+	require.NoError(t, err)
+
+	require.False(t, wstarts.IsNull(0))
+	require.True(t, wstarts.IsNull(1))
+	require.False(t, wstarts.IsNull(2))
+	require.False(t, wstarts.IsNull(3))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		0,
+		types.TimestampMinValue,
+		maxHourStart,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wstarts))
+
+	require.False(t, wends.IsNull(0))
+	require.False(t, wends.IsNull(1))
+	require.False(t, wends.IsNull(2))
+	require.True(t, wends.IsNull(3))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(beforeMin) + int64(hour)),
+		types.Timestamp(int64(types.TimestampMinValue) + int64(hour)),
+		0,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wends))
+
+	starts.Free(proc.Mp())
+	wstarts.Free(proc.Mp())
+	wends.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
