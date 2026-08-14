@@ -875,6 +875,62 @@ func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
 }
 
+func TestGenViewTableDefPreservesSampleStar(t *testing.T) {
+	const rootSQL = "create view v_sample as select sample(*, 100 percent) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
+}
+
+func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
+	const rootSQL = "create view v_union as select * from nation union all select * from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Equal(t, 2, strings.Count(viewData.Stmt, "`nation`.`n_nationkey`"))
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+}
+
+func TestNormalSelectDoesNotCaptureExpandedStarList(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = builder.bindSelect(stmt.(*tree.Select), bindCtx, true)
+	require.NoError(t, err)
+	require.Nil(t, bindCtx.expandedSelectLists)
+}
+
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"

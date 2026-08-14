@@ -4603,6 +4603,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var helpFunc *helpFunc
 	var boundTimeWindowGroupBy *plan.Expr
 	var rollupFilter bool
+	var expandedSelectClause *tree.SelectClause
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
@@ -4688,6 +4689,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		expandedSelectClause = selectClause
 		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
 			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
 			// the same parsed SELECT once per reference, so keep the declaration
@@ -4839,7 +4841,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
-	ctx.expandedSelectList = cloneTreeSelectExprs(selectList)
+	if ctx.captureViewStarExpansion && selectClauseHasStar(expandedSelectClause) {
+		if ctx.expandedSelectLists == nil {
+			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+		}
+		ctx.expandedSelectLists[expandedSelectClause] = cloneTreeSelectExprs(selectList)
+	}
 
 	// bind SELECT clause (Projection List)
 	projectionBinder = NewProjectionBinder(builder, ctx, havingBinder)

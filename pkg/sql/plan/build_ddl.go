@@ -161,13 +161,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	// check view statement
 	var stmtPlan *Plan
 	var outputColumnProvenance []OutputColumnProvenance
-	var expandedSelectList tree.SelectExprs
+	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
 		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
 		for i := range outputColumnProvenance {
 			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))
 		}
-		expandedSelectList = cloneTreeSelectExprs(bindCtx.expandedSelectList)
+		expandedSelectLists = bindCtx.expandedSelectLists
 	}
 	var err error
 	switch s := stmt.Select.(type) {
@@ -237,7 +237,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectList); rewritten {
+	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, expandedSelectLists); rewritten {
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
 	}
@@ -279,13 +279,17 @@ func stableViewSQLWithExpandedStars(
 	ctx CompilerContext,
 	stmt *tree.Select,
 	viewSql string,
-	expandedSelectList tree.SelectExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
-	if viewSql == "" || len(expandedSelectList) == 0 || !viewSelectHasStar(stmt) {
+	// SAMPLE(*) expands to a sampling operator during binding, but replacing
+	// the source list with the ordinary projected columns would silently drop
+	// that operator. Keep the original statement until the SAMPLE AST can be
+	// rewritten without changing its semantics.
+	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) || viewSelectHasSampleStar(stmt) {
 		return viewSql, false
 	}
 
-	stableSelect, ok := viewSelectWithExpandedSelectList(stmt, expandedSelectList)
+	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
 	if !ok {
 		return viewSql, false
 	}
@@ -338,15 +342,56 @@ func viewSelectHasStar(stmt *tree.Select) bool {
 	if stmt == nil {
 		return false
 	}
-	switch selectStmt := stmt.Select.(type) {
+	return selectStatementHasStar(stmt.Select)
+}
+
+func selectStatementHasStar(stmt tree.SelectStatement) bool {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectClauseHasStar(selectStmt)
+	case *tree.Select:
+		return selectStatementHasStar(selectStmt.Select)
+	case *tree.ParenSelect:
+		return selectStatementHasStar(selectStmt.Select)
+	case *tree.UnionClause:
+		return selectStatementHasStar(selectStmt.Left) || selectStatementHasStar(selectStmt.Right)
+	}
+	return false
+}
+
+func selectClauseHasStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if selectExprHasStar(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func viewSelectHasSampleStar(stmt *tree.Select) bool {
+	if stmt == nil {
+		return false
+	}
+	return selectStatementHasSampleStar(stmt.Select)
+}
+
+func selectStatementHasSampleStar(stmt tree.SelectStatement) bool {
+	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
 		for _, expr := range selectStmt.Exprs {
-			if selectExprHasStar(expr) {
+			if selectExprHasSampleStar(expr) {
 				return true
 			}
 		}
+	case *tree.Select:
+		return selectStatementHasSampleStar(selectStmt.Select)
 	case *tree.ParenSelect:
-		return viewSelectHasStar(selectStmt.Select)
+		return selectStatementHasSampleStar(selectStmt.Select)
+	case *tree.UnionClause:
+		return selectStatementHasSampleStar(selectStmt.Left) || selectStatementHasSampleStar(selectStmt.Right)
 	}
 	return false
 }
@@ -366,28 +411,73 @@ func selectExprHasStar(selectExpr tree.SelectExpr) bool {
 	return false
 }
 
-func viewSelectWithExpandedSelectList(stmt *tree.Select, expandedSelectList tree.SelectExprs) (*tree.Select, bool) {
+func selectExprHasSampleStar(selectExpr tree.SelectExpr) bool {
+	expr, ok := selectExpr.Expr.(*tree.SampleExpr)
+	if !ok {
+		return false
+	}
+	_, isStar := expr.GetColumns()
+	return isStar
+}
+
+func viewSelectWithExpandedStars(
+	stmt *tree.Select,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Select, bool) {
 	if stmt == nil {
 		return nil, false
 	}
 	stableSelect := *stmt
-	switch selectStmt := stmt.Select.(type) {
+	stableStatement, rewritten := viewSelectStatementWithExpandedStars(stmt.Select, expandedSelectLists)
+	if stableStatement == nil || !rewritten {
+		return nil, false
+	}
+	stableSelect.Select = stableStatement
+	return &stableSelect, true
+}
+
+func viewSelectStatementWithExpandedStars(
+	stmt tree.SelectStatement,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectStatement, bool) {
+	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
 		stableClause := *selectStmt
+		expandedSelectList, ok := expandedSelectLists[selectStmt]
+		if !ok {
+			return &stableClause, false
+		}
 		stableClause.Exprs = cloneTreeSelectExprs(expandedSelectList)
-		stableSelect.Select = &stableClause
-		return &stableSelect, true
+		return &stableClause, true
+	case *tree.Select:
+		stableSelect := *selectStmt
+		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
+		stableSelect.Select = stableStatement
+		return &stableSelect, rewritten
 	case *tree.ParenSelect:
-		innerSelect, ok := viewSelectWithExpandedSelectList(selectStmt.Select, expandedSelectList)
+		stableParen := *selectStmt
+		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
+		if stableStatement == nil {
+			return nil, false
+		}
+		stableSelect, ok := stableStatement.(*tree.Select)
 		if !ok {
 			return nil, false
 		}
-		stableParen := *selectStmt
-		stableParen.Select = innerSelect
-		stableSelect.Select = &stableParen
-		return &stableSelect, true
+		stableParen.Select = stableSelect
+		return &stableParen, rewritten
+	case *tree.UnionClause:
+		stableUnion := *selectStmt
+		left, leftRewritten := viewSelectStatementWithExpandedStars(selectStmt.Left, expandedSelectLists)
+		right, rightRewritten := viewSelectStatementWithExpandedStars(selectStmt.Right, expandedSelectLists)
+		if left == nil || right == nil {
+			return nil, false
+		}
+		stableUnion.Left = left
+		stableUnion.Right = right
+		return &stableUnion, leftRewritten || rightRewritten
 	default:
-		return nil, false
+		return stmt, false
 	}
 }
 

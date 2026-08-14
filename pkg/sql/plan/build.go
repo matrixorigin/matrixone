@@ -64,6 +64,10 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
+	if capture != nil {
+		bindCtx.captureViewStarExpansion = true
+		bindCtx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
