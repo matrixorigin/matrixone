@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -944,9 +945,8 @@ func TestObjectStatsInBatch(t *testing.T) {
 	assert.Equal(t, uint32(1000), storedStats.Size())
 }
 
-// TestGetObjectListFromCKPWithEmptyLocation tests GetObjectListFromCKP with checkpoint entry having empty location
-// Note: This test verifies that the function panics when given an empty location,
-// which is expected behavior since empty locations should never be passed to this function
+// TestGetObjectListFromCKPWithEmptyLocation verifies the public checkpoint
+// consumer propagates an invalid location as an error instead of panicking.
 func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
@@ -963,16 +963,7 @@ func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 	var bat *batch.Batch
 	checkpointEntries := []*checkpoint.CheckpointEntry{entry}
 
-	// This will panic because location is empty and ReadMeta attempts to read from it
-	// We use recover to verify the panic behavior
-	defer func() {
-		if r := recover(); r != nil {
-			// Expected: panic when location is empty
-			t.Logf("Expected panic occurred: %v", r)
-		}
-	}()
-
-	_ = GetObjectListFromCKP(
+	err := GetObjectListFromCKP(
 		ctx,
 		1,  // tid
 		"", // sid
@@ -985,9 +976,13 @@ func TestGetObjectListFromCKPWithEmptyLocation(t *testing.T) {
 		mp,
 		fs,
 	)
-
-	// If we reach here, the function didn't panic which is unexpected
-	t.Fatal("Expected panic for empty location, but function completed normally")
+	require.NotNil(t, bat)
+	t.Cleanup(func() {
+		bat.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Zero(t, bat.RowCount())
 }
 
 // TestCollectObjectListNilBatch tests CollectObjectList does not panic with nil batch

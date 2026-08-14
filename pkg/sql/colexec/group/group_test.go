@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -60,6 +61,18 @@ func sumAgg(pos int32) aggexec.AggFuncExecExpression {
 
 func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
+}
+
+func countPreparedParamAgg() aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfCountColumn,
+		false,
+		[]*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}},
+		nil,
+	)
 }
 
 func minPreparedParamAgg() aggexec.AggFuncExecExpression {
@@ -284,6 +297,7 @@ func buildPartialH0Batch(t *testing.T, proc *process.Process, values []int32) *b
 type preparedPartialSpec struct {
 	rows    int
 	kind    vector.PrepareParamKind
+	binary  bool
 	allNull bool
 	value   string
 }
@@ -312,7 +326,7 @@ func buildPreparedPartial(
 		value = "5"
 	}
 	require.NoError(t, vector.AppendBytes(params, []byte(value), spec.allNull, proc.Mp()))
-	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind})
+	proc.SetPrepareParamsWithMeta(params, nil, []vector.PrepareParamKind{spec.kind}, []bool{spec.binary})
 	defer proc.SetPrepareParams(nil)
 
 	input := batch.NewWithSize(1)
@@ -466,6 +480,131 @@ func TestMergeGroupPreservesPreparedParamKind(t *testing.T) {
 	}
 }
 
+func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		require.Zero(t, proc.Mp().CurrNB())
+		proc.Free()
+	})
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
+	input.Vecs[0].SetIsBinaryString(true)
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	partialOp := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
+	partialOp.AppendChild(child)
+	require.NoError(t, partialOp.Prepare(proc))
+	partials := collectBatches(t, partialOp, proc)
+	require.Len(t, partials, 1)
+	partial := cloneBatch(t, proc, partials[0])
+	partialOp.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	output := mergePreparedPartial(t, proc, partial,
+		[]aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
+	require.True(t, output.Vecs[0].GetBinaryStringMetadataAt(0))
+}
+
+func TestGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
+	tests := []struct {
+		name           string
+		version        int64
+		missingRuntime bool
+		wantErr        bool
+	}{
+		{name: "v11", version: defines.MORPCVersion11, wantErr: true},
+		{name: "v12", version: defines.MORPCVersion12, wantErr: true},
+		{name: "v16", version: defines.MORPCVersion16, wantErr: true},
+		{name: "v17", version: defines.MORPCVersion17, wantErr: true},
+		{name: "v18", version: defines.MORPCVersion18},
+		{name: "missing runtime", missingRuntime: true, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			if tc.missingRuntime {
+				proc.Base.LockService = &unknownGroupServiceLockService{
+					cfg: lockservice.Config{ServiceID: "group-binary-unknown-service"},
+				}
+			} else {
+				setPrepareParamKindProtocolVersion(t, proc, tc.version)
+			}
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("binary"), false, proc.Mp()))
+			input.Vecs[1].SetIsBinaryString(true)
+			input.SetRowCount(1)
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+				[]aggexec.AggFuncExecExpression{minTextColumnAgg(1)})
+			partial.NeedEval = false
+			partial.AppendChild(child)
+			require.NoError(t, partial.Prepare(proc))
+
+			var gotBatch *batch.Batch
+			var gotErr error
+			for range 4 {
+				result, err := vm.Exec(partial, proc)
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if result.Batch != nil {
+					gotBatch = result.Batch
+					break
+				}
+			}
+			if tc.wantErr {
+				require.Nil(t, gotBatch)
+				require.ErrorContains(t, gotErr, "requires MORPCVersion18")
+			} else {
+				require.NoError(t, gotErr)
+				require.NotNil(t, gotBatch)
+			}
+			partial.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB())
+			proc.Free()
+		})
+	}
+}
+
+func TestMergeGroupBinaryStringPartialRequiresMORPCVersion18(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		require.Zero(t, proc.Mp().CurrNB())
+		proc.Free()
+	})
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
+	partial := buildPreparedMinPartial(t, proc, preparedPartialSpec{
+		rows:   1,
+		binary: true,
+	})
+	trailerOffset := bytes.LastIndex(partial.ExtraBuf, []byte{
+		prepareParamKindTrailerMagic0,
+		prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2,
+	})
+	require.NotEqual(t, -1, trailerOffset)
+	// Exercise the aggregate-owned receiver gate directly. The ordinary batch
+	// metadata is intentionally absent, while the aggregate state still carries
+	// its v18-only binary-string trailer.
+	partial.ExtraBuf = partial.ExtraBuf[:trailerOffset]
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion16)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minPreparedParamAgg()})
+	merge.AppendChild(child)
+	t.Cleanup(func() { merge.Free(proc, true, nil) })
+	require.NoError(t, merge.Prepare(proc))
+	result, err := vm.Exec(merge, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorContains(t, err, "requires MORPCVersion18")
+}
+
 func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -520,7 +659,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion12)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion18)
 
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{0, 1}, nil, proc.Mp())
@@ -532,6 +671,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 		vector.PrepareParamFloat,
 		vector.PrepareParamNone,
 	})
+	input.Vecs[1].SetIsBinaryString(true)
 	input.SetRowCount(2)
 
 	partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
@@ -554,6 +694,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	keys := vector.MustFixedColNoTypeCheck[int32](outputs[0].Vecs[0])
 	for row, key := range keys {
 		seen[key] = outputs[0].Vecs[1].GetPrepareParamKindAt(row)
+		require.True(t, outputs[0].Vecs[1].GetBinaryStringMetadataAt(row))
 	}
 	require.Equal(t, vector.PrepareParamFloat, seen[0])
 	require.Equal(t, vector.PrepareParamNone, seen[1])
@@ -773,10 +914,10 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 		{
 			name: "unsupported version",
 			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3] = 3
+				extra[trailerOffset+3] = 4
 				return extra
 			},
-			wantErr: "unsupported aggregate prepared parameter trailer version 3",
+			wantErr: "unsupported aggregate prepared parameter trailer version 4",
 		},
 		{
 			name: "aggregate count mismatch",
@@ -973,6 +1114,36 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestPreparedCountParamUsesInputRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("x"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	makeInput := func(rows int) *batch.Batch {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector(make([]int32, rows), nil, proc.Mp())
+		input.SetRowCount(rows)
+		return input
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeInput(3), makeInput(2)})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countPreparedParamAgg()})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Vecs, 1)
+	require.Equal(t, int64(5), vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[0])[0])
+
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestGroupUsesReducedHashKeyAndKeepsFullOutput(t *testing.T) {

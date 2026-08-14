@@ -135,25 +135,27 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			StmtType: queryType,
 			MaxDop:   int64(maxDop),
 		},
-		compCtx:                ctx,
-		ctxByNode:              []*BindContext{},
-		nameByColRef:           make(map[[2]int32]string),
-		protectedScans:         make(map[int32]int),
-		projectSpecialGuards:   make(map[int32]*specialIndexGuard),
-		setBitmapByDisplayNode: make(map[[2]int32]int32),
-		indexHintOwnerByNode:   make(map[int32]int32),
-		nextBindTag:            0,
-		mysqlCompatible:        mysqlCompatible,
-		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
-		aggSpillMem:            aggSpillMem,
-		joinSpillMem:           joinSpillMem,
-		sortSpillMem:           sortSpillMem,
-		tag2Table:              make(map[int32]*TableDef),
-		tag2NodeID:             make(map[int32]int32),
-		isPrepareStatement:     isPrepareStatement,
-		deleteNode:             make(map[uint64]int32),
-		skipStats:              skipStats,
-		optimizationHistory:    make([]string, 0),
+		compCtx:                  ctx,
+		ctxByNode:                []*BindContext{},
+		nameByColRef:             make(map[[2]int32]string),
+		protectedScans:           make(map[int32]int),
+		projectSpecialGuards:     make(map[int32]*specialIndexGuard),
+		setBitmapByDisplayNode:   make(map[[2]int32]int32),
+		indexHintOwnerByNode:     make(map[int32]int32),
+		userWindowNodes:          make(map[int32]struct{}),
+		partitionTopNWindowNodes: make(map[int32]struct{}),
+		nextBindTag:              0,
+		mysqlCompatible:          mysqlCompatible,
+		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		aggSpillMem:              aggSpillMem,
+		joinSpillMem:             joinSpillMem,
+		sortSpillMem:             sortSpillMem,
+		tag2Table:                make(map[int32]*TableDef),
+		tag2NodeID:               make(map[int32]int32),
+		isPrepareStatement:       isPrepareStatement,
+		deleteNode:               make(map[uint64]int32),
+		skipStats:                skipStats,
+		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
@@ -2144,11 +2146,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+		_, partitionTopN := builder.partitionTopNWindowNodes[nodeID]
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, 1, colRefCnt)
+				}
+			}
+		}
 
 		// remap children node
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, -1, colRefCnt)
+				}
+			}
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -2201,6 +2218,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
+			}
+			if _, ok := builder.partitionTopNWindowNodes[nodeID]; ok {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					if err = builder.remapColRefForExpr(partitionExpr, childRemapping.globalToLocal, &remapInfo); err != nil {
+						return nil, err
+					}
+				}
 			}
 
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
@@ -2980,6 +3004,36 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
+		var selectorRefs [3][2]int32
+		if node.PreInsertCtx.HasTargetSelector {
+			selectorInput := builder.qry.Nodes[node.Children[0]]
+			// Target-aware UPDATE can place pass-through ASSERT/FILTER nodes and
+			// another PRE_INSERT between this operator and the project that owns
+			// the selector columns. Walk through any single-child node without an
+			// output binding instead of assuming only nested PRE_INSERT can occur.
+			for len(selectorInput.BindingTags) == 0 {
+				if len(selectorInput.Children) != 1 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+				}
+				selectorInput = builder.qry.Nodes[selectorInput.Children[0]]
+			}
+			if len(selectorInput.BindingTags) == 0 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+			}
+			selectorProject := selectorInput.ProjectList
+			selectorPositions := []int32{
+				node.PreInsertCtx.TargetRowNumberCol,
+				node.PreInsertCtx.TargetActiveCol,
+				node.PreInsertCtx.TargetRowIdCol,
+			}
+			for i, pos := range selectorPositions {
+				if pos < 0 || int(pos) >= len(selectorProject) {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+				}
+				selectorRefs[i] = [2]int32{selectorInput.BindingTags[0], pos}
+				colRefCnt[selectorRefs[i]]++
+			}
+		}
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
 				increaseRefCnt(expr, 1, colRefCnt)
@@ -2991,9 +3045,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
+			}
+			if node.PreInsertCtx.HasTargetSelector {
+				for selectorIdx, selectorRef := range selectorRefs {
+					if globalRef == selectorRef {
+						selectorOutputPos[selectorIdx] = int32(len(node.ProjectList))
+					}
+				}
 			}
 
 			remapping.addColRef(globalRef)
@@ -3008,6 +3070,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+		if node.PreInsertCtx.HasTargetSelector {
+			for _, pos := range selectorOutputPos {
+				if pos < 0 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+				}
+			}
+			node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+			node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+			node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
 		}
 
 		if node.PreInsertCtx.CompPkeyExpr != nil {
@@ -3221,6 +3293,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
 
@@ -4616,6 +4689,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
+		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
 		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
 		// GAPFILL uses the same second-stage aggregate state machine as an
 		// explicit sliding window even when its external SQL is a tumbling
@@ -7459,6 +7535,11 @@ func (builder *QueryBuilder) bindGroupBy(
 				ctx.groupingFlag[i] = true
 			}
 		}
+
+		// GROUPING() is meaningful only for grouping extensions. Apart marks an
+		// internally expanded ROLLUP/CUBE/GROUPING SETS branch; GroupingSets also
+		// covers the single-set form, which does not need branch expansion.
+		ctx.groupingFuncAllowed = clause.Apart || clause.Cube || clause.GroupingSets || clause.Rollup
 	}
 
 	if astTimeWindow != nil {
@@ -7566,6 +7647,10 @@ func (builder *QueryBuilder) bindTimeWindow(
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
+	if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
+		return
+	}
+
 	h := projectionBinder.havingBinder
 	col, err := ctx.qualifyColumnNames(astTimeWindow.Interval.Col, NoAlias)
 	if err != nil {
@@ -8653,6 +8738,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
 		}, ctx)
+		builder.userWindowNodes[nodeID] = struct{}{}
 	}
 
 	for name, id := range ctx.windowByAst {
@@ -8927,6 +9013,61 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 	}
 	return h, nil
+}
+
+const (
+	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+	timeWindowIntervalMustBePositive  = "time window interval must be greater than zero"
+	timeWindowSlidingMustBePositive   = "time window sliding value must be greater than zero"
+)
+
+func validateTimeWindowIntervalUnits(ctx context.Context, astTimeWindow *tree.TimeWindow) error {
+	if astTimeWindow == nil {
+		return nil
+	}
+	if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Interval.Unit); err != nil {
+		return err
+	}
+	if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Interval.Val, timeWindowIntervalMustBePositive); err != nil {
+		return err
+	}
+	if astTimeWindow.Sliding != nil {
+		if err := validateTimeWindowIntervalUnit(ctx, astTimeWindow.Sliding.Unit); err != nil {
+			return err
+		}
+		if err := validateTimeWindowIntervalValue(ctx, astTimeWindow.Sliding.Val, timeWindowSlidingMustBePositive); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalValue(ctx context.Context, expr tree.Expr, message string) error {
+	val, ok := expr.(*tree.NumVal)
+	if !ok {
+		return nil
+	}
+	n, ok := val.Int64()
+	if !ok {
+		return nil
+	}
+	if n <= 0 {
+		return moerr.NewInvalidInput(ctx, message)
+	}
+	return nil
+}
+
+func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
+	typ, err := types.IntervalTypeOf(unit)
+	if err != nil {
+		return err
+	}
+	switch typ {
+	case types.Second, types.Minute, types.Hour, types.Day:
+		return nil
+	default:
+		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)
+	}
 }
 
 func appendSelectList(
@@ -9592,6 +9733,14 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.headings[i] = string(colName)
 		}
 	}
+	// Expanding a view removes the view catalog object from the executable
+	// scan nodes. Preserve that object's identity so every plan consumer,
+	// including the ordinary COM_QUERY cache, can validate the complete
+	// catalog dependency closure before reusing the expanded plan.
+	builder.qry.CatalogDependencies = appendPrepareSchemas(
+		builder.qry.CatalogDependencies,
+		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+	)
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
@@ -10028,6 +10177,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
+		explicitNamedSnapshot := false
 		if tbl.AtTsExpr != nil {
 			if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
@@ -10041,6 +10191,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			explicitNamedSnapshot = tbl.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT
 		}
 
 		var snapshot *Snapshot
@@ -10082,6 +10233,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		}
 		if tableDef == nil {
 			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
+		}
+		if explicitNamedSnapshot {
+			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
+		}
+		if err != nil {
+			return 0, err
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}

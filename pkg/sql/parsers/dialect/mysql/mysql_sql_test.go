@@ -815,6 +815,31 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	)
 }
 
+func TestCloneDatabaseParsePreservesIfNotExists(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create database if not exists dst clone src{snapshot = 'sp1'} to account acc",
+		1,
+	)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	cloneStmt, ok := stmt.(*tree.CloneDatabase)
+	require.True(t, ok)
+	require.True(t, cloneStmt.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.DstDatabase)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcDatabase)
+	require.NotNil(t, cloneStmt.AtTsExpr)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create database if not exists `dst` clone `src`{snapshot = 'sp1'} to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
 func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
@@ -2877,6 +2902,12 @@ var (
 		}, {
 			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
 			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
+			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
+			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {

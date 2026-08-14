@@ -327,6 +327,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
+	case vm.Partition:
+		t := sourceOp.(*partition.Partition)
+		op := partition.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.Limit = t.Limit
+		op.PartitionByCount = t.PartitionByCount
+		op.PreReduce = t.PreReduce
+		op.SetInfo(&info)
+		return op
+	case vm.Window:
+		t := sourceOp.(*window.Window)
+		op := window.NewArgument()
+		op.WinSpecList = t.WinSpecList
+		op.Fs = t.Fs
+		op.Aggs = t.Aggs
+		op.PartitionTopN = t.PartitionTopN
+		op.SetInfo(&info)
+		return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -532,6 +550,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.HasTargetSelector = t.HasTargetSelector
+		op.TargetRowNumberCol = t.TargetRowNumberCol
+		op.TargetActiveCol = t.TargetActiveCol
+		op.TargetRowIDCol = t.TargetRowIDCol
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -838,6 +860,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.HasTargetSelector = preCtx.HasTargetSelector
+	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
+	op.TargetActiveCol = preCtx.TargetActiveCol
+	op.TargetRowIDCol = preCtx.TargetRowIdCol
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err
@@ -933,19 +959,32 @@ func constructMultiUpdate(
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
+			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
+			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
+			TargetTableID:      updateCtx.TableDef.TblId,
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(node.UpdateCtxList[0].TableDef.FeatureFlag) {
+	if !ps.Enabled() {
+		return arg, nil
+	}
+	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
 		return arg, nil
 	}
 
-	return multi_update.NewPartitionMultiUpdate(
-		arg,
-		node.UpdateCtxList[0].TableDef.TblId,
-	), nil
+	return multi_update.NewPartitionMultiUpdate(arg), nil
+}
+
+func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
+			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
 }
 
 func constructInsert(
@@ -2028,6 +2067,8 @@ func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 func constructPartition(node *plan.Node) *partition.Partition {
 	arg := partition.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.Limit = node.Limit
+	arg.PartitionByCount = node.PartitionByCount
 	return arg
 }
 

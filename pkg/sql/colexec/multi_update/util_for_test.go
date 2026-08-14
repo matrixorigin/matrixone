@@ -16,12 +16,14 @@ package multi_update
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
@@ -115,6 +117,14 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 			continue
 		}
 		require.NoError(t, err)
+		if tc.op.Action == UpdateWriteS3 {
+			sentinel, mapErr := hashmap.NewStrHashMap(false, proc.Mp())
+			require.NoError(t, mapErr)
+			tc.op.ctr.seenTargetRows[math.MaxUint64] = sentinel
+			require.Same(t, sentinel, tc.op.ctr.s3Writer.seenTargetRows[math.MaxUint64])
+			delete(tc.op.ctr.seenTargetRows, math.MaxUint64)
+			sentinel.Free()
+		}
 		if tc.op.Action != UpdateWriteS3 {
 			for _, info := range tc.op.ctr.updateCtxInfos {
 				require.NotNil(t, info.Source)
