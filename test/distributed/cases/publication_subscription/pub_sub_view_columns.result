@@ -12,10 +12,10 @@ select * from view_columns_subscription.published_view;
 ➤ value[-5,64,0]
 desc view_columns_subscription.published_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 show columns from view_columns_subscription.published_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 drop database view_columns_subscription;
 drop publication view_columns_publication;
 drop database view_columns_source;
