@@ -360,6 +360,7 @@ type QueryBuilder struct {
 	isForUpdate            bool // if it's a query plan for update
 	isRestore              bool
 	isRestoreByTs          bool
+	deriveViewMetadata     bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
 	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected

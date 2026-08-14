@@ -210,16 +210,17 @@ var (
 		"(not exists (select 1 from mo_catalog.mo_view_refresh vr "+
 		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id) and "+
 		"not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
-		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0 "+
-		"and vd.source_relation_kind<>'REVALIDATE_REQUIRED') and "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) and "+
 		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
 		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
 		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) or "+
 		"(exists (select 1 from mo_catalog.mo_view_refresh vr "+
 		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id "+
-		"and vr.status='CURRENT') and not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
-		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0 "+
-		"and vd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')) and "+
+		"and vr.status='CURRENT') and (not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) or "+
+		"exists (select 1 from mo_catalog.mo_view_dependencies ga "+
+		"where ga.account_id=0 and ga.target_relation_id=0 and ga.dependency_ordinal=0 "+
+		"and ga.source_relation_kind not in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) and "+
 		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
 		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
 		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')))) "+

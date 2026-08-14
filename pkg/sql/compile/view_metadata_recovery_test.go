@@ -140,6 +140,58 @@ func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
 	require.Contains(t, sql, "t.reldatabase not in ('")
 }
 
+func TestConflictingRecoveryTargetGetsGenerationFencedBackoff(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selected := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	selected.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(selected, 0, []uint32{7}))
+	require.NoError(t, executor.AppendFixedRows(selected, 1, []uint64{11}))
+	require.NoError(t, executor.AppendFixedRows(selected, 2, []uint64{13}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{selected.GetResult(), {}}}
+	target, found, err := selectPendingViewMetadataTarget(context.Background(), exec, nil)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, uint32(7), target.accountID)
+	require.Equal(t, uint64(11), target.relationID)
+	require.Equal(t, uint64(13), target.generation)
+	require.NoError(t, deferConflictingViewMetadata(context.Background(), exec,
+		viewMetadataRecoveryCommand{
+			AccountID: target.accountID, RelationID: target.relationID, Generation: target.generation,
+		}))
+	require.Contains(t, exec.sqls[1], "next_retry_at=date_add(now(),interval 2 second)")
+	require.Contains(t, exec.sqls[1], "attempts=attempts+1")
+	require.Contains(t, exec.sqls[1], "account_id=7 and target_relation_id=11 and target_generation=13")
+	require.Contains(t, exec.sqls[1], "status in ('PENDING','DISCOVERING')")
+}
+
+func TestRunRecoveryContinuesAfterTransactionConflict(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	discovery := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	discovery.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(discovery, 0, []string{`{"result":0}`}))
+	selected := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	selected.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(selected, 0, []uint32{7}))
+	require.NoError(t, executor.AppendFixedRows(selected, 1, []uint64{11}))
+	require.NoError(t, executor.AppendFixedRows(selected, 2, []uint64{13}))
+	exec := &viewMetadataCleanupRecordingExecutor{
+		results:  []executor.Result{{}, discovery.GetResult(), selected.GetResult(), {}, {}, {}},
+		failures: map[int]error{4: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
+	}
+	require.NoError(t, RunViewMetadataRecovery(context.Background(), exec, "worker"))
+	require.GreaterOrEqual(t, len(exec.sqls), 6)
+	require.Contains(t, exec.sqls[4], "next_retry_at=date_add(now(),interval 2 second)")
+	require.Contains(t, exec.sqls[4], "target_generation=13")
+	// The successful durable backoff counts as progress, so the same page asks
+	// for another eligible target instead of stopping behind the conflict.
+	require.Contains(t, exec.sqls[5], "order by next_retry_at,attempts")
+	require.Contains(t, exec.sqls[5], "not (account_id=7 and target_relation_id=11)")
+}
+
 func TestRecoveryPropagationOnlyInvalidatesCurrentDependents(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	exec := &viewMetadataCleanupRecordingExecutor{}
@@ -327,7 +379,7 @@ func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
 		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
 			persistViewDependencies(nil, "db", nil))
 		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
-		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
+		require.Contains(t, exec.sqls[2], "source_relation_kind='REVALIDATE_REQUIRED'")
 	})
 
 	t.Run("catalog failure", func(t *testing.T) {
@@ -862,40 +914,104 @@ func TestBeginViewMetadataRevalidationPropagatesCatalogError(t *testing.T) {
 }
 
 func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T) {
-	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, {}, {}, {}, {}, {}, {}}}
+	markerResult := func() executor.Result {
+		proc := testutil.NewProcess(t)
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint32{viewMetadataRevalidationSeedComplete}))
+		require.NoError(t, executor.AppendStringRows(result, 1,
+			[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{7}))
+		return result.GetResult()
+	}
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		{}, {}, {}, {}, markerResult(), {}, markerResult(), {},
+	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
-	require.Len(t, exec.sqls, 7)
+	require.Len(t, exec.sqls, 8)
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
-	require.Contains(t, exec.sqls[1],
+	require.Contains(t, exec.sqls[1], "select source_account_id")
+	require.Contains(t, exec.sqls[2],
 		"where not exists")
-	require.Contains(t, exec.sqls[1], "'REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[2],
-		"select a.account_id")
-	require.Contains(t, exec.sqls[2],
-		"d.account_id=a.account_id")
 	require.Contains(t, exec.sqls[2], "'REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[3],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[3],
 		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
-	require.NotContains(t, exec.sqls[3], "where account_id=0")
-	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[4])
-	require.Contains(t, exec.sqls[5], "select a.account_id")
-	require.Contains(t, exec.sqls[5], "g.source_relation_kind='REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[5], "g.dependency_generation")
-	require.Contains(t, exec.sqls[6],
+	require.Contains(t, exec.sqls[3], "where account_id=0")
+	require.Contains(t, exec.sqls[4], "select source_account_id")
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[5])
+	require.Contains(t, exec.sqls[6], "select source_account_id")
+	require.Contains(t, exec.sqls[7],
 		"source_relation_kind='REVALIDATE_SCAN'")
-	require.Contains(t, exec.sqls[6],
+	require.Contains(t, exec.sqls[7],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[6], "source_account_id=0")
-	require.NotContains(t, exec.sqls[6], "where account_id=0")
+	require.Contains(t, exec.sqls[7], "source_account_id=0")
+	require.Contains(t, exec.sqls[7], "where account_id=0")
 	for _, sql := range exec.sqls {
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
 		require.Len(t, statements, 1)
 		statements[0].Free()
 	}
+}
+
+func TestRequireViewMetadataRevalidationFastReturnsWhenAlreadyRequired(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	current := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	current.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(current, 0,
+		[]uint32{viewMetadataRevalidationSeedComplete}))
+	require.NoError(t, executor.AppendStringRows(current, 1,
+		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+	require.NoError(t, executor.AppendFixedRows(current, 2, []uint64{7}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{}, current.GetResult()}}
+	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
+	require.Len(t, exec.sqls, 2)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[0])
+	require.Contains(t, exec.sqls[1], "for update")
+}
+
+func TestSeedViewMetadataRevalidationPageIsBounded(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	marker := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	marker.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(marker, 0, []uint32{0}))
+	require.NoError(t, executor.AppendStringRows(marker, 1,
+		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+	require.NoError(t, executor.AppendFixedRows(marker, 2, []uint64{9}))
+	accounts := executor.NewMemResult([]types.Type{types.T_uint32.ToType()}, proc.Mp())
+	accounts.NewBatchWithRowCount(viewMetadataRecoveryPageSize)
+	ids := make([]uint32, viewMetadataRecoveryPageSize)
+	for i := range ids {
+		ids[i] = uint32(i + 1)
+	}
+	require.NoError(t, executor.AppendFixedRows(accounts, 0, ids))
+	results := []executor.Result{marker.GetResult(), accounts.GetResult()}
+	results = append(results, make([]executor.Result, viewMetadataRecoveryPageSize+1)...)
+	results[len(results)-1].AffectedRows = 1
+	exec := &viewMetadataCleanupRecordingExecutor{results: results}
+	complete := false
+	err := exec.ExecTxn(context.Background(), func(txn executor.TxnExecutor) error {
+		var seedErr error
+		var active bool
+		complete, active, seedErr = seedViewMetadataRevalidationPage(txn)
+		require.True(t, active)
+		return seedErr
+	}, executor.Options{})
+	require.NoError(t, err)
+	require.False(t, complete)
+	require.Len(t, exec.sqls, viewMetadataRecoveryPageSize+3)
+	require.Contains(t, exec.sqls[1], fmt.Sprintf("limit %d", viewMetadataRecoveryPageSize))
+	require.Contains(t, exec.sqls[len(exec.sqls)-1],
+		fmt.Sprintf("set source_account_id=%d", viewMetadataRecoveryPageSize))
 }
 
 func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T) {
@@ -907,13 +1023,13 @@ func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T)
 		require.Len(t, exec.sqls, 2)
 	})
 
-	t.Run("required tenant marker insert", func(t *testing.T) {
+	t.Run("required marker transition", func(t *testing.T) {
 		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{3: testErr}}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 3)
 	})
 
-	t.Run("required marker transition", func(t *testing.T) {
+	t.Run("required marker cursor", func(t *testing.T) {
 		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{4: testErr}}
 		require.ErrorIs(t, RequireViewMetadataRevalidation(context.Background(), exec), testErr)
 		require.Len(t, exec.sqls, 4)
@@ -926,7 +1042,20 @@ func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T)
 	})
 
 	t.Run("start scan transition", func(t *testing.T) {
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{3: testErr}}
+		proc := testutil.NewProcess(t)
+		marker := executor.NewMemResult([]types.Type{
+			types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+		}, proc.Mp())
+		marker.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(marker, 0,
+			[]uint32{viewMetadataRevalidationSeedComplete}))
+		require.NoError(t, executor.AppendStringRows(marker, 1,
+			[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+		require.NoError(t, executor.AppendFixedRows(marker, 2, []uint64{7}))
+		exec := &viewMetadataCleanupRecordingExecutor{
+			results:  []executor.Result{{}, marker.GetResult()},
+			failures: map[int]error{3: testErr},
+		}
 		require.ErrorIs(t,
 			StartViewMetadataRevalidation(context.Background(), exec, "restarted-worker"), testErr)
 		require.Len(t, exec.sqls, 3)
@@ -939,7 +1068,7 @@ func TestViewMetadataRevalidationActivationPropagatesCatalogErrors(t *testing.T)
 		require.Len(t, exec.sqls, 1)
 	})
 
-	t.Run("start tenant marker seed", func(t *testing.T) {
+	t.Run("start tenant marker cursor", func(t *testing.T) {
 		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{2: testErr}}
 		require.ErrorIs(t,
 			StartViewMetadataRevalidation(context.Background(), exec, "restarted-worker"), testErr)

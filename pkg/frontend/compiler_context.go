@@ -738,9 +738,11 @@ func viewMetadataStatusIsCurrent(
 	if !globallyEnabled {
 		return true
 	}
+	globalRevalidationComplete := globalStatus == catalog.ViewRefreshStatusActivated ||
+		globalStatus == catalog.ViewRefreshStatusLegacyScan
 	return found && status == catalog.ViewRefreshStatusCurrent &&
-		markerStatus != catalog.ViewRefreshStatusRevalidateScan &&
-		markerStatus != catalog.ViewRefreshStatusRevalidateRequired
+		(globalRevalidationComplete || (markerStatus != catalog.ViewRefreshStatusRevalidateScan &&
+			markerStatus != catalog.ViewRefreshStatusRevalidateRequired))
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(

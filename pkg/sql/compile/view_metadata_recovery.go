@@ -51,6 +51,9 @@ type viewMetadataRecoveryCommand struct {
 	WorkerID   string `json:"worker_id"`
 	Discover   bool   `json:"discover"`
 	Revalidate bool   `json:"revalidate"`
+	AccountID  uint32 `json:"account_id,omitempty"`
+	RelationID uint64 `json:"relation_id,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
 }
 
 func viewMetadataRequireRevalidationSQL() []string {
@@ -65,18 +68,9 @@ func viewMetadataRequireRevalidationSQL() []string {
 			catalog.ViewRefreshStatusRevalidateRequired,
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
 		fmt.Sprintf(
-			"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
-				"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
-				"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
-				"and d.dependency_ordinal=0)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
-			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
-			catalog.ViewRefreshStatusRevalidateRequired,
-			catalog.MO_CATALOG, catalog.MOAccountTable,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
-		fmt.Sprintf(
-			"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-				"where target_relation_id=0 and dependency_ordinal=0 "+
+			"update %s.%s set source_account_id=0,source_relation_kind='%s',"+
+				"dependency_generation=dependency_generation+1 where account_id=0 "+
+				"and target_relation_id=0 and dependency_ordinal=0 "+
 				"and source_relation_kind in ('%s','%s','%s')",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateRequired,
@@ -91,15 +85,99 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
-		for _, statement := range viewMetadataRequireRevalidationSQL() {
+		statements := viewMetadataRequireRevalidationSQL()
+		result, err := txn.Exec(statements[0], executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		result.Close()
+		if _, active, seedErr := seedViewMetadataRevalidationPage(txn); seedErr != nil || active {
+			return seedErr
+		}
+
+		for _, statement := range statements[1:] {
 			result, err := txn.Exec(statement, executor.StatementOption{})
 			if err != nil {
 				return err
 			}
 			result.Close()
 		}
-		return nil
+		_, _, err = seedViewMetadataRevalidationPage(txn)
+		return err
 	}, executor.Options{}.WithAccountID(catalog.System_Account))
+}
+
+const viewMetadataRevalidationSeedComplete = uint32(^uint32(0))
+
+func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, active bool, err error) {
+	cursorResult, err := txn.Exec(fmt.Sprintf(
+		"select source_account_id,source_relation_kind,dependency_generation from %s.%s "+
+			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 for update",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
+	if err != nil {
+		return false, false, err
+	}
+	cursor := uint32(0)
+	status := ""
+	generation := uint64(1)
+	cursorResult.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if rows > 0 {
+			cursor = vector.MustFixedColNoTypeCheck[uint32](columns[0])[0]
+			status = columns[1].GetStringAt(0)
+			generation = vector.MustFixedColNoTypeCheck[uint64](columns[2])[0]
+		}
+		return false
+	})
+	cursorResult.Close()
+	if status != catalog.ViewRefreshStatusRevalidateRequired {
+		return false, false, nil
+	}
+	if cursor == viewMetadataRevalidationSeedComplete {
+		return true, true, nil
+	}
+	page, err := txn.Exec(fmt.Sprintf(
+		"select account_id from %s.%s where account_id>%d order by account_id limit %d",
+		catalog.MO_CATALOG, catalog.MOAccountTable, cursor, viewMetadataRecoveryPageSize),
+		executor.StatementOption{})
+	if err != nil {
+		return false, true, err
+	}
+	accounts := make([]uint32, 0, viewMetadataRecoveryPageSize)
+	page.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		accounts = append(accounts, vector.MustFixedColNoTypeCheck[uint32](columns[0])[:rows]...)
+		return true
+	})
+	page.Close()
+	for _, accountID := range accounts {
+		result, execErr := txn.Exec(fmt.Sprintf(
+			"replace into %s.%s (%s) values (%d,0,0,0,'%s','%s',0,0,0,0,0,"+
+				"'','','','','%s','',0,null,0,%d)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+			accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+			catalog.ViewRefreshStatusRevalidateRequired, generation), executor.StatementOption{})
+		if execErr != nil {
+			return false, true, execErr
+		}
+		result.Close()
+	}
+	nextCursor := viewMetadataRevalidationSeedComplete
+	if len(accounts) == viewMetadataRecoveryPageSize {
+		nextCursor = accounts[len(accounts)-1]
+	}
+	advanced, err := txn.Exec(fmt.Sprintf(
+		"update %s.%s set source_account_id=%d where account_id=0 and target_relation_id=0 "+
+			"and dependency_ordinal=0 and dependency_generation=%d and source_relation_kind='%s'",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, nextCursor, generation,
+		catalog.ViewRefreshStatusRevalidateRequired), executor.StatementOption{})
+	if err != nil {
+		return false, true, err
+	}
+	affected := advanced.AffectedRows
+	advanced.Close()
+	if affected != 1 {
+		return false, true, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nextCursor == viewMetadataRevalidationSeedComplete, true, nil
 }
 
 // StartViewMetadataRevalidation starts one durable bounded pass over every
@@ -115,29 +193,16 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 		}
 		gate.Close()
 
-		seeded, err := txn.Exec(fmt.Sprintf(
-			"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
-				"'','','','','%s','',0,null,0,g.dependency_generation from %s.%s a join %s.%s g "+
-				"on g.account_id=0 and g.target_relation_id=0 and g.dependency_ordinal=0 "+
-				"and g.source_relation_kind='%s' where a.account_id<>0 and not exists "+
-				"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
-				"and d.dependency_ordinal=0)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
-			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
-			catalog.ViewRefreshStatusRevalidateRequired,
-			catalog.MO_CATALOG, catalog.MOAccountTable,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
-			catalog.ViewRefreshStatusRevalidateRequired,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
-		if err != nil {
+		complete, active, err := seedViewMetadataRevalidationPage(txn)
+		if err != nil || !active || !complete {
 			return err
 		}
-		seeded.Close()
 
 		result, err := txn.Exec(fmt.Sprintf(
 			"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
 				"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-				"where target_relation_id=0 and dependency_ordinal=0 and source_relation_kind='%s'",
+				"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 "+
+				"and source_relation_kind='%s'",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateScan,
 			catalog.ViewRefreshStatusRevalidateRequired), executor.StatementOption{})
@@ -157,11 +222,29 @@ func RunViewMetadataRecovery(
 	sqlExecutor executor.SQLExecutor,
 	workerID string,
 ) error {
+	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+	defer cancel()
+	ctx = callCtx
+	blocked, err := viewMetadataRevalidationStillRequired(ctx, sqlExecutor)
+	if err != nil || blocked {
+		return err
+	}
+	excludedTargets := make([]viewRefreshTarget, 0, viewMetadataRecoveryPageSize)
 	call := func(discover bool) (bool, error) {
-		command, err := json.Marshal(viewMetadataRecoveryCommand{
+		request := viewMetadataRecoveryCommand{
 			WorkerID: workerID,
 			Discover: discover,
-		})
+		}
+		if !discover {
+			target, found, err := selectPendingViewMetadataTarget(ctx, sqlExecutor, excludedTargets)
+			if err != nil || !found {
+				return false, err
+			}
+			request.AccountID = target.accountID
+			request.RelationID = target.relationID
+			request.Generation = target.generation
+		}
+		command, err := json.Marshal(request)
 		if err != nil {
 			return false, err
 		}
@@ -172,6 +255,16 @@ func RunViewMetadataRecovery(
 			sqlquote.EscapeString(string(command))),
 			executor.Options{}.WithAccountID(catalog.System_Account))
 		if err != nil {
+			failure := classifyViewRefreshFailure(err)
+			if !discover && failure.code == viewRefreshFailureTxnConflict {
+				if scheduleErr := deferConflictingViewMetadata(ctx, sqlExecutor, request); scheduleErr != nil {
+					return false, scheduleErr
+				}
+				excludedTargets = append(excludedTargets, viewRefreshTarget{
+					accountID: request.AccountID, relationID: request.RelationID,
+				})
+				return true, nil
+			}
 			return false, err
 		}
 		processed := false
@@ -192,6 +285,84 @@ func RunViewMetadataRecovery(
 	return runViewMetadataRecoveryPage(ctx,
 		func() (bool, error) { return call(true) },
 		func() (bool, error) { return call(false) })
+}
+
+func viewMetadataRevalidationStillRequired(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+) (bool, error) {
+	result, err := sqlExecutor.Exec(ctx, fmt.Sprintf(
+		"select source_relation_kind from %s.%s where account_id=0 and target_relation_id=0 "+
+			"and dependency_ordinal=0",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+	required := false
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if rows > 0 {
+			required = columns[0].GetStringAt(0) == catalog.ViewRefreshStatusRevalidateRequired
+		}
+		return false
+	})
+	return required, nil
+}
+
+func selectPendingViewMetadataTarget(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	excluded []viewRefreshTarget,
+) (viewRefreshTarget, bool, error) {
+	excludedPredicate := ""
+	for _, target := range excluded {
+		excludedPredicate += fmt.Sprintf(" and not (account_id=%d and target_relation_id=%d)",
+			target.accountID, target.relationID)
+	}
+	result, err := sqlExecutor.Exec(ctx, fmt.Sprintf(
+		"select account_id,target_relation_id,target_generation from %s.%s "+
+			"where status in ('%s','%s') and (next_retry_at is null or next_retry_at<=now()) "+
+			"%s order by next_retry_at,attempts,account_id,target_relation_id limit 1",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
+		viewRefreshStatusPending, viewRefreshStatusDiscovering, excludedPredicate),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return viewRefreshTarget{}, false, err
+	}
+	defer result.Close()
+	target := viewRefreshTarget{}
+	found := false
+	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
+		if rows > 0 {
+			found = true
+			target.accountID = vector.MustFixedColNoTypeCheck[uint32](columns[0])[0]
+			target.relationID = vector.MustFixedColNoTypeCheck[uint64](columns[1])[0]
+			target.generation = vector.MustFixedColNoTypeCheck[uint64](columns[2])[0]
+		}
+		return false
+	})
+	return target, found, nil
+}
+
+func deferConflictingViewMetadata(
+	ctx context.Context,
+	sqlExecutor executor.SQLExecutor,
+	command viewMetadataRecoveryCommand,
+) error {
+	result, err := sqlExecutor.Exec(ctx, fmt.Sprintf(
+		"update %s.%s set failure_code=%d,next_retry_at=date_add(now(),interval 2 second),"+
+			"attempts=attempts+1 where account_id=%d and target_relation_id=%d and target_generation=%d "+
+			"and status in ('%s','%s')",
+		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, viewRefreshFailureTxnConflict,
+		command.AccountID, command.RelationID, command.Generation,
+		viewRefreshStatusPending, viewRefreshStatusDiscovering),
+		executor.Options{}.WithAccountID(catalog.System_Account))
+	if err != nil {
+		return err
+	}
+	result.Close()
+	return nil
 }
 
 func runViewMetadataRecoveryPage(
@@ -242,7 +413,7 @@ func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, e
 	if command.Revalidate {
 		return beginViewMetadataRevalidation(proc)
 	}
-	return recoverOnePendingViewMetadata(proc, command.WorkerID)
+	return recoverPendingViewMetadataTarget(proc, command.WorkerID, command)
 }
 
 func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
@@ -636,6 +807,14 @@ func (c *recoveryCompilerContext) ResolveViewDependencyAccount(
 // invokes the command repeatedly, so every invocation owns one bounded
 // transaction and one relation replacement.
 func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int, error) {
+	return recoverPendingViewMetadataTarget(proc, workerID, viewMetadataRecoveryCommand{})
+}
+
+func recoverPendingViewMetadataTarget(
+	proc *process.Process,
+	workerID string,
+	command viewMetadataRecoveryCommand,
+) (int, error) {
 	if err := proc.Ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -648,13 +827,18 @@ func recoverOnePendingViewMetadata(proc *process.Process, workerID string) (int,
 		WithDisableIncrStatement().
 		WithTxn(proc.GetTxnOperator()).
 		WithAccountID(catalog.System_Account)
+	targetPredicate := ""
+	if command.RelationID != 0 {
+		targetPredicate = fmt.Sprintf(" and account_id=%d and target_relation_id=%d and target_generation=%d",
+			command.AccountID, command.RelationID, command.Generation)
+	}
 	result, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"select account_id,target_database_id,target_relation_id,target_logical_id,"+
 			"target_database_name,target_relation_name,target_generation,lease_epoch,status "+
 			"from %s.%s where status in ('%s','%s') and (next_retry_at is null or next_retry_at<=now()) "+
-			"order by next_retry_at,attempts,account_id,target_relation_id limit 1",
+			"%s order by next_retry_at,attempts,account_id,target_relation_id limit 1",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
-		viewRefreshStatusPending, viewRefreshStatusDiscovering), opts)
+		viewRefreshStatusPending, viewRefreshStatusDiscovering, targetPredicate), opts)
 	if err != nil {
 		return 0, err
 	}
@@ -1030,27 +1214,6 @@ func regenerateViewUsingPersistedEnvironment(
 		dependencies: persistedData.Dependencies,
 	}
 	return plan2.RegenerateViewDefinition(compilerCtx, currentDef.ViewSql.View)
-}
-
-func (c *Compile) enqueueDependentViews(
-	mutation viewRelationMutation,
-	generation uint64,
-	oldRelationID uint64,
-	oldLogicalID uint64,
-) error {
-	return c.runSqlWithSystemTenant(fmt.Sprintf(
-		"replace into %s.%s (%s) select distinct d.account_id,d.target_database_id,d.target_relation_id,"+
-			"d.target_logical_id,d.target_database_name,d.target_relation_name,"+
-			"coalesce(r.target_generation+1,%d),coalesce(r.completed_generation,0),'%s',"+
-			"0,null,'',coalesce(r.lease_epoch,0)+1,null,coalesce(r.attempts,0) "+
-			"from %s.%s d left join %s.%s r on d.account_id=r.account_id "+
-			"and d.target_relation_id=r.target_relation_id where %s",
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
-		generation, viewRefreshStatusPending,
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
-		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
-		viewDependencyMutationPredicate(mutation, oldRelationID, oldLogicalID),
-	))
 }
 
 func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) error {

@@ -276,6 +276,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.deriveViewMetadata = true
 	bindCtx := NewBindContext(builder, nil)
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {

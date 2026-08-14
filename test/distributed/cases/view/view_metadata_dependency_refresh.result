@@ -27,6 +27,12 @@ MODIFY code VARCHAR(48) DEFAULT 'wider',
 MODIFY amount DECIMAL(18,4) NOT NULL DEFAULT 2.5000,
 MODIFY state ENUM('new','ready','done') DEFAULT 'ready',
 MODIFY flags SET('a','b','c') DEFAULT 'b';
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
 DESC direct_view;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        NULL
@@ -69,6 +75,12 @@ id    code_alias    amount    state    flags
 ALTER TABLE source_table ALGORITHM=COPY,
 MODIFY code VARCHAR(80) DEFAULT 'copied',
 MODIFY amount DECIMAL(22,6) NOT NULL DEFAULT 3.750000;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
 DESC direct_view;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        NULL
@@ -87,6 +99,12 @@ MODIFY code VARCHAR(96) DEFAULT 'first';
 ALTER TABLE source_table ALGORITHM=COPY,
 MODIFY code VARCHAR(112) DEFAULT 'final';
 COMMIT;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('direct_view','chain_view')
+AND status = 'CURRENT';
+count(*)
+2
 DESC direct_view;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        NULL
@@ -131,6 +149,12 @@ INSERT INTO right_source VALUES (2);
 CREATE VIEW outer_join_view AS
 SELECT l.id, r.id AS rid FROM left_source l LEFT JOIN right_source r ON l.id = r.id;
 ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name = 'outer_join_view'
+AND status = 'CURRENT';
+count(*)
+1
 CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
 SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
 count(*)

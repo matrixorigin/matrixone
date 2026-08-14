@@ -10207,13 +10207,14 @@ func inheritViewMetadataRevalidation(
 	err := bh.Exec(ctx, fmt.Sprintf(
 		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,d.dependency_generation "+
 			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
-			"and d.source_relation_kind in ('%s','%s') and not exists (select 1 from %s.%s a "+
+			"and d.source_relation_kind in ('%s','%s','%s','%s') and not exists (select 1 from %s.%s a "+
 			"where a.account_id=%d and a.target_relation_id=0 and a.dependency_ordinal=0)",
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
 		accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
 		catalog.ViewRefreshStatusRevalidateScan,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.ViewRefreshStatusActivated, catalog.ViewRefreshStatusLegacyScan,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
 	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
 		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {

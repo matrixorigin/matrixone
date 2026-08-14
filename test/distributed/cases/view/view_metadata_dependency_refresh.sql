@@ -31,6 +31,12 @@ ALTER TABLE source_table
     MODIFY state ENUM('new','ready','done') DEFAULT 'ready',
     MODIFY flags SET('a','b','c') DEFAULT 'b';
 
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+  AND target_relation_name IN ('direct_view','chain_view')
+  AND status = 'CURRENT';
+
 DESC direct_view;
 DESC chain_view;
 SELECT table_name, column_name, column_type, is_nullable, column_default
@@ -48,6 +54,12 @@ ALTER TABLE source_table ALGORITHM=COPY,
     MODIFY code VARCHAR(80) DEFAULT 'copied',
     MODIFY amount DECIMAL(22,6) NOT NULL DEFAULT 3.750000;
 
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+  AND target_relation_name IN ('direct_view','chain_view')
+  AND status = 'CURRENT';
+
 DESC direct_view;
 DESC chain_view;
 
@@ -57,6 +69,12 @@ ALTER TABLE source_table ALGORITHM=COPY,
 ALTER TABLE source_table ALGORITHM=COPY,
     MODIFY code VARCHAR(112) DEFAULT 'final';
 COMMIT;
+
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+  AND target_relation_name IN ('direct_view','chain_view')
+  AND status = 'CURRENT';
 
 DESC direct_view;
 DESC chain_view;
@@ -85,6 +103,11 @@ INSERT INTO right_source VALUES (2);
 CREATE VIEW outer_join_view AS
     SELECT l.id, r.id AS rid FROM left_source l LEFT JOIN right_source r ON l.id = r.id;
 ALTER TABLE right_source MODIFY id BIGINT NOT NULL;
+-- @wait_expect(1, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+  AND target_relation_name = 'outer_join_view'
+  AND status = 'CURRENT';
 CREATE TABLE copied_outer_join AS SELECT * FROM outer_join_view;
 SELECT count(*) FROM copied_outer_join WHERE rid IS NULL;
 

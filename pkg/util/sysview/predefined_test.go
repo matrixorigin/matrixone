@@ -121,9 +121,7 @@ func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 
 	assert.Contains(t, InformationSchemaColumnsDDL, "vr.status='CURRENT'")
 	assert.Contains(t, InformationSchemaColumnsDDL,
-		"vd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')")
-	assert.Contains(t, InformationSchemaColumnsDDL,
-		"vr.status='CURRENT') and not exists")
+		"vr.status='CURRENT') and (not exists")
 	assert.Contains(t, InformationSchemaColumnsDDL,
 		"(not exists (select 1 from mo_catalog.mo_view_refresh vr")
 	assert.Contains(t, InformationSchemaColumnsDDL,
@@ -131,7 +129,7 @@ func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 	assert.Contains(t, InformationSchemaColumnsDDL,
 		"vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0")
 	assert.Contains(t, InformationSchemaColumnsDDL,
-		"vd.source_relation_kind<>'REVALIDATE_REQUIRED'")
+		"ga.source_relation_kind not in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')")
 	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
 		"gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0"))
 	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
