@@ -187,8 +187,8 @@ PREPARE p_float FROM
 'SELECT COALESCE(?,d,f),GREATEST(?,d,f),LEAST(?,d,f) FROM common_peers';
 SET @p='10';
 EXECUTE p_float USING @p,@p,@p;
-➤ COALESCE(?, d, f)[8,53,31]  ¦  GREATEST(?, d, f)[8,53,31]  ¦  LEAST(?, d, f)[8,53,31]  𝄀
-10.0  ¦  10.0  ¦  1.5
+➤ COALESCE(?, d, f)[8,53,31]  ¦  GREATEST(?, d, f)[12,0,0]  ¦  LEAST(?, d, f)[12,0,0]  𝄀
+10.0  ¦  2.00  ¦  1.5
 DEALLOCATE PREPARE p_float;
 PREPARE p_bool FROM
 'SELECT COALESCE(?,d,b),GREATEST(?,d,b),LEAST(?,d,b) FROM common_peers';
@@ -256,14 +256,16 @@ SET @exact='9007199254740992.0000000002';
 SET @float_zero=CAST(0 AS DOUBLE);
 EXECUTE p_mixed_in USING @exact,@float_zero;
 ➤ id[4,32,0]  𝄀
-2
+1  𝄀
+2  𝄀
+3
 EXECUTE p_mixed_in USING @float_zero,@exact;
 ➤ id[4,32,0]  𝄀
-2
+1  𝄀
+2  𝄀
+3
 EXECUTE p_mixed_not_in USING @exact,@float_zero;
 ➤ id[4,32,0]  𝄀
-1  𝄀
-3  𝄀
 4
 EXECUTE p_mixed_or USING @exact,@float_zero;
 ➤ id[4,32,0]  𝄀
@@ -295,4 +297,133 @@ SELECT v FROM fractional_overflow_ctas;
 1.0E36
 DEALLOCATE PREPARE p_fractional_overflow_ctas;
 DROP TABLE fractional_overflow_ctas;
+CREATE TABLE runtime_range_bound(id INT, d DECIMAL(10,0));
+INSERT INTO runtime_range_bound VALUES (1,1),(2,2),(3,3);
+PREPARE p_row_bound_left FROM
+'SELECT id FROM runtime_range_bound WHERE ? BETWEEN d AND ? ORDER BY id';
+PREPARE p_row_bound_high FROM
+'SELECT id FROM runtime_range_bound WHERE ? BETWEEN ? AND d ORDER BY id';
+PREPARE p_row_bound_update FROM
+'UPDATE runtime_range_bound SET id=id+10 WHERE ? BETWEEN d AND ?';
+SET @two='2';
+EXECUTE p_row_bound_left USING @two,@two;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+EXECUTE p_row_bound_high USING @two,@two;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+EXECUTE p_row_bound_update USING @two,@two;
+SELECT id,d FROM runtime_range_bound ORDER BY d;
+➤ id[4,32,0]  ¦  d[3,10,0]  𝄀
+11  ¦  1  𝄀
+12  ¦  2  𝄀
+3  ¦  3
+DEALLOCATE PREPARE p_row_bound_left;
+DEALLOCATE PREPARE p_row_bound_high;
+DEALLOCATE PREPARE p_row_bound_update;
+DROP TABLE runtime_range_bound;
+CREATE TABLE runtime_in_real(id INT, d DECIMAL(38,10));
+INSERT INTO runtime_in_real VALUES
+(1,9007199254740992.0000000001),(2,9007199254740992.0000000002),
+(3,9007199254740992.0000000003),(4,9007199254740994.0000000001),
+(5,9007199254740995.0000000001),(6,9007199254740996.0000000001);
+PREPARE p_in_real FROM 'SELECT id FROM runtime_in_real WHERE d IN (?,?) ORDER BY id';
+PREPARE p_not_in_real FROM 'SELECT id FROM runtime_in_real WHERE d NOT IN (?,?) ORDER BY id';
+PREPARE p_or_real FROM 'SELECT id FROM runtime_in_real WHERE d=? OR d=? ORDER BY id';
+PREPARE p_in_real_ctas FROM
+'CREATE TABLE runtime_in_real_ctas AS SELECT id FROM runtime_in_real WHERE d IN (?,?)';
+PREPARE p_in_real_update FROM 'UPDATE runtime_in_real SET id=id+10 WHERE d IN (?,?)';
+SET @real=CAST(9007199254740992 AS DOUBLE);
+SET @zero='0';
+EXECUTE p_in_real USING @real,@zero;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+EXECUTE p_not_in_real USING @real,@zero;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+6
+EXECUTE p_or_real USING @real,@zero;
+➤ id[4,32,0]
+EXECUTE p_in_real_ctas USING @real,@zero;
+SELECT id FROM runtime_in_real_ctas ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+EXECUTE p_in_real_update USING @real,@zero;
+SELECT id FROM runtime_in_real ORDER BY id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+11  𝄀
+12  𝄀
+13
+DEALLOCATE PREPARE p_in_real;
+DEALLOCATE PREPARE p_not_in_real;
+DEALLOCATE PREPARE p_or_real;
+DEALLOCATE PREPARE p_in_real_ctas;
+DEALLOCATE PREPARE p_in_real_update;
+DROP TABLE runtime_in_real_ctas;
+DROP TABLE runtime_in_real;
+PREPARE p_leading_zero FROM 'SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0)))';
+SET @leading=REPEAT('0',77);
+EXECUTE p_leading_zero USING @leading;
+➤ COALESCE(?, cast(2 as decimal(1)))[3,65,30]  𝄀
+0E-30
+SET @leading=CONCAT(REPEAT('0',76),'1');
+EXECUTE p_leading_zero USING @leading;
+➤ COALESCE(?, cast(2 as decimal(1)))[3,65,30]  𝄀
+1.000000000000000000000000000000
+DEALLOCATE PREPARE p_leading_zero;
+PREPARE p_tiny FROM
+'SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0))),LEAST(?,CAST(2 AS DECIMAL(1,0)))';
+SET @tiny='1e-100';
+EXECUTE p_tiny USING @tiny,@tiny;
+➤ COALESCE(?, cast(2 as decimal(1)))[8,53,31]  ¦  LEAST(?, cast(2 as decimal(1)))[8,53,31]  𝄀
+1.0E-100  ¦  1.0E-100
+SET @tiny=CONCAT('0.',REPEAT('0',99),'1');
+EXECUTE p_tiny USING @tiny,@tiny;
+➤ COALESCE(?, cast(2 as decimal(1)))[8,53,31]  ¦  LEAST(?, cast(2 as decimal(1)))[8,53,31]  𝄀
+1.0E-100  ¦  1.0E-100
+PREPARE p_tiny_ctas FROM
+'CREATE TABLE runtime_tiny_ctas AS SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0))) AS v';
+EXECUTE p_tiny_ctas USING @tiny;
+SHOW CREATE TABLE runtime_tiny_ctas;
+➤ Table[12,12,0]  ¦  Create Table[12,43,0]  𝄀
+runtime_tiny_ctas  ¦  CREATE TABLE `runtime_tiny_ctas` (
+  `v` double NOT NULL
+)
+SELECT v FROM runtime_tiny_ctas;
+➤ v[8,53,31]  𝄀
+1.0E-100
+DEALLOCATE PREPARE p_tiny_ctas;
+DROP TABLE runtime_tiny_ctas;
+DEALLOCATE PREPARE p_tiny;
+PREPARE p_extreme FROM
+'SELECT GREATEST(?,?,CAST(0 AS DECIMAL(38,10))),LEAST(?,?,CAST(0 AS DECIMAL(38,10))),COALESCE(?,?,CAST(0 AS DECIMAL(38,10)))';
+SET @extreme='9007199254740992.0000000002';
+SET @float=CAST(0 AS DOUBLE);
+EXECUTE p_extreme USING @extreme,@float,@extreme,@float,@extreme,@float;
+➤ GREATEST(?, ?, cast(0 as decimal(38, 10)))[12,0,0]  ¦  LEAST(?, ?, cast(0 as decimal(38, 10)))[12,0,0]  ¦  COALESCE(?, ?, cast(0 as decimal(38, 10)))[8,53,31]  𝄀
+9007199254740992.0000000002  ¦  0  ¦  9.007199254740992E15
+PREPARE p_extreme_ctas FROM
+'CREATE TABLE runtime_extreme_ctas AS SELECT GREATEST(?,?,CAST(0 AS DECIMAL(38,10))) AS v';
+EXECUTE p_extreme_ctas USING @extreme,@float;
+SHOW CREATE TABLE runtime_extreme_ctas;
+➤ Table[12,15,0]  ¦  Create Table[12,47,0]  𝄀
+runtime_extreme_ctas  ¦  CREATE TABLE `runtime_extreme_ctas` (
+  `v` text DEFAULT NULL
+)
+SELECT v FROM runtime_extreme_ctas;
+➤ v[12,0,0]  𝄀
+9007199254740992.0000000002
+DEALLOCATE PREPARE p_extreme_ctas;
+DROP TABLE runtime_extreme_ctas;
+DEALLOCATE PREPARE p_extreme;
 DROP DATABASE prepare_decimal_common_type;

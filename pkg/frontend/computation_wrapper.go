@@ -788,14 +788,14 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	switch {
 	case integral > 76:
 		binding.Size = preparedNumericTextFloat
+	case width > 76:
+		// A non-zero fractional digit beyond Decimal256's maximum scale cannot
+		// survive an exact cast. Preserve it through the approximate numeric
+		// domain instead of rounding the prepared value to zero.
+		binding.Size = preparedNumericTextFloat
 	case integral <= 35:
 		binding.Size = preparedNumericTextPrefix
 		binding.Width, binding.Scale = 65, 30
-	case width > 76:
-		// A suffix does not change the domain of the numeric prefix. If that
-		// prefix exceeds Decimal256, keep the same approximate numeric domain as
-		// the complete spelling instead of falling back to VARCHAR.
-		binding.Size = preparedNumericTextFloat
 	case width <= 76:
 		// Once a numeric prefix crosses the ordinary 35-integral-digit envelope,
 		// preserve its actual Decimal256 domain regardless of whether the spelling

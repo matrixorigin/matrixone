@@ -80,3 +80,33 @@
 | 超域 prefix 保持数值域 | 36 整数位 + 41 小数位 + suffix | 76/77 总 width、full/prefix、整数/小数 | full 与 prefix 均为 DOUBLE/约 1e36；不得返回 VARCHAR/suffix |
 | IN 逐元素 coercion | DECIMAL(38,10) `IN(string,FLOAT)` | NOT IN、参数反转、[]byte、等价 OR | IN 仅 id=2；NOT IN 为 1,3,4；与逐项比较一致 |
 | MORPC gate 唯一 | v20 UPDATE + v21 prepared DECIMAL | upgrade/rollback gate | 两项能力独立启用，proto 生成物无冲突且一致 |
+
+## 第四轮 review blocker 修复
+
+### 不变量与设计
+
+1. `BETWEEN` 只有在两个 bound 均为标量常量时才能使用原生向量函数；任一 bound 逐行变化时必须保持逐行语义，并与 `left >= low AND left <= high` 等价。
+2. 多元素 `IN/NOT IN` 需要一个列表公共比较域。若任一运行时元素为 FLOAT，则 DECIMAL 左值和所有列表项统一使用 REAL；这与逐项 OR 的独立 coercion 不同，是 MySQL IN-list 的既有契约。
+3. Decimal256 cast 必须基于 canonical numeric prefix。合法前导零不得消耗 precision 或触发 parser overflow/clamp；真正超域值仍按既有错误/饱和契约处理。
+4. 非零数值若 scale/width 超出 Decimal256 可表达域，prepared 分类必须进入近似域，不能先被 `integral <= 35` 分支截获并静默舍入为零。
+5. COALESCE 与 GREATEST/LEAST 的类型规则不同：运行时 FLOAT 可决定 COALESCE 数值公共域，但 GREATEST/LEAST 的 string+FLOAT+DECIMAL 组合必须保留字符串比较/返回域。
+6. 变更限定于 bind/prepare/cast 边界，不增加逐行分配、全局状态或缓存。
+
+### 实施与验证步骤
+
+1. 为 BETWEEN 增加逐行 bound 检测与等价比较展开，覆盖参数在 left/low/high 的排列及 SELECT/UPDATE。
+2. 恢复 DECIMAL-column IN-list 的公共域分组，并区分 IN 公共域与显式 OR 的逐项域；覆盖 IN、NOT IN、UPDATE、CTAS 和参数顺序。
+3. 在 Decimal256 numeric-prefix parser 前 canonicalize 前导零，增加 77 个零、76 个零加 1、fractional/exponent 控制及原始 DECIMAL/NEWDECIMAL 参数测试。
+4. 重排 prepared 分类边界，使 `1e-100` 和等价小数进入 FLOAT，同时保持零值和 Decimal256 可精确边界。
+5. 将 GREATEST/LEAST 从 COALESCE 的运行时 FLOAT 规则中拆分，增加返回值与 CTAS 类型控制。
+6. 运行 frontend/plan/function owning package focused/full test、build、vet、BVT 和完整自审；随后 commit/push，不 force-push。
+
+### 测试矩阵
+
+| 不变量 | 见证 | 控制 | Oracle |
+|---|---|---|---|
+| BETWEEN bound 逐行求值 | `? BETWEEN d AND ?`、`? BETWEEN ? AND d` | 常量 bounds、NOT BETWEEN | 与二元比较展开的行集和 UPDATE 行数一致 |
+| IN 使用列表公共域 | DECIMAL 列 `IN(FLOAT,string)` | NOT IN、显式 OR、单元素 | IN/NOT IN 与 MySQL 行集一致；OR 保持独立比较 |
+| 前导零不造成 overflow | 77 个零、76 个零加 1 | 无前导零、真正 77 位非零 | 返回 0/1；不得 clamp 为 Decimal256 最大值 |
+| 极小非零值不归零 | `1e-100`、`0.`+99 个零+`1` | 精确可表示小数、零 | DOUBLE 非零；CTAS 为 DOUBLE |
+| GREATEST/LEAST 保留字符串域 | string+FLOAT+DECIMAL runtime 参数 | COALESCE 控制 | GREATEST/LEAST 精确文本且 CTAS 为文本；COALESCE 为 DOUBLE |

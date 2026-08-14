@@ -4674,6 +4674,21 @@ func TestMySQLDecimalPrefix(t *testing.T) {
 	underflow, err = parseMySQLDecimal256Prefix("9999999999e-2147483648tail", 65, 30)
 	require.NoError(t, err)
 	require.Equal(t, types.Decimal256{}, underflow)
+
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: strings.Repeat("0", 77), want: "0"},
+		{input: strings.Repeat("0", 76) + "1", want: "1"},
+		{input: "-" + strings.Repeat("0", 76) + "1.25tail", want: "-1.25"},
+	} {
+		got, parseErr := parseMySQLDecimal256Prefix(test.input, 65, 30)
+		require.NoError(t, parseErr)
+		want, parseErr := types.ParseDecimal256(test.want, 65, 30)
+		require.NoError(t, parseErr)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestParseStringToFloatWithBitSize(t *testing.T) {

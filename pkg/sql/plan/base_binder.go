@@ -1070,7 +1070,21 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 }
 
 func bindPreparedRangeOperands(ctx context.Context, not bool, operands []*plan.Expr) (*plan.Expr, error) {
-	between, err := BindFuncExprImplByPlanExpr(ctx, "between", operands)
+	var between *plan.Expr
+	var err error
+	if isFoldableDecimalComparisonConstant(operands[1]) && isFoldableDecimalComparisonConstant(operands[2]) {
+		between, err = BindFuncExprImplByPlanExpr(ctx, "between", operands)
+	} else {
+		lower, bindErr := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(operands[0]), operands[1]})
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		upper, bindErr := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{operands[0], operands[2]})
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		between, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{lower, upper})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -4330,8 +4344,33 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 			}
+			useRuntimeListReal := len(rightList.List) > 1
+			if useRuntimeListReal {
+				useRuntimeListReal = false
+				for _, item := range rightList.List {
+					itemType := types.T(item.Typ.Id)
+					if item.ExactDecimalParam && (itemType == types.T_float32 || itemType == types.T_float64) {
+						useRuntimeListReal = true
+						break
+					}
+				}
+			}
+			if useRuntimeListReal {
+				floatType := types.T_float64.ToType()
+				target := makePlan2Type(&floatType)
+				args[0], err = appendCastBeforeExpr(ctx, args[0], target)
+				if err != nil {
+					return nil, err
+				}
+				for i := range rightList.List {
+					rightList.List[i], err = appendCastBeforeExpr(ctx, rightList.List[i], target)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 			groupID := int32(0)
-			if leftIsPreparedParam && preparedListParams > 1 {
+			if preparedListParams > 1 {
 				groupID = nextExactDecimalListGroupID()
 			}
 			typLeft := makeTypeByPlan2Expr(args[0])
@@ -5489,6 +5528,12 @@ func decimalParamCommonTypeResolutionTypes(
 		if isUnresolvedPreparedNumericParam(args[i], typ) && args[i].Typ.Enumvalues == "" {
 			args[i].Typ.Enumvalues = "mo_decimal_common_type_dependency"
 		}
+	}
+	if name != "coalesce" && decimalParamCommonTypeHasFloatingPeer(args, argsType) {
+		// GREATEST/LEAST use MySQL's string comparison/result domain when a
+		// prepared string is mixed with a runtime FLOAT. COALESCE instead uses a
+		// numeric common domain, so only it applies the FLOAT override below.
+		return argsType
 	}
 	if !prefixCastEnabled {
 		return argsType

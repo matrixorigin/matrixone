@@ -203,8 +203,8 @@ SET @p='9007199254740992.0000000002';
 EXECUTE pc_one USING @p;
 DEALLOCATE PREPARE pc_one;
 
--- Each multi-element IN comparison keeps its own coercion domain. A FLOAT
--- peer must not erase precision from an independent DECIMAL/string comparison.
+-- A multi-element IN list uses one comparison domain. Explicit OR remains the
+-- control in which each equality resolves independently.
 PREPARE p_mixed_in FROM 'SELECT id FROM t WHERE d128 IN (?,?) ORDER BY id';
 PREPARE p_mixed_not_in FROM 'SELECT id FROM t WHERE d128 NOT IN (?,?) ORDER BY id';
 PREPARE p_mixed_or FROM 'SELECT id FROM t WHERE d128=? OR d128=? ORDER BY id';
@@ -234,5 +234,87 @@ SHOW CREATE TABLE fractional_overflow_ctas;
 SELECT v FROM fractional_overflow_ctas;
 DEALLOCATE PREPARE p_fractional_overflow_ctas;
 DROP TABLE fractional_overflow_ctas;
+
+CREATE TABLE runtime_range_bound(id INT, d DECIMAL(10,0));
+INSERT INTO runtime_range_bound VALUES (1,1),(2,2),(3,3);
+PREPARE p_row_bound_left FROM
+  'SELECT id FROM runtime_range_bound WHERE ? BETWEEN d AND ? ORDER BY id';
+PREPARE p_row_bound_high FROM
+  'SELECT id FROM runtime_range_bound WHERE ? BETWEEN ? AND d ORDER BY id';
+PREPARE p_row_bound_update FROM
+  'UPDATE runtime_range_bound SET id=id+10 WHERE ? BETWEEN d AND ?';
+SET @two='2';
+EXECUTE p_row_bound_left USING @two,@two;
+EXECUTE p_row_bound_high USING @two,@two;
+EXECUTE p_row_bound_update USING @two,@two;
+SELECT id,d FROM runtime_range_bound ORDER BY d;
+DEALLOCATE PREPARE p_row_bound_left;
+DEALLOCATE PREPARE p_row_bound_high;
+DEALLOCATE PREPARE p_row_bound_update;
+DROP TABLE runtime_range_bound;
+
+CREATE TABLE runtime_in_real(id INT, d DECIMAL(38,10));
+INSERT INTO runtime_in_real VALUES
+  (1,9007199254740992.0000000001),(2,9007199254740992.0000000002),
+  (3,9007199254740992.0000000003),(4,9007199254740994.0000000001),
+  (5,9007199254740995.0000000001),(6,9007199254740996.0000000001);
+PREPARE p_in_real FROM 'SELECT id FROM runtime_in_real WHERE d IN (?,?) ORDER BY id';
+PREPARE p_not_in_real FROM 'SELECT id FROM runtime_in_real WHERE d NOT IN (?,?) ORDER BY id';
+PREPARE p_or_real FROM 'SELECT id FROM runtime_in_real WHERE d=? OR d=? ORDER BY id';
+PREPARE p_in_real_ctas FROM
+  'CREATE TABLE runtime_in_real_ctas AS SELECT id FROM runtime_in_real WHERE d IN (?,?)';
+PREPARE p_in_real_update FROM 'UPDATE runtime_in_real SET id=id+10 WHERE d IN (?,?)';
+SET @real=CAST(9007199254740992 AS DOUBLE);
+SET @zero='0';
+EXECUTE p_in_real USING @real,@zero;
+EXECUTE p_not_in_real USING @real,@zero;
+EXECUTE p_or_real USING @real,@zero;
+EXECUTE p_in_real_ctas USING @real,@zero;
+SELECT id FROM runtime_in_real_ctas ORDER BY id;
+EXECUTE p_in_real_update USING @real,@zero;
+SELECT id FROM runtime_in_real ORDER BY id;
+DEALLOCATE PREPARE p_in_real;
+DEALLOCATE PREPARE p_not_in_real;
+DEALLOCATE PREPARE p_or_real;
+DEALLOCATE PREPARE p_in_real_ctas;
+DEALLOCATE PREPARE p_in_real_update;
+DROP TABLE runtime_in_real_ctas;
+DROP TABLE runtime_in_real;
+
+PREPARE p_leading_zero FROM 'SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0)))';
+SET @leading=REPEAT('0',77);
+EXECUTE p_leading_zero USING @leading;
+SET @leading=CONCAT(REPEAT('0',76),'1');
+EXECUTE p_leading_zero USING @leading;
+DEALLOCATE PREPARE p_leading_zero;
+
+PREPARE p_tiny FROM
+  'SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0))),LEAST(?,CAST(2 AS DECIMAL(1,0)))';
+SET @tiny='1e-100';
+EXECUTE p_tiny USING @tiny,@tiny;
+SET @tiny=CONCAT('0.',REPEAT('0',99),'1');
+EXECUTE p_tiny USING @tiny,@tiny;
+PREPARE p_tiny_ctas FROM
+  'CREATE TABLE runtime_tiny_ctas AS SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0))) AS v';
+EXECUTE p_tiny_ctas USING @tiny;
+SHOW CREATE TABLE runtime_tiny_ctas;
+SELECT v FROM runtime_tiny_ctas;
+DEALLOCATE PREPARE p_tiny_ctas;
+DROP TABLE runtime_tiny_ctas;
+DEALLOCATE PREPARE p_tiny;
+
+PREPARE p_extreme FROM
+  'SELECT GREATEST(?,?,CAST(0 AS DECIMAL(38,10))),LEAST(?,?,CAST(0 AS DECIMAL(38,10))),COALESCE(?,?,CAST(0 AS DECIMAL(38,10)))';
+SET @extreme='9007199254740992.0000000002';
+SET @float=CAST(0 AS DOUBLE);
+EXECUTE p_extreme USING @extreme,@float,@extreme,@float,@extreme,@float;
+PREPARE p_extreme_ctas FROM
+  'CREATE TABLE runtime_extreme_ctas AS SELECT GREATEST(?,?,CAST(0 AS DECIMAL(38,10))) AS v';
+EXECUTE p_extreme_ctas USING @extreme,@float;
+SHOW CREATE TABLE runtime_extreme_ctas;
+SELECT v FROM runtime_extreme_ctas;
+DEALLOCATE PREPARE p_extreme_ctas;
+DROP TABLE runtime_extreme_ctas;
+DEALLOCATE PREPARE p_extreme;
 
 DROP DATABASE prepare_decimal_common_type;

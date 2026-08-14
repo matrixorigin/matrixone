@@ -667,12 +667,12 @@ func TestPreparedDecimalGroupsUseExecutionCommonDomain(t *testing.T) {
 		{
 			name: "in text float", predicate: "p_retailprice in (?,?)",
 			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", PrepareParamKind: vector.PrepareParamFloat}},
-			expectedID: types.T_decimal128,
+			expectedID: types.T_float64,
 		},
 		{
 			name: "not in text float", predicate: "p_retailprice not in (?,?)",
 			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", PrepareParamKind: vector.PrepareParamFloat}},
-			expectedID: types.T_decimal128,
+			expectedID: types.T_float64,
 		},
 		{
 			name: "in text integer", predicate: "p_retailprice in (?,?)",
@@ -702,7 +702,8 @@ func TestPreparedDecimalGroupsUseExecutionCommonDomain(t *testing.T) {
 				if isDecimalComparisonOperator(expr.GetF().Func.GetObjName()) {
 					comparisons++
 					for _, arg := range expr.GetF().Args {
-						require.Equal(t, int32(test.expectedID), arg.Typ.Id)
+						require.Equal(t, int32(test.expectedID), arg.Typ.Id,
+							"comparison=%s group=%d arg=%s", expr.GetF().Func.GetObjName(), expr.ExactDecimalGroup, arg.String())
 					}
 				}
 				for _, arg := range expr.GetF().Args {

@@ -362,7 +362,7 @@ func exprContainsParam(expr *planpb.Expr) bool {
 	return false
 }
 
-func TestRuntimeMixedINPreservesIndependentComparisonDomains(t *testing.T) {
+func TestRuntimeMixedINUsesOneRealListDomain(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	column := &planpb.Expr{
 		Typ:  MakePlan2Type(&decimalType),
@@ -383,10 +383,30 @@ func TestRuntimeMixedINPreservesIndependentComparisonDomains(t *testing.T) {
 	require.NoError(t, err)
 	comparisonTypes := collectComparisonOperandTypes(expr)
 	require.Len(t, comparisonTypes, 2)
-	require.True(t, comparisonTypes[0][0].IsDecimal())
-	require.True(t, comparisonTypes[0][1].IsDecimal())
-	require.True(t, comparisonTypes[1][0].IsDecimal())
-	require.True(t, comparisonTypes[1][1].IsDecimal())
+	for _, comparison := range comparisonTypes {
+		require.Equal(t, types.T_float64, comparison[0])
+		require.Equal(t, types.T_float64, comparison[1])
+	}
+}
+
+func TestPreparedRangeWithRowBoundExpandsToComparisons(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 20, 4)
+	constant := makeDecimal128ConstExpr("2.0000", 20, 4)
+	column := &planpb.Expr{
+		Typ:  MakePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	expr, err := bindPreparedRangeOperands(context.Background(), false,
+		[]*Expr{constant, column, DeepCopyExpr(constant)})
+	require.NoError(t, err)
+	require.Equal(t, "and", expr.GetF().GetFunc().GetObjName())
+	require.Equal(t, ">=", expr.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
+	require.Equal(t, "<=", expr.GetF().GetArgs()[1].GetF().GetFunc().GetObjName())
+
+	expr, err = bindPreparedRangeOperands(context.Background(), false,
+		[]*Expr{constant, DeepCopyExpr(constant), DeepCopyExpr(constant)})
+	require.NoError(t, err)
+	require.Equal(t, "between", expr.GetF().GetFunc().GetObjName())
 }
 
 func TestTupleRuntimeFloatNormalizesToExactDecimal(t *testing.T) {
@@ -559,6 +579,15 @@ func TestPreparedNumericCommonTypeResolutionGuards(t *testing.T) {
 	require.Equal(t, types.T_uint8, resolved[2].Oid)
 	require.Equal(t, types.T_decimal128, resolved[3].Oid)
 	require.Equal(t, types.T_decimal64, resolved[4].Oid)
+
+	floatParam := makePlan2Float64ConstExprWithType(0)
+	floatParam.ExactDecimalParam = true
+	stringParam := makePlan2StringConstExprWithType("9007199254740992.0000000002")
+	stringParam.ExactDecimalParam = true
+	greatestArgs := []*Expr{stringParam, floatParam, decimalExpr}
+	greatestTypes := []types.Type{types.T_varchar.ToType(), types.T_float64.ToType(), decimalType}
+	require.Equal(t, greatestTypes,
+		decimalParamCommonTypeResolutionTypes("greatest", greatestArgs, greatestTypes, true))
 }
 
 func TestPreparedDecimalCommonTypeHelperGuardsAndLists(t *testing.T) {

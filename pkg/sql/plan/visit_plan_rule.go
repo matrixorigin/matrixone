@@ -672,7 +672,9 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 		count++
 		pos := int(cast.Args[0].GetP().Pos)
 		if pos >= 0 && pos < len(params) {
-			real = real || preparedDecimalParamRequiresReal(params[pos])
+			paramType := types.T(params[pos].Typ.Id)
+			real = real || paramType == types.T_float32 || paramType == types.T_float64 ||
+				preparedDecimalParamRequiresReal(params[pos])
 		}
 	}
 	return count > 1, real
@@ -808,7 +810,9 @@ func preparedDecimalGroupHasRealParam(expr *plan.Expr, params []*Expr) bool {
 	if cast, ok := preparedDecimalComparisonCast(expr); ok {
 		pos := int(cast.Args[0].GetP().Pos)
 		if pos >= 0 && pos < len(params) {
-			return preparedDecimalParamRequiresReal(params[pos])
+			paramType := types.T(params[pos].Typ.Id)
+			return paramType == types.T_float32 || paramType == types.T_float64 ||
+				preparedDecimalParamRequiresReal(params[pos])
 		}
 	}
 	if fn := expr.GetF(); fn != nil {

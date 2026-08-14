@@ -6879,6 +6879,33 @@ sign:
 	return prefix
 }
 
+func canonicalizeMySQLDecimalPrefix(prefix string) string {
+	if prefix == "" {
+		return prefix
+	}
+	signEnd := 0
+	if prefix[0] == '+' || prefix[0] == '-' {
+		signEnd = 1
+	}
+	integralEnd := len(prefix)
+	if decimalAt := strings.IndexByte(prefix[signEnd:], '.'); decimalAt >= 0 {
+		integralEnd = signEnd + decimalAt
+	} else if exponentAt := strings.IndexByte(prefix[signEnd:], 'e'); exponentAt >= 0 {
+		integralEnd = signEnd + exponentAt
+	}
+	first := signEnd
+	for first < integralEnd && prefix[first] == '0' {
+		first++
+	}
+	if first == signEnd {
+		return prefix
+	}
+	if first == integralEnd {
+		return prefix[:signEnd] + "0" + prefix[integralEnd:]
+	}
+	return prefix[:signEnd] + prefix[first:]
+}
+
 func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 	exponentAt := strings.IndexByte(prefix, 'e')
 	if exponentAt < 0 || exponentAt+1 >= len(prefix) {
@@ -6927,7 +6954,7 @@ func mysqlDecimalPrefixUnderflows(prefix string, scale int32) bool {
 }
 
 func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, error) {
-	prefix := mysqlDecimalPrefix(s)
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
 	result, err := types.ParseDecimal64(prefix, width, scale)
 	if err == nil {
 		return result, nil
@@ -6939,7 +6966,7 @@ func parseMySQLDecimal64Prefix(s string, width, scale int32) (types.Decimal64, e
 }
 
 func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128, error) {
-	prefix := mysqlDecimalPrefix(s)
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
 	result, err := types.ParseDecimal128(prefix, width, scale)
 	if err == nil {
 		return result, nil
@@ -6951,7 +6978,7 @@ func parseMySQLDecimal128Prefix(s string, width, scale int32) (types.Decimal128,
 }
 
 func parseMySQLDecimal256Prefix(s string, width, scale int32) (types.Decimal256, error) {
-	prefix := mysqlDecimalPrefix(s)
+	prefix := canonicalizeMySQLDecimalPrefix(mysqlDecimalPrefix(s))
 	result, err := types.ParseDecimal256(prefix, width, scale)
 	if err == nil {
 		return result, nil

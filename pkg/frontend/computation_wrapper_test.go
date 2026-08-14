@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -526,6 +527,8 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e-31", wantWidth: 31, wantScale: 31, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 65, wantBindScale: 30},
+		{value: "1e-100", wantWidth: 77, wantScale: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
+		{value: "0." + strings.Repeat("0", 99) + "1", wantWidth: 77, wantScale: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e999999999999999999999999999999", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 	}
 	for _, test := range tests {
