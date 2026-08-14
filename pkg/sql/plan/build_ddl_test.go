@@ -1148,6 +1148,83 @@ func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
 	require.False(t, rewritten)
 }
 
+func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
+	const rootSQL = "create view v_cte as with recursive c(n_nationkey,n_name,n_regionkey,n_comment) as (select * from nation union all select n_nationkey,n_name,n_regionkey,n_comment from c where false) select * from c"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Stmt, "with recursive `c`")
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_cte"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_cte"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_cte"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_cte", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func TestStableViewStarHelpersRewriteCTEUnionAndRecursiveBranches(t *testing.T) {
+	makeStarSelect := func() (*tree.Select, *tree.SelectClause) {
+		clause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}}, From: &tree.From{}}
+		return &tree.Select{Select: clause}, clause
+	}
+	left, leftClause := makeStarSelect()
+	right, rightClause := makeStarSelect()
+	union := &tree.UnionClause{Left: left, Right: right}
+	with := &tree.With{
+		IsRecursive: true,
+		CTEs: []*tree.CTE{
+			{Name: &tree.AliasClause{Alias: "c"}, Stmt: union},
+		},
+	}
+	root := &tree.Select{With: with, Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("c", 1))}}, From: &tree.From{}}}
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		leftClause:  {{Expr: tree.NewUnresolvedColName("left_col")}},
+		rightClause: {{Expr: tree.NewUnresolvedColName("right_col")}},
+	}
+	require.True(t, viewSelectHasStar(root))
+	stable, rewritten := viewSelectWithExpandedStars(root, expanded)
+	require.True(t, rewritten)
+	require.NotNil(t, stable)
+	stableWith := stable.With
+	require.NotNil(t, stableWith)
+	require.Len(t, stableWith.CTEs, 1)
+	stableUnion, ok := stableWith.CTEs[0].Stmt.(*tree.UnionClause)
+	require.True(t, ok)
+	stableLeft := stableUnion.Left.(*tree.Select).Select.(*tree.SelectClause)
+	stableRight := stableUnion.Right.(*tree.Select).Select.(*tree.SelectClause)
+	require.Equal(t, "left_col", stableLeft.Exprs[0].Expr.(*tree.UnresolvedName).ColName())
+	require.Equal(t, "right_col", stableRight.Exprs[0].Expr.(*tree.UnresolvedName).ColName())
+}
+
 func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
 	const viewSQL = "create view v_star as select * from nation"
 	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewSQL, 1)

@@ -350,11 +350,27 @@ func selectStatementHasStar(stmt tree.SelectStatement) bool {
 	case *tree.SelectClause:
 		return selectClauseHasStar(selectStmt)
 	case *tree.Select:
-		return selectStatementHasStar(selectStmt.Select)
+		return selectWithHasStar(selectStmt.With) || selectStatementHasStar(selectStmt.Select)
 	case *tree.ParenSelect:
 		return selectStatementHasStar(selectStmt.Select)
 	case *tree.UnionClause:
 		return selectStatementHasStar(selectStmt.Left) || selectStatementHasStar(selectStmt.Right)
+	}
+	return false
+}
+
+func selectWithHasStar(with *tree.With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte == nil {
+			continue
+		}
+		selectStmt, ok := cte.Stmt.(tree.SelectStatement)
+		if ok && selectStatementHasStar(selectStmt) {
+			return true
+		}
 	}
 	return false
 }
@@ -387,11 +403,27 @@ func selectStatementHasSampleStar(stmt tree.SelectStatement) bool {
 			}
 		}
 	case *tree.Select:
-		return selectStatementHasSampleStar(selectStmt.Select)
+		return selectWithSampleStar(selectStmt.With) || selectStatementHasSampleStar(selectStmt.Select)
 	case *tree.ParenSelect:
 		return selectStatementHasSampleStar(selectStmt.Select)
 	case *tree.UnionClause:
 		return selectStatementHasSampleStar(selectStmt.Left) || selectStatementHasSampleStar(selectStmt.Right)
+	}
+	return false
+}
+
+func selectWithSampleStar(with *tree.With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte == nil {
+			continue
+		}
+		selectStmt, ok := cte.Stmt.(tree.SelectStatement)
+		if ok && selectStatementHasSampleStar(selectStmt) {
+			return true
+		}
 	}
 	return false
 }
@@ -428,12 +460,14 @@ func viewSelectWithExpandedStars(
 		return nil, false
 	}
 	stableSelect := *stmt
-	stableStatement, rewritten := viewSelectStatementWithExpandedStars(stmt.Select, expandedSelectLists)
-	if stableStatement == nil || !rewritten {
+	stableWith, withRewritten := viewWithWithExpandedStars(stmt.With, expandedSelectLists)
+	stableSelect.With = stableWith
+	stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(stmt.Select, expandedSelectLists)
+	if stableStatement == nil || (!withRewritten && !statementRewritten) {
 		return nil, false
 	}
 	stableSelect.Select = stableStatement
-	return &stableSelect, true
+	return &stableSelect, withRewritten || statementRewritten
 }
 
 func viewSelectStatementWithExpandedStars(
@@ -457,9 +491,11 @@ func viewSelectStatementWithExpandedStars(
 		return &stableClause, rewritten
 	case *tree.Select:
 		stableSelect := *selectStmt
-		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
+		stableWith, withRewritten := viewWithWithExpandedStars(selectStmt.With, expandedSelectLists)
+		stableSelect.With = stableWith
+		stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
 		stableSelect.Select = stableStatement
-		return &stableSelect, rewritten
+		return &stableSelect, withRewritten || statementRewritten
 	case *tree.ParenSelect:
 		stableParen := *selectStmt
 		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
@@ -485,6 +521,36 @@ func viewSelectStatementWithExpandedStars(
 	default:
 		return stmt, false
 	}
+}
+
+func viewWithWithExpandedStars(
+	with *tree.With,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.With, bool) {
+	if with == nil {
+		return nil, false
+	}
+	stableWith := *with
+	stableWith.CTEs = make([]*tree.CTE, len(with.CTEs))
+	rewritten := false
+	for i, cte := range with.CTEs {
+		if cte == nil {
+			continue
+		}
+		stableCTE := *cte
+		selectStmt, ok := cte.Stmt.(tree.SelectStatement)
+		if !ok {
+			stableWith.CTEs[i] = &stableCTE
+			continue
+		}
+		stableStmt, cteRewritten := viewSelectStatementWithExpandedStars(selectStmt, expandedSelectLists)
+		if stableStmt != nil {
+			stableCTE.Stmt = stableStmt
+		}
+		stableWith.CTEs[i] = &stableCTE
+		rewritten = rewritten || cteRewritten
+	}
+	return &stableWith, rewritten
 }
 
 func viewFromWithExpandedStars(
