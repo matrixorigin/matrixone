@@ -250,7 +250,7 @@ entries. The reader only scans entries within the selected centroids, and an
 entry passes iff its PK is in the key set — so an exact filter built over the
 full key set yields the identical result as the (former) centroid-narrowed set.
 The old centroid-bloom narrowing only mattered to keep an approximate bloom
-filter small; with docfilter's exact bitset (cbitmap / CRoaring) it is a no-op,
+filter small; with docfilter's exact integer set (cbitmap / Sorted64) it is a no-op,
 so the per-centroid bloom build/merge (and its preload path) has been removed.
 */
 func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (err error) {
@@ -314,10 +314,13 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	}
 
 	// Build the doc_id pushdown filter directly from the unique join keys.
-	// docfilter picks the structure: an exact bitset (cbitmap / CRoaring) for
+	// docfilter picks the structure: an exact set (cbitmap / Sorted64) for
 	// integer PKs — no false positives — or a CBloomFilter otherwise. The
 	// reader's docfilter.New reconstructs it from the tag.
-	payload, err := docfilter.Build(keyvec)
+	payload, err := docfilter.BuildWithMemoryAdmission(
+		keyvec,
+		docfilter.AdmissionForService(sqlproc.Proc.GetService()),
+	)
 	if err != nil {
 		return err
 	}
@@ -1031,6 +1034,8 @@ func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt
 	return nil
 }
 
-func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
+// SearchInto is not yet implemented for this algo (box-free LIMIT path); it will migrate
+// from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
+func (s *IvfflatSearch[T]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
+	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
 }

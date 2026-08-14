@@ -1,0 +1,36 @@
+drop database if exists alter_set_default_restrictions;
+create database alter_set_default_restrictions;
+use alter_set_default_restrictions;
+create table t_auto_increment(id bigint auto_increment primary key, v int);
+alter table t_auto_increment alter column id set default 9;
+Invalid default value for 'id'
+desc t_auto_increment;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+v  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+insert into t_auto_increment(v) values (10);
+select v from t_auto_increment;
+➤ v[4,32,0]  𝄀
+10
+create table t_generated(a int, g int as (a + 1) stored);
+alter table t_generated alter column g set default 9;
+invalid input: generated column 'g' cannot have a default value
+desc t_generated;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+g  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  
+insert into t_generated(a) values (10);
+select * from t_generated;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+10  ¦  11
+create table t_normal(a int, v int);
+alter table t_normal alter column v set default 9;
+desc t_normal;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  INT(32)  ¦  YES  ¦    ¦  9  ¦    ¦  
+insert into t_normal(a) values (10);
+select * from t_normal;
+➤ a[4,32,0]  ¦  v[4,32,0]  𝄀
+10  ¦  9
+drop database alter_set_default_restrictions;

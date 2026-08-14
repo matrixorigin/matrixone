@@ -216,6 +216,8 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcBackendClosedCounter)
 	registry.MustRegister(rpcBackendConnectCounter)
 	registry.MustRegister(rpcMessageCounter)
+	registry.MustRegister(rpcClientRequestStartedCounter)
+	registry.MustRegister(rpcClientRequestCompletedCounter)
 	registry.MustRegister(rpcNetworkBytesCounter)
 	registry.MustRegister(rpcGCChannelDropCounter)
 	registry.MustRegister(rpcGCIdleBackendsCleanedCounter)
@@ -245,6 +247,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcWriteDurationHistogram)
 	registry.MustRegister(rpcWriteLatencyDurationHistogram)
 	registry.MustRegister(rpcBackendDoneDurationHistogram)
+	registry.MustRegister(rpcClientRequestDurationHistogram)
 
 }
 

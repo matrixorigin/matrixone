@@ -46,6 +46,9 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	// MASTER now has full synchronous modern maintenance (delete-by-pk + insert),
 	// same as IVF/fulltext. HNSW/CAGRA/IVF-PQ are cron-maintained.
 	tableDef := dmlCtx.tableDefs[0]
+	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+		return 0, err
+	}
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
@@ -1086,9 +1089,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// and let the main plan, the insert maintenance (new entries) and the delete
 	// maintenance (drop the old entries, keyed by the old PK) all read it.
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
+			-1, -1,
 			irregularIndexes, tableDef, objRef)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if len(lockTargets) > 0 && !buildParentFKActions {

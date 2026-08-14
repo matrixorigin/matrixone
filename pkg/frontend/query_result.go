@@ -58,10 +58,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	}
 
 	stmtProfile := ses.GetStmtProfile()
-	if stmtProfile.GetSqlSourceType() == constant.InternalSql {
+	sqlSourceType := stmtProfile.GetSqlSourceType()
+	if sqlSourceType == constant.InternalSql || sqlSourceType == constant.CloudNoUserSql {
 		return false
 	}
-	if stmtProfile.GetStmtType() == "Select" && stmtProfile.GetSqlSourceType() != constant.CloudUserSql {
+	if stmtProfile.GetStmtType() == "Select" && sqlSourceType != constant.CloudUserSql {
 		return false
 	}
 
@@ -110,13 +111,18 @@ func initQueryResulConfig(ctx context.Context, ses *Session) error {
 }
 
 func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
-	n := uint64(0)
-	if bat != nil && bat.Vecs[0] != nil {
-		n = uint64(bat.Vecs[0].Length())
-	}
+	n := uint64(bat.RowCount())
 	ses.queryRowCount += n
 
-	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
+	writeBat, release, err := prepareQueryResultBatchForWrite(bat, ses.GetMemPool())
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
+
+	s := ses.curResultSize + float64(writeBat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
 		ses.Debug(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
@@ -129,7 +135,7 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.Write(bat)
+	_, err = writer.Write(writeBat)
 	if err != nil {
 		return err
 	}
@@ -144,6 +150,96 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 	ses.curResultSize = s
 	ses.savedRowCount += n
 	return err
+}
+
+func prepareQueryResultBatchForWrite(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+) (*batch.Batch, func(), error) {
+	rowCount := bat.RowCount()
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d is nil", i,
+			)
+		}
+		if vec.Length() != rowCount {
+			return normalizeQueryResultBatchForWrite(bat, mp, rowCount)
+		}
+	}
+	return bat, nil, nil
+}
+
+func normalizeQueryResultBatchForWrite(
+	bat *batch.Batch,
+	mp *mpool.MPool,
+	rowCount int,
+) (*batch.Batch, func(), error) {
+	writeBat := batch.NewWithSize(len(bat.Vecs))
+	writeBat.Attrs = bat.Attrs
+	copy(writeBat.Vecs, bat.Vecs)
+	writeBat.SetRowCount(rowCount)
+	cloned := make([]*vector.Vector, 0, len(bat.Vecs))
+
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			freeQueryResultVectors(cloned, mp)
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d is nil", i,
+			)
+		}
+		if vec.Length() == rowCount {
+			continue
+		}
+		if !vec.IsConst() && vec.Length() > rowCount {
+			freeQueryResultVectors(cloned, mp)
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"query result column %d has %d rows, batch has %d",
+				i, vec.Length(), rowCount,
+			)
+		}
+		if !vec.IsConst() {
+			for row := vec.Length(); row < rowCount; row++ {
+				if !vec.GetNulls().Contains(uint64(row)) {
+					freeQueryResultVectors(cloned, mp)
+					return nil, nil, moerr.NewInternalErrorNoCtxf(
+						"query result column %d is missing non-null row %d",
+						i, row,
+					)
+				}
+			}
+		}
+		dup, err := vec.Dup(mp)
+		if err != nil {
+			freeQueryResultVectors(cloned, mp)
+			return nil, nil, err
+		}
+		cloned = append(cloned, dup)
+		// Prepared-parameter provenance is execution-only and is not part of the
+		// stable vector encoding. Drop it before extending the persisted logical
+		// length so a heterogeneous sidecar cannot grow with the result batch.
+		dup.SetPrepareParamKinds(nil)
+		if vec.IsConst() {
+			dup.SetLength(rowCount)
+		} else {
+			for dup.Length() < rowCount {
+				if err := dup.UnionNull(mp); err != nil {
+					freeQueryResultVectors(cloned, mp)
+					return nil, nil, err
+				}
+			}
+		}
+		writeBat.Vecs[i] = dup
+	}
+	return writeBat, func() {
+		freeQueryResultVectors(cloned, mp)
+	}, nil
+}
+
+func freeQueryResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
+	for _, vec := range vecs {
+		vec.Free(mp)
+	}
 }
 
 func saveBatches(ctx context.Context, ses *Session, data []*batch.Batch) error {
@@ -598,7 +694,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	mrs := &MysqlResultSet{}
 	typs := make([]types.Type, columnCount)
 	for i, c := range columnDefs.ResultCols {
-		typs[i] = types.New(types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale)
+		typs[i] = types.NewWithCharset(
+			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, uint8(c.Typ.Charset),
+		)
 		mcol := &MysqlColumn{}
 		mcol.SetName(c.GetName())
 		err = convertEngineTypeToMysqlType(ctx, typs[i].Oid, mcol)
@@ -832,7 +930,9 @@ func (result *QueryResult) FinishStage(execCtx *ExecCtx) error {
 	}
 	empty := batch.NewWithSize(len(ses.rs.ResultCols))
 	for i, col := range ses.rs.ResultCols {
-		empty.Vecs[i] = vector.NewVec(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+		empty.Vecs[i] = vector.NewVec(types.NewWithCharset(
+			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+		))
 	}
 	defer empty.Clean(ses.proc.Mp())
 	empty.SetRowCount(0)

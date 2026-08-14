@@ -32,7 +32,19 @@ func validateIteratorVectors(
 		return mpool.ErrAllocationAccountInvalid
 	}
 	for _, vec := range vecs {
-		if vec == nil || start > vec.Length() || count > vec.Length()-start {
+		if vec == nil {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		// Scalar const vectors physically store one value and broadcast it across
+		// the caller's logical row range. Hash encoders already handle that
+		// contract by reading row zero.
+		if vec.IsConst() {
+			if !vec.CoversLogicalRows(start, count) {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			continue
+		}
+		if start > vec.Length() || count > vec.Length()-start {
 			return mpool.ErrAllocationAccountInvalid
 		}
 	}

@@ -56,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -762,8 +763,8 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	}
 	tTime := time.Since(begin)
 	n := 0
-	if !isPerformStatement(execCtx.stmt) && bat != nil && bat.Vecs[0] != nil {
-		n = bat.Vecs[0].Length()
+	if !isPerformStatement(execCtx.stmt) && bat != nil {
+		n = bat.RowCount()
 		ses.sentRows.Add(int64(n))
 	}
 
@@ -928,31 +929,42 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
-		assign       *tree.VarAssignmentExpr
-		value        interface{}
-		userVarIsBin bool
+		assign                  *tree.VarAssignmentExpr
+		value                   interface{}
+		userVarIsBin            bool
+		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
-		value, evalErr := getExprValueWithPrepareMode(
-			assign.Value, ses, execCtx, preparedExpression, &isBin)
+		prepareParamKind := vector.PrepareParamNone
+		value, evalErr := getExprValueWithPrepareMeta(
+			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
 			if isDefault, isBool := value.(bool); isBool && isDefault {
-				value = systemVar.Default
+				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
+					value, evalErr = transactionIsolationDefaultValue(
+						execCtx.reqCtx, ses, scope)
+					if evalErr != nil {
+						return evaluatedAssignment{}, evalErr
+					}
+				} else {
+					value = systemVar.Default
+				}
 			}
 		}
 		return evaluatedAssignment{
-			assign:       assign,
-			value:        value,
-			userVarIsBin: isBin,
+			assign:                  assign,
+			value:                   value,
+			userVarIsBin:            isBin,
+			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
-
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -989,7 +1001,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithKind(
+				name, value, sql, userVarIsBin, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -1002,6 +1015,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
@@ -1015,6 +1029,34 @@ func doSetVar(
 				if err != nil {
 					return err
 				}
+			}
+		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
+			switch scope {
+			case tree.TransactionScopeNext:
+				def := gSysVarsDefs[canonicalSystemVariableName(name)]
+				converted, convertErr := def.GetType().Convert(value)
+				if convertErr != nil {
+					return convertErr
+				}
+				isolation, isolationErr := txnIsolationFromSystemValue(execCtx.reqCtx, converted)
+				if isolationErr != nil {
+					return isolationErr
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
+				}
+				allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
+					!execCtx.txnOpt.activeTxnAtStart
+				return txnHandler.setNextTxnIsolation(
+					execCtx.reqCtx, isolation, allowCurrentStatementTxn)
+			case tree.TransactionScopeSession:
+				return setVarFunc(true, false, name, value, sql)
+			case tree.TransactionScopeGlobal:
+				return setVarFunc(true, true, name, value, sql)
+			default:
+				return moerr.NewInvalidInputf(execCtx.reqCtx,
+					"unsupported transaction scope %d", scope)
 			}
 		} else if assign.System && name == "clear_privilege_cache" {
 			//if it is global variable, it does nothing.
@@ -1159,6 +1201,99 @@ func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) 
 		return err
 	}
 
+	return nil
+}
+
+func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransaction) error {
+	var isolationCharacteristic *tree.TransactionCharacteristic
+	var accessCharacteristic *tree.TransactionCharacteristic
+	for i, characteristic := range stmt.CharacterList {
+		if characteristic == nil {
+			return moerr.NewInvalidInputf(execCtx.reqCtx,
+				"transaction characteristic %d is empty", i+1)
+		}
+		if characteristic.IsLevel {
+			if isolationCharacteristic != nil {
+				return moerr.NewInvalidInput(execCtx.reqCtx,
+					"transaction isolation level specified more than once")
+			}
+			isolationCharacteristic = characteristic
+		} else {
+			if accessCharacteristic != nil {
+				return moerr.NewInvalidInput(execCtx.reqCtx,
+					"transaction access mode specified more than once")
+			}
+			accessCharacteristic = characteristic
+		}
+	}
+
+	if accessCharacteristic != nil {
+		var accessMode string
+		switch accessCharacteristic.Access {
+		case tree.ACCESS_MODE_READ_ONLY:
+			accessMode = "READ ONLY"
+		case tree.ACCESS_MODE_READ_WRITE:
+			accessMode = "READ WRITE"
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx,
+				"unsupported transaction access mode %d", accessCharacteristic.Access)
+		}
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction access mode "+accessMode+" is not supported")
+	}
+	if isolationCharacteristic == nil {
+		return moerr.NewInvalidInput(execCtx.reqCtx,
+			"transaction characteristic list must not be empty")
+	}
+
+	var value string
+	var isolation pbtxn.TxnIsolation
+	switch isolationCharacteristic.Isolation {
+	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+		value = "REPEATABLE-READ"
+		isolation = pbtxn.TxnIsolation_SI
+	case tree.ISOLATION_LEVEL_READ_COMMITTED:
+		value = "READ-COMMITTED"
+		isolation = pbtxn.TxnIsolation_RC
+	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction isolation level READ-UNCOMMITTED is not supported")
+	case tree.ISOLATION_LEVEL_SERIALIZABLE:
+		return moerr.NewNotSupported(execCtx.reqCtx,
+			"transaction isolation level SERIALIZABLE is not supported")
+	default:
+		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+	}
+
+	switch stmt.Scope {
+	case tree.TransactionScopeNext:
+		txnHandler := ses.GetTxnHandler()
+		if txnHandler == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "transaction handler is not initialized")
+		}
+		allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
+			!execCtx.txnOpt.activeTxnAtStart
+		if err := txnHandler.setNextTxnIsolation(
+			execCtx.reqCtx,
+			isolation,
+			allowCurrentStatementTxn,
+		); err != nil {
+			return err
+		}
+	case tree.TransactionScopeSession:
+		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	case tree.TransactionScopeGlobal:
+		if err := doCheckRole(execCtx.reqCtx, ses); err != nil {
+			return err
+		}
+		if err := ses.SetGlobalSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction scope %d", stmt.Scope)
+	}
 	return nil
 }
 
@@ -1695,9 +1830,12 @@ func writeExplainResult(
 
 	//2. fill the result set
 	//column
+	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(explainColName)
+	setMysqlColumnTypeMetadata(col1, types.New(types.T_varchar, 0, 0))
+	setCharacter(col1)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -3193,21 +3331,33 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
-		if ref == nil || def == nil {
+	checkCatalogObject := func(
+		ref *plan.ObjectRef,
+		name string,
+		snapshot *plan2.Snapshot,
+		version int64,
+		tableID int64,
+	) (bool, error) {
+		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
 			return true, nil
 		}
 		return false, nil
+	}
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -3235,6 +3385,18 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				if err != nil || flag {
 					return true, err
 				}
+			}
+		}
+		for _, dependency := range p.Query.GetCatalogDependencies() {
+			flag, err := checkCatalogObject(
+				dependency,
+				dependency.GetObjName(),
+				dependency.GetSnapshot(),
+				dependency.GetServer(),
+				dependency.GetObj(),
+			)
+			if err != nil || flag {
+				return true, err
 			}
 		}
 	default:
@@ -3295,6 +3457,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
+			// The cache owns its ASTs until eviction. Wrappers only borrow them;
+			// otherwise normal cleanup or stale-plan reset can return the same AST
+			// to the parser pool while the cache still owns or already freed it.
+			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
@@ -4146,6 +4312,8 @@ func executeStmtWithWorkspace(ses FeSession,
 	//special BEGIN,COMMIT,ROLLBACK
 	beginStmt := false
 	execCtx.txnOpt.Close()
+	execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+	execCtx.txnOpt.activeTxnAtStartKnown = true
 	switch execCtx.stmt.(type) {
 	case *tree.BeginTransaction:
 		execCtx.txnOpt.byBegin = true
@@ -4315,6 +4483,44 @@ func executeStmtWithIncrStmt(ses FeSession,
 	return
 }
 
+func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
+	// Evict this stale entry before rebuilding so a successful replan replaces
+	// it instead of paying the validation/rebuild cost forever.
+	if session, ok := ses.(*Session); ok {
+		session.removeCachedPlan(execCtx.input.getHash())
+	}
+
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	defer freeStmts(stmts)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != len(execCtx.cws) {
+		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
+	}
+	if execCtx.rewriteEnabled {
+		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+			return err
+		}
+		remaps := make([]map[string]string, len(execCtx.cws))
+		for i, cw := range execCtx.cws {
+			if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+				remaps[i] = carrier.GetRemapDb()
+			}
+		}
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+			return err
+		}
+	}
+	for i, cw := range execCtx.cws {
+		cw.ResetPlanAndStmt(stmts[i])
+		// ResetPlanAndStmt now owns the replacement AST. Keep the deferred
+		// cleanup responsible only for statements that were not transferred.
+		stmts[i] = nil
+	}
+	return nil
+}
+
 func dispatchStmt(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx) (err error) {
@@ -4327,32 +4533,8 @@ func dispatchStmt(ses FeSession,
 			return err
 		}
 		if flag {
-			//plan changed
-			//clear all cached plan and parse sql again
-			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
-			if err != nil {
+			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
-			}
-			if len(stmts) != len(execCtx.cws) {
-				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
-			}
-			if execCtx.rewriteEnabled {
-				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
-					return err
-				}
-				remaps := make([]map[string]string, len(execCtx.cws))
-				for i, cw := range execCtx.cws {
-					if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
-						remaps[i] = carrier.GetRemapDb()
-					}
-				}
-				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
-					return err
-				}
-			}
-			for i, cw := range execCtx.cws {
-				cw.ResetPlanAndStmt(stmts[i])
 			}
 		}
 	}
@@ -4601,6 +4783,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
@@ -5057,34 +5240,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
-		// before normal processing. If sidecar is not configured, silently
-		// fall through to normal MO execution.
-		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
-			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				query = stripSidecarHint(query)
-			} else {
-				err = handleSidecarOffload(ses, execCtx, query, useGPU)
-				if err == nil {
-					ses.resetDiagnostics()
-					setRowCount(ses, ses.GetProc(), -1)
-					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-					return resp, nil
-				}
-				if err != errSidecarNotConfigured {
-					ses.resetDiagnostics()
-					markRowCountFailed(ses, ses.GetProc())
-					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-					return resp, nil
-				}
-				// errSidecarNotConfigured: strip hint and fall through to normal execution
-				query = stripSidecarHint(query)
-			}
-		} else {
-			ses.addSqlCount(1)
-		}
+		// SIDECAR is an explicit statement selector. Keep the raw request intact
+		// so doComQuery can bind each hint to its own computation wrapper; a
+		// request-scoped marker would leak into unhinted sibling statements.
+		ses.addSqlCount(1)
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
@@ -5404,9 +5563,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varbinary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:

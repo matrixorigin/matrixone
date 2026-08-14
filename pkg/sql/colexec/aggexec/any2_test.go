@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -53,6 +54,57 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 
 	err := target.BatchMerge(source, 0, []uint64{1})
 	require.Error(t, err)
+}
+
+func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(input, []byte("9"), false, mp))
+	input.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	require.NoError(t, input.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+
+	exec := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	defer func() {
+		input.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, vector.PrepareParamFloat, results[0].GetPrepareParamKindAt(0))
+	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+	results[0].Free(mp)
+}
+
+func TestAnyValueIntermediateRoundTripPreservesBinaryString(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("binary"), false, mp))
+	input.SetIsBinaryString(true)
+	source := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+	var wire bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+
+	restored := makeAnyValueExec(mp, AggIdOfAny, types.T_text.ToType())
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+	results, err := restored.Flush()
+	require.NoError(t, err)
+	require.True(t, results[0].GetBinaryStringMetadataAt(0))
+
+	results[0].Free(mp)
+	restored.Free()
+	source.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
 }
 
 func newLimitedAnyValueExec(t *testing.T) (*anyExec, *mpool.MPool, []byte) {

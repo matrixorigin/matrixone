@@ -143,6 +143,94 @@ func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
 	return string(databaseName), string(viewName), snapshot, nil
 }
 
+// ValidateSnapshotScope verifies that a relation belongs to the object covered
+// by a named snapshot. Timestamp-only snapshots have no object restriction.
+func ValidateSnapshotScope(
+	snapshot *Snapshot,
+	databaseName string,
+	tableName string,
+	databaseID uint64,
+	tableID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		if snapshot.ExtraInfo.ObjId != tableID {
+			return moerr.NewInternalErrorNoCtxf(
+				"table-level snapshot(%s) does not belong to the table(%s-%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+				tableName,
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
+// ValidateSnapshotDatabaseScope verifies that an operation scoped to a
+// database is compatible with a named snapshot. A table snapshot cannot read
+// database-wide metadata because it represents a single relation.
+func ValidateSnapshotDatabaseScope(
+	snapshot *Snapshot,
+	databaseName string,
+	databaseID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		return moerr.NewInternalErrorNoCtxf(
+			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
+			snapshot.ExtraInfo.Name,
+			databaseName,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
@@ -240,6 +328,7 @@ type QueryBuilder struct {
 	ctxByNode                   []*BindContext
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
+	updateTargetScans           map[int32]struct{}
 	projectSpecialGuards        map[int32]*specialIndexGuard
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
@@ -250,6 +339,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -266,9 +360,8 @@ type QueryBuilder struct {
 	isRestoreByTs          bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
-	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	aggSpillMem int64
@@ -309,6 +402,7 @@ type QueryBuilder struct {
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
 	irregularMaintSkipInsert  bool
+	irregularUpdateMaints     []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -332,6 +426,16 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep  int32
+	deleteStep  int32
+	deletePkPos int32
+	deletePkTyp plan.Type
+	indexes     []*plan.IndexDef
+	tableDef    *plan.TableDef
+	objRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -410,12 +514,17 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+type orderResolutionMetadata struct {
+	bindAsts          []tree.Expr
+	semanticKeysByTag map[int32][]string
+}
+
 type BindContext struct {
 	binder Binder
 
-	// outputColumnProvenance records planner-local lineage overrides by output
-	// position. An explicit None prevents later transparent-boundary code from
-	// rediscovering a source after a semantic boundary has cleared it.
+	// outputColumnProvenance records planner-local source or pure-NULL identity
+	// by output position. An explicit None prevents later transparent-boundary
+	// code from rediscovering metadata after a semantic boundary has cleared it.
 	outputColumnProvenance map[int32]OutputColumnProvenance
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
@@ -447,9 +556,24 @@ type BindContext struct {
 	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
-	isCorrelated                 bool
-	hasSingleRow                 bool
-	isGroupingSet                bool
+	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
+	// the tail of a grouping-set branch select list. They are qualified after
+	// FROM binding with source-column-first ORDER BY semantics.
+	groupingSetOrderHiddenCount int
+	// groupingSetOrderAliases carries the original select-list expressions for
+	// generated hidden ORDER BY projections. Unlike normal branch projections,
+	// those expressions use source-column-first alias fallback semantics.
+	groupingSetOrderAliases map[string][]tree.Expr
+	// groupingSetOrderSourceProbes resolves names whose presence cannot be known
+	// until the generated branch has bound its FROM scope.
+	groupingSetOrderSourceProbes map[string]*tree.GroupingSetOrderSourceProbe
+	// preserveOrderSemanticKeys retains source-scope projection identities for
+	// a grouping-set branch whose UNION output otherwise loses that identity.
+	preserveOrderSemanticKeys bool
+	isCorrelated              bool
+	hasSingleRow              bool
+	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -474,18 +598,25 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
-	whereFilters    []*plan.Expr
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
+	// set, keeping the ordinary-query projection path allocation-free.
+	projectSemanticKeys []string
+	// orderResolution is allocated only for generated ROLLUP/CUBE window
+	// boundaries that must preserve output AST categories and bound identity.
+	orderResolution *orderResolutionMetadata
 
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
@@ -538,6 +669,24 @@ type BindContext struct {
 	groupingFlag []bool
 
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {
@@ -714,8 +863,8 @@ type Binding struct {
 	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
 	// post-semantic canonical-value contract through transparent bindings.
 	mysqlSpecialCanonicalTypes []*plan.Type
-	// outputColumnProvenance is aligned with cols and carries planner-local,
-	// single-source output lineage. It is never serialized into the plan.
+	// outputColumnProvenance is aligned with cols and carries planner-local
+	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
 	refCnts                []uint
 	// lower case

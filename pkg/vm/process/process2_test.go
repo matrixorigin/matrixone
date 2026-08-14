@@ -156,8 +156,23 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 		return params
 	}
 
+	plain := newParams("plain")
+	proc.SetOwnedPrepareParamsWithMeta(
+		plain,
+		[]bool{false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone},
+	)
+	require.Nil(t, proc.Base.prepareParamsIsBin, "default metadata must keep the zero-allocation path")
+
 	first := newParams("first")
-	proc.SetOwnedPrepareParamsWithIsBin(first, []bool{true})
+	proc.SetOwnedPrepareParamsWithMeta(
+		first,
+		[]bool{true},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal},
+	)
+	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Zero(t, plain.Length(), "replacing owned default-metadata params must release them")
 	proc.SetPrepareParamsWithIsBin(first, []bool{false})
 	require.Equal(t, 1, first.Length(), "setting the same pointer must not release it")
 	require.True(t, proc.Base.prepareParamsOwned, "setting the same pointer must preserve ownership")
@@ -186,16 +201,18 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+	proc.SetOwnedPrepareParamsWithMetadata(params, []bool{true}, []bool{true})
 
 	state := proc.DetachPrepareParams()
 	require.Nil(t, proc.GetPrepareParams())
 	require.False(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
 	proc.BorrowPrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.False(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()
@@ -204,6 +221,7 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.True(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()

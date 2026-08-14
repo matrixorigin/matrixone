@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,7 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	vec.GetGrouping().Set(0)
 	vec.SetSorted(true)
 	checkpoint := vec.MakeAppendCheckpoint()
+	vec.SetPrepareParamKind(PrepareParamFloat)
 
 	require.NoError(t, AppendBytes(vec, []byte(strings.Repeat("b", 96)), false, mp))
 	vec.GetNulls().Set(1)
@@ -88,6 +90,8 @@ func TestAppendCheckpointRollback(t *testing.T) {
 	require.False(t, vec.GetNulls().Contains(1))
 	require.True(t, vec.GetGrouping().Contains(0))
 	require.False(t, vec.GetGrouping().Contains(1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind(),
+		"the checkpoint predates the explicit provenance assignment")
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
 }
@@ -1657,6 +1661,31 @@ func TestCopy(t *testing.T) {
 	}
 }
 
+func TestCopyPreallocatedNullVectorKeepsScalarMetadata(t *testing.T) {
+	const rows = 1024
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	destination := NewVec(types.T_int64.ToType())
+	require.NoError(t, destination.PreExtend(rows, mp))
+	destination.SetLength(rows)
+	destination.SetAllNulls(rows)
+	defer destination.Free(mp)
+
+	for row := rows - 1; row >= 0; row-- {
+		require.NoError(t, destination.Copy(source, int64(row), 0, mp))
+	}
+	require.False(t, destination.HasNull())
+	require.False(t, destination.HasBinaryStringRows())
+	require.False(t, destination.GetIsBinaryString())
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[0])
+	require.Equal(t, int64(42), MustFixedColNoTypeCheck[int64](destination)[rows-1])
+}
+
 func TestCloneWindow(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v1 := NewConstNull(types.T_int32.ToType(), 10, mp)
@@ -1690,6 +1719,554 @@ func TestCloneWindow(t *testing.T) {
 	require.Equal(t, payload, v6.GetBytesAt(1))
 	require.Equal(t, 10, v5.Length(), "cloning must not mutate the source")
 	require.Equal(t, payload, v5.GetBytesAt(0))
+}
+
+func TestBinaryStringMetadataSurvivesPublicCopies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte{0xe4, 0xbd, 0xa0, 0xff}, false, mp))
+	source.SetIsBinaryString(true)
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.True(t, dup.GetIsBinaryString())
+	dup.Free(mp)
+
+	window, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.True(t, window.GetIsBinaryString())
+	window.Free(mp)
+
+	cloneWindow, err := source.CloneWindow(0, 1, mp)
+	require.NoError(t, err)
+	require.True(t, cloneWindow.GetIsBinaryString())
+	cloneWindow.Free(mp)
+
+	cloneTo := NewVec(types.T_text.ToType())
+	require.NoError(t, source.CloneWindowTo(cloneTo, 0, 1, mp))
+	require.True(t, cloneTo.GetIsBinaryString())
+	cloneTo.Free(mp)
+
+	compact, err := source.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.True(t, compact.GetIsBinaryString())
+	compact.Free(mp)
+}
+
+func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	for _, value := range []string{"a", "你", "b"} {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	source.SetIsBinaryStringAt(0, true)
+	source.SetIsBinaryStringAt(2, true)
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	assertRows := func(t *testing.T, vec *Vector, want []bool) {
+		t.Helper()
+		for row, expected := range want {
+			require.Equal(t, expected, vec.GetIsBinaryStringAt(row), "row %d", row)
+		}
+	}
+	assertRows(t, source, []bool{true, false, true})
+
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	assertRows(t, dup, []bool{true, false, true})
+	dup.Free(mp)
+
+	window, err := source.Window(1, 3)
+	require.NoError(t, err)
+	assertRows(t, window, []bool{false, true})
+	window.Free(mp)
+
+	cloneWindow, err := source.CloneWindow(1, 3, mp)
+	require.NoError(t, err)
+	assertRows(t, cloneWindow, []bool{false, true})
+	cloneWindow.Free(mp)
+
+	cloneTo := NewVec(types.T_text.ToType())
+	require.NoError(t, source.CloneWindowTo(cloneTo, 1, 3, mp))
+	assertRows(t, cloneTo, []bool{false, true})
+	cloneTo.Free(mp)
+
+	destination := NewVec(types.T_text.ToType())
+	require.NoError(t, destination.UnionBatch(source, 0, source.Length(), nil, mp))
+	assertRows(t, destination, []bool{true, false, true})
+	destination.Free(mp)
+
+	t.Run("sparse-flags", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			source     func() *Vector
+			flags      []uint8
+			cnt        int
+			wantBinary []bool
+			wantNull   []bool
+		}{
+			{
+				name: "high-row",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("match")}, nil, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(3, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+			{
+				name: "selected-null",
+				source: func() *Vector {
+					vec := NewVec(types.T_text.ToType())
+					require.NoError(t, AppendBytesList(vec,
+						[][]byte{[]byte("a"), nil, []byte("match")}, []bool{false, true, false}, mp))
+					require.NoError(t, vec.SetIsBinaryStringAt(2, true, mp))
+					return vec
+				},
+				flags: []uint8{0, 1, 1}, cnt: 2, wantBinary: []bool{false, true}, wantNull: []bool{true, false},
+			},
+			{
+				name: "const",
+				source: func() *Vector {
+					vec, err := NewConstBytes(types.T_text.ToType(), []byte("match"), 4, mp)
+					require.NoError(t, err)
+					vec.SetIsBinaryString(true)
+					return vec
+				},
+				flags: []uint8{0, 0, 0, 1}, cnt: 1, wantBinary: []bool{true}, wantNull: []bool{false},
+			},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				source := tc.source()
+				defer source.Free(mp)
+				destination := NewVec(types.T_text.ToType())
+				require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+				require.NoError(t, destination.UnionBatch(source, 0, tc.cnt, tc.flags, mp))
+				for row, want := range tc.wantBinary {
+					require.Equal(t, want, destination.GetBinaryStringMetadataAt(row+1))
+					require.Equal(t, tc.wantNull[row], destination.IsNull(uint64(row+1)))
+				}
+				require.Equal(t, "match", destination.GetStringAt(destination.Length()-1))
+				destination.Free(mp)
+			})
+		}
+	})
+
+	shrunk, err := source.Dup(mp)
+	require.NoError(t, err)
+	shrunk.Shrink([]int64{1, 2}, false)
+	assertRows(t, shrunk, []bool{false, true})
+	shrunk.Free(mp)
+
+	shuffled, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.NoError(t, shuffled.Shuffle([]int64{2, 1, 0}, mp))
+	assertRows(t, shuffled, []bool{true, false, true})
+	shuffled.Free(mp)
+
+	copied, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.NoError(t, copied.Copy(source, 0, 1, mp))
+	assertRows(t, copied, []bool{false, false, true})
+	copied.Free(mp)
+
+	staticBinary := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(staticBinary, nil, true, mp))
+	require.False(t, staticBinary.GetIsBinaryStringAt(0), "NULL rows have no selected-value provenance")
+	require.NoError(t, AppendBytes(staticBinary, []byte("value"), false, mp))
+	staticCopy := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, staticCopy.UnionBatch(staticBinary, 0, staticBinary.Length(), nil, mp))
+	require.False(t, staticCopy.HasBinaryStringRows())
+	require.False(t, staticCopy.GetIsBinaryString())
+	require.True(t, staticCopy.GetIsBinaryStringAt(1), "static type still provides byte semantics")
+	staticCopy.Free(mp)
+	staticBinary.Free(mp)
+
+	copySource := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(copySource, []byte("binary"), false, mp))
+	require.NoError(t, AppendBytes(copySource, []byte("text"), false, mp))
+	require.NoError(t, copySource.SetIsBinaryStringAt(0, true, mp))
+	copyDestination := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(copyDestination, []byte("old-text"), false, mp))
+	require.NoError(t, AppendBytes(copyDestination, []byte("old-binary"), false, mp))
+	require.NoError(t, copyDestination.SetIsBinaryStringAt(1, true, mp))
+	require.NoError(t, SetBytesAtFrom(copyDestination, 0, copySource, 0, mp))
+	require.NoError(t, SetBytesAtFrom(copyDestination, 1, copySource, 1, mp))
+	require.Equal(t, []byte("binary"), copyDestination.GetBytesAt(0))
+	require.Equal(t, []byte("text"), copyDestination.GetBytesAt(1))
+	require.True(t, copyDestination.GetBinaryStringMetadataAt(0))
+	require.False(t, copyDestination.GetBinaryStringMetadataAt(1))
+	copySource.Free(mp)
+	copyDestination.Free(mp)
+
+	nullable := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(nullable, []byte("a"), false, mp))
+	require.NoError(t, AppendBytes(nullable, nil, true, mp))
+	require.NoError(t, AppendBytes(nullable, []byte("b"), false, mp))
+	nullable.SetIsBinaryString(true)
+	nullable.SetIsBinaryStringAt(0, false)
+	nullable.SetIsBinaryStringAt(2, false)
+	require.False(t, nullable.GetIsBinaryString())
+	require.False(t, nullable.HasBinaryStringRows())
+	nullable.Free(mp)
+
+	rollback, err := source.Dup(mp)
+	require.NoError(t, err)
+	checkpoint := rollback.MakeAppendCheckpoint()
+	require.NoError(t, AppendBytes(rollback, []byte("c"), false, mp))
+	rollback.SetIsBinaryStringAt(3, true)
+	rollback.RollbackAppend(checkpoint, 1)
+	assertRows(t, rollback, []bool{true, false, true})
+	require.Equal(t, 3, rollback.Length())
+	rollback.Free(mp)
+}
+
+func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var nilVector *Vector
+	require.False(t, nilVector.GetIsBinaryStringAt(0))
+	require.NoError(t, nilVector.SetIsBinaryStringAt(0, true))
+
+	empty := NewVec(types.T_text.ToType())
+	require.Error(t, empty.SetBinaryStringRows([]bool{true}))
+	require.NoError(t, empty.SetBinaryStringRows(nil))
+	empty.Free(mp)
+
+	uniform := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(uniform, []byte("a"), false, mp))
+	require.NoError(t, AppendBytes(uniform, []byte("b"), false, mp))
+	require.NoError(t, uniform.SetBinaryStringRows([]bool{false, false}))
+	require.False(t, uniform.GetIsBinaryString())
+	require.NoError(t, uniform.SetBinaryStringRows([]bool{true, true}))
+	require.True(t, uniform.GetIsBinaryString())
+	uniform.SetNull(1)
+	require.NoError(t, uniform.SetIsBinaryStringAt(0, false))
+	require.False(t, uniform.GetIsBinaryString())
+	uniform.Free(mp)
+
+	source := NewVec(types.T_text.ToType())
+	for _, value := range []string{"z", "a", "tail"} {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	require.NoError(t, source.SetIsBinaryStringAt(0, true))
+	defer source.Free(mp)
+
+	broadcast := NewVec(types.T_text.ToType())
+	require.NoError(t, broadcast.UnionMulti(source, 0, 2, mp))
+	require.True(t, broadcast.GetIsBinaryStringAt(0))
+	require.True(t, broadcast.GetIsBinaryStringAt(1))
+	broadcast.Free(mp)
+
+	constant, err := NewConstBytes(types.T_text.ToType(), []byte("raw"), 2, mp)
+	require.NoError(t, err)
+	constant.SetIsBinaryString(true)
+	constantCopy := NewVec(types.T_text.ToType())
+	require.NoError(t, GetUnionAllFunction(types.T_text.ToType(), mp)(constantCopy, constant))
+	require.True(t, constantCopy.GetIsBinaryStringAt(0))
+	require.True(t, constantCopy.GetIsBinaryStringAt(1))
+	constantCopy.Free(mp)
+	constant.Free(mp)
+
+	nullable, err := source.Dup(mp)
+	require.NoError(t, err)
+	nullable.SetNull(0)
+	require.False(t, nullable.GetIsBinaryString())
+	require.False(t, nullable.HasBinaryStringRows())
+	nullable.Free(mp)
+
+	shortened, err := source.Dup(mp)
+	require.NoError(t, err)
+	shortened.SetNull(2)
+	shortened.SetLength(2)
+	require.True(t, shortened.GetIsBinaryStringAt(0))
+	require.False(t, shortened.GetIsBinaryStringAt(1))
+	shortened.Free(mp)
+
+	reused, err := source.Dup(mp)
+	require.NoError(t, err)
+	reused.CleanOnlyData()
+	require.NoError(t, AppendBytes(reused, []byte("text"), false, mp))
+	require.False(t, reused.GetIsBinaryString())
+	reused.Free(mp)
+
+	bulkNull := NewVec(types.T_text.ToType())
+	for _, value := range []string{"binary", "text"} {
+		require.NoError(t, AppendBytes(bulkNull, []byte(value), false, mp))
+	}
+	require.NoError(t, bulkNull.SetIsBinaryStringAt(0, true))
+	nsp := nulls.NewWithSize(2)
+	nsp.Add(0)
+	bulkNull.SetNulls(nsp)
+	require.False(t, bulkNull.GetIsBinaryString())
+	require.False(t, bulkNull.GetIsBinaryStringAt(1))
+	bulkNull.SetIsBinaryString(true)
+	bulkNull.SetAllNulls(2)
+	require.False(t, bulkNull.GetIsBinaryString())
+	require.False(t, bulkNull.HasBinaryStringRows())
+	bulkNull.Free(mp)
+}
+
+func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(vec, []string{"a", "b"}, nil, mp))
+	defer vec.Free(mp)
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("c"), false, mp))
+	source.SetIsBinaryString(true)
+	defer source.Free(mp)
+	require.NoError(t, vec.UnionBatch(source, 0, 1, nil, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.True(t, vec.GetIsBinaryString())
+
+	require.NotPanics(t, func() { vec.RollbackAppend(checkpoint, 1) })
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+}
+
+func TestRollbackAppendIgnoresStaleNullExtent(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mp.Free(nil)
+
+	vec := NewVec(types.T_text.ToType())
+	for row := 0; row < 130; row++ {
+		require.NoError(t, AppendBytes(vec, []byte("v"), row == 129, mp))
+	}
+	defer vec.Free(mp)
+	vec.SetLength(2)
+	require.True(t, vec.GetNulls().Contains(129), "SetLength preserves stale bitmap extent")
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(1, true, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	defer source.Free(mp)
+	require.NoError(t, vec.UnionBatch(source, 0, 1, nil, mp))
+	require.False(t, vec.HasBinaryStringRows())
+
+	require.NotPanics(t, func() { vec.RollbackAppend(checkpoint, 1) })
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.True(t, vec.GetBinaryStringMetadataAt(1))
+}
+
+func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tests := []struct {
+		name string
+		run  func(*Vector) error
+	}{
+		{name: "bytes", run: func(vec *Vector) error {
+			return AppendBytes(vec, []byte("ordinary"), false, mp)
+		}},
+		{name: "multi bytes", run: func(vec *Vector) error {
+			return AppendMultiBytes(vec, []byte("ordinary"), false, 2, mp)
+		}},
+		{name: "bytes list", run: func(vec *Vector) error {
+			return AppendBytesList(vec, [][]byte{[]byte("ordinary")}, nil, mp)
+		}},
+		{name: "string list", run: func(vec *Vector) error {
+			return AppendStringList(vec, []string{"ordinary"}, nil, mp)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(vec, []byte("binary"), false, mp))
+			vec.SetIsBinaryString(true)
+			require.NoError(t, test.run(vec))
+			require.True(t, vec.GetIsBinaryStringAt(0))
+			for row := 1; row < vec.Length(); row++ {
+				require.False(t, vec.GetIsBinaryStringAt(row))
+			}
+			vec.Free(mp)
+		})
+	}
+
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	source.SetIsBinaryString(true)
+	empty, err := source.Window(0, 0)
+	require.NoError(t, err)
+	require.True(t, empty.GetIsBinaryString())
+	require.NoError(t, AppendBytes(empty, []byte("ordinary"), false, mp))
+	require.False(t, empty.GetIsBinaryStringAt(0))
+	empty.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
+	mp := mpool.MustNewZero()
+	plain := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(plain, []byte("plain"), false, mp))
+	stable, err := plain.MarshalBinary()
+	require.NoError(t, err)
+	plain.Free(mp)
+
+	target := NewVec(types.T_text.ToType())
+	require.NoError(t, target.UnmarshalBinary(stable))
+	target.SetIsBinaryString(true)
+	require.NoError(t, target.UnmarshalBinary(stable))
+	require.False(t, target.GetIsBinaryString())
+	target.Free(mp)
+
+	sorted := NewVec(types.T_text.ToType())
+	for _, value := range []string{"z", "a"} {
+		require.NoError(t, AppendBytes(sorted, []byte(value), false, mp))
+	}
+	require.NoError(t, sorted.SetIsBinaryStringAt(0, true))
+	sorted.InplaceSort()
+	require.Equal(t, "a", string(sorted.GetBytesAt(0)))
+	require.Equal(t, "z", string(sorted.GetBytesAt(1)))
+	require.False(t, sorted.GetIsBinaryStringAt(0))
+	require.True(t, sorted.GetIsBinaryStringAt(1))
+	sorted.Free(mp)
+
+	compact := NewVec(types.T_text.ToType())
+	for _, value := range []string{"z", "a", "z", "n1", "n2"} {
+		require.NoError(t, AppendBytes(compact, []byte(value), false, mp))
+	}
+	require.NoError(t, compact.SetIsBinaryStringAt(0, true))
+	compact.SetNull(3)
+	compact.SetNull(4)
+	compact.GetGrouping().Add(1)
+	require.NoError(t, compact.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger, PrepareParamNone, PrepareParamNone,
+		PrepareParamBoolean, PrepareParamDecimal,
+	}, mp))
+	compact.InplaceSortAndCompact()
+	require.Equal(t, 4, compact.Length())
+	require.True(t, compact.IsNull(0))
+	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(0))
+	require.Equal(t, "a", string(compact.GetBytesAt(1)))
+	require.True(t, compact.GetGrouping().Contains(1))
+	require.False(t, compact.GetIsBinaryStringAt(1))
+	require.Equal(t, "z", string(compact.GetBytesAt(2)))
+	require.False(t, compact.GetIsBinaryStringAt(2))
+	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(2))
+	require.Equal(t, "z", string(compact.GetBytesAt(3)))
+	require.True(t, compact.GetIsBinaryStringAt(3))
+	require.Equal(t, PrepareParamInteger, compact.GetPrepareParamKindAt(3))
+	compact.Free(mp)
+
+	interleaved := NewVec(types.T_text.ToType())
+	for range 3 {
+		require.NoError(t, AppendBytes(interleaved, []byte("same"), false, mp))
+	}
+	require.NoError(t, interleaved.SetBinaryStringRowsWithMP([]bool{true, false, true}, mp))
+	interleaved.InplaceSortAndCompact()
+	require.Equal(t, 2, interleaved.Length())
+	require.False(t, interleaved.GetBinaryStringMetadataAt(0))
+	require.True(t, interleaved.GetBinaryStringMetadataAt(1))
+	interleaved.Free(mp)
+
+	for _, binaryFirst := range []bool{true, false} {
+		metadataDistinct := NewVec(types.T_text.ToType())
+		for range 2 {
+			require.NoError(t, AppendBytes(metadataDistinct, []byte("same"), false, mp))
+		}
+		binaryRow := 1
+		if binaryFirst {
+			binaryRow = 0
+		}
+		require.NoError(t, metadataDistinct.SetIsBinaryStringAt(binaryRow, true))
+		require.NoError(t, metadataDistinct.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger, PrepareParamFloat,
+		}, mp))
+		metadataDistinct.InplaceSortAndCompact()
+		require.Equal(t, 2, metadataDistinct.Length())
+		require.Equal(t, binaryFirst, metadataDistinct.GetIsBinaryStringAt(0))
+		require.Equal(t, !binaryFirst, metadataDistinct.GetIsBinaryStringAt(1))
+		require.Equal(t, PrepareParamInteger, metadataDistinct.GetPrepareParamKindAt(0))
+		require.Equal(t, PrepareParamFloat, metadataDistinct.GetPrepareParamKindAt(1))
+		metadataDistinct.Free(mp)
+	}
+
+	groupingDistinct := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(groupingDistinct, nil, true, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, nil, true, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, []byte("x"), false, mp))
+	require.NoError(t, AppendBytes(groupingDistinct, []byte("y"), false, mp))
+	groupingDistinct.GetGrouping().Add(0)
+	require.NoError(t, groupingDistinct.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger, PrepareParamFloat, PrepareParamBoolean, PrepareParamDecimal,
+	}, mp))
+	require.NoError(t, groupingDistinct.SetIsBinaryStringAt(2, true))
+	groupingDistinct.InplaceSortAndCompact()
+	require.Equal(t, 4, groupingDistinct.Length())
+	require.False(t, groupingDistinct.GetGrouping().Contains(0))
+	require.True(t, groupingDistinct.GetGrouping().Contains(1))
+	groupingDistinct.Free(mp)
+
+	for _, compact := range []bool{false, true} {
+		prepareOnly := NewVec(types.T_text.ToType())
+		for _, value := range []string{"z", "a"} {
+			require.NoError(t, AppendBytes(prepareOnly, []byte(value), false, mp))
+		}
+		require.NoError(t, prepareOnly.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger, PrepareParamFloat,
+		}, mp))
+		if compact {
+			prepareOnly.InplaceSortAndCompact()
+		} else {
+			prepareOnly.InplaceSort()
+		}
+		require.Equal(t, "a", string(prepareOnly.GetBytesAt(0)))
+		require.Equal(t, "z", string(prepareOnly.GetBytesAt(1)))
+		require.Equal(t, PrepareParamFloat, prepareOnly.GetPrepareParamKindAt(0))
+		require.Equal(t, PrepareParamInteger, prepareOnly.GetPrepareParamKindAt(1))
+		prepareOnly.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestBinaryStringShuffleWithBufScratchFailureIsAtomic(t *testing.T) {
+	dataMP := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	vec.SetOffHeap(true)
+	require.NoError(t, AppendBytes(vec, []byte("z"), false, dataMP))
+	require.NoError(t, AppendBytes(vec, []byte("a"), false, dataMP))
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, dataMP))
+
+	scratchMP, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(scratchMP)
+	hold, err := scratchMP.Alloc(mpool.MB, true)
+	require.NoError(t, err)
+	var scratch []byte
+	err = vec.ShuffleWithBuf([]int64{1, 0}, scratchMP, &scratch)
+	require.Error(t, err)
+	require.Equal(t, []byte("z"), vec.GetBytesAt(0))
+	require.Equal(t, []byte("a"), vec.GetBytesAt(1))
+	require.True(t, vec.GetBinaryStringMetadataAt(0))
+	require.False(t, vec.GetBinaryStringMetadataAt(1))
+
+	scratchMP.Free(hold)
+	vec.Free(dataMP)
+	require.Zero(t, scratchMP.CurrNB())
+	require.Zero(t, dataMP.CurrNB())
 }
 
 func TestCloneWindowWithMpNil(t *testing.T) {
@@ -3905,4 +4482,1228 @@ func TestVarlenaAreaDisjointAppendFailureFailsClosed(t *testing.T) {
 
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindValueLifecycle(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	source, err := NewConstBytes(types.T_text.ToType(), []byte("5"), 2, mp)
+	require.NoError(t, err)
+	source.SetPrepareParamKind(PrepareParamFloat)
+	defer source.Free(mp)
+
+	duplicate, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, duplicate.GetPrepareParamKind())
+	duplicate.Free(mp)
+
+	window, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+
+	clone, err := source.CloneWindow(0, 1, mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.ResetWithSameType()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamDecimal)
+	clone.Reset(types.T_varchar.ToType())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamInteger)
+	blobType := types.T_blob.ToType()
+	clone.ResetWithNewType(&blobType)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.SetPrepareParamKind(PrepareParamBoolean)
+	clone.CleanOnlyData()
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	clone.Free(mp)
+}
+
+func TestPrepareParamKindPropagationAcrossAppendAndClone(t *testing.T) {
+	mp := mpool.MustNewZero()
+	numeric := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(numeric, []byte("5.5"), false, mp))
+	numeric.SetPrepareParamKind(PrepareParamFloat)
+	defer numeric.Free(mp)
+
+	for name, appendFn := range map[string]func(*Vector) error{
+		"one":       func(dst *Vector) error { return dst.UnionOne(numeric, 0, mp) },
+		"multi":     func(dst *Vector) error { return dst.UnionMulti(numeric, 0, 2, mp) },
+		"selection": func(dst *Vector) error { return dst.Union(numeric, []int64{0}, mp) },
+		"batch":     func(dst *Vector) error { return dst.UnionBatch(numeric, 0, 1, nil, mp) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := NewVec(types.T_text.ToType())
+			defer dst.Free(mp)
+			require.NoError(t, appendFn(dst))
+			require.Equal(t, PrepareParamFloat, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("text"), false, mp))
+	defer ordinary.Free(mp)
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.UnionBatch(numeric, 0, 1, nil, mp))
+	require.NoError(t, dst.UnionBatch(ordinary, 0, 1, nil, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind(),
+		"mixed prepared and ordinary sources must be conservative")
+	dst.Free(mp)
+
+	clone, err := numeric.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, clone.GetPrepareParamKind())
+	clone.Free(mp)
+	dup, err := numeric.Dup(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, dup.GetPrepareParamKind())
+	dup.Free(mp)
+	window, err := numeric.Window(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamFloat, window.GetPrepareParamKind())
+	window.Free(mp)
+}
+
+func TestPrepareParamKindEmptyReuseCopyAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	decimal := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(decimal, []byte("5.9"), false, mp))
+	decimal.SetPrepareParamKind(PrepareParamDecimal)
+	defer decimal.Free(mp)
+
+	for name, makeDestination := range map[string]func() *Vector{
+		"empty": func() *Vector { return NewVec(types.T_text.ToType()) },
+		"all-null": func() *Vector {
+			v := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(v, nil, true, mp))
+			v.SetPrepareParamKind(PrepareParamFloat)
+			return v
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := makeDestination()
+			defer dst.Free(mp)
+			require.NoError(t, dst.UnionOne(decimal, 0, mp))
+			require.Equal(t, PrepareParamDecimal, dst.GetPrepareParamKind())
+		})
+	}
+
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("ordinary"), false, mp))
+	defer ordinary.Free(mp)
+	require.NoError(t, ordinary.Copy(decimal, 0, 0, mp))
+	require.Equal(t, PrepareParamNone, ordinary.GetPrepareParamKind())
+
+	union := NewVec(types.T_text.ToType())
+	require.NoError(t, GetUnionAllFunction(types.T_text.ToType(), mp)(union, decimal))
+	require.Equal(t, PrepareParamDecimal, union.GetPrepareParamKind())
+	union.Free(mp)
+
+	rollback := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(rollback, []byte("5.5"), false, mp))
+	rollback.SetPrepareParamKind(PrepareParamFloat)
+	defer rollback.Free(mp)
+	checkpoint := rollback.MakeAppendCheckpoint()
+	require.NoError(t, rollback.UnionOne(decimal, 0, mp))
+	require.Equal(t, PrepareParamNone, rollback.GetPrepareParamKind())
+	rollback.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamFloat, rollback.GetPrepareParamKind(),
+		"rollback must restore the mixed-source provenance")
+}
+
+func TestCopyOrdinaryPrepareParamKindKeepsScalarMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	t.Cleanup(func() {
+		destination.Free(mp)
+		source.Free(mp)
+		if got := mp.CurrNB(); got != 0 {
+			t.Errorf("mpool retains %d bytes after vector cleanup", got)
+		}
+	})
+
+	require.NoError(t, AppendFixed(source, int64(1), false, mp))
+	require.NoError(t, AppendFixedList(destination, make([]int64, 100), nil, mp))
+	require.False(t, source.HasPrepareParamKind())
+	require.False(t, destination.HasPrepareParamKind())
+
+	before := mp.CurrNB()
+	require.NoError(t, destination.Copy(source, 50, 0, mp))
+	require.Equal(t, int64(0), mp.CurrNB()-before,
+		"copying ordinary metadata must not materialize a row sidecar")
+	require.True(t, destination.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKind())
+	require.Nil(t, destination.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(50))
+}
+
+func TestCopyPrepareParamKindMaterializesOnlyDivergence(t *testing.T) {
+	newVector := func(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_int64.ToType())
+		require.NoError(t, AppendFixedList(vec, make([]int64, rows), nil, mp))
+		return vec
+	}
+
+	t.Run("scalar none and non-none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamFloat)
+		destination.SetPrepareParamKind(PrepareParamNone)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamNone,
+			PrepareParamFloat,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("scalar non-none and none", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 2)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		destination.SetPrepareParamKind(PrepareParamFloat)
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamFloat,
+			PrepareParamNone,
+		}, destination.GetPrepareParamKinds())
+	})
+
+	t.Run("existing sidecar", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		source := newVector(t, mp, 1)
+		destination := newVector(t, mp, 3)
+		t.Cleanup(func() {
+			destination.Free(mp)
+			source.Free(mp)
+		})
+		source.SetPrepareParamKind(PrepareParamBoolean)
+		require.NoError(t, destination.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamDecimal,
+		}, mp))
+		before := mp.CurrNB()
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.Equal(t, before, mp.CurrNB())
+		require.Equal(t, []PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamBoolean,
+			PrepareParamDecimal,
+		}, destination.GetPrepareParamKinds())
+	})
+}
+
+func TestPrepareParamKindPerRowMaterialization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	source.SetPrepareParamKinds([]PrepareParamKind{PrepareParamInteger, PrepareParamNone})
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKind())
+	require.Equal(t, PrepareParamInteger, source.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, source.GetPrepareParamKindAt(1))
+
+	dst := NewVec(types.T_text.ToType())
+	require.NoError(t, dst.Union(source, []int64{1, 0}, mp))
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, dst.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKindAt(1))
+
+	clone, err := dst.CloneToFlatCompact(mp)
+	require.NoError(t, err)
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKind())
+	require.Equal(t, PrepareParamNone, clone.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, clone.GetPrepareParamKindAt(1))
+	clone.Free(mp)
+
+	resized := NewVec(types.T_text.ToType())
+	require.NoError(t, resized.PreExtend(3, mp))
+	resized.SetLength(3)
+	resized.SetAllNulls(3)
+	require.NoError(t, resized.Copy(source, 2, 0, mp))
+	require.NoError(t, resized.Copy(source, 0, 1, mp))
+	require.Equal(t, PrepareParamInteger, resized.GetPrepareParamKindAt(2))
+	require.Equal(t, PrepareParamNone, resized.GetPrepareParamKindAt(0))
+	resized.Free(mp)
+	dst.Free(mp)
+	source.Free(mp)
+}
+
+func makePrepareParamKindReaderVector(t *testing.T, mp *mpool.MPool, rows int) *Vector {
+	t.Helper()
+	vec := NewVec(types.T_int8.ToType())
+	values := make([]int8, rows)
+	for i := range values {
+		values[i] = int8(i + 1)
+	}
+	require.NoError(t, AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func kindsToBytes(kinds []PrepareParamKind) []byte {
+	data := make([]byte, len(kinds))
+	for i, kind := range kinds {
+		data[i] = byte(kind)
+	}
+	return data
+}
+
+// unexpectedEOFReader models a transport that has delivered a partial
+// payload and reports the truncation on the next read. bytes.Reader returns
+// io.EOF when that next read has no bytes, which is a distinct failure mode.
+type unexpectedEOFReader struct {
+	reader *bytes.Reader
+}
+
+func (r *unexpectedEOFReader) Read(p []byte) (int, error) {
+	if r.reader.Len() == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return r.reader.Read(p)
+}
+
+func TestSetPrepareParamKindsFromReaderCollapsesUniformAndNullRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		kinds       []PrepareParamKind
+		nullRows    []uint64
+		wantKind    PrepareParamKind
+		wantSeen    bool
+		wantSidecar bool
+	}{
+		{
+			name:        "mixed",
+			kinds:       []PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamNone},
+			wantKind:    PrepareParamNone,
+			wantSeen:    true,
+			wantSidecar: true,
+		},
+		{
+			name:     "uniform",
+			kinds:    []PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal, PrepareParamDecimal},
+			wantKind: PrepareParamDecimal,
+			wantSeen: true,
+		},
+		{
+			name:     "all-null",
+			kinds:    []PrepareParamKind{PrepareParamBoolean, PrepareParamInteger, PrepareParamFloat},
+			nullRows: []uint64{0, 1, 2},
+			wantKind: PrepareParamNone,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, len(tc.kinds))
+			defer vec.Free(mp)
+			for _, row := range tc.nullRows {
+				vec.GetNulls().Add(row)
+			}
+			before := mp.CurrNB()
+
+			err := vec.SetPrepareParamKindsFromReader(
+				bytes.NewReader(kindsToBytes(tc.kinds)), len(tc.kinds), mp)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantKind, vec.GetPrepareParamKind())
+			require.Equal(t, tc.wantSeen, vec.prepareParamKindSeen)
+			if tc.wantSidecar {
+				require.Equal(t, tc.kinds, vec.GetPrepareParamKinds())
+				require.Greater(t, mp.CurrNB(), before)
+			} else {
+				require.Nil(t, vec.GetPrepareParamKinds())
+				require.Equal(t, before, mp.CurrNB(),
+					"uniform/all-null metadata must release its temporary sidecar")
+			}
+		})
+	}
+}
+
+func TestSetPrepareParamKindsAndBinaryStringFromReader(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 3)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{
+			byte(PrepareParamInteger) | 0x80,
+			byte(PrepareParamFloat),
+			byte(PrepareParamNone) | 0x80,
+		}),
+		3,
+		mp,
+		0x80,
+	))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(2))
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.GetIsBinaryStringAt(1))
+	require.True(t, vec.GetIsBinaryStringAt(2))
+
+	before := mp.CurrNB()
+	err := vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{byte(PrepareParamDecimal) | 0x80}),
+		3,
+		mp,
+		0x80,
+	)
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, before, mp.CurrNB(), "a failed generation must release its temporary MPool slice")
+	// The last complete generation remains available after a truncated frame.
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.True(t, vec.GetIsBinaryStringAt(2))
+}
+
+func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {
+	tests := []struct {
+		name       string
+		reader     io.Reader
+		rowCount   int
+		wantErr    error
+		wantString string
+	}{
+		{
+			name:     "nil reader",
+			rowCount: 2,
+			wantErr:  io.ErrClosedPipe,
+		},
+		{
+			name:       "row count mismatch",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			rowCount:   1,
+			wantString: "row count 1 does not match vector length 2",
+		},
+		{
+			name:     "no-byte EOF",
+			reader:   bytes.NewReader(nil),
+			rowCount: 2,
+			wantErr:  io.EOF,
+		},
+		{
+			name: "partial-read unexpected EOF",
+			reader: &unexpectedEOFReader{
+				reader: bytes.NewReader([]byte{byte(PrepareParamFloat)}),
+			},
+			rowCount: 2,
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+		{
+			name:       "invalid kind",
+			reader:     bytes.NewReader([]byte{byte(PrepareParamFloat), 0xff}),
+			rowCount:   2,
+			wantString: "invalid prepared parameter row kind 255",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := makePrepareParamKindReaderVector(t, mp, 2)
+			before := mp.CurrNB()
+			err := vec.SetPrepareParamKindsFromReader(tc.reader, tc.rowCount, mp)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.ErrorContains(t, err, tc.wantString)
+			}
+			require.Equal(t, before, mp.CurrNB(),
+				"failed metadata generation must release its temporary allocation")
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKind())
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestSetPrepareParamKindsFromReaderFailedGenerationCanReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 2)
+	defer vec.Free(mp)
+	before := mp.CurrNB()
+
+	err := vec.SetPrepareParamKindsFromReader(
+		&unexpectedEOFReader{
+			reader: bytes.NewReader([]byte{byte(PrepareParamInteger)}),
+		}, 2, mp)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.Equal(t, before, mp.CurrNB())
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamInteger, PrepareParamFloat})),
+		2, mp))
+	require.Equal(t, []PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, vec.GetPrepareParamKinds())
+	require.True(t, vec.prepareParamKindSeen)
+
+	require.NoError(t, vec.SetPrepareParamKindsFromReader(
+		bytes.NewReader(kindsToBytes([]PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal})),
+		2, mp))
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKind())
+	require.Equal(t, before, mp.CurrNB(),
+		"reuse must release the failed generation and collapsed sidecar")
+}
+
+func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeVector := func() *Vector {
+		v := NewVec(types.T_text.ToType())
+		for _, value := range []string{"1", "2", "3", "4"} {
+			require.NoError(t, AppendBytes(v, []byte(value), false, mp))
+		}
+		require.NoError(t, v.SetPrepareParamKindsWithMP([]PrepareParamKind{
+			PrepareParamInteger,
+			PrepareParamFloat,
+			PrepareParamNone,
+			PrepareParamDecimal,
+		}, mp))
+		return v
+	}
+
+	vec := makeVector()
+	before := mp.CurrNB()
+	vec.Shrink([]int64{1, 3}, false)
+	require.Equal(t, before, mp.CurrNB(), "ordered shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	var mask bitmap.Bitmap
+	mask.InitWithSize(2)
+	mask.AddMany([]uint64{0, 1})
+	vec.ShrinkByMask(&mask, false, 1)
+	require.Equal(t, before, mp.CurrNB(), "mask shrink must reuse the sidecar")
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	vec.Free(mp)
+
+	vec = makeVector()
+	before = mp.CurrNB()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 3}, mp))
+	require.Equal(t, before, mp.CurrNB(), "shuffle must not allocate a replacement sidecar")
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(2))
+	var scratch []byte
+	require.NoError(t, vec.ShuffleWithBuf([]int64{1, 0, 1}, mp, &scratch))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamFloat,
+	}, []PrepareParamKind{
+		vec.GetPrepareParamKindAt(0),
+		vec.GetPrepareParamKindAt(1),
+		vec.GetPrepareParamKindAt(2),
+	})
+	vec.Free(mp)
+
+	vec = makeVector()
+	require.NoError(t, vec.Shuffle([]int64{3, 1, 0, 3, 2}, mp))
+	require.Equal(t, []PrepareParamKind{
+		PrepareParamDecimal,
+		PrepareParamFloat,
+		PrepareParamInteger,
+		PrepareParamDecimal,
+		PrepareParamNone,
+	}, vec.GetPrepareParamKinds())
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
+	require.NoError(t, source.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, mp))
+	destination := NewVec(types.T_text.ToType())
+	set := GetConstSetFunction(types.T_text.ToType(), mp)
+	require.NoError(t, set(destination, source, 1, 3))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(2))
+
+	nullSource := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(nullSource, nil, true, mp))
+	require.NoError(t, set(destination, nullSource, 0, 2))
+	require.False(t, destination.HasPrepareParamKind())
+
+	destination.Free(mp)
+	nullSource.Free(mp)
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindCheckpointRollbackRetainsSidecarOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, AppendBytes(vec, []byte("text"), false, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+	ordinary := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(ordinary, []byte("later"), false, mp))
+	require.NoError(t, vec.UnionOne(ordinary, 0, mp))
+	afterAppend := mp.CurrNB()
+	vec.RollbackAppend(checkpoint, 1)
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	require.GreaterOrEqual(t, afterAppend, before)
+	require.Equal(t, afterAppend, mp.CurrNB(),
+		"rollback should retain admitted sidecar capacity for reuse")
+	ordinary.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPrepareParamKindCheckpointDoesNotCopySidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytesList(
+		vec, [][]byte{[]byte("5"), []byte("text")}, nil, mp))
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamNone}, mp))
+
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		_ = vec.MakeAppendCheckpoint()
+	}))
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
+	var nilVec *Vector
+	require.False(t, nilVec.HasPrepareParamKind())
+	require.Equal(t, PrepareParamNone, nilVec.GetPrepareParamKindAt(0))
+	require.NoError(t, nilVec.SetPrepareParamKindAtWithMP(0, PrepareParamInteger, nil))
+	require.NoError(t, nilVec.CopyPrepareParamMetadataToWithMP(nil, nil))
+
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+
+	// Invalid and empty inputs leave the existing scalar representation intact
+	// while a length mismatch is rejected before touching metadata.
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	require.ErrorContains(t, vec.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger}, mp), "row count")
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(nil, mp))
+	require.False(t, vec.HasPrepareParamKind())
+
+	// Uniform and all-NULL rows stay on the scalar fast path; a real conflict
+	// promotes exactly once to the owned sidecar.
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamInteger, PrepareParamInteger}, mp))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	for row := uint64(0); row < 3; row++ {
+		vec.GetNulls().Add(row)
+	}
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamFloat, PrepareParamDecimal, PrepareParamBoolean}, mp))
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	vec.GetNulls().Clear()
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamDecimal}, mp))
+	require.Len(t, vec.GetPrepareParamKinds(), 3)
+
+	// Sidecar resize exercises both in-capacity clearing and owner-preserving
+	// growth. A NULL write clears one row and all-NULL resets the sidecar.
+	vec.SetLength(2)
+	require.Len(t, vec.GetPrepareParamKinds(), 2)
+	vec.SetLength(6)
+	require.Len(t, vec.GetPrepareParamKinds(), 6)
+	vec.SetPrepareParamKindAt(-1, PrepareParamBoolean)
+	vec.SetPrepareParamKindAt(99, PrepareParamBoolean)
+	vec.GetNulls().Add(0)
+	require.NoError(t, vec.SetPrepareParamKindAtWithMP(0, PrepareParamBoolean, mp))
+	vec.SetAllNulls(vec.Length())
+	require.False(t, vec.HasPrepareParamKind())
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	// Reader zero-row input and scalar row updates are no-op/reset boundaries.
+	zero := NewVec(types.T_int8.ToType())
+	require.NoError(t, zero.SetPrepareParamKindsFromReader(bytes.NewReader(nil), 0, mp))
+	zero.Free(mp)
+	vec.SetNulls(nil)
+	vec.SetLength(3)
+	vec.SetPrepareParamKindAt(0, PrepareParamDecimal)
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(-1))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
+}
+
+func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	batchDestination := NewVec(types.T_int64.ToType())
+	allDestination := NewVec(types.T_int64.ToType())
+	defer func() {
+		source.Free(mp)
+		destination.Free(mp)
+		batchDestination.Free(mp)
+		allDestination.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3, 4}, nil, mp))
+	want := []PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+		PrepareParamBoolean,
+	}
+	require.NoError(t, source.SetPrepareParamKindsWithMP(want, mp))
+
+	for row := range want {
+		require.NoError(t, destination.UnionOne(source, int64(row), mp))
+	}
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	for row, kind := range want {
+		require.Equal(t, kind, destination.GetPrepareParamKindAt(row))
+	}
+
+	// Once the exact representation exists, a raw ordinary append must extend
+	// the sidecar and initialize the new row to None.
+	require.NoError(t, AppendFixed(destination, int64(5), false, mp))
+	require.Len(t, destination.GetPrepareParamKinds(), destination.Length())
+	require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(4))
+
+	// Batch and whole-vector appends share the same row-parallel growth
+	// boundary. Split each operation after the first divergence so the second
+	// call must extend and populate an existing sidecar.
+	require.NoError(t, batchDestination.UnionBatch(source, 0, 2, nil, mp))
+	require.NoError(t, batchDestination.UnionBatch(source, 2, 2, nil, mp))
+	for row, kind := range want {
+		require.Equal(t, kind, batchDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, batchDestination.GetPrepareParamKinds(), batchDestination.Length())
+
+	first, err := source.Window(0, 2)
+	require.NoError(t, err)
+	defer first.Free(mp)
+	second, err := source.Window(2, 4)
+	require.NoError(t, err)
+	defer second.Free(mp)
+	unionAll := GetUnionAllFunction(types.T_int64.ToType(), mp)
+	require.NoError(t, unionAll(allDestination, first))
+	require.NoError(t, unionAll(allDestination, second))
+	for row, kind := range want {
+		require.Equal(t, kind, allDestination.GetPrepareParamKindAt(row))
+	}
+	require.Len(t, allDestination.GetPrepareParamKinds(), allDestination.Length())
+}
+
+func TestRawAppendOrdinaryRowsDivergeFromScalarPrepareParamKind(t *testing.T) {
+	jsonValue, err := bytejson.ParseFromString(`{"value":"ordinary"}`)
+	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		typ        types.Type
+		seed       func(*Vector, *mpool.MPool) error
+		appendRows func(*Vector, *mpool.MPool) error
+		wantNull   map[int]bool
+	}{
+		{
+			name: "fixed one",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(2), false, mp)
+			},
+		},
+		{
+			name: "fixed multi",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiFixed(vec, int64(2), false, 2, mp)
+			},
+		},
+		{
+			name: "fixed list with null",
+			typ:  types.T_int64.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(1), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixedList(vec, []int64{2, 3}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "bytes one",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("ordinary"), false, mp)
+			},
+		},
+		{
+			name: "bytes multi",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendMultiBytes(vec, []byte("ordinary"), false, 2, mp)
+			},
+		},
+		{
+			name: "bytes list with null",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytesList(vec, [][]byte{nil, []byte("ordinary")}, []bool{true, false}, mp)
+			},
+			wantNull: map[int]bool{1: true},
+		},
+		{
+			name: "string list",
+			typ:  types.T_varchar.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendBytes(vec, []byte("seed"), false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendStringList(vec, []string{"ordinary", "ordinary"}, nil, mp)
+			},
+		},
+		{
+			name: "bytejson one",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+		},
+		{
+			name: "bytejson encoded",
+			typ:  types.T_json.ToType(),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJson(vec, jsonValue, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendByteJsonEncoded(vec, testByteJsonEncoder{value: jsonValue}, mp)
+			},
+		},
+		{
+			name: "array one",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{4, 5, 6}, false, mp)
+			},
+		},
+		{
+			name: "array list",
+			typ:  types.New(types.T_array_float32, 3, 0),
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArray(vec, []float32{1, 2, 3}, false, mp)
+			},
+			appendRows: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendArrayList(vec, [][]float32{{4, 5, 6}, {7, 8, 9}}, nil, mp)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(test.typ)
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, test.seed(vec, mp))
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			require.NoError(t, test.appendRows(vec, mp))
+
+			require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+			require.Len(t, vec.GetPrepareParamKinds(), vec.Length())
+			for row := 1; row < vec.Length(); row++ {
+				require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(row))
+				require.Equal(t, test.wantNull[row], vec.IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindFastPathsDoNotAllocate(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      PrepareParamKind
+		isNull    bool
+		wantKind  PrepareParamKind
+		wantSeen  bool
+		wantNulls bool
+	}{
+		{name: "unobserved ordinary", wantKind: PrepareParamNone},
+		{name: "observed ordinary", kind: PrepareParamNone, wantKind: PrepareParamNone, wantSeen: true},
+		{name: "prepared null", kind: PrepareParamFloat, isNull: true, wantKind: PrepareParamFloat, wantSeen: true, wantNulls: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+			if test.wantSeen {
+				vec.SetPrepareParamKind(test.kind)
+			}
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(2), test.isNull, mp))
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.Equal(t, test.wantKind, vec.GetPrepareParamKindAt(0))
+			require.Equal(t, test.wantNulls, vec.IsNull(1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOwnerlessPrefixStaysScalar(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		seed func(*Vector, *mpool.MPool) error
+	}{
+		{name: "empty"},
+		{
+			name: "all null",
+			seed: func(vec *Vector, mp *mpool.MPool) error {
+				return AppendFixed(vec, int64(0), true, mp)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNew(t.Name())
+			vec := NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, vec.PreExtend(2, mp))
+			if test.seed != nil {
+				require.NoError(t, test.seed(vec, mp))
+			}
+			vec.SetPrepareParamKind(PrepareParamFloat)
+			before := mp.CurrNB()
+			require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+
+			require.Equal(t, before, mp.CurrNB())
+			require.Nil(t, vec.GetPrepareParamKinds())
+			require.False(t, vec.HasPrepareParamKind())
+			require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()-1))
+		})
+	}
+}
+
+func TestRawAppendPrepareParamKindOOMDoesNotPublishRow(t *testing.T) {
+	const poolCap = int64(1 << 20)
+	mp, err := mpool.NewMPool(t.Name(), poolCap, mpool.NoLock)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	vec := NewVec(types.T_int64.ToType())
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	fill, err := mp.Alloc(int(poolCap-mp.CurrNB()), true)
+	require.NoError(t, err)
+	defer func() {
+		mp.Free(fill)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	err = AppendFixed(vec, int64(2), false, mp)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Nil(t, vec.GetPrepareParamKinds())
+
+	mp.Free(fill)
+	fill = nil
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.Equal(t, 2, vec.Length())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+}
+
+func TestRawAppendPrepareParamKindRollbackRestoresScalar(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.PreExtend(2, mp))
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamFloat)
+	before := mp.CurrNB()
+	checkpoint := vec.MakeAppendCheckpoint()
+
+	require.NoError(t, AppendFixed(vec, int64(2), false, mp))
+	require.NotNil(t, vec.GetPrepareParamKinds())
+	vec.RollbackAppend(checkpoint, 1)
+
+	require.Equal(t, 1, vec.Length())
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, before, mp.CurrNB())
+}
+
+func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(source, []int64{1, 2, 3}, nil, mp))
+	source.GetNulls().Add(1)
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamInteger,
+		PrepareParamFloat,
+		PrepareParamDecimal,
+	}, mp))
+	defer func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	uniform, err := source.Window(0, 1)
+	require.NoError(t, err)
+	require.Nil(t, uniform.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamInteger, uniform.GetPrepareParamKind())
+	uniform.Free(mp)
+
+	nullOnly, err := source.Window(1, 2)
+	require.NoError(t, err)
+	require.Nil(t, nullOnly.GetPrepareParamKinds())
+	require.False(t, nullOnly.HasPrepareParamKind())
+	nullOnly.Free(mp)
+
+	mixed, err := source.Window(0, 3)
+	require.NoError(t, err)
+	require.Len(t, mixed.GetPrepareParamKinds(), mixed.Length())
+	require.Equal(t, PrepareParamInteger, mixed.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamDecimal, mixed.GetPrepareParamKindAt(2))
+	mixed.Free(mp)
+}
+
+func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
+	const rows = 16 * 1024
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	defer destination.Free(mp)
+
+	values := make([]int64, rows)
+	require.NoError(b, AppendFixedList(source, values, nil, mp))
+	kinds := make([]PrepareParamKind, rows)
+	for row := range kinds {
+		kinds[row] = PrepareParamInteger
+	}
+	kinds[rows/2] = PrepareParamFloat
+	require.NoError(b, source.SetPrepareParamKindsWithMP(kinds, mp))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		destination.ResetWithSameType()
+		for row := range rows {
+			if err := destination.UnionOne(source, int64(row), mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkUnionOneBinaryStringProvenanceScale(b *testing.B) {
+	for _, rows := range []int{8 << 10, 32 << 10, 128 << 10, 512 << 10} {
+		for _, mixed := range []bool{false, true} {
+			name := fmt.Sprintf("rows=%d/mixed=%t", rows, mixed)
+			b.Run(name, func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				source := NewVec(types.T_text.ToType())
+				destination := NewVec(types.T_text.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				values := make([][]byte, rows)
+				for row := range values {
+					values[row] = []byte("v")
+				}
+				require.NoError(b, AppendBytesList(source, values, nil, mp))
+				if mixed {
+					provenance := make([]bool, rows)
+					for row := range provenance {
+						provenance[row] = row&1 == 0
+					}
+					require.NoError(b, source.SetBinaryStringRowsWithMP(provenance, mp))
+				}
+				b.ReportAllocs()
+				b.ReportMetric(float64(rows), "rows/op")
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					for row := range rows {
+						if err := destination.UnionOne(source, int64(row), mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUnionOneBinaryStringBitmapGrowthIsGeometric(t *testing.T) {
+	const rows = 512 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	values := make([][]byte, rows)
+	provenance := make([]bool, rows)
+	for row := range rows {
+		values[row] = []byte("v")
+		provenance[row] = row&1 == 0
+	}
+	require.NoError(t, AppendBytesList(source, values, nil, mp))
+	require.NoError(t, source.SetBinaryStringRowsWithMP(provenance, mp))
+	defer source.Free(mp)
+
+	allocations := testing.AllocsPerRun(1, func() {
+		destination := NewVec(types.T_text.ToType())
+		for row := range rows {
+			require.NoError(t, destination.UnionOne(source, int64(row), mp))
+		}
+		destination.Free(mp)
+	})
+	// Exact-per-word growth used more than 8,000 allocations at this size.
+	// Geometric payload and metadata growth should remain logarithmic.
+	require.Less(t, allocations, float64(128))
+	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkCopyPreallocatedNullVectorReverseFill(b *testing.B) {
+	const rows = 16 << 10
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	require.NoError(b, AppendFixed(source, int64(42), false, mp))
+	defer source.Free(mp)
+
+	b.ReportMetric(float64(rows), "rows/op")
+	for b.Loop() {
+		b.StopTimer()
+		destination := NewVec(types.T_int64.ToType())
+		if err := destination.PreExtend(rows, mp); err != nil {
+			b.Fatal(err)
+		}
+		destination.SetLength(rows)
+		destination.SetAllNulls(rows)
+		b.StartTimer()
+		for row := rows - 1; row >= 0; row-- {
+			if err := destination.Copy(source, int64(row), 0, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		destination.Free(mp)
+		b.StartTimer()
+	}
+}
+
+func BenchmarkUnionBatchPrepareParamKind(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
+	source.SetPrepareParamKind(PrepareParamFloat)
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchNoMetadata(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendFixed(source, int64(i), false, mp))
+	}
+	destination := NewVec(types.T_int64.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkUnionBatchStaticBinaryNoMetadata(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varbinary.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 1024; i++ {
+		require.NoError(b, AppendBytes(source, []byte("value"), false, mp))
+	}
+	destination := NewVec(types.T_varbinary.ToType())
+	defer destination.Free(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		destination.ResetWithSameType()
+		if err := destination.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

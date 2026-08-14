@@ -197,6 +197,17 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
+	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+}
+
+func getExprValueWithPrepareMeta(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	prepareParamKind *vector.PrepareParamKind,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -208,6 +219,9 @@ func getExprValueWithPrepareMode(
 		// set @a = on, type of a is bool.
 		if len(isBin) > 0 {
 			*isBin[0] = false
+		}
+		if prepareParamKind != nil {
+			*prepareParamKind = vector.PrepareParamNone
 		}
 		return v.ColName(), nil
 	}
@@ -298,7 +312,46 @@ func getExprValueWithPrepareMode(
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
 	}
+	if prepareParamKind != nil {
+		*prepareParamKind = resultVec.GetPrepareParamKind()
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if *prepareParamKind == vector.PrepareParamNone {
+			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
+		}
+	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+// transparentPrepareParamKind closes the metadata boundary introduced by SET's
+// synthetic SELECT evaluation. A direct parameter or variable retains its
+// source conversion category even if projection materialization drops vector-
+// local metadata. Parentheses are transparent; casts and other expressions are
+// intentionally not, because their result type defines the conversion category.
+func transparentPrepareParamKind(e tree.Expr, ses *Session) (vector.PrepareParamKind, error) {
+	for {
+		switch expr := e.(type) {
+		case *tree.ParenExpr:
+			e = expr.Expr
+		case *tree.ParamExpr:
+			proc := ses.GetProc()
+			// Parser ordinals are one-based; the normalized plan/process positions
+			// are zero-based (see decrementParamOrdinalRule).
+			if proc == nil || expr.Offset <= 0 {
+				return vector.PrepareParamNone, nil
+			}
+			return proc.GetPrepareParamKind(expr.Offset - 1), nil
+		case *tree.VarExpr:
+			return ses.GetTxnCompileCtx().ResolveVariablePrepareParamKind(
+				expr.Name, expr.System, expr.Global)
+		default:
+			return vector.PrepareParamNone, nil
+		}
+	}
 }
 
 func bindSetVariableResultExpr(
@@ -1643,8 +1696,23 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
-	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+	switch typ.Charset {
+	case types.CharsetUTF8:
+		// CharsetUTF8 is MatrixOne's explicit utf8mb4_general_ci identity.
+		// setCharacter uses the older utf8_general_ci protocol default, so
+		// override it with the exact utf8mb4 collation ID.
+		col.SetCharset(uint16(Utf8mb4CollationID))
+	case types.CharsetUTF8MB4Bin:
+		// A _bin collation still describes nonbinary UTF-8 text. Protocol
+		// collation 63 is reserved for the binary character set.
+		col.SetCharset(uint16(utf8mb4BinCollationID))
+	case types.CharsetBinary:
+		// Some internal functions intentionally return packed bytes in a VARCHAR
+		// container. Keep those values binary even though their physical OID is a
+		// text OID; clients must not attempt UTF-8 conversion on the payload.
 		col.SetCharset(charsetBinary)
+	}
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
@@ -2130,14 +2198,20 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetName(col.Name)
 	c.SetOrgName(col.GetOriginCaseName())
 	c.SetTable(col.TblName)
-	c.SetOrgTable(col.TblName)
+	orgTable := col.OriginTblName
+	if orgTable == "" {
+		orgTable = col.TblName
+	}
+	c.SetOrgTable(orgTable)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	typ := types.NewWithCharset(
+		types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	setColFlag(c)
+	setColFlag(c, col)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
@@ -2365,6 +2439,7 @@ func extractTableDefColumns(erArray []ExecResult, ctx context.Context, dbName, t
 					Id:          int32(typ.Oid),
 					Width:       typ.Width,
 					Scale:       typ.Scale,
+					Charset:     uint32(typ.Charset),
 					Table:       table,
 					NotNullable: !def.NullAbility,
 				},

@@ -955,7 +955,7 @@ func (e *SpillEngine) scatterBatchWithPressure(
 			}
 			currentKeys = make([]*vector.Vector, len(keyVecs))
 			for i, key := range keyVecs {
-				currentKeys[i], err = key.WindowWithAllocation(
+				currentKeys[i], err = key.WindowByLogicalRowsWithAllocation(
 					start, end, proc.Mp(), e.allocation.selected,
 				)
 				if err != nil {

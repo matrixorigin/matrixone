@@ -64,6 +64,10 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	cns[0].CommitID = "older-commit"
 	cluster.UpdateCN(cns[0])
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
+	binaryStringParam := shard.ReadParam{Process: pipeline.ProcessInfo{
+		PrepareParams: pipeline.PrepareParamInfo{IsBinaryString: []bool{true}},
+	}}
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryStringParam))
 
 	textParam := binaryParam
 	textParam.Process.PrepareParams.IsBin = []bool{false, false}
@@ -74,7 +78,7 @@ func TestValidateRemoteReadCompatibility(t *testing.T) {
 	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
 }
 
-func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
+func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) {
 	s := &service{}
 	s.remote.pool = morpc.NewMessagePool(
 		func() *shard.Request { return &shard.Request{} },
@@ -96,6 +100,43 @@ func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
 	)
 	require.Equal(t, shard.Method_ShardReadV2, binaryReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(binaryReq)
+
+	binaryStringReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			PrepareParams: pipeline.PrepareParamInfo{IsBinaryString: []bool{true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, binaryStringReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(binaryStringReq)
+
+	numericReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			// FLOAT has only the high kind bit set. It must still select the
+			// versioned method instead of looking only at the first kind section.
+			PrepareParams: pipeline.PrepareParamInfo{Length: 1, IsBin: []bool{false, false, true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, numericReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(numericReq)
+
+	booleanReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			// BOOLEAN uses the third kind bit and must also select the
+			// versioned method.
+			PrepareParams: pipeline.PrepareParamInfo{Length: 1, IsBin: []bool{false, false, false, true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, booleanReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(booleanReq)
 }
 
 func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {

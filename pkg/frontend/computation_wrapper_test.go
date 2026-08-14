@@ -31,6 +31,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -171,6 +172,7 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
 }
 
@@ -231,6 +233,146 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 }
 
+func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 104, "select ?, ?, ?, ?, ?, ?, ?, ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{
+		"5", "18446744073709551615", "2024", "5.5", "5.5", "5.9", "5.9", "5",
+	} {
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0x80,
+		byte(defines.MYSQL_TYPE_YEAR), 0,
+		byte(defines.MYSQL_TYPE_FLOAT), 0,
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+		byte(defines.MYSQL_TYPE_DECIMAL), 0,
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	for i, want := range []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamInteger,
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+		vector.PrepareParamFloat,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamNone,
+	} {
+		require.Equal(t, want, cw.proc.GetPrepareParamKind(i), "parameter %d", i)
+	}
+	require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(8))
+	// An invalid parameter index must not bleed into another packed section.
+	require.False(t, cw.proc.GetPrepareParamIsBin(8))
+
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	for i := 0; i < prepareStmt.params.Length(); i++ {
+		require.Equal(t, vector.PrepareParamNone, cw.proc.GetPrepareParamKind(i),
+			"parameter %d retained stale numeric metadata", i)
+	}
+}
+
+func TestBinaryProtocolPrepareParamKind(t *testing.T) {
+	for _, test := range []struct {
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		value      string
+		want       vector.PrepareParamKind
+	}{
+		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_SHORT, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_INT24, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_LONG, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_LONGLONG, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_YEAR, false, "2024", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_FLOAT, false, "1.5", vector.PrepareParamFloat},
+		{defines.MYSQL_TYPE_DOUBLE, false, "1.5", vector.PrepareParamFloat},
+		{defines.MYSQL_TYPE_DECIMAL, false, "1.5", vector.PrepareParamDecimal},
+		{defines.MYSQL_TYPE_NEWDECIMAL, false, "1.5", vector.PrepareParamDecimal},
+		{defines.MYSQL_TYPE_BIT, false, "1", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_VAR_STRING, false, "1", vector.PrepareParamNone},
+	} {
+		require.Equal(t, test.want,
+			binaryProtocolPrepareParamKind(test.mysqlType, test.isUnsigned, []byte(test.value)),
+			"type %v unsigned %t value %q", test.mysqlType, test.isUnsigned, test.value)
+	}
+}
+
+func TestSQLVariablePrepareParamKind(t *testing.T) {
+	for _, test := range []struct {
+		oid  types.T
+		want vector.PrepareParamKind
+	}{
+		{types.T_bool, vector.PrepareParamBoolean},
+		{types.T_bit, vector.PrepareParamInteger},
+		{types.T_int64, vector.PrepareParamInteger},
+		{types.T_uint64, vector.PrepareParamInteger},
+		{types.T_year, vector.PrepareParamInteger},
+		{types.T_float64, vector.PrepareParamFloat},
+		{types.T_decimal128, vector.PrepareParamDecimal},
+		{types.T_varchar, vector.PrepareParamNone},
+	} {
+		require.Equal(t, test.want, prepareParamKindFromType(test.oid), "type %v", test.oid)
+	}
+	require.Equal(t, vector.PrepareParamBoolean, prepareParamKindFromValue(true))
+	require.Equal(t, vector.PrepareParamInteger, prepareParamKindFromValue(uint64(5)))
+	require.Equal(t, vector.PrepareParamFloat, prepareParamKindFromValue(float64(5)))
+	require.Equal(t, vector.PrepareParamNone, prepareParamKindFromValue("5"))
+}
+
+func TestTransparentPrepareParamKind(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 109, "select ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("5"), false, cw.proc.Mp()))
+	defer params.Free(cw.proc.Mp())
+	cw.proc.SetPrepareParamsWithMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamFloat})
+	defer cw.proc.SetPrepareParams(nil)
+
+	kind, err := transparentPrepareParamKind(
+		&tree.ParenExpr{Expr: tree.NewParamExpr(1)}, ses)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, kind)
+
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"decimal_value", "5.9", "", false, vector.PrepareParamDecimal))
+	kind, err = transparentPrepareParamKind(
+		tree.NewVarExpr("decimal_value", false, false, nil), ses)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamDecimal, kind)
+
+	kind, err = transparentPrepareParamKind(tree.NewParamExpr(2), ses)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, kind)
+}
+
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 108, "set @prepared_set_value = ? + 1")
@@ -277,7 +419,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
+	params, _, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -290,10 +432,27 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVar("v1", "session-binary", "", true))
 	require.NoError(t, ses.setUserDefinedVar("session_only", "session-binary", "", true))
 	scopes := []map[string]interface{}{
-		{"v1": int64(10)},
-		{"v1": int64(20), "inner": int64(30)},
+		{"v1": int64(10), "declared_only_outer": "5.0"},
+		{
+			"v1":                  int64(20),
+			"inner":               int64(30),
+			"decimal_value":       "5.00",
+			"year_value":          "2024",
+			"string_value":        "5",
+			"declared_only_outer": "5.0",
+		},
+	}
+	typeScopes := []map[string]plan.Type{
+		{"declared_only_outer": {Id: int32(types.T_decimal64)}},
+		{
+			"v1":            {Id: int32(types.T_int64)},
+			"decimal_value": {Id: int32(types.T_decimal64)},
+			"year_value":    {Id: int32(types.T_year)},
+			"string_value":  {Id: int32(types.T_varchar)},
+		},
 	}
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeKey{}, &scopes)
+	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.VarScopeTypeKey{}, &typeScopes)
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, defines.InSp{}, true)
 
 	value, err := ses.txnCompileCtx.ResolveVariable("V1", false, false)
@@ -302,6 +461,23 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("V1", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
+	kind, err := ses.txnCompileCtx.ResolveVariablePrepareParamKind("V1", false, false)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamInteger, kind)
+
+	for _, test := range []struct {
+		name     string
+		expected vector.PrepareParamKind
+	}{
+		{name: "decimal_value", expected: vector.PrepareParamDecimal},
+		{name: "year_value", expected: vector.PrepareParamInteger},
+		{name: "string_value", expected: vector.PrepareParamNone},
+		{name: "declared_only_outer", expected: vector.PrepareParamNone},
+	} {
+		kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind(test.name, false, false)
+		require.NoError(t, err)
+		require.Equal(t, test.expected, kind, test.name)
+	}
 
 	value, err = ses.txnCompileCtx.ResolveVariable("session_only", false, false)
 	require.NoError(t, err)
@@ -309,6 +485,9 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("session_only", false, false)
 	require.NoError(t, err)
 	require.True(t, isBin)
+	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("session_only", false, false)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamNone, kind)
 }
 
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
@@ -327,14 +506,19 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cw.proc, args)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	}, paramKinds)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false},
-		plan2.ParamValue{Value: int64(20), IsBin: false},
+		plan2.ParamValue{Value: int64(10), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
+		plan2.ParamValue{Value: int64(20), IsBin: false, PrepareParamKind: vector.PrepareParamInteger},
 		plan2.ParamValue{Value: "session-binary", IsBin: true},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
@@ -894,6 +1078,85 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamBypassesCachedTopologyForPreparedSiriusExecution(t *testing.T) {
+	for _, protocol := range []struct {
+		name     string
+		execPlan func(string) *plan.Execute
+		stmtName func(string) string
+	}{
+		{
+			name:     "binary",
+			execPlan: func(string) *plan.Execute { return nil },
+			stmtName: func(name string) string { return name },
+		},
+		{
+			name:     "text",
+			execPlan: func(name string) *plan.Execute { return &plan.Execute{Name: name} },
+			stmtName: func(string) string { return "" },
+		},
+	} {
+		t.Run(protocol.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, 110, "/*+ SIDECAR */ select 1")
+			defer prepareStmt.Close()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+
+			for range 2 {
+				retComp, retPlan, retStmt, originSQL, _, err := initExecuteStmtParam(
+					execCtx,
+					ses,
+					cw,
+					protocol.execPlan(prepareStmt.Name),
+					protocol.stmtName(prepareStmt.Name),
+				)
+				require.NoError(t, err)
+				require.Nil(t, retComp)
+				require.Same(t, sentinel, prepareStmt.compile)
+				require.NotNil(t, retPlan)
+				require.NotNil(t, retStmt)
+				require.True(t, siriusStatementSelected(originSQL, retStmt))
+			}
+		})
+	}
+}
+
+func TestCompileStatementContextsPreserveCounterWithoutLeakingSelection(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sql           string
+		separateChild bool
+	}{
+		{name: "selected", sql: "/*+ SIDECAR */ select 1", separateChild: true},
+		{name: "unselected", sql: "select 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			counter := new(perfcounter.CounterSet)
+			requestCtx, compileCtx := compileStatementContexts(
+				context.Background(), test.sql, &tree.Select{}, counter)
+
+			attached, ok := compileCtx.Value(perfcounter.CompilePlanMarkKey{}).(*perfcounter.CounterSet)
+			require.True(t, ok)
+			require.Same(t, counter, attached)
+			require.Equal(t, test.separateChild, requestCtx != compileCtx)
+			perfcounter.Update(compileCtx, func(set *perfcounter.CounterSet) {
+				set.FileService.S3.Get.Add(1)
+			})
+			require.Equal(t, int64(1), counter.FileService.S3.Get.Load())
+		})
+	}
+
+	requestCtx, _ := compileStatementContexts(
+		context.Background(), "/*+ SIDECAR */ select 1", &tree.Select{}, new(perfcounter.CounterSet))
+	requestCtx, unselectedCompileCtx := compileStatementContexts(
+		requestCtx, "select 2", &tree.Select{}, new(perfcounter.CounterSet))
+	require.True(t, requestCtx == unselectedCompileCtx,
+		"the selected statement's Sirius marker must not enter its sibling's request context")
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {

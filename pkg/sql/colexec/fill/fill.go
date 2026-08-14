@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -483,7 +484,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 
 // consumeLinear folds one freshly pulled batch into the LINEAR state. A NULL
 // with a known previous value of the same partition joins that column's run; a
-// non-NULL interpolates the pending run against the midpoint of linPre and
+// non-NULL interpolates every position in the pending run between linPre and
 // itself, then becomes the new linPre. A run whose neighbour lies across a
 // partition boundary stays NULL, because there is nothing to interpolate
 // between.
@@ -529,8 +530,10 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 	return nil
 }
 
-// interpolateRun writes the midpoint of the pre and cur values into every row
-// of column col's pending run.
+// interpolateRun divides the interval between pre and cur into len(run)+1
+// equal steps. A single missing row keeps using the bound SQL expression so
+// its historical cast semantics stay unchanged; longer runs use the same
+// numeric contract at each distinct position.
 func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int, proc *process.Process) error {
 	var preBatch *batch.Batch
 	preRow := pre.row
@@ -542,20 +545,29 @@ func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int,
 		preBatch.SetRowCount(1)
 		preRow = 0
 	}
-	valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, ctr.batAt(curSeq), curRow)
-	if err != nil {
-		return err
-	}
-	for _, cd := range ctr.linRun[col] {
-		if err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc); err != nil {
-			if owned {
-				valVec.Free(proc.Mp())
-			}
+	curBatch := ctr.batAt(curSeq)
+	if len(ctr.linRun[col]) == 1 {
+		valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, curBatch, curRow)
+		if err != nil {
 			return err
 		}
+		cd := ctr.linRun[col][0]
+		err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc)
+		if owned {
+			valVec.Free(proc.Mp())
+		}
+		return err
 	}
-	if owned {
-		valVec.Free(proc.Mp())
+
+	total := uint64(len(ctr.linRun[col]) + 1)
+	for position, cd := range ctr.linRun[col] {
+		if err := setLinearInterpolatedValue(
+			ctr.batAt(cd.seq).Vecs[col], cd.row,
+			preBatch.Vecs[col], preRow, curBatch.Vecs[col], curRow,
+			uint64(position+1), total,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -583,7 +595,22 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 		result := vector.NewVec(*preVec.GetType())
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
-		value, err := decimal128LinearMidpoint(left, right, preVec.GetType().Scale)
+		value, err := linearExactValue(left, right, 1, 2)
+		if err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		if err = vector.AppendFixed(result, value, false, proc.Mp()); err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		return result, true, nil
+	}
+	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
+		result := vector.NewVec(*preVec.GetType())
+		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
+		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
+		value, err := linearExactValue256(left, right, 1, 2)
 		if err != nil {
 			result.Free(proc.Mp())
 			return nil, false, err
@@ -612,16 +639,345 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	return result, false, err
 }
 
-func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.Decimal128, error) {
-	sum, err := left.Add128(right)
+// setLinearInterpolatedValue writes the value at step/total between the two
+// endpoints. Exact numeric types use a widened weighted sum, which both avoids
+// endpoint arithmetic overflow and rounds once at the destination scale.
+// Floating-point types use a stable convex form when the endpoints have
+// opposite signs, avoiding overflow in right-left.
+func setLinearInterpolatedValue(
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step uint64,
+	total uint64,
+) error {
+	if step == 0 || step >= total {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid linear interpolation position %d/%d", step, total)
+	}
+	if dst.GetType().Oid != leftVec.GetType().Oid || dst.GetType().Oid != rightVec.GetType().Oid {
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation type mismatch: dst=%s, left=%s, right=%s",
+			dst.GetType(), leftVec.GetType(), rightVec.GetType())
+	}
+
+	var err error
+	switch dst.GetType().Oid {
+	case types.T_bit:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int8:
+		err = setLinearSignedValue[int8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int16:
+		err = setLinearSignedValue[int16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int32:
+		err = setLinearSignedValue[int32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int64:
+		err = setLinearSignedValue[int64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint8:
+		err = setLinearUnsignedValue[uint8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint16:
+		err = setLinearUnsignedValue[uint16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint32:
+		err = setLinearUnsignedValue[uint32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint64:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float32:
+		err = setLinearFloatValue[float32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float64:
+		err = setLinearFloatValue[float64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_decimal64:
+		value, calcErr := linearExactValue(
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](leftVec, leftRow))),
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](rightVec, rightRow))),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, types.Decimal64(value.B0_63))
+	case types.T_decimal128:
+		value, calcErr := linearExactValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	case types.T_decimal256:
+		value, calcErr := linearExactValue256(
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation does not support result type %s", dst.GetType())
+	}
+	if err == nil && dst.HasNull() {
+		dst.GetNulls().Del(uint64(dstRow))
+	}
+	return err
+}
+
+type linearSignedNumber interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+func setLinearSignedValue[T linearSignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearUnsignedNumber interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+func setLinearUnsignedValue[T linearUnsignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearFloatNumber interface {
+	~float32 | ~float64
+}
+
+func setLinearFloatValue[T linearFloatNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value := linearFloat64(
+		float64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow)),
+		float64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow)),
+		step, total)
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value))
+}
+
+func unsignedDecimal128(value uint64) types.Decimal128 {
+	return types.Decimal128{B0_63: value}
+}
+
+func linearFloat64(left, right float64, step, total uint64) float64 {
+	if left == right {
+		return left
+	}
+	ratio := float64(step) / float64(total)
+	if (left < 0) != (right < 0) {
+		return left*(1-ratio) + right*ratio
+	}
+	return left + (right-left)*ratio
+}
+
+func linearExactValue(left, right types.Decimal128, step, total uint64) (types.Decimal128, error) {
+	if step == 0 || step >= total {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+	leftTerm, err := multiplyDecimal128ByUint64(left, total-step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	value, valueScale, err := sum.Div(types.Decimal128FromInt64(2), scale, 0)
+	rightTerm, err := multiplyDecimal128ByUint64(right, step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	return value.Scale(scale - valueScale)
+	numerator, _, err := leftTerm.Add(rightTerm, 0, 0)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	negative := numerator.Sign()
+	if negative {
+		numerator = numerator.Minus()
+	}
+	value, err := numerator.Div256(types.Decimal256{B0_63: total})
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if negative {
+		value = value.Minus()
+	}
+	return decimal256ToDecimal128(value)
+}
+
+func multiplyDecimal128ByUint64(value types.Decimal128, factor uint64) (types.Decimal256, error) {
+	widened := types.Decimal256FromDecimal128(value)
+	negative := widened.Sign()
+	if negative {
+		widened = widened.Minus()
+	}
+	result, err := widened.Mul256(types.Decimal256{B0_63: factor})
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func linearExactValue256(left, right types.Decimal256, step, total uint64) (types.Decimal256, error) {
+	if step == 0 || step >= total {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+
+	// A Decimal256 endpoint multiplied by a uint64 position needs at most 320
+	// bits. Keep that exact intermediate on the stack: using Decimal256 directly
+	// can overflow before division even though the final convex value is valid.
+	leftTerm, leftNegative := multiplyDecimal256Magnitude(left, total-step)
+	rightTerm, rightNegative := multiplyDecimal256Magnitude(right, step)
+	var numerator linearUint320
+	negative := leftNegative
+	if leftNegative == rightNegative {
+		var overflow bool
+		numerator, overflow = leftTerm.add(rightTerm)
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation intermediate exceeds 320 bits")
+		}
+	} else if leftTerm.compare(rightTerm) >= 0 {
+		numerator = leftTerm.sub(rightTerm)
+	} else {
+		numerator = rightTerm.sub(leftTerm)
+		negative = rightNegative
+	}
+	value, remainder := numerator.div(total)
+	if remainder >= total-remainder {
+		var overflow bool
+		value, overflow = value.add(linearUint320{1})
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation rounded result exceeds 320 bits")
+		}
+	}
+	return value.decimal256(negative)
+}
+
+// linearUint320 is an unsigned little-endian integer used only for the exact
+// Decimal256 weighted sum. Five limbs are sufficient for 256 bits × uint64.
+type linearUint320 [5]uint64
+
+func multiplyDecimal256Magnitude(value types.Decimal256, factor uint64) (linearUint320, bool) {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	input := [...]uint64{value.B0_63, value.B64_127, value.B128_191, value.B192_255}
+	var result linearUint320
+	var carry uint64
+	for i, limb := range input {
+		hi, lo := bits.Mul64(limb, factor)
+		var loCarry uint64
+		result[i], loCarry = bits.Add64(lo, carry, 0)
+		carry, _ = bits.Add64(hi, 0, loCarry)
+	}
+	result[4] = carry
+	return result, negative
+}
+
+func (value linearUint320) add(other linearUint320) (linearUint320, bool) {
+	var result linearUint320
+	var carry uint64
+	for i := range result {
+		result[i], carry = bits.Add64(value[i], other[i], carry)
+	}
+	return result, carry != 0
+}
+
+func (value linearUint320) sub(other linearUint320) linearUint320 {
+	var result linearUint320
+	var borrow uint64
+	for i := range result {
+		result[i], borrow = bits.Sub64(value[i], other[i], borrow)
+	}
+	return result
+}
+
+func (value linearUint320) compare(other linearUint320) int {
+	for i := len(value) - 1; i >= 0; i-- {
+		if value[i] < other[i] {
+			return -1
+		}
+		if value[i] > other[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func (value linearUint320) div(divisor uint64) (linearUint320, uint64) {
+	var quotient linearUint320
+	var remainder uint64
+	for i := len(value) - 1; i >= 0; i-- {
+		quotient[i], remainder = bits.Div64(remainder, value[i], divisor)
+	}
+	return quotient, remainder
+}
+
+func (value linearUint320) decimal256(negative bool) (types.Decimal256, error) {
+	if value[4] != 0 || (!negative && value[3]>>63 != 0) ||
+		(negative && value[3] > uint64(1)<<63) ||
+		(negative && value[3] == uint64(1)<<63 && (value[2] != 0 || value[1] != 0 || value[0] != 0)) {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+			"linear interpolation result exceeds decimal256")
+	}
+	result := types.Decimal256{
+		B0_63: value[0], B64_127: value[1],
+		B128_191: value[2], B192_255: value[3],
+	}
+	if negative && (value[0] != 0 || value[1] != 0 || value[2] != 0 || value[3] != 0) {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func decimal256ToDecimal128(value types.Decimal256) (types.Decimal128, error) {
+	if value.Sign() {
+		if value.B192_255 != ^uint64(0) || value.B128_191 != ^uint64(0) || value.B64_127>>63 == 0 {
+			return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+		}
+	} else if value.B192_255 != 0 || value.B128_191 != 0 || value.B64_127>>63 != 0 {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+	}
+	return types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, nil
 }
 
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -734,62 +1090,10 @@ func processDefault(ctr *container, ap *Fill, proc *process.Process, analyzer pr
 }
 
 func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
-	var err error
-	switch v.GetType().Oid {
-	case types.T_bool:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[bool](w, j), false, proc.Mp())
-	case types.T_bit:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
-	case types.T_int8:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int8](w, j), false, proc.Mp())
-	case types.T_int16:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int16](w, j), false, proc.Mp())
-	case types.T_int32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int32](w, j), false, proc.Mp())
-	case types.T_int64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[int64](w, j), false, proc.Mp())
-	case types.T_uint8:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint8](w, j), false, proc.Mp())
-	case types.T_uint16:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint16](w, j), false, proc.Mp())
-	case types.T_uint32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint32](w, j), false, proc.Mp())
-	case types.T_uint64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[uint64](w, j), false, proc.Mp())
-	case types.T_float32:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[float32](w, j), false, proc.Mp())
-	case types.T_float64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[float64](w, j), false, proc.Mp())
-	case types.T_date:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Date](w, j), false, proc.Mp())
-	case types.T_datetime:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Datetime](w, j), false, proc.Mp())
-	case types.T_time:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Time](w, j), false, proc.Mp())
-	case types.T_timestamp:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Timestamp](w, j), false, proc.Mp())
-	case types.T_enum:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Enum](w, j), false, proc.Mp())
-	case types.T_decimal64:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j), false, proc.Mp())
-	case types.T_decimal128:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Decimal128](w, j), false, proc.Mp())
-	case types.T_uuid:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j), false, proc.Mp())
-	case types.T_TS:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.TS](w, j), false, proc.Mp())
-	case types.T_Rowid:
-		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j), false, proc.Mp())
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
-		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		err = vector.AppendBytes(v, w.GetBytesAt(j), false, proc.Mp())
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
+	if w.IsNull(uint64(j)) {
+		return vector.AppendNull(v, proc.Mp())
 	}
-	return err
+	return v.UnionOne(w, int64(j), proc.Mp())
 }
 
 func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
@@ -836,6 +1140,8 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
 		err = setDecimal128Value(v, w, i, j)
+	case types.T_decimal256:
+		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal256](w, j))
 	case types.T_uuid:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:
@@ -847,7 +1153,7 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
 		types.T_array_int8, types.T_array_uint8, types.T_datalink:
-		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
+		err = vector.SetBytesAtFrom(v, i, w, j, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
 	}

@@ -2058,8 +2058,8 @@ agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` double DEFAULT NULL,
   `sumcol` decimal(38,0) DEFAULT NULL,
   `countcol` bigint NOT NULL,
-  `maxcol` double NOT NULL,
-  `mincol` double NOT NULL
+  `maxcol` double DEFAULT NULL,
+  `mincol` double DEFAULT NULL
 )
 select * from agg01;
 ➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
@@ -2092,8 +2092,7 @@ from information_schema.columns
 where table_schema = 'repro_ctas_datetime6'
 order by ordinal_position;
 ➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES  𝄀
-t  ¦  __mo_fake_pk_col  ¦  BIGINT UNSIGNED(0)  ¦  NO
+t  ¦  dt_lit  ¦  DATETIME(6)  ¦  YES
 create table t_union as
 select cast('2025-05-06 07:08:09.123456' as datetime(6)) as dt_lit
 union all
@@ -2103,3 +2102,68 @@ select dt_lit from t_union order by dt_lit;
 2025-05-06 07:08:09.123456000  𝄀
 2025-05-07 08:09:10.654321000
 drop database repro_ctas_datetime6;
+drop database if exists ctas_null_extension_26828;
+create database ctas_null_extension_26828;
+use ctas_null_extension_26828;
+create table l (id int primary key, lv int not null);
+create table r (id int primary key, rv int not null);
+insert into l values (1, 10), (2, 20);
+insert into r values (1, 100), (3, 300);
+create table direct_left as select l.id as l_id, l.lv, r.id as r_id, r.rv from l left join r on l.id = r.id;
+select * from direct_left order by l_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null
+create table derived_right as select * from (select l.id as l_id, l.lv, r.id as r_id, r.rv from l right join r on l.id = r.id) as src;
+select * from derived_right order by r_id;
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+null  ¦  null  ¦  3  ¦  300
+create view full_view as select l.id as l_id, l.lv, r.id as r_id, r.rv from l full join r on l.id = r.id;
+create table view_full as select * from full_view;
+select * from view_full order by coalesce(l_id, r_id);
+➤ l_id[4,32,0]  ¦  lv[4,32,0]  ¦  r_id[4,32,0]  ¦  rv[4,32,0]  𝄀
+1  ¦  10  ¦  1  ¦  100  𝄀
+2  ¦  20  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  3  ¦  300
+create table scalar_direct as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+select * from scalar_direct order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create view scalar_view as select l.id as l_id, (select r.rv from r where r.id = l.id) as scalar_rv from l;
+create table scalar_view_ctas as select * from scalar_view;
+select * from scalar_view_ctas order by l_id;
+➤ l_id[4,32,0]  ¦  scalar_rv[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  null
+create table coalesce_left as select l.id as l_id, coalesce(r.rv, -1) as rv_or_default from l left join r on l.id = r.id;
+select * from coalesce_left order by l_id;
+➤ l_id[4,32,0]  ¦  rv_or_default[4,32,0]  𝄀
+1  ¦  100  𝄀
+2  ¦  -1
+create table explicit_not_null_reject (r_id int not null) as select r.id from l left join r on l.id = r.id;
+constraint violation: Column 'r_id' cannot be null
+show tables like 'explicit_not_null_reject';
+➤ Tables_in_ctas_null_extension_26828[12,-1,0]
+select table_name, column_name, is_nullable from information_schema.columns where table_schema = 'ctas_null_extension_26828' and table_name in ('coalesce_left', 'derived_right', 'direct_left', 'scalar_direct', 'scalar_view_ctas', 'view_full') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+coalesce_left  ¦  l_id  ¦  NO  𝄀
+coalesce_left  ¦  rv_or_default  ¦  NO  𝄀
+derived_right  ¦  l_id  ¦  YES  𝄀
+derived_right  ¦  lv  ¦  YES  𝄀
+derived_right  ¦  r_id  ¦  NO  𝄀
+derived_right  ¦  rv  ¦  NO  𝄀
+direct_left  ¦  l_id  ¦  NO  𝄀
+direct_left  ¦  lv  ¦  NO  𝄀
+direct_left  ¦  r_id  ¦  YES  𝄀
+direct_left  ¦  rv  ¦  YES  𝄀
+scalar_direct  ¦  l_id  ¦  NO  𝄀
+scalar_direct  ¦  scalar_rv  ¦  YES  𝄀
+scalar_view_ctas  ¦  l_id  ¦  NO  𝄀
+scalar_view_ctas  ¦  scalar_rv  ¦  YES  𝄀
+view_full  ¦  l_id  ¦  YES  𝄀
+view_full  ¦  lv  ¦  YES  𝄀
+view_full  ¦  r_id  ¦  YES  𝄀
+view_full  ¦  rv  ¦  YES
+drop database ctas_null_extension_26828;

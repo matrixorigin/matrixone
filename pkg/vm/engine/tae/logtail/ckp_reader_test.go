@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,6 +81,19 @@ func TestDeleteUnpublishedObjectsUsesBoundedBatches(t *testing.T) {
 		canceledCtx, trackingFS, "canceled-cleanup")
 	require.Equal(t, 1, count)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDeleteUnpublishedObjectsIsIdempotent(t *testing.T) {
+	trackingFS := &trackingDeleteFileService{
+		err: moerr.NewFileNotFoundNoCtx("already-deleted-object"),
+	}
+
+	count, err := ioutil.DeleteUnpublishedObjects(
+		context.Background(), trackingFS, "already-deleted-object")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, []string{"already-deleted-object"}, trackingFS.deleted)
 }
 
 func TestConsumeCheckpointWithTableID(t *testing.T) {
@@ -427,4 +441,28 @@ func makeCheckpointObjectRanges(
 			1,
 			ckputil.ObjectType_Tombstone,
 		)
+}
+
+func TestCKPReaderReadMetaEmptyLocation(t *testing.T) {
+	for _, version := range []uint32{CheckpointVersion12, CheckpointCurrentVersion} {
+		for _, test := range []struct {
+			name     string
+			location objectio.Location
+		}{
+			{name: "missing encoding"},
+			{
+				name: "truncated encoding",
+				location: append(
+					objectio.Location{1}, make(objectio.Location, objectio.LocationLen-2)...,
+				),
+			},
+			{name: "zero object name", location: make(objectio.Location, objectio.LocationLen)},
+		} {
+			t.Run(fmt.Sprintf("version-%d/%s", version, test.name), func(t *testing.T) {
+				reader := NewCKPReader(version, test.location, nil, nil)
+				err := reader.ReadMeta(context.Background())
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			})
+		}
+	}
 }

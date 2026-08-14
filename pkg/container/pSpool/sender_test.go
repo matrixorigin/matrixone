@@ -28,6 +28,98 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func TestCachedBatchPreservesPrepareParamKind(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	source.Vecs[0].SetPrepareParamKind(vector.PrepareParamFloat)
+	source.SetRowCount(1)
+	defer source.Clean(mp)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.Equal(t, vector.PrepareParamFloat, copied.Vecs[0].GetPrepareParamKind())
+	cache.CacheBatch(useCache, cacheID, copied)
+	cache.free()
+
+	constant := batch.NewWithSize(1)
+	constant.Vecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("raw"), 2, mp)
+	require.NoError(t, err)
+	constant.Vecs[0].SetIsBinaryString(true)
+	constant.SetRowCount(2)
+	defer constant.Clean(mp)
+	constantCache := initCachedBatch(mp, 1)
+	constantCopy, useCache, cacheID, err := constantCache.GetCopiedBatch(constant)
+	require.NoError(t, err)
+	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(0))
+	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(1))
+	constantCache.CacheBatch(useCache, cacheID, constantCopy)
+	constantCache.free()
+}
+
+func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, source.Vecs[0].SetIsBinaryStringAt(0, true))
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
+	cache.CacheBatch(useCache, cacheID, copied)
+	cache.free()
+}
+
+func TestCachedBatchHeterogeneousPrepareParamKindSingleCopy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	source := batch.NewOffHeapWithSize(1)
+	require.NoError(t, source.SetAllocationAccount(selection))
+	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
+	require.NoError(t, source.Vecs[0].SetPrepareParamKindsWithMP(
+		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamNone}, mp))
+	source.SetRowCount(2)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, useCache)
+	require.Equal(t, vector.PrepareParamFloat, copied.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, copied.Vecs[0].GetPrepareParamKindAt(1))
+	// The union path owns the destination sidecar. A second metadata copy
+	// would make the account peak exceed the live source+destination usage.
+	snapshot := account.Snapshot()
+	require.Equal(t, snapshot.Used, snapshot.Peak)
+
+	cache.CacheBatch(useCache, cacheID, copied)
+	source.Clean(mp)
+	cache.free()
+	require.Zero(t, account.Snapshot().Used)
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 // TestPipelineSpoolForceCleanupRetainsUntilReceiversDrained verifies that
 // ForceCleanup does NOT free spool memory while a receiver still has an
 // unconsumed batch (a pending reference). Freeing it then would let that

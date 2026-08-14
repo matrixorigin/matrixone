@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -127,6 +128,11 @@ func (s *Scanner) Scan() (int, string) {
 	}
 	s.PrePos = s.Pos
 	s.skipBlank()
+	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
+		start := s.Pos
+		s.incN(size)
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
 	switch ch := s.cur(); {
 	case ch == '@':
 		tokenID := AT_ID
@@ -154,7 +160,7 @@ func (s *Scanner) Scan() (int, string) {
 			return tID, ""
 		}
 		return tokenID, tBytes
-	case isLetter(ch):
+	case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -174,7 +180,10 @@ func (s *Scanner) Scan() (int, string) {
 			} else {
 				// this is a dollar sign string
 				strTyp, strStr := s.scanString('$', STRING)
-				_, tagStr := s.scanIdentifier(false)
+				tagTyp, tagStr := s.scanIdentifier(false)
+				if tagTyp == LEX_ERROR {
+					return tagTyp, tagStr
+				}
 				if tagStr != str {
 					return LEX_ERROR, string(byte(s.cur()))
 				}
@@ -185,15 +194,11 @@ func (s *Scanner) Scan() (int, string) {
 		}
 
 		if ch == '_' {
-			if s.isCollate() {
+			if s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
-				if s.cur() == '\'' {
-					s.inc()
-					return s.scanString('\'', STRING)
-				} else {
-					s.scanIdentifier(false)
-				}
+				s.inc()
+				return s.scanString('\'', STRING)
 			}
 			return s.scanIdentifier(false)
 		}
@@ -322,11 +327,22 @@ func (s *Scanner) TakeExecutableCommentEnd() int {
 	return end
 }
 
-func (s *Scanner) isCollate() bool {
-	if s.peek(1) == 'u' && s.peek(2) == 't' && s.peek(3) == 'f' && s.peek(4) == '8' && s.peek(5) == 'm' && s.peek(6) == 'b' && s.peek(7) == '4' {
-		return true
+func (s *Scanner) isCharsetIntroducer() bool {
+	if s.peek(1) != 'u' || s.peek(2) != 't' || s.peek(3) != 'f' || s.peek(4) != '8' ||
+		s.peek(5) != 'm' || s.peek(6) != 'b' || s.peek(7) != '4' {
+		return false
 	}
-	return false
+
+	pos := s.Pos + len("_utf8mb4")
+	for pos < len(s.buf) {
+		switch s.buf[pos] {
+		case ' ', '\n', '\r', '\t':
+			pos++
+			continue
+		}
+		break
+	}
+	return pos < len(s.buf) && s.buf[pos] == '\''
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR
@@ -748,9 +764,11 @@ func (s *Scanner) scanBindVar() (int, string) {
 func (s *Scanner) scanNumber() (int, string) {
 	start := s.Pos
 	token := INTEGRAL
+	canPromoteToIdentifier := true
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 		goto exponent
@@ -767,8 +785,12 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
-				return token, strings.ToLower(s.buf[start:s.Pos])
+				if s.cur() != eofChar {
+					if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+						return typ, str
+					}
+				}
+				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
 			goto exit
@@ -780,8 +802,12 @@ func (s *Scanner) scanNumber() (int, string) {
 			p2 := s.Pos
 			if p1 == p2 || isDigit(s.cur()) {
 				token = ID
-				s.scanIdentifier(false)
-				return token, strings.ToLower(s.buf[start:s.Pos])
+				if s.cur() != eofChar {
+					if typ, str := s.scanIdentifier(false); typ == LEX_ERROR {
+						return typ, str
+					}
+				}
+				return token, toLowerASCII(s.buf[start:s.Pos])
 			}
 
 			goto exit
@@ -792,6 +818,7 @@ func (s *Scanner) scanNumber() (int, string) {
 
 	if s.cur() == '.' {
 		token = FLOAT
+		canPromoteToIdentifier = false
 		s.inc()
 		s.scanMantissa(10)
 	}
@@ -800,6 +827,7 @@ exponent:
 	if s.cur() == 'e' || s.cur() == 'E' {
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
+			canPromoteToIdentifier = false
 			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
@@ -811,21 +839,30 @@ exponent:
 	}
 
 exit:
-	if isLetter(s.cur()) {
+	if canPromoteToIdentifier && isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
 		// TODO: optimize
 		token = ID
 		s.scanIdentifier(false)
 	}
 
-	return token, strings.ToLower(s.buf[start:s.Pos])
+	return token, toLowerASCII(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
+	start := s.Pos
+	if size := supplementaryUTF8SequenceSizeAt(s.buf, s.Pos); size != 0 {
+		s.incN(size)
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
+	if ch := s.cur(); !isUnquotedIdentifierLetterAt(s.buf, s.Pos) && !isDigit(ch) && !(isVariable && isCarat(ch)) {
+		s.inc()
+		return LEX_ERROR, s.buf[start:s.Pos]
+	}
+
 	dollarFlag := false
 	if s.cur() == '$' {
 		dollarFlag = true
 	}
-	start := s.Pos
 	s.inc()
 
 	for {
@@ -833,7 +870,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '$' && dollarFlag {
 			break
 		}
-		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
+		if !isUnquotedIdentifierLetterAt(s.buf, s.Pos) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -845,6 +882,12 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
+		if lower == "within" {
+			if s.withinGroupPhraseAhead(s.Pos) {
+				return keywordID, keywordName
+			}
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos
@@ -853,7 +896,10 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 				s.Pos = cur
 				return keywordID, keywordName
 			}
-			typ, _ := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			typ, str := s.scanIdentifier(false) // "begin work / begin transaction" situation
+			if typ == LEX_ERROR {
+				return typ, str
+			}
 			if typ == WORK || typ == TRANSACTION {
 				s.Pos = cur
 				return keywordID, keywordName
@@ -869,6 +915,81 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if !hasKeywordAt(s.buf, pos, "group") {
+		return false
+	}
+	pos += len("group")
+	pos = s.skipBlankAndCommentsFrom(pos)
+	return pos < len(s.buf) && s.buf[pos] == '('
+}
+
+func (s *Scanner) skipBlankAndCommentsFrom(pos int) int {
+	for {
+		for pos < len(s.buf) {
+			switch s.buf[pos] {
+			case ' ', '\n', '\r', '\t':
+				pos++
+				continue
+			}
+			break
+		}
+		if pos >= len(s.buf) {
+			return pos
+		}
+		switch {
+		case strings.HasPrefix(s.buf[pos:], "/*"):
+			end := strings.Index(s.buf[pos+2:], "*/")
+			if end < 0 {
+				return pos
+			}
+			pos += 2 + end + 2
+			continue
+		case strings.HasPrefix(s.buf[pos:], "//"):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		case s.buf[pos] == '#':
+			pos = skipLineCommentFrom(s.buf, pos+1)
+			continue
+		case strings.HasPrefix(s.buf[pos:], "--") &&
+			(pos+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[pos+2])):
+			pos = skipLineCommentFrom(s.buf, pos+2)
+			continue
+		}
+		return pos
+	}
+}
+
+func hasKeywordAt(sql string, pos int, keyword string) bool {
+	if pos+len(keyword) > len(sql) {
+		return false
+	}
+	if !strings.EqualFold(sql[pos:pos+len(keyword)], keyword) {
+		return false
+	}
+	if pos+len(keyword) == len(sql) {
+		return true
+	}
+	nextPos := pos + len(keyword)
+	next := uint16(sql[nextPos])
+	return !isUnquotedIdentifierLetterAt(sql, nextPos) && !isDigit(next) && next != '@'
+}
+
+func skipLineCommentFrom(sql string, pos int) int {
+	for pos < len(sql) {
+		if sql[pos] == '\n' {
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+func isMySQLDashCommentBlank(ch byte) bool {
+	return ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t'
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {
@@ -950,6 +1071,53 @@ func (s *Scanner) peek(dist int) uint16 {
 		return eofChar
 	}
 	return uint16(s.buf[s.Pos+dist])
+}
+
+// isUnquotedIdentifierLetterAt preserves invalid UTF-8 bytes from single-byte
+// client encodings while rejecting valid supplementary UTF-8 sequences. MySQL
+// permits Unicode identifier characters only in the BMP.
+func isUnquotedIdentifierLetterAt(sql string, pos int) bool {
+	if pos < 0 || pos >= len(sql) {
+		return false
+	}
+	ch := uint16(sql[pos])
+	if isLetter(ch) {
+		return true
+	}
+	if ch < utf8.RuneSelf {
+		return false
+	}
+	r, size := utf8.DecodeRuneInString(sql[pos:])
+	return (size == 1 && r == utf8.RuneError) || r <= '\uFFFF'
+}
+
+func supplementaryUTF8SequenceSizeAt(sql string, pos int) int {
+	if pos < 0 || pos >= len(sql) || sql[pos] < utf8.RuneSelf {
+		return 0
+	}
+	r, size := utf8.DecodeRuneInString(sql[pos:])
+	if size == 4 && r > '\uFFFF' {
+		return size
+	}
+	return 0
+}
+
+// toLowerASCII retains raw client bytes. strings.ToLower cannot be used on an
+// identifier that may contain invalid UTF-8 because it replaces those bytes
+// with utf8.RuneError.
+func toLowerASCII(value string) string {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 'A' && value[i] <= 'Z' {
+			lower := []byte(value)
+			for j := i; j < len(lower); j++ {
+				if lower[j] >= 'A' && lower[j] <= 'Z' {
+					lower[j] += 'a' - 'A'
+				}
+			}
+			return string(lower)
+		}
+	}
+	return value
 }
 
 func isLetter(ch uint16) bool {

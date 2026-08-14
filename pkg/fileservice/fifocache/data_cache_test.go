@@ -118,6 +118,14 @@ func (t testBytes) Bytes() []byte {
 	return t
 }
 
+func (t testBytes) Size() int64 {
+	return int64(len(t))
+}
+
+func (t testBytes) Capacity() int64 {
+	return int64(cap(t))
+}
+
 func (t testBytes) Release() {
 }
 
@@ -138,11 +146,12 @@ func (s *sizedTestData) Bytes() []byte {
 }
 
 func (*sizedTestData) Size() int64              { return 3 }
+func (*sizedTestData) Capacity() int64          { return 7 }
 func (*sizedTestData) Release()                 {}
 func (*sizedTestData) Retain()                  {}
 func (s *sizedTestData) Slice(int) fscache.Data { return s }
 
-func TestDataCacheSetUsesSizeWithoutExposingBytes(t *testing.T) {
+func TestDataCacheSetUsesCapacityWithoutExposingBytes(t *testing.T) {
 	cache := NewDataCache(fscache.ConstCapacity(1024), nil, nil, nil)
 	data := new(sizedTestData)
 	err := cache.Set(context.Background(), fscache.CacheKey{Path: "foo", Sz: 3}, data)
@@ -151,5 +160,40 @@ func TestDataCacheSetUsesSizeWithoutExposingBytes(t *testing.T) {
 	}
 	if data.bytesCalls != 0 {
 		t.Fatalf("Bytes called %d times", data.bytesCalls)
+	}
+	if got := cache.Used(); got != 7 {
+		t.Fatalf("cache used bytes = %d, want physical capacity 7", got)
+	}
+}
+
+func TestDataCacheCallbacksReceiveCapturedLogicalSize(t *testing.T) {
+	type callbackSizes struct {
+		logical int64
+		backing int64
+	}
+
+	var postSet, postEvict callbackSizes
+	cache := NewDataCache(
+		fscache.ConstCapacity(8),
+		func(_ context.Context, _ fscache.CacheKey, _ fscache.Data, logicalSize, size int64, _ uint64) {
+			postSet = callbackSizes{logical: logicalSize, backing: size}
+		},
+		nil,
+		func(_ context.Context, _ fscache.CacheKey, _ fscache.Data, logicalSize, size int64, _ uint64) {
+			postEvict = callbackSizes{logical: logicalSize, backing: size}
+		},
+	)
+	key := fscache.CacheKey{Path: "foo", Sz: 3}
+	if err := cache.Set(context.Background(), key, testBytes(make([]byte, 3, 8))); err != nil {
+		t.Fatal(err)
+	}
+	cache.DeletePaths(context.Background(), []string{"foo"})
+
+	want := callbackSizes{logical: 3, backing: 8}
+	if postSet != want {
+		t.Fatalf("post-set sizes = %+v, want %+v", postSet, want)
+	}
+	if postEvict != want {
+		t.Fatalf("post-evict sizes = %+v, want %+v", postEvict, want)
 	}
 }

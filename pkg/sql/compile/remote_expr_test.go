@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
@@ -44,6 +45,32 @@ func TestScopeContainsVarExpr(t *testing.T) {
 	scope.setRootOperator(f)
 
 	require.True(t, scopeContainsVarExpr(scope))
+}
+
+func TestAssertFilterRemoteRoundTrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := testutil.NewProcess(t)
+	original := filter.NewArgument()
+	original.FilterExprs = []*plan.Expr{makeTestConstBoolExpr(true)}
+	original.IsAssert = true
+
+	_, wire, err := convertToPipelineInstruction(original, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, wire.FilterIsAssert)
+
+	payload, err := wire.Marshal()
+	require.NoError(t, err)
+	wireRoundTrip := new(pipeline.Instruction)
+	require.NoError(t, wireRoundTrip.Unmarshal(payload))
+	require.True(t, wireRoundTrip.FilterIsAssert)
+
+	restored, err := convertToVmOperator(wireRoundTrip, ctx, nil)
+	require.NoError(t, err)
+	require.True(t, restored.(*filter.Filter).IsAssert)
 }
 
 func TestAggregateConfigTypeRemoteRoundTrip(t *testing.T) {
@@ -100,6 +127,105 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 			plan.AggregateConfigType_AGG_CONFIG_NONE,
 		),
 	}))
+}
+
+func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	percentile := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileCont,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 17",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+}
+
+func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	textMinForCharset := func(charset uint32) []aggexec.AggFuncExecExpression {
+		expr := makeTestVarExpr("value")
+		expr.Typ.Charset = charset
+		return []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin,
+			false,
+			[]*plan.Expr{expr},
+			nil,
+		)}
+	}
+	generalCIMin := textMinForCharset(uint32(types.CharsetUTF8))
+	binMin := textMinForCharset(uint32(types.CharsetUTF8MB4Bin))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion13)
+	for _, collationAwareMin := range [][]aggexec.AggFuncExecExpression{generalCIMin, binMin} {
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, collationAwareMin),
+			"requires MORPC protocol version 14")
+	}
+
+	ordered := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+	require.ErrorContains(t,
+		validateRemoteAggregateProtocol(proc,
+			append([]aggexec.AggFuncExecExpression{ordered}, generalCIMin...)),
+		"requires MORPC protocol version 14",
+	)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion14)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, generalCIMin))
+	require.NoError(t, validateRemoteAggregateProtocol(proc, binMin))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion9)
+	for _, charset := range []uint32{
+		uint32(types.CharsetLegacy),
+		uint32(types.CharsetBinary),
+	} {
+		binaryText := makeTestVarExpr("packed")
+		binaryText.Typ.Charset = charset
+		require.NoError(t, validateRemoteAggregateProtocol(proc,
+			[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfMax, false, []*plan.Expr{binaryText}, nil)}))
+	}
+}
+
+func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	merge := group.NewArgumentMergeGroup()
+	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	_, _, err := convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 17")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	_, _, err = convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
+	require.NoError(t, err)
 }
 
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {

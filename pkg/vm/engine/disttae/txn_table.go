@@ -69,9 +69,10 @@ const (
 )
 
 // docfilter.MembershipFilter (producer view, with Share) must stay assignable to
-// engine.MembershipFilter (consumer view) so docfilter.New(...).Share() can be
-// stored in FilterHint.BF. This compile-time assertion locks that relationship
-// from a package that imports both, since docfilter cannot import engine.
+// engine.MembershipFilter (consumer view) so a reconstructed docfilter share
+// can be stored in FilterHint.BF. This compile-time assertion locks that
+// relationship from a package that imports both, since docfilter cannot import
+// engine.
 var _ engine.MembershipFilter = (docfilter.MembershipFilter)(nil)
 
 var traceFilterExprInterval atomic.Uint64
@@ -1164,7 +1165,7 @@ func (tbl *txnTable) rangesOnePart(
 ) (err error) {
 	var done bool
 
-	if done, err = readutil.TryFastFilterBlocks(
+	if done, err = readutil.TryFastFilterBlocksWithZone(
 		ctx,
 		tbl.db.op.SnapshotTS(),
 		tbl.tableDef,
@@ -1175,6 +1176,7 @@ func (tbl *txnTable) rangesOnePart(
 		outBlocks,
 		tbl.PrefetchAllMeta,
 		tbl.getTxn().engine.fs,
+		proc.GetSessionInfo().TimeZone,
 	); err != nil {
 		return err
 	} else if done {
@@ -1471,6 +1473,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 						Table:       tbl.tableName,
 						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
 						Enumvalues:  attr.Attr.EnumVlaues,
+						Charset:     uint32(attr.Attr.Type.Charset),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1601,6 +1604,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIncrOffset = tbl.extraInfo.AutoIncrOffset
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
+			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
 	}
 	return tbl.tableDef
@@ -1675,6 +1679,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldConstraint := tbl.constraint
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
+	oldChecks := api.CloneExtra(&api.SchemaExtra{Checks: tbl.extraInfo.Checks}).Checks
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1697,6 +1702,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				// Rollback for ReplaceDef is handled by restoring defs
 			case api.AlterKind_RenameColumn:
 				// RenameColumn takes effect in form of ReplaceDef
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_UpdateAutoIncrement:
 				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
 				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
@@ -1737,6 +1743,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			hasReplaceDef = true
 			re := req.GetRenameCol()
 			renameColMap[re.OldName] = re.NewName
+			if re.Checks != nil {
+				tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: re.Checks}).Checks
+			}
 		case api.AlterKind_UpdateAutoIncrement:
 			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 			tbl.extraInfo.AutoIncrEpoch++
@@ -1811,11 +1820,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	tbl.defs = append(baseDefs, appendDef...)
 	tbl.RefeshTableDef(ctx)
 
-	ctx = context.WithValue(ctx, defines.LogicalIdKey{}, tbl.logicalId)
-
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
+	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for
+	// the recreation to replace. Pass that intent explicitly: inferring it from
+	// the hidden-table name would leave the old row and insert a duplicate.
+	if err := tbl.db.createWithID(
+		ctx, tbl.tableName, tbl.tableId, tbl.logicalId, true,
+		tbl.defs, !createdInTxn, tbl.extraInfo,
+	); err != nil {
 		return err
 	}
 	if createdInTxn {
@@ -2403,49 +2416,30 @@ func (tbl *txnTable) BuildReaders(
 	def := tbl.GetTableDef(ctx)
 	shards := relData.Split(newNum)
 
-	// Reconstruct the doc_id filter from the tagged bytes. docfilter hides which
-	// structure (cbitmap / CRoaring / bloom) backs it; we just hand each reader
-	// a share and free the builder reference at the end.
-	var mainFilter docfilter.MembershipFilter
-	if len(filterHint.MembershipFilterBytes) > 0 {
-		f, ferr := docfilter.New(filterHint.MembershipFilterBytes)
-		if ferr != nil {
-			// A non-empty payload that fails to decode must NOT be silently
-			// dropped to a nil filter (which disables filtering and lets all rows
-			// through). Fail closed so the corruption surfaces instead of
-			// returning wrong results.
-			return nil, ferr
-		}
-		mainFilter = f
+	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
+		filterHint,
+		docfilter.AdmissionForService(proc.GetService()),
+	)
+	if err != nil {
+		return nil, err
 	}
-
-	// On an error mid-loop we return nil (not rds), so the caller never gets the
-	// partially-built readers and can never Close them to drop their filter
-	// shares. Track every share we hand out and, on the error paths, free all of
-	// them plus the builder's own reference — otherwise the C filter's refcount
-	// never reaches 0 and it leaks for the process lifetime. On success the
-	// readers own their shares and drop them via reset(); we free only the
-	// builder reference.
-	var shares []docfilter.MembershipFilter
-	freeOnError := func() {
-		for _, s := range shares {
-			s.Free()
-		}
-		if mainFilter != nil {
-			mainFilter.Free()
-		}
+	if owned {
+		defer mainFilter.Free()
 	}
 
 	for i := 0; i < newNum; i++ {
-		hint := filterHint
+		hint := preparedHint
+		var readerFilter docfilter.MembershipFilter
 		if mainFilter != nil {
-			sh := mainFilter.Share()
-			shares = append(shares, sh)
-			hint.BF = sh
+			readerFilter = mainFilter.Share()
+			hint.BF = readerFilter
 		}
 		ds, err := tbl.buildLocalDataSource(ctx, txnOffset, shards[i], tombstonePolicy, engine.GeneralLocalDataSource)
 		if err != nil {
-			freeOnError()
+			if readerFilter != nil {
+				readerFilter.Free()
+			}
+			closeReaders(rds)
 			return nil, err
 		}
 		rd, err := readutil.NewReader(
@@ -2461,16 +2455,15 @@ func (tbl *txnTable) BuildReaders(
 			hint,
 		)
 		if err != nil {
-			freeOnError()
+			// NewReader consumes the current source and filter share on every
+			// return. Close only the readers that completed earlier iterations.
+			closeReaders(rds)
 			return nil, err
 		}
 
 		rds = append(rds, rd)
 	}
 
-	if mainFilter != nil {
-		mainFilter.Free()
-	}
 	return rds, nil
 }
 
@@ -2629,38 +2622,28 @@ func pkCommitTSMatchedInRange(
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
-		if abortVec.GetType().Oid != types.T_bool {
-			return false, false
-		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(timestamps) {
-			return false, false
-		}
+	rowCount := commitTSVec.Length()
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
+	}
+	abortColumn, err := ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
+	if err != nil {
+		return false, false
 	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		if aborts != nil {
-			if abortVec.IsNull(uint64(sel)) {
-				return false, false
-			}
-			if aborts[sel] {
+		if abortColumn.IsPresent() {
+			if abortColumn.IsAborted(int(sel)) {
 				continue
 			}
 		}
-		ts := timestamps[sel]
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}

@@ -69,5 +69,6 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	require.Equal(t, "insert into mo_catalog.mo_indexes "+moIndexesColumnList, header)
 	require.NotContains(t, header, catalog.IncludedColumns)
 	require.Contains(t, sql, sqlquote.String(algoParams))
+	require.Contains(t, sql, sqlquote.String(algoParams)+", 1, 0, ")
 	require.Contains(t, sql, "'__mo_index_entries_idx_vec')")
 }

@@ -15,16 +15,19 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -48,6 +51,58 @@ var (
 	sendToAnyLocal  = sendToAnyLocalFunc
 	sendToAnyRemote = sendToAnyRemoteFunc
 )
+
+func prepareParamKindRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion12
+}
+
+func binaryStringRemoteWireEnabled(proc *process.Process) bool {
+	return remoteBatchWireVersion(proc) >= defines.MORPCVersion18
+}
+
+func remoteBatchWireVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
+}
+
+// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
+// optional transient provenance trailer only after the shared protocol gate is
+// enabled. Older protocol sessions fail before writing rather than silently
+// dropping a materialized row's source category.
+func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
+	if bat == nil {
+		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
+	}
+	wireEnabled := prepareParamKindRemoteWireEnabled(proc)
+	if bat.HasBinaryStringMetadata() && !binaryStringRemoteWireEnabled(proc) {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"binary-string provenance requires MORPCVersion18 for remote dispatch")
+	}
+	if bat.HasPrepareParamKindMetadata() && !wireEnabled {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"prepared parameter provenance requires MORPCVersion12 for remote dispatch")
+	}
+	if _, err := bat.MarshalBinaryWithBuffer(buf, true); err != nil {
+		return nil, err
+	}
+	if wireEnabled {
+		if err := bat.AppendPrepareParamKindMetadata(buf); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
 
 func (ctr *container) removeIdxReceiver(idx int) {
 	ctr.remoteReceivers = append(ctr.remoteReceivers[:idx], ctr.remoteReceivers[idx+1:]...)
@@ -82,7 +137,7 @@ func sendToAllRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	}
 
 	{ // send to remote regs
-		encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+		encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 		if errEncode != nil {
 			return false, errEncode
 		}
@@ -135,7 +190,7 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 		if shuffleIndex == batIndex {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
 					err = errEncode
 					break
@@ -193,7 +248,7 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 		if shuffleIndex%localRegsCnt == batIndex%localRegsCnt {
 			if bat != nil && !bat.IsEmpty() {
 				receiverID := fmt.Sprintf("%s(ShuffleIdx=%d)", r.Uid.String(), shuffleIndex)
-				encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+				encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 				if errEncode != nil {
 					return errEncode
 				}
@@ -309,7 +364,7 @@ func sendToAnyRemoteFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) 
 	default:
 	}
 
-	encodeData, errEncode := bat.MarshalBinaryWithBuffer(&ap.ctr.marshalBuf, true)
+	encodeData, errEncode := marshalRemoteBatch(proc, bat, &ap.ctr.marshalBuf)
 	if errEncode != nil {
 		return false, errEncode
 	}

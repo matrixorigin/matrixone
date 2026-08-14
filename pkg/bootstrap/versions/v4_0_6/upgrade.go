@@ -34,13 +34,17 @@ import (
 
 var Handler *versionHandle
 
+// Version offsets are persisted upgrade identities and must not decrease.
+// Keep the slot consumed by the removed index-visibility migration reserved.
+const removedIndexVisibilityUpgradeOffset uint32 = 1
+
 func init() {
 	Handler = &versionHandle{metadata: versions.Version{
 		Version:           "4.0.6",
 		MinUpgradeVersion: "4.0.5",
 		UpgradeCluster:    versions.Yes,
 		UpgradeTenant:     versions.Yes,
-		VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
+		VersionOffset:     uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) + removedIndexVisibilityUpgradeOffset,
 	}}
 }
 

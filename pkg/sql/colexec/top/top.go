@@ -352,7 +352,7 @@ func (ctr *container) spillBatch(bat *batch.Batch, proc *process.Process, analyz
 	origBat.SetRowCount(bat.RowCount())
 
 	ctr.spillBuf.Reset()
-	data, err := origBat.MarshalBinaryWithBuffer(&ctr.spillBuf, false)
+	data, err := origBat.MarshalBinaryWithPrepareParamKinds(&ctr.spillBuf, false)
 	if err != nil {
 		return err
 	}
@@ -559,7 +559,7 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 		}
 
 		reuseBat.CleanOnlyData()
-		if err := reuseBat.UnmarshalBinaryWithAnyMp(data, proc.Mp()); err != nil {
+		if err := reuseBat.UnmarshalBinaryWithPrepareParamKinds(data, proc.Mp()); err != nil {
 			return false, err
 		}
 
@@ -570,6 +570,10 @@ func (ctr *container) evalSpill(limit uint64, n int, proc *process.Process, resu
 					return false, err
 				}
 				outputBat.Vecs[i].SetLength(chunkSize)
+				// The output is capacity-reserved but no logical row has been
+				// written yet. Marking the slots null makes Copy's row-level
+				// provenance decision independent of the reserved length.
+				outputBat.Vecs[i].SetAllNulls(chunkSize)
 			}
 			if len(reuseBat.Attrs) > 0 {
 				outputBat.Attrs = make([]string, n)

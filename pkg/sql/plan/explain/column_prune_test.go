@@ -448,6 +448,10 @@ func TestNestedQueryPrune(t *testing.T) {
 					tableName: "lineitem",
 					colNames:  []string{"l_partkey", "l_quantity"},
 				},
+				{
+					tableName: "part",
+					colNames:  []string{"p_partkey", "p_brand", "p_container"},
+				},
 			},
 		},
 	}

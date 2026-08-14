@@ -188,6 +188,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		AutoIncrOffset: tableDef.AutoIncrOffset,
 		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 		Checks:         tableDef.Checks,
+		DefaultCharset: tableDef.DefaultCharset,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -241,11 +242,14 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
+		exeTyp := types.NewWithCharset(
+			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
+		)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{
 				Name:          col.GetOriginCaseName(),
 				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Type:          exeTyp,
 				Default:       planCols[i].GetDefault(),
 				OnUpdate:      planCols[i].GetOnUpdate(),
 				GeneratedCol:  col.GetGeneratedCol(),
@@ -1206,6 +1210,42 @@ type Reader interface {
 	//SetScanType()
 }
 
+// ReaderFilterResult describes which rows survived a ReaderFilter. Sels must
+// contain sorted, unique positions in the callback's input batch, and its
+// length must equal the filtered batch row count. Sels is borrowed from the
+// callback and is only valid until the next callback. When All is true, every
+// row survived, the callback must not change the row count, and Sels is ignored.
+type ReaderFilterResult struct {
+	Sels []int64
+	All  bool
+}
+
+// ReaderFilter evaluates a residual predicate over the columns listed in
+// loadedColumns. loadedColumns contains positions in the full output schema;
+// nil means every output column is already loaded and the row mapping is not
+// consumed. The callback must shrink the loaded vectors and update bat.RowCount
+// when only a subset survives. Readers invoke the callback synchronously and
+// must finish consuming its result before ReadWithFilter returns.
+type ReaderFilter func(
+	bat *batch.Batch,
+	loadedColumns []int,
+) (ReaderFilterResult, error)
+
+// LateMaterializationReader is an optional Reader capability. It reads the
+// early columns, applies filter, and materializes the remaining columns only
+// for surviving persisted rows. Readers must fall back to an eager read for
+// data sources that cannot be revisited, such as in-memory workspace data.
+type LateMaterializationReader interface {
+	ReadWithFilter(
+		ctx context.Context,
+		cols []string,
+		earlyColumns []int,
+		filter ReaderFilter,
+		mp *mpool.MPool,
+		outBatch *batch.Batch,
+	) (isEnd bool, err error)
+}
+
 type Database interface {
 	Relations(context.Context) ([]string, error)
 	Relation(context.Context, string, any) (Relation, error)
@@ -1260,7 +1300,8 @@ type Engine interface {
 		expr *plan.Expr,
 		def *plan.TableDef,
 		relData RelData,
-		num int) ([]Reader, error)
+		num int,
+		filterHint ...FilterHint) ([]Reader, error)
 
 	// Get database name & table name by table id
 	GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error)
@@ -1446,8 +1487,8 @@ func GetPrefetchOnSubscribed() (bool, []*regexp.Regexp) {
 // MembershipFilter is a membership filter over the indexed primary-key values
 // (fulltext calls this PK doc_id) used to prune an index scan to the candidate
 // rows that pass the surrounding relational predicate. It is implemented in
-// pkg/common/docfilter by an exact bitset (cbitmap / CRoaring) for integer PKs
-// and by a CBloomFilter (approximate) for non-integer PKs.
+// pkg/common/docfilter by an exact set (dense cbitmap / sparse Sorted64) for
+// integer PKs and by a CBloomFilter (approximate) for non-integer PKs.
 //
 // This is the CONSUMER (probe) view, so it deliberately omits Share() — a plain
 // *bloomfilter.CBloomFilter satisfies it directly. The PRODUCER superset is

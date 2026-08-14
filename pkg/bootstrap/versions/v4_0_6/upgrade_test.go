@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -36,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 9)
+	require.Len(t, tenantUpgEntries, 12)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -57,10 +58,30 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.MODIFY_VIEW, columns.UpgType)
 	require.Equal(t, sysview.InformationSchemaColumnsDDL, columns.UpgSql)
 	require.Contains(t, strings.ToLower(columns.PreSql), "drop view if exists information_schema.columns")
+	checkConstraints := tenantUpgEntries[9]
+	require.Equal(t, sysview.InformationDBConst, checkConstraints.Schema)
+	require.Equal(t, "CHECK_CONSTRAINTS", checkConstraints.TableName)
+	require.Equal(t, versions.CREATE_VIEW, checkConstraints.UpgType)
+	require.Equal(t, sysview.InformationSchemaCheckConstraintsDDL, checkConstraints.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion16), checkConstraints.RequiredProtocolVersion)
+	require.Contains(t, strings.ToLower(checkConstraints.PreSql), "drop view if exists information_schema.check_constraints")
+	tableConstraints := tenantUpgEntries[10]
+	require.Equal(t, sysview.InformationDBConst, tableConstraints.Schema)
+	require.Equal(t, "TABLE_CONSTRAINTS", tableConstraints.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, tableConstraints.UpgType)
+	require.Equal(t, sysview.InformationSchemaTableConstraintsDDL, tableConstraints.UpgSql)
+	require.Equal(t, int64(defines.MORPCVersion16), tableConstraints.RequiredProtocolVersion)
+	require.Contains(t, strings.ToLower(tableConstraints.PreSql), "drop view if exists information_schema.table_constraints")
+	hideInternalColumns := tenantUpgEntries[11]
+	require.Equal(t, sysview.InformationDBConst, hideInternalColumns.Schema)
+	require.Equal(t, "COLUMNS", hideInternalColumns.TableName)
+	require.Equal(t, versions.MODIFY_VIEW, hideInternalColumns.UpgType)
+	require.Equal(t, sysview.InformationSchemaColumnsDDL, hideInternalColumns.UpgSql)
+	require.Contains(t, strings.ToLower(hideInternalColumns.PreSql), "drop view if exists information_schema.columns")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 9)
+	require.Len(t, tenantUpgEntries, 12)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]
@@ -286,13 +307,15 @@ func TestVersionHandleMetadata(t *testing.T) {
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, versions.Yes, meta.UpgradeCluster)
-	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries))+removedIndexVisibilityUpgradeOffset, meta.VersionOffset)
 }
 
 func TestTenantViewDefinitionChecks(t *testing.T) {
 	entries := []versions.UpgradeEntry{
 		upgradeInformationSchemaKeyColumnUsage(),
 		upgradeInformationSchemaReferentialConstraints(),
+		upgradeInformationSchemaCheckConstraints(),
+		upgradeInformationSchemaTableConstraints(),
 	}
 
 	for _, entry := range entries {
@@ -334,6 +357,46 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 	}
 }
 
+func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T) {
+	tests := []struct {
+		name     string
+		entry    versions.UpgradeEntry
+		exists   bool
+		viewName string
+		viewDef  string
+	}{
+		{
+			name:     "missing check constraints view",
+			entry:    upgradeInformationSchemaCheckConstraints(),
+			exists:   false,
+			viewName: "CHECK_CONSTRAINTS",
+		},
+		{
+			name:     "legacy table constraints view",
+			entry:    upgradeInformationSchemaTableConstraints(),
+			exists:   true,
+			viewName: "TABLE_CONSTRAINTS",
+			viewDef:  sysview.InformationSchemaTableConstraintsLegacyDDL,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, test.viewName, viewName)
+				return test.exists, test.viewDef, nil
+			})
+			defer stub.Reset()
+
+			matched, err := test.entry.CheckFunc(nil, 42)
+			require.NoError(t, err)
+			require.False(t, matched)
+		})
+	}
+}
+
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		tableStub := gostub.Stub(&versions.CheckTableDefinition, func(executor.TxnExecutor, uint32, string, string) (bool, error) {
@@ -347,6 +410,10 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
 			case "REFERENTIAL_CONSTRAINTS":
 				return true, sysview.InformationSchemaReferentialConstraintsDDL, nil
+			case "CHECK_CONSTRAINTS":
+				return true, sysview.InformationSchemaCheckConstraintsDDL, nil
+			case "TABLE_CONSTRAINTS":
+				return true, sysview.InformationSchemaTableConstraintsDDL, nil
 			case "COLUMNS":
 				return true, sysview.InformationSchemaColumnsDDL, nil
 			default:
@@ -357,6 +424,9 @@ func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
 
 		var executed []string
 		txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			if strings.Contains(strings.ToLower(sql), "getprotocolversion") {
+				return newProtocolVersionResult(t), nil
+			}
 			executed = append(executed, sql)
 			return executor.Result{}, nil
 		})
@@ -829,6 +899,18 @@ func newHistoricalCreateSQLResult(t *testing.T, createSQL string) executor.Resul
 	result.NewBatchWithRowCount(1)
 	if err := executor.AppendStringRows(result, 0, []string{createSQL}); err != nil {
 		t.Fatalf("append historical CREATE definition: %v", err)
+	}
+	return result.GetResult()
+}
+
+func newProtocolVersionResult(t *testing.T) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+	result.NewBatchWithRowCount(1)
+	if err := executor.AppendStringRows(result, 0, []string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:13, cn-b:13"}`}); err != nil {
+		t.Fatalf("append protocol version result: %v", err)
 	}
 	return result.GetResult()
 }
