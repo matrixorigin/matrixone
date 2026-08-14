@@ -129,8 +129,10 @@ func TestCheckWithAcyclicBranchReconvergence(t *testing.T) {
 
 func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 	reuse.RunReuseTests(func() {
-		root := []byte("root")
-		seed := []byte("seed")
+		// Prefix nodes deliberately sort after every cycle member. Victim
+		// selection must consider the cycle only, not an acyclic path into it.
+		root := []byte("zz-root")
+		seed := []byte("zz-seed")
 		a := []byte("a")
 		b := []byte("b")
 		x := []byte("x")
@@ -138,7 +140,7 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		depends := map[string][]pb.WaitTxn{
 			string(seed): {{TxnID: a}, {TxnID: b}},
 			string(a):    {{TxnID: x}},
-			string(b):    {{TxnID: y}},
+			string(b):    {{TxnID: y, WaiterAddress: "y-service"}},
 			string(x):    {{TxnID: b}},
 			string(y):    {{TxnID: x, WaiterAddress: "closing-service"}},
 		}
@@ -168,8 +170,8 @@ func TestCheckWithCrossBranchDeadlock(t *testing.T) {
 		hasDeadlock, deadlockTxn, err := d.checkDeadlock(context.Background(), w)
 		require.NoError(t, err)
 		require.True(t, hasDeadlock)
-		require.Equal(t, x, deadlockTxn.TxnID)
-		require.Equal(t, "closing-service", deadlockTxn.WaiterAddress)
+		require.Equal(t, y, deadlockTxn.TxnID)
+		require.Equal(t, "y-service", deadlockTxn.WaiterAddress)
 		require.Equal(t, "78 <= 62 <= 79 <= 78", printPathFromRoot(w.deadlockNode()))
 		require.Equal(t, 1, fetchCount[string(seed)])
 		require.Equal(t, 1, fetchCount[string(a)])
