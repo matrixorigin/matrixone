@@ -176,9 +176,14 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	// assertion independent of parallel pipeline scheduling.
 	failedResult, err := conn.QueryContext(ctx, query)
 	if failedResult != nil {
-		require.False(t, failedResult.Next(),
-			"failed broadcast build exposed a result row before its terminal error")
-		err = errors.Join(err, failedResult.Err(), failedResult.Close())
+		func() {
+			defer func() {
+				err = errors.Join(err, failedResult.Close())
+			}()
+			require.False(t, failedResult.Next(),
+				"failed broadcast build exposed a result row before its terminal error")
+			err = errors.Join(err, failedResult.Err())
+		}()
 	}
 	require.Error(t, err)
 	var mysqlErr *mysqlDriver.MySQLError
