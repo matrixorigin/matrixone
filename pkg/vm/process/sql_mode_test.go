@@ -42,6 +42,12 @@ func TestIsPadCharToFullLengthMode(t *testing.T) {
 }
 
 func TestResolvePadCharToFullLength(t *testing.T) {
+	t.Run("nil process", func(t *testing.T) {
+		enabled, err := ResolvePadCharToFullLength(nil)
+		require.NoError(t, err)
+		require.False(t, enabled)
+	})
+
 	t.Run("local resolver", func(t *testing.T) {
 		proc := &Process{Base: &BaseProcess{}}
 		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
