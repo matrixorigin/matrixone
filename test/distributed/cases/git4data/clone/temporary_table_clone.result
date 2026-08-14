@@ -177,6 +177,23 @@ select id from temp_vec order by l2_distance(v, '[2,2,3]') limit 2;
 1
 drop temporary table temp_vec;
 set experimental_ivf_index = 0;
+create temporary table temp_copy_grants clone src copy grants;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS
+drop temporary table if exists temp_copy_grants;
+create temporary table temp_copy_grants (id int primary key);
+insert into temp_copy_grants values (11);
+select * from temp_copy_grants;
+➤ id[4,32,0]  𝄀
+11
+drop temporary table temp_copy_grants;
+create temporary table temp_copy_grants_existing (id int primary key);
+insert into temp_copy_grants_existing values (12);
+create temporary table if not exists temp_copy_grants_existing clone src copy grants;
+invalid input: CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS
+select * from temp_copy_grants_existing;
+➤ id[4,32,0]  𝄀
+12
+drop temporary table temp_copy_grants_existing;
 drop account if exists clone_temp_target_account;
 create account clone_temp_target_account admin_name 'admin' identified by '111';
 create database clone_temp_target;

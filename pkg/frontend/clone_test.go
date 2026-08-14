@@ -104,19 +104,59 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	))
 }
 
-func TestHandleCloneTableRejectsTemporaryDestinationToAccountBeforeExecution(t *testing.T) {
-	stmt := tree.NewCloneTable()
-	t.Cleanup(stmt.Free)
-	stmt.CreateTable.Temporary = true
-	stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+func TestHandleCloneTableRejectsUnsupportedTemporaryOptionsBeforeExecution(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*tree.CloneTable)
+		wantErr string
+	}{
+		{
+			name: "to account",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+		{
+			name: "copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "if not exists copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CreateTable.IfNotExists = true
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "to account and copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+	}
 
-	// Nil execution dependencies prove this semantic rejection happens before
-	// opening a background transaction, resolving a snapshot/account, or
-	// publishing any temporary-table state.
-	_, err := handleCloneTable(nil, nil, stmt, nil, nil)
-	require.ErrorContains(t, err,
-		"CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT")
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt := tree.NewCloneTable()
+			t.Cleanup(stmt.Free)
+			stmt.CreateTable.Temporary = true
+			test.prepare(stmt)
+
+			// Nil execution dependencies prove this semantic rejection happens before
+			// opening a background transaction, resolving a snapshot/account, or
+			// publishing any temporary-table state.
+			_, err := handleCloneTable(nil, nil, stmt, nil, nil)
+			require.ErrorContains(t, err, test.wantErr)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
 }
 
 func TestRemoveFailedTemporaryCloneAlias(t *testing.T) {

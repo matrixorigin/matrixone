@@ -153,6 +153,23 @@ select id from temp_vec order by l2_distance(v, '[2,2,3]') limit 2;
 drop temporary table temp_vec;
 set experimental_ivf_index = 0;
 
+-- COPY GRANTS writes persistent table-object privileges, while a temporary
+-- destination is session-owned and cataloged under a generated physical name.
+-- Reject the combination before either the normal or IF NOT EXISTS path can
+-- create state, and prove existing temporary state is left unchanged.
+create temporary table temp_copy_grants clone src copy grants;
+drop temporary table if exists temp_copy_grants;
+create temporary table temp_copy_grants (id int primary key);
+insert into temp_copy_grants values (11);
+select * from temp_copy_grants;
+drop temporary table temp_copy_grants;
+
+create temporary table temp_copy_grants_existing (id int primary key);
+insert into temp_copy_grants_existing values (12);
+create temporary table if not exists temp_copy_grants_existing clone src copy grants;
+select * from temp_copy_grants_existing;
+drop temporary table temp_copy_grants_existing;
+
 -- Temporary aliases and their physical relations are session/account-owned, so
 -- TO ACCOUNT must be rejected before snapshot resolution, background-transaction
 -- creation, or alias publication. Closing the rejected statement's session must
