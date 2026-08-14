@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -210,7 +211,7 @@ func TestMemCacheRehomeReservesCapacityBeforeCopy(t *testing.T) {
 	require.Equal(t, int64(0), cache.reservedBytes)
 }
 
-func TestMemCacheCapacityReservationWaitsForPendingAllocation(t *testing.T) {
+func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
 	ctx := context.Background()
 	const capacity = 1 << 20
 	const request = 700 << 10
@@ -220,28 +221,40 @@ func TestMemCacheCapacityReservationWaitsForPendingAllocation(t *testing.T) {
 	backing := cache.BackingSize(request)
 	first := cache.reserveCacheData(ctx, backing)
 
-	secondReady := make(chan *memoryCacheReservation, 1)
-	go func() {
-		secondReady <- cache.reserveCacheData(ctx, backing)
-	}()
-
-	require.Never(t, func() bool {
-		select {
-		case reservation := <-secondReady:
-			reservation.release()
-			return true
-		default:
-			return false
-		}
-	}, 100*time.Millisecond, 5*time.Millisecond)
-
+	second := cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear)
+	admission, ok := second.(fscache.DataCacheAdmission)
+	require.True(t, ok)
+	require.False(t, admission.CacheAdmissionAllowed(cache.allocator.owner))
+	require.Equal(t, int64(backing), cache.reservedBytes)
+	second.Release()
 	first.release()
-	select {
-	case second := <-secondReady:
-		second.release()
-	case <-time.After(time.Second):
-		t.Fatal("second reservation did not proceed after the first was released")
+	require.Equal(t, int64(0), cache.reservedBytes)
+}
+
+func TestMemCacheOversizedDataBypassesAdmission(t *testing.T) {
+	ctx := context.Background()
+	const capacity = 1 << 20
+	const request = 2 << 20
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(ctx)
+	require.Greater(t, cache.BackingSize(request), capacity)
+
+	vector := &IOVector{
+		FilePath: "shared:/oversized",
+		Entries: []IOEntry{{
+			Size:       request,
+			CachedData: cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear),
+		}},
 	}
+	admission, ok := vector.Entries[0].CachedData.(fscache.DataCacheAdmission)
+	require.True(t, ok)
+	require.False(t, admission.CacheAdmissionAllowed(cache.allocator.owner))
+
+	require.NoError(t, cache.Update(ctx, vector, false))
+	require.Equal(t, int64(0), cache.cache.Used())
+	require.Equal(t, int64(0), cache.reservedBytes)
+	vector.Release()
 }
 
 func TestMemCacheDuplicateSetKeepsReservationUntilDataRelease(t *testing.T) {

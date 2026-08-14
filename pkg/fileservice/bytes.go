@@ -31,7 +31,10 @@ type Bytes struct {
 	deallocator malloc.Deallocator
 	owner       *fscache.DataOwner
 	reservation cacheDataReservation
-	refs        atomic.Int32
+	// cacheAdmissionOwner identifies a cache that deliberately allocated this
+	// as a transient read buffer because it could not reserve cache capacity.
+	cacheAdmissionOwner *fscache.DataOwner
+	refs                atomic.Int32
 }
 
 // cacheDataReservation accounts for a buffer that has been allocated for a
@@ -117,6 +120,7 @@ func (b *Bytes) Release() {
 
 var _ fscache.DataOwnership = (*Bytes)(nil)
 var _ fscache.DataCacheReservation = (*Bytes)(nil)
+var _ fscache.DataCacheAdmission = (*Bytes)(nil)
 
 // CommitCacheReservation transfers pending capacity accounting to the FIFO
 // after this buffer has been retained by a cache.
@@ -124,6 +128,13 @@ func (b *Bytes) CommitCacheReservation() {
 	if b.reservation != nil {
 		b.reservation.commit()
 	}
+}
+
+// CacheAdmissionAllowed reports whether this data can enter the destination
+// cache. A transient buffer must remain owned by the read and never turn into
+// an unaccounted cache allocation.
+func (b *Bytes) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	return b.cacheAdmissionOwner != owner
 }
 
 func (b *Bytes) CacheDataOwner() *fscache.DataOwner {

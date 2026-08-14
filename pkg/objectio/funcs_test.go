@@ -60,6 +60,25 @@ func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
 	require.Equal(t, []byte{1, 2, 3}, rehomed.Bytes())
 }
 
+type admissionTrackingData struct {
+	releaseTrackingData
+	blockedOwner *fscache.DataOwner
+}
+
+func (d *admissionTrackingData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	return owner != d.blockedOwner
+}
+
+func TestValidatedVectorCacheDataForwardsCacheAdmission(t *testing.T) {
+	blocked := new(fscache.DataOwner)
+	data := &validatedVectorCacheData{
+		data: &admissionTrackingData{blockedOwner: blocked},
+	}
+
+	require.False(t, data.CacheAdmissionAllowed(blocked))
+	require.True(t, data.CacheAdmissionAllowed(new(fscache.DataOwner)))
+}
+
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
 }

@@ -52,3 +52,11 @@ type DataCacheReservation interface {
 	Data
 	CommitCacheReservation()
 }
+
+// DataCacheAdmission identifies data that must not be admitted into a
+// particular cache. It is used for a read buffer when that cache cannot grant
+// capacity without blocking the read; the caller still owns and releases it.
+type DataCacheAdmission interface {
+	Data
+	CacheAdmissionAllowed(*DataOwner) bool
+}

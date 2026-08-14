@@ -39,6 +39,7 @@ type MemCache struct {
 	// here: that would merge unrelated FileService caches into one allocator
 	// arena and make fragmentation metrics untrustworthy.
 	allocator           *bytesAllocator
+	uncachedAllocator   *bytesAllocator
 	arenaAllocator      malloc.MemoryCacheAllocator
 	allocatorGauges     metric.FsCacheAllocatorStatsGauges
 	metricKey           memoryCacheMetricKey
@@ -239,12 +240,13 @@ func newMemCacheWithMetricScope(
 	var dataCache *fifocache.DataCache
 	cacheAllocator, arenaAllocator := newMemoryCacheDataAllocator()
 	ret := &MemCache{
-		counterSets:     counterSets,
-		allocator:       cacheAllocator,
-		arenaAllocator:  arenaAllocator,
-		allocatorGauges: allocatorGauges,
-		metricKey:       memoryCacheMetricKey{scope: metricScope, name: name},
-		capacityChanged: make(chan struct{}),
+		counterSets:       counterSets,
+		allocator:         cacheAllocator,
+		uncachedAllocator: newBytesAllocator(ioAllocator()),
+		arenaAllocator:    arenaAllocator,
+		allocatorGauges:   allocatorGauges,
+		metricKey:         memoryCacheMetricKey{scope: metricScope, name: name},
+		capacityChanged:   make(chan struct{}),
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -386,9 +388,18 @@ func (m *MemCache) BackingSize(size int) int {
 }
 
 func (m *MemCache) allocateCacheData(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	reservation := m.reserveCacheData(ctx, m.allocator.BackingSize(size))
-	ret := m.allocator.allocateCacheBytes(size, hints)
-	ret.reservation = reservation
+	if reservation := m.reserveCacheData(ctx, m.allocator.BackingSize(size)); reservation != nil {
+		ret := m.allocator.allocateCacheBytes(size, hints)
+		ret.reservation = reservation
+		return ret
+	}
+
+	// A cache cannot wait for capacity here: a read may need this data to
+	// release the same cache references that would make capacity available.
+	// Keep it as an explicit transient read buffer instead of exceeding the
+	// cache allocation contract or deadlocking the read.
+	ret := m.uncachedAllocator.allocateCacheBytes(size, hints)
+	ret.cacheAdmissionOwner = m.allocator.owner
 	return ret
 }
 
@@ -408,19 +419,13 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 			return &memoryCacheReservation{cache: m, bytes: want}
 		}
 		target := capacity - m.reservedBytes - want
-		changed := m.capacityChanged
 		m.capacityMu.Unlock()
 
-		if target >= 0 {
-			if m.cache.EvictToTargetWithWait(withoutEventLogger(ctx), target) <= target {
-				continue
-			}
+		if target < 0 {
+			return nil
 		}
-
-		select {
-		case <-ctx.Done():
-			panic(ctx.Err())
-		case <-changed:
+		if m.cache.EvictToTargetWithWait(withoutEventLogger(ctx), target) > target {
+			return nil
 		}
 	}
 }
@@ -625,11 +630,19 @@ func (m *MemCache) Update(
 		if entry.fromCache == m {
 			continue
 		}
+		if !m.cacheAdmissionAllowed(entry.CachedData) {
+			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
+		}
 
 		data := m.admitCacheData(ctx, entry.CachedData)
 		if data != entry.CachedData {
 			entry.CachedData.Release()
 			entry.CachedData = data
+		}
+		if !m.cacheAdmissionAllowed(entry.CachedData) {
+			metric.FSCachePressureMemorySkipCounter.Inc()
+			continue
 		}
 
 		key := fscache.CacheKey{
@@ -654,6 +667,13 @@ func (m *MemCache) Update(
 		}
 	}
 	return nil
+}
+
+func (m *MemCache) cacheAdmissionAllowed(data fscache.Data) bool {
+	if admission, ok := data.(fscache.DataCacheAdmission); ok {
+		return admission.CacheAdmissionAllowed(m.allocator.owner)
+	}
+	return true
 }
 
 // admitCacheData makes this cache the physical owner of every admitted entry.
