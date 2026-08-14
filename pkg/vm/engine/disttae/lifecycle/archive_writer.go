@@ -151,13 +151,13 @@ func (writer *ArchiveWriter) WriteBatch(
 	if value == nil {
 		return nil
 	}
-	if len(value.Vecs) != len(writer.config.Schema.Columns) {
-		return moerr.NewInvalidInputf(
-			ctx,
-			"Lifecycle archive batch has %d columns, schema has %d",
-			len(value.Vecs),
-			len(writer.config.Schema.Columns),
-		)
+	columnIndexes, err := archiveBatchColumnIndexes(
+		ctx,
+		value,
+		writer.config.Schema,
+	)
+	if err != nil {
+		return err
 	}
 	for row := 0; row < value.RowCount(); row++ {
 		if err := ctx.Err(); err != nil {
@@ -166,7 +166,12 @@ func (writer *ArchiveWriter) WriteBatch(
 		if selected != nil && !selected.Contains(uint64(row)) {
 			continue
 		}
-		archiveValue, err := writer.rowFromBatch(ctx, value, row)
+		archiveValue, err := writer.rowFromBatch(
+			ctx,
+			value,
+			columnIndexes,
+			row,
+		)
 		if err != nil {
 			return err
 		}
@@ -207,6 +212,65 @@ func (writer *ArchiveWriter) WriteBatch(
 		writer.pendingBytes += archiveValue.bytes
 	}
 	return nil
+}
+
+// archiveBatchColumnIndexes projects the physical Merge Batch onto the frozen
+// user Schema. MO keeps internal columns such as __mo_cpkey_col in that Batch
+// because Rewrite and TransferTable still need them; Archive payloads must not
+// persist those implementation columns. Attribute-free synthetic batches keep
+// the original positional contract used by focused package tests.
+func archiveBatchColumnIndexes(
+	ctx context.Context,
+	value *batch.Batch,
+	schema SchemaDescriptor,
+) ([]int, error) {
+	if len(value.Attrs) == 0 {
+		if len(value.Vecs) != len(schema.Columns) {
+			return nil, moerr.NewInvalidInputf(
+				ctx,
+				"Lifecycle archive batch has %d columns, schema has %d",
+				len(value.Vecs),
+				len(schema.Columns),
+			)
+		}
+		indexes := make([]int, len(schema.Columns))
+		for index := range indexes {
+			indexes[index] = index
+		}
+		return indexes, nil
+	}
+	if len(value.Attrs) != len(value.Vecs) {
+		return nil, moerr.NewInvalidInputf(
+			ctx,
+			"Lifecycle archive batch has %d attributes and %d vectors",
+			len(value.Attrs),
+			len(value.Vecs),
+		)
+	}
+	byName := make(map[string]int, len(value.Attrs))
+	for index, name := range value.Attrs {
+		if _, exists := byName[name]; exists {
+			return nil, moerr.NewInvalidInputf(
+				ctx,
+				"Lifecycle archive batch contains duplicate column %s",
+				name,
+			)
+		}
+		byName[name] = index
+	}
+	indexes := make([]int, len(schema.Columns))
+	for ordinal, column := range schema.Columns {
+		index, exists := byName[column.Name]
+		if !exists {
+			return nil, moerr.NewInvalidInputf(
+				ctx,
+				"Lifecycle archive batch is missing frozen column %s",
+				column.Name,
+			)
+		}
+		indexes[ordinal] = index
+	}
+	return indexes, nil
 }
 
 func (writer *ArchiveWriter) Close(
@@ -428,11 +492,20 @@ func (writer *ArchiveWriter) ensureGuard(ctx context.Context) error {
 func (writer *ArchiveWriter) rowFromBatch(
 	ctx context.Context,
 	value *batch.Batch,
+	columnIndexes []int,
 	row int,
 ) (archiveRow, error) {
-	cells := make([]CanonicalCell, len(value.Vecs))
-	parquetValue := make(map[string]any, len(value.Vecs))
-	for columnIndex, vec := range value.Vecs {
+	cells := make([]CanonicalCell, len(columnIndexes))
+	parquetValue := make(map[string]any, len(columnIndexes))
+	for columnIndex, batchIndex := range columnIndexes {
+		vec := value.Vecs[batchIndex]
+		if vec == nil {
+			return archiveRow{}, moerr.NewInvalidInputf(
+				ctx,
+				"Lifecycle archive column %d has a nil vector",
+				columnIndex,
+			)
+		}
 		column := writer.config.Schema.Columns[columnIndex]
 		if int32(vec.GetType().Oid) != column.TypeID ||
 			vec.GetType().Width != column.Width ||

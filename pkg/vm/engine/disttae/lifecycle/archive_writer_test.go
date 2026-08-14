@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -89,6 +90,53 @@ func TestArchiveWriterRoundTripAndStableChunks(t *testing.T) {
 	persisted, err := ReadArchiveManifest(ctx, store, manifestKey)
 	require.NoError(t, err)
 	require.Equal(t, "FULL_READBACK_VERIFIED", persisted.VerificationStatus)
+}
+
+func TestArchiveWriterProjectsUserColumnsFromCompositePrimaryKeyBatch(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryArchiveStore()
+	schema := archiveTestSchema()
+	schemaDigest, err := schema.Digest()
+	require.NoError(t, err)
+	writer, err := NewArchiveWriter(ctx, ArchiveWriterConfig{
+		RootID:               "root-composite-primary-key",
+		AttemptID:            "attempt-composite-primary-key",
+		Prefix:               "archive/root-composite-primary-key/attempt-composite-primary-key",
+		WriteID:              "write-composite-primary-key",
+		Schema:               schema,
+		SchemaDigest:         schemaDigest,
+		MaxRestoreChunkRows:  2,
+		MaxChunkLogicalBytes: 1 << 20,
+		MaxPhysicalBytes:     archiveTestMaxPhysicalBytes,
+	}, store, &testArchiveSideEffectGuard{durable: true})
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	// The internal composite-key vector is deliberately placed between user
+	// columns. The Archive payload must follow the frozen user Schema rather
+	// than depend on hidden columns being appended at the end of the Batch.
+	value := batch.New([]string{"id", catalog.CPrimaryKeyColName, "name"})
+	defer value.Clean(mp)
+	value.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	value.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	nameType := types.T_varchar.ToType()
+	nameType.Width = 1024
+	value.Vecs[2] = vector.NewVec(nameType)
+	require.NoError(t, vector.AppendFixed(value.Vecs[0], int64(7), false, mp))
+	require.NoError(t, vector.AppendBytes(value.Vecs[1], []byte("opaque-composite-key"), false, mp))
+	require.NoError(t, vector.AppendBytes(value.Vecs[2], []byte("seven"), false, mp))
+	value.SetRowCount(1)
+
+	require.NoError(t, writer.WriteBatch(ctx, value, nil))
+	manifest, _, err := writer.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), manifest.RowCount)
+	rows, _, err := ReadArchiveChunk(ctx, store, manifest, 0, 2, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Len(t, rows[0], 2)
+	require.Equal(t, int64(7), rows[0][0].Value)
+	require.Equal(t, []byte("seven"), rows[0][1].Value)
 }
 
 func TestArchiveWriterFreezesAndReadbackVerifiesLifecycleRange(t *testing.T) {
