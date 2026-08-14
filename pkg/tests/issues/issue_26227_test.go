@@ -287,7 +287,7 @@ func waitForViewMetadataRevalidation(t *testing.T, ctx context.Context, db *sql.
 	require.Eventually(t, func() bool {
 		var count int
 		err := db.QueryRowContext(ctx,
-			"select count(*) from mo_catalog.mo_view_dependencies where target_relation_id=0 "+
+			"select count(*) from mo_catalog.mo_view_dependencies where account_id=0 and target_relation_id=0 "+
 				"and dependency_ordinal=0 and source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')").
 			Scan(&count)
 		return err == nil && count == 0
