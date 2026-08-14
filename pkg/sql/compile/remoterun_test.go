@@ -481,6 +481,11 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 			TargetUpdateCtxIdx: 1,
 		}},
 	}
+	affectedRowsMultiUpdate := &multi_update.MultiUpdate{
+		MultiUpdateCtx: []*multi_update.MultiUpdateCtx{{
+			AffectedRowsCols: []int{9, 10},
+		}},
+	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, nil))
@@ -529,6 +534,34 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 21")
+	affectedRowsPipeline := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.MultiUpdate),
+			MultiUpdate: &pipeline.MultiUpdate{
+				UpdateCtxList: []*planpb.UpdateCtx{{
+					AffectedRowsCols: []planpb.ColRef{{ColPos: 9}, {ColPos: 10}},
+				}},
+			},
+		}},
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline),
+		"requires MORPC protocol version 21")
+	combinedPipeline := &pipeline.Pipeline{
+		InstructionList: append(targetAwarePipeline.Children[0].InstructionList, affectedRowsPipeline.InstructionList...),
+	}
+	require.ErrorContains(t,
+		validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline),
+		"requires MORPC protocol version 21",
+		"a preceding v20-compatible operator must not hide a later v21 field")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, _, err = convertToPipelineInstruction(affectedRowsMultiUpdate, proc, ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, affectedRowsPipeline))
+	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, combinedPipeline))
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {

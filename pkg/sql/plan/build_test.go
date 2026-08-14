@@ -8075,9 +8075,9 @@ func TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate(t *testing.T) 
 				}
 			}
 			require.Equal(t, 1, aggregates,
-				"every prefix must reuse the same physical-row contribution aggregate")
-			require.Less(t, len(logicPlan.GetQuery().Nodes), 30*aliasCount,
-				"planner node growth must remain linear in the alias count")
+				"every greedy stage must reuse the same physical-row contribution aggregate")
+			require.Less(t, len(logicPlan.GetQuery().Nodes), 40*aliasCount,
+				"greedy candidate/fallback stages must remain linear in the alias count")
 		})
 	}
 }

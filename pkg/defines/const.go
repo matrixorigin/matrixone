@@ -56,7 +56,8 @@ const (
 	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
 	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
 	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
-	MORPCLatestVersion       = MORPCVersion20
+	MORPCVersion21     int64 = 21 // per-target affected-row selectors for repeated physical UPDATE targets
+	MORPCLatestVersion       = MORPCVersion21
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
