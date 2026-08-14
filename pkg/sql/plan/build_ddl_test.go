@@ -269,6 +269,8 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -293,6 +295,51 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name: "latin1 column",
+			sql: "create table t(v varchar(8) character set latin1 " +
+				"collate latin1_swedish_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "ascii column case insensitive spelling",
+			sql: "create table t(v varchar(8) character set ASCII " +
+				"collate ASCII_GENERAL_CI)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "latin1 table default",
+			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "ascii table default",
+			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
 		})
 	}
 }
