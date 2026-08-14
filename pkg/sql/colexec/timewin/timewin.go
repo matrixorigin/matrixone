@@ -732,12 +732,24 @@ func appendTimestampBoundaryVector(
 	values []types.Datetime,
 	typ plan.Type,
 	proc *process.Process,
-) (*vector.Vector, error) {
+) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	vec := vector.NewVec(tsType)
+	vec = vector.NewOffHeapVecWithType(tsType)
+	defer func() {
+		if err != nil {
+			vec.Free(proc.Mp())
+			vec = nil
+		}
+	}()
 	for _, value := range values {
-		if err := vector.AppendFixed(vec, types.Timestamp(value), false, proc.Mp()); err != nil {
-			return nil, err
+		tsValue := types.Timestamp(value)
+		if !timestampIntervalBoundaryInDomain(tsValue) {
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+		} else {
+			err = vector.AppendFixed(vec, tsValue, false, proc.Mp())
+		}
+		if err != nil {
+			return vec, err
 		}
 	}
 	return vec, nil
@@ -749,35 +761,45 @@ func appendTimestampIntervalBoundaryVector(
 	end bool,
 	typ plan.Type,
 	proc *process.Process,
-) (*vector.Vector, error) {
+) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	vec := vector.NewVec(tsType)
+	vec = vector.NewOffHeapVecWithType(tsType)
+	defer func() {
+		if err != nil {
+			vec.Free(proc.Mp())
+			vec = nil
+		}
+	}()
 	values := vector.MustFixedColWithTypeCheck[types.Timestamp](starts)
 	for i, value := range values {
 		if starts.IsNull(uint64(i)) {
-			if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
-				return nil, err
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+			if err != nil {
+				return vec, err
 			}
 			continue
 		}
 		if end && value != types.ZeroTimestamp {
 			boundary, ok := addTimestampIntervalBoundary(value, interval)
 			if !ok {
-				if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
-					return nil, err
+				err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+				if err != nil {
+					return vec, err
 				}
 				continue
 			}
 			value = boundary
 		}
 		if !timestampIntervalBoundaryInDomain(value) {
-			if err := vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp()); err != nil {
-				return nil, err
+			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
+			if err != nil {
+				return vec, err
 			}
 			continue
 		}
-		if err := vector.AppendFixed(vec, value, false, proc.Mp()); err != nil {
-			return nil, err
+		err = vector.AppendFixed(vec, value, false, proc.Mp())
+		if err != nil {
+			return vec, err
 		}
 	}
 	return vec, nil

@@ -610,6 +610,83 @@ func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	beforeMin := types.Datetime(int64(types.TimestampMinValue) - int64(types.MicroSecsPerSec))
+	afterMax := types.Datetime(int64(types.TimestampMaxValue) + 1)
+	values := []types.Datetime{
+		types.ZeroDatetime,
+		beforeMin,
+		types.Datetime(types.TimestampMinValue),
+		types.Datetime(types.TimestampMaxValue),
+		afterMax,
+	}
+
+	vec, err := appendTimestampBoundaryVector(values, typ, proc)
+	require.NoError(t, err)
+	require.False(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+	require.False(t, vec.IsNull(2))
+	require.False(t, vec.IsNull(3))
+	require.True(t, vec.IsNull(4))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		0,
+		types.TimestampMinValue,
+		types.TimestampMaxValue,
+		0,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](vec))
+
+	vec.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimestampBoundaryVectorsFreeOnAppendFailure(t *testing.T) {
+	const rows = 200_000
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	limited, err := mpool.NewMPool("timestamp-boundary-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", limited)
+	values := make([]types.Datetime, rows)
+	for i := range values {
+		values[i] = types.Datetime(types.TimestampMinValue)
+	}
+	_, err = appendTimestampBoundaryVector(values, typ, proc)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+	proc.Free()
+	mpool.DeleteMPool(limited)
+
+	startsMP := mpool.MustNewZero()
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	startValues := make([]types.Timestamp, rows)
+	for i := range startValues {
+		startValues[i] = types.TimestampMinValue
+	}
+	require.NoError(t, vector.AppendFixedList(starts, startValues, nil, startsMP))
+
+	limited, err = mpool.NewMPool("timestamp-interval-boundary-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	proc = testutil.NewProcessWithMPool(t, "", limited)
+	_, err = appendTimestampIntervalBoundaryVector(
+		starts,
+		types.Datetime(types.MicroSecsPerSec),
+		true,
+		typ,
+		proc,
+	)
+	require.Error(t, err)
+	require.Zero(t, limited.CurrNB())
+	proc.Free()
+	mpool.DeleteMPool(limited)
+
+	starts.Free(startsMP)
+	mpool.DeleteMPool(startsMP)
+}
+
 func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
