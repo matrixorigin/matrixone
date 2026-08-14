@@ -102,6 +102,51 @@ func TestTmpFileServiceInstancesOwnTheirRoots(t *testing.T) {
 	require.Equal(t, []byte{2}, secondData)
 }
 
+func TestAppFSRejectsEmptyFilePathWithoutRemovingAppRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	tmpFS, err := NewTestTmpFileService("tmp", root, time.Hour)
+	require.NoError(t, err)
+	t.Cleanup(func() { tmpFS.Close(ctx) })
+
+	appFS, err := tmpFS.GetOrCreateApp(&AppConfig{
+		Name: "app",
+		GCFn: func(string, FileService) (bool, error) {
+			return false, nil
+		},
+	})
+	require.NoError(t, err)
+	appRoot := filepath.Join(root, "app")
+	require.NoError(t, os.MkdirAll(appRoot, 0o755))
+
+	assertFileNotFound := func(operation string, err error) {
+		t.Helper()
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
+			"%s returned %v", operation, err)
+	}
+	assertFileNotFound("Read", appFS.Read(ctx, &IOVector{
+		FilePath: "",
+		Entries:  []IOEntry{{Size: -1}},
+	}))
+	assertFileNotFound("ReadCache", appFS.ReadCache(ctx, &IOVector{
+		FilePath: "",
+		Entries:  []IOEntry{{Size: -1}},
+	}))
+	assertFileNotFound("Write", appFS.Write(ctx, IOVector{
+		FilePath: "",
+		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+	}))
+	_, err = appFS.StatFile(ctx, "")
+	assertFileNotFound("StatFile", err)
+	assertFileNotFound("PrefetchFile", appFS.PrefetchFile(ctx, ""))
+	assertFileNotFound("Delete", appFS.Delete(ctx, ""))
+	assertFileNotFound("Delete dot root alias", appFS.Delete(ctx, "."))
+	_, err = os.Stat(appRoot)
+	require.NoError(t, err)
+	_, err = SortedList(appFS.List(ctx, ""))
+	require.NoError(t, err, "List must keep accepting the app root")
+}
+
 func TestTmpFileServiceConcurrentCloseHasOneOwner(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	storage := &errorListFileService{name: "tmp"}

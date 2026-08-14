@@ -106,6 +106,10 @@ func TestS3FSCopyObject(t *testing.T) {
 	copied, err = noCopier.CopyObject(ctx, src, "objects/a", "objects/b")
 	require.NoError(t, err)
 	require.False(t, copied)
+	_, err = noCopier.CopyObject(ctx, src, "", "objects/b")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	_, err = noCopier.CopyObject(ctx, src, "objects/a", "")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 
 	dstStorage.exists = true
 	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
@@ -130,6 +134,10 @@ func TestS3FSCopyObject(t *testing.T) {
 	require.Error(t, err)
 	_, err = dst.CopyObject(ctx, src, "objects/a", "~~")
 	require.Error(t, err)
+	_, err = dst.CopyObject(ctx, src, "", "objects/b")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	_, err = dst.CopyObject(ctx, src, "objects/a", "")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
 
 func TestObjectCopyCapabilityFallbacks(t *testing.T) {

@@ -103,7 +103,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	default:
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, l.name)
+	path, err := parseFilePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -379,7 +379,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (l *LocalETLFS) ReadCache(ctx context.Context, vector *IOVector) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(vector.FilePath, l.name)
+	return err
 }
 
 func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
@@ -389,7 +393,7 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +419,11 @@ func (l *LocalETLFS) StatFile(ctx context.Context, filePath string) (*DirEntry, 
 }
 
 func (l *LocalETLFS) PrefetchFile(ctx context.Context, filePath string) error {
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, err := parseFilePathAtService(filePath, l.name)
+	return err
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
@@ -496,7 +504,7 @@ func (l *LocalETLFS) Delete(ctx context.Context, filePaths ...string) error {
 }
 
 func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -534,7 +542,7 @@ func (l *LocalETLFS) NewReader(ctx context.Context, filePath string) (io.ReadClo
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +576,7 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 	default:
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -711,7 +719,10 @@ func (l *LocalETLFS) ETLCompatible() {}
 var _ MutableFileService = new(LocalETLFS)
 
 func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	path, err := ParsePathAtService(filePath, l.name)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -800,7 +811,14 @@ func (l *LocalETLFSMutator) Close() error {
 
 // open for read and write, raw os.File API.
 func (l *LocalETLFS) EnsureDir(ctx context.Context, filePath string) error {
-	return l.ensureDir(l.toNativeFilePath(filePath))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return err
+	}
+	return l.ensureDir(l.toNativeFilePath(path.File))
 }
 
 func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
@@ -809,7 +827,7 @@ func (l *LocalETLFS) OpenFile(ctx context.Context, filePath string) (*os.File, e
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -824,7 +842,7 @@ func (l *LocalETLFS) CreateFile(ctx context.Context, filePath string) (*os.File,
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
@@ -839,7 +857,7 @@ func (l *LocalETLFS) RemoveFile(ctx context.Context, filePath string) error {
 		return err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
@@ -854,7 +872,7 @@ func (l *LocalETLFS) CreateAndRemoveFile(ctx context.Context, filePath string) (
 		return nil, err
 	}
 
-	path, err := ParsePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
