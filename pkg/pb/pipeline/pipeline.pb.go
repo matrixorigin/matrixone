@@ -2152,6 +2152,7 @@ type HashJoin struct {
 	RightTypes             []plan.Type               `protobuf:"bytes,13,rep,name=right_types,json=rightTypes,proto3" json:"right_types"`
 	JoinMapTag             int32                     `protobuf:"varint,14,opt,name=join_map_tag,json=joinMapTag,proto3" json:"join_map_tag,omitempty"`
 	RuntimeFilterBuildList []*plan.RuntimeFilterSpec `protobuf:"bytes,15,rep,name=runtime_filter_build_list,json=runtimeFilterBuildList,proto3" json:"runtime_filter_build_list,omitempty"`
+	AsofRightCol           int32                     `protobuf:"varint,16,opt,name=asof_right_col,json=asofRightCol,proto3" json:"asof_right_col,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{}                  `json:"-"`
 	XXX_unrecognized       []byte                    `json:"-"`
 	XXX_sizecache          int32                     `json:"-"`
@@ -2183,6 +2184,13 @@ func (m *HashJoin) XXX_Merge(src proto.Message) {
 }
 func (m *HashJoin) XXX_Size() int {
 	return m.ProtoSize()
+}
+
+func (m *HashJoin) GetAsofRightCol() int32 {
+	if m != nil {
+		return m.AsofRightCol
+	}
+	return 0
 }
 func (m *HashJoin) XXX_DiscardUnknown() {
 	xxx_messageInfo_HashJoin.DiscardUnknown(m)
@@ -8626,6 +8634,11 @@ func (m *HashJoin) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.AsofRightCol != 0 {
+		i = encodeVarintPipeline(dAtA, i, uint64(m.AsofRightCol))
+		i--
+		dAtA[i] = 0x10
+	}
 	if len(m.RuntimeFilterBuildList) > 0 {
 		for iNdEx := len(m.RuntimeFilterBuildList) - 1; iNdEx >= 0; iNdEx-- {
 			{
@@ -13814,6 +13827,9 @@ func (m *HashJoin) ProtoSize() (n int) {
 			l = e.ProtoSize()
 			n += 1 + l + sovPipeline(uint64(l))
 		}
+	}
+	if m.AsofRightCol != 0 {
+		n += 2 + sovPipeline(uint64(m.AsofRightCol))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -21235,6 +21251,25 @@ func (m *HashJoin) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.JoinMapTag |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 16:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AsofRightCol", wireType)
+			}
+			m.AsofRightCol = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPipeline
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AsofRightCol |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

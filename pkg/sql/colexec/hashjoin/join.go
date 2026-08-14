@@ -896,6 +896,7 @@ func (ctr *container) findAsofPredecessor(
 	ordered, ok := ctr.asofIndexes[groupKey]
 	if ok && !ctr.asofIndexValid(hashJoin, ordered) {
 		ctr.cleanAsofIndexes(proc)
+		ctr.asofIndexes = make(map[uint64][]int32)
 		ok = false
 	}
 	if !ok {
