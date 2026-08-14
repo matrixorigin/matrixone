@@ -36,6 +36,9 @@ type MemoryCacheStats struct {
 type MemoryCacheAllocator interface {
 	Allocator
 	Stats() (MemoryCacheStats, error)
+	// Reclaim purges unused native pages after an explicit cache memory
+	// reclamation boundary. It must not be called on ordinary release paths.
+	Reclaim() error
 }
 
 // NewMemoryCacheAllocator creates the production allocator for one isolated

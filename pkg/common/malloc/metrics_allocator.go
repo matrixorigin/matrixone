@@ -40,6 +40,10 @@ type MetricsAllocator[U Allocator] struct {
 	inuseObjects    ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 
 	updating atomic.Bool
+	// dirty records metric mutations which arrive while a refresh is publishing.
+	// It closes the interval between draining the sharded counters and clearing
+	// updating, where an update could otherwise be left unscheduled forever.
+	dirty atomic.Bool
 }
 
 type metricsDeallocatorArgs struct {
@@ -73,7 +77,7 @@ func NewMetricsAllocator[U Allocator](
 			func(hints Hints, args *metricsDeallocatorArgs) {
 				ret.inuseBytes.Add(-int64(args.size))
 				ret.inuseObjects.Add(-1)
-				ret.triggerUpdate()
+				ret.recordUpdate()
 			},
 		),
 	}
@@ -103,7 +107,7 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	m.inuseBytes.Add(int64(backingSize))
 	m.allocateObjects.Add(1)
 	m.inuseObjects.Add(1)
-	m.triggerUpdate()
+	m.recordUpdate()
 
 	return ptr, ChainDeallocator(
 		dec,
@@ -115,48 +119,61 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 
 const metricsAllocatorUpdateWindow = time.Millisecond * 100
 
+func (m *MetricsAllocator[U]) recordUpdate() {
+	m.dirty.Store(true)
+	m.triggerUpdate()
+}
+
 func (m *MetricsAllocator[U]) triggerUpdate() {
 	if m.updating.CompareAndSwap(false, true) {
-		time.AfterFunc(metricsAllocatorUpdateWindow, func() {
+		time.AfterFunc(metricsAllocatorUpdateWindow, m.refreshMetrics)
+	}
+}
 
-			if m.allocateBytesCounter != nil {
-				var n uint64
-				m.allocateBytes.Each(func(v *atomic.Uint64) {
-					n += v.Swap(0)
-				})
-				m.allocateBytesCounter.Add(float64(n))
-			}
+func (m *MetricsAllocator[U]) refreshMetrics() {
+	// Mutations before this store are included in this refresh. Mutations after
+	// it either set dirty for the rearm below or schedule their own refresh.
+	m.dirty.Store(false)
 
-			if m.inuseBytesGauge != nil || m.absoluteInuseGauge != nil {
-				var n int64
-				m.inuseBytes.Each(func(v *atomic.Int64) {
-					n += v.Swap(0)
-				})
-				if m.inuseBytesGauge != nil {
-					m.inuseBytesGauge.Add(float64(n))
-				}
-				if m.absoluteInuseGauge != nil {
-					m.absoluteInuseGauge.Add(float64(n))
-				}
-			}
-
-			if m.allocateObjectsCounter != nil {
-				var n uint64
-				m.allocateObjects.Each(func(v *atomic.Uint64) {
-					n += v.Swap(0)
-				})
-				m.allocateObjectsCounter.Add(float64(n))
-			}
-
-			if m.inuseObjectsGauge != nil {
-				var n int64
-				m.inuseObjects.Each(func(v *atomic.Int64) {
-					n += v.Swap(0)
-				})
-				m.inuseObjectsGauge.Add(float64(n))
-			}
-
-			m.updating.Store(false)
+	if m.allocateBytesCounter != nil {
+		var n uint64
+		m.allocateBytes.Each(func(v *atomic.Uint64) {
+			n += v.Swap(0)
 		})
+		m.allocateBytesCounter.Add(float64(n))
+	}
+
+	if m.inuseBytesGauge != nil || m.absoluteInuseGauge != nil {
+		var n int64
+		m.inuseBytes.Each(func(v *atomic.Int64) {
+			n += v.Swap(0)
+		})
+		if m.inuseBytesGauge != nil {
+			m.inuseBytesGauge.Add(float64(n))
+		}
+		if m.absoluteInuseGauge != nil {
+			m.absoluteInuseGauge.Add(float64(n))
+		}
+	}
+
+	if m.allocateObjectsCounter != nil {
+		var n uint64
+		m.allocateObjects.Each(func(v *atomic.Uint64) {
+			n += v.Swap(0)
+		})
+		m.allocateObjectsCounter.Add(float64(n))
+	}
+
+	if m.inuseObjectsGauge != nil {
+		var n int64
+		m.inuseObjects.Each(func(v *atomic.Int64) {
+			n += v.Swap(0)
+		})
+		m.inuseObjectsGauge.Add(float64(n))
+	}
+
+	m.updating.Store(false)
+	if m.dirty.Load() {
+		m.triggerUpdate()
 	}
 }

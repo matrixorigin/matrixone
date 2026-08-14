@@ -26,8 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 type MemCache struct {
@@ -47,9 +49,8 @@ type MemCache struct {
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
 
-	capacityMu      sync.Mutex
-	reservedBytes   int64
-	capacityChanged chan struct{}
+	capacityMu    sync.Mutex
+	reservedBytes int64
 }
 
 // memoryCacheReservation accounts for an allocated buffer until FIFO insertion
@@ -246,7 +247,6 @@ func newMemCacheWithMetricScope(
 		arenaAllocator:    arenaAllocator,
 		allocatorGauges:   allocatorGauges,
 		metricKey:         memoryCacheMetricKey{scope: metricScope, name: name},
-		capacityChanged:   make(chan struct{}),
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -323,7 +323,6 @@ func newMemCacheWithMetricScope(
 
 		// release
 		value.Release()
-		ret.signalCapacityChanged()
 		ret.refreshAllocatorMetrics(false)
 
 		// callbacks
@@ -437,19 +436,7 @@ func (m *MemCache) releaseReservedBytes(bytes int64) {
 		m.capacityMu.Unlock()
 		panic("memory cache reservation underflow")
 	}
-	m.signalCapacityChangedLocked()
 	m.capacityMu.Unlock()
-}
-
-func (m *MemCache) signalCapacityChanged() {
-	m.capacityMu.Lock()
-	m.signalCapacityChangedLocked()
-	m.capacityMu.Unlock()
-}
-
-func (m *MemCache) signalCapacityChangedLocked() {
-	close(m.capacityChanged)
-	m.capacityChanged = make(chan struct{})
 }
 
 func (m *MemCache) refreshAllocatorMetrics(force bool) {
@@ -696,8 +683,8 @@ func (m *MemCache) admitCacheData(ctx context.Context, data fscache.Data) fscach
 }
 
 func (m *MemCache) Flush(ctx context.Context) {
-	m.cache.Flush(ctx)
-	m.refreshAllocatorMetrics(true)
+	m.cache.EvictToTargetWithWait(ctx, 0)
+	m.reclaimAllocator()
 }
 
 func (m *MemCache) DeletePaths(
@@ -728,12 +715,21 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 		percent = 100
 	}
 	target := m.cache.Capacity() * percent / 100
-	return m.EvictToTarget(ctx, target)
+	used := m.EvictToTarget(ctx, target)
+	m.reclaimAllocator()
+	return used
 }
 
 func (m *MemCache) Close(ctx context.Context) {
 	m.closed.Store(true)
 	m.Flush(ctx)
 	allMemoryCaches.Delete(m)
+	m.refreshAllocatorMetrics(true)
+}
+
+func (m *MemCache) reclaimAllocator() {
+	if err := m.arenaAllocator.Reclaim(); err != nil {
+		logutil.Warn("reclaim memory cache allocator", zap.Error(err))
+	}
 	m.refreshAllocatorMetrics(true)
 }

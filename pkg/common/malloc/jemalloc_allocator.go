@@ -82,6 +82,15 @@ mo_jemalloc_arena_resident(unsigned arena, size_t *value) {
 }
 
 static int
+mo_jemalloc_arena_purge(unsigned arena) {
+	char name[96];
+	if (snprintf(name, sizeof(name), "arena.%u.purge", arena) >= (int)sizeof(name)) {
+		return EINVAL;
+	}
+	return je_mallctl(name, NULL, NULL, NULL, 0);
+}
+
+static int
 mo_jemalloc_read_stats(unsigned arena, mo_jemalloc_stats *stats) {
 	uint64_t epoch = 1;
 	size_t page = 0;
@@ -226,6 +235,15 @@ func (j *JemallocAllocator) Stats() (MemoryCacheStats, error) {
 		Dirty:     uint64(stats.dirty),
 		Muzzy:     uint64(stats.muzzy),
 	}, nil
+}
+
+// Reclaim purges this arena's unused dirty pages. Callers use it only after an
+// explicit cache-eviction boundary so normal cache turnover remains hot.
+func (j *JemallocAllocator) Reclaim() error {
+	if err := C.mo_jemalloc_arena_purge(C.uint(j.arena)); err != 0 {
+		return moerr.NewInternalErrorNoCtxf("purge jemalloc arena %d: %d", j.arena, int(err))
+	}
+	return nil
 }
 
 // nativeResident reads jemalloc's arena resident statistic directly. It keeps

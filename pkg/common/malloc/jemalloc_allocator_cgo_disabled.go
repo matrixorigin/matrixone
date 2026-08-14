@@ -41,3 +41,7 @@ func (*JemallocAllocator) Arena() uint { return 0 }
 func (*JemallocAllocator) Stats() (MemoryCacheStats, error) {
 	return MemoryCacheStats{}, moerr.NewNotSupportedNoCtx("memory cache jemalloc allocator requires cgo")
 }
+
+func (*JemallocAllocator) Reclaim() error {
+	return moerr.NewNotSupportedNoCtx("memory cache jemalloc allocator requires cgo")
+}

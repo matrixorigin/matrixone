@@ -39,6 +39,16 @@ func requireDataCacheSet(t *testing.T, cache fscache.DataCache, ctx context.Cont
 	require.NoError(t, err)
 }
 
+type reclaimTrackingAllocator struct {
+	malloc.MemoryCacheAllocator
+	reclaims atomic.Int64
+}
+
+func (a *reclaimTrackingAllocator) Reclaim() error {
+	a.reclaims.Add(1)
+	return nil
+}
+
 func TestMemCacheLeak(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
@@ -963,6 +973,34 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 	ret := EvictMemoryCachesToCapacityPercent(ctx, 50)
 	assert.Equal(t, int64(5), ret["test-target-evict"])
 	assert.LessOrEqual(t, cache.cache.Used(), int64(5))
+}
+
+func TestMemoryCacheExplicitEvictionReclaimsAllocator(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(10), nil, nil, "")
+	defer cache.Close(ctx)
+
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+
+	cache.EvictToCapacityPercent(ctx, 50)
+	assert.Equal(t, int64(1), tracking.reclaims.Load())
+
+	cache.Flush(ctx)
+	assert.Equal(t, int64(2), tracking.reclaims.Load())
+}
+
+func TestMemoryCacheReservationReleaseDoesNotAllocate(t *testing.T) {
+	cache := NewMemCache(fscache.ConstCapacity(1), nil, nil, "")
+	defer cache.Close(context.Background())
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		cache.capacityMu.Lock()
+		cache.reservedBytes = 1
+		cache.capacityMu.Unlock()
+		cache.releaseReservedBytes(1)
+	})
+	assert.Zero(t, allocations)
 }
 
 func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {

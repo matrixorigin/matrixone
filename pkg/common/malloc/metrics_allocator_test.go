@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,34 @@ import (
 
 type cappedTestAllocator struct {
 	capacity int
+}
+
+type blockingGauge struct {
+	prometheus.Gauge
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *blockingGauge) blockNextAdd() (<-chan struct{}, func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.started = make(chan struct{})
+	g.release = make(chan struct{})
+	release := g.release
+	return g.started, func() { close(release) }
+}
+
+func (g *blockingGauge) Add(v float64) {
+	g.mu.Lock()
+	started, release := g.started, g.release
+	g.started, g.release = nil, nil
+	g.mu.Unlock()
+	if started != nil {
+		close(started)
+		<-release
+	}
+	g.Gauge.Add(v)
 }
 
 func (a cappedTestAllocator) Allocate(size uint64, _ Hints) ([]byte, Deallocator, error) {
@@ -71,6 +100,53 @@ func TestMetricsAllocatorAggregatesAbsoluteInuseGauge(t *testing.T) {
 
 	secondDec.Deallocate()
 	assertGaugeValue(t, gauge, 0)
+}
+
+func TestMetricsAllocatorRefreshRearmsAfterAllocateDuringPublish(t *testing.T) {
+	base := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_allocate_during_publish"})
+	gauge := &blockingGauge{Gauge: base}
+	allocator := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, gauge, nil, nil, nil)
+
+	started, release := gauge.blockNextAdd()
+	_, first, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	<-started
+	_, second, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	release()
+
+	assertGaugeValue(t, base, 200)
+	first.Deallocate()
+	second.Deallocate()
+	assertGaugeValue(t, base, 0)
+}
+
+func TestMetricsAllocatorRefreshRearmsAfterReleaseDuringPublish(t *testing.T) {
+	base := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_release_during_publish"})
+	gauge := &blockingGauge{Gauge: base}
+	allocator := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, gauge, nil, nil, nil)
+
+	_, first, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	assertGaugeValue(t, base, 100)
+
+	started, release := gauge.blockNextAdd()
+	_, second, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	<-started
+	first.Deallocate()
+	release()
+
+	assertGaugeValue(t, base, 100)
+	second.Deallocate()
+	assertGaugeValue(t, base, 0)
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertGaugeValue(t *testing.T, gauge prometheus.Gauge, want float64) {

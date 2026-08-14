@@ -96,3 +96,34 @@ func TestJemallocAllocatorUsesIndependentArenas(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, first.Arena(), second.Arena())
 }
+
+func TestJemallocAllocatorReclaimPurgesUnusedPages(t *testing.T) {
+	allocator, err := NewJemallocAllocator()
+	require.NoError(t, err)
+
+	const allocationSize = 512 << 10
+	const allocationCount = 64
+	deallocators := make([]Deallocator, 0, allocationCount)
+	for range allocationCount {
+		buf, dec, err := allocator.Allocate(allocationSize, NoHints)
+		require.NoError(t, err)
+		for offset := 0; offset < len(buf); offset += 4096 {
+			buf[offset] = 1
+		}
+		deallocators = append(deallocators, dec)
+	}
+	for _, dec := range deallocators {
+		dec.Deallocate()
+	}
+
+	before, err := allocator.Stats()
+	require.NoError(t, err)
+	require.Zero(t, before.Allocated)
+	require.Greater(t, before.Dirty, uint64(0))
+
+	require.NoError(t, allocator.Reclaim())
+	after, err := allocator.Stats()
+	require.NoError(t, err)
+	require.Zero(t, after.Dirty)
+	require.LessOrEqual(t, after.Resident, before.Resident)
+}
