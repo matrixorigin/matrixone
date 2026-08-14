@@ -158,14 +158,14 @@ func TestConstructTableCloneUsesCopiedStateForFreshClone(t *testing.T) {
 		TblId:          7,
 		DbName:         "db-name",
 		Name:           "t`name",
-		AutoIncrOffset: 999,
+		AutoIncrOffset: 1999,
 		Cols: []*plan.ColDef{
 			{ColId: 1, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{ColId: 11, Name: "id`col", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 		},
 	}
 	dstDef := &plan.TableDef{
-		AutoIncrOffset: 1999,
+		AutoIncrOffset: 999,
 		Cols: []*plan.ColDef{
 			{ColId: 0, Name: "id`col", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
 			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
