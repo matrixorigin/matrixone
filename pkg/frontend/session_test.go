@@ -1028,6 +1028,79 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
+func TestSessionTempTableTransactionJournal(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("statement rollback restores only that statement", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTable("db", "existing", "txn", "stmt-2")
+
+		ses.rollbackTempTableStatement("txn", "stmt-2")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		realName, ok = ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+	})
+
+	t.Run("transaction rollback restores its original aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTableByRealName("real-existing", "txn", "stmt-2")
+		ses.commitTempTableStatement("txn", "stmt-2")
+
+		ses.rollbackTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		_, ok = ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction commit preserves its aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt")
+		ses.commitTempTableStatement("txn", "stmt")
+
+		ses.commitTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction generations restore only aliases they own", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "first", "real-first", "txn-1", "stmt-1")
+		ses.addTempTable("db", "second", "real-second", "txn-2", "stmt-2")
+		ses.commitTempTableStatement("txn-2", "stmt-2")
+		ses.commitTempTableTransaction("txn-2")
+
+		ses.rollbackTempTableTransaction("txn-1")
+
+		_, ok := ses.GetTempTable("db", "first")
+		require.False(t, ok)
+		realName, ok := ses.GetTempTable("db", "second")
+		require.True(t, ok)
+		require.Equal(t, "real-second", realName)
+	})
+}
+
 type sessionCloseExecutor struct {
 	sql  string
 	opts executor.Options

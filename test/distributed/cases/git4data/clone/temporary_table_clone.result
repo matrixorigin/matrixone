@@ -57,6 +57,63 @@ select count(*) from temp_dst;
 ➤ count(*)[-5,64,0]  𝄀
 2
 drop temporary table temp_dst;
+begin;
+create temporary table temp_txn_commit clone src;
+commit;
+select * from temp_txn_commit order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+drop temporary table temp_txn_commit;
+begin;
+create temporary table temp_txn_rollback clone src;
+select count(*) from temp_txn_rollback;
+➤ count(*)[-5,64,0]  𝄀
+2
+rollback;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+and relname like '__mo_tmp_%_clone_temp_target_temp_txn_rollback';
+➤ count(*)[-5,64,0]  𝄀
+0
+create temporary table temp_txn_rollback (id int primary key);
+insert into temp_txn_rollback values (21);
+select * from temp_txn_rollback;
+➤ id[4,32,0]  𝄀
+21
+drop temporary table temp_txn_rollback;
+create temporary table temp_txn_existing (id int primary key);
+insert into temp_txn_existing values (22);
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+rollback;
+select * from temp_txn_existing;
+➤ id[4,32,0]  𝄀
+22
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+commit;
+select * from temp_txn_existing;
+➤ id[4,32,0]  𝄀
+22
+drop temporary table temp_txn_existing;
+create temporary table temp_txn_drop clone src;
+begin;
+drop temporary table temp_txn_drop;
+rollback;
+select * from temp_txn_drop order by id;
+➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+begin;
+drop temporary table temp_txn_drop;
+commit;
+create temporary table temp_txn_drop (id int primary key);
+insert into temp_txn_drop values (23);
+select * from temp_txn_drop;
+➤ id[4,32,0]  𝄀
+23
+drop temporary table temp_txn_drop;
 create temporary table src clone src;
 insert into src values (3, 'temporary shadow');
 select * from src order by id;

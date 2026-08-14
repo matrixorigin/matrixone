@@ -51,6 +51,53 @@ create temporary table temp_dst clone src;
 select count(*) from temp_dst;
 drop temporary table temp_dst;
 
+-- Temporary aliases must follow the same statement and transaction lifecycle
+-- as their physical relations. COMMIT keeps a clone; ROLLBACK removes a newly
+-- created clone and restores a dropped one; IF NOT EXISTS never changes the
+-- pre-transaction mapping.
+begin;
+create temporary table temp_txn_commit clone src;
+commit;
+select * from temp_txn_commit order by id;
+drop temporary table temp_txn_commit;
+
+begin;
+create temporary table temp_txn_rollback clone src;
+select count(*) from temp_txn_rollback;
+rollback;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_temp_target'
+  and relname like '__mo_tmp_%_clone_temp_target_temp_txn_rollback';
+create temporary table temp_txn_rollback (id int primary key);
+insert into temp_txn_rollback values (21);
+select * from temp_txn_rollback;
+drop temporary table temp_txn_rollback;
+
+create temporary table temp_txn_existing (id int primary key);
+insert into temp_txn_existing values (22);
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+rollback;
+select * from temp_txn_existing;
+begin;
+create temporary table if not exists temp_txn_existing clone src;
+commit;
+select * from temp_txn_existing;
+drop temporary table temp_txn_existing;
+
+create temporary table temp_txn_drop clone src;
+begin;
+drop temporary table temp_txn_drop;
+rollback;
+select * from temp_txn_drop order by id;
+begin;
+drop temporary table temp_txn_drop;
+commit;
+create temporary table temp_txn_drop (id int primary key);
+insert into temp_txn_drop values (23);
+select * from temp_txn_drop;
+drop temporary table temp_txn_drop;
+
 -- The temporary destination may shadow its permanent source. The clone must
 -- write only to the generated physical destination and leave the source intact.
 create temporary table src clone src;
