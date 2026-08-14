@@ -36,7 +36,7 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272510), nil).Times(1)
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272510), nil).Times(2)
 
 	proc := testutil.NewProc(t)
 	const algoParams = `{"included_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}`
@@ -60,6 +60,17 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 						TableExist:         true,
 						Visible:            true,
 						IncludedColumns:    []string{"title", "category"},
+						Visible:            true,
+					},
+					{
+						IndexName:          "idx_vec_invisible",
+						Parts:              []string{"embedding"},
+						IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+						IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+						IndexAlgoParams:    algoParams,
+						IndexTableName:     "__mo_index_entries_idx_vec_invisible",
+						TableExist:         true,
+						IncludedColumns:    []string{"title", "category"},
 					},
 				},
 			},
@@ -73,7 +84,9 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	require.NotContains(t, header, catalog.IncludedColumns)
 	require.Contains(t, sql, sqlquote.String(algoParams))
 	require.Contains(t, sql, sqlquote.String(algoParams)+", 1, 0, ")
+	require.Contains(t, sql, sqlquote.String(algoParams)+", 0, 0, ")
 	require.Contains(t, sql, "'__mo_index_entries_idx_vec')")
+	require.Contains(t, sql, "'__mo_index_entries_idx_vec_invisible')")
 }
 
 func TestGenInsertMOIndexesSqlEscapesStringValues(t *testing.T) {

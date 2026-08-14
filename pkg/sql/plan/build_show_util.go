@@ -343,7 +343,6 @@ func constructCreateTableSQL(
 				if indexVisibilityKnown && !indexdef.Visible {
 					indexStr += " INVISIBLE"
 				}
-
 			} else {
 				rewriteIndexStr := ""
 				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
