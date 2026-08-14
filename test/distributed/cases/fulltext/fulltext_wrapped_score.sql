@@ -129,6 +129,13 @@ select id, round(match(body) against('hello'),3) as r from two order by id;  -- 
 select count(*) as n from two where match(body) against('hello') > 0.015;    -- and through an aggregate
 select count(*) as n from two where match(body) against('hello') > 0.9;
 
+-- with no ORDER BY the rows must come back by RELEVANCE, exactly as a bare MATCH does. The
+-- stream built for a wrapped-only match belongs to neither the filter nor the projection list,
+-- so the SORT above the join was built with NO keys: it sorted by nothing and handed back join
+-- order. Both selects below must return the same sequence.
+select id from two where match(body) against('hello') > 0.005;
+select id from two where match(body) against('hello');
+
 -- @separator:table
 -- @regex("Table Function on fulltext_index_scan", true)
 explain select id from two where match(body) against('hello') > 0.015;

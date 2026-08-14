@@ -156,6 +156,35 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			})
 		}
 
+		// A stream built for a WRAPPED-only match appears in neither list -- there is no bare
+		// MATCH position to record it against -- so `where match(...) > 0.5` reached this point
+		// with no keys at all and built a SORT node that sorts by nothing: wasted buffering,
+		// and rows in join order while the identical query with a bare MATCH comes back by
+		// relevance. Order by every stream's score, skipping those the loops above added.
+		ordered := make(map[int32]bool, len(orderByScore))
+		for _, id := range filter_node_ids {
+			ordered[id] = true
+		}
+		for i, id := range proj_node_ids {
+			if _, ok := eqmap[int32(i)]; !ok {
+				ordered[id] = true
+			}
+		}
+		for _, s := range served {
+			if s.nodeID < 0 || ordered[s.nodeID] {
+				continue
+			}
+			scoreExpr := builder.fullTextScoreColRef(s.nodeID)
+			if scoreExpr == nil {
+				continue
+			}
+			ordered[s.nodeID] = true
+			orderByScore = append(orderByScore, &OrderBySpec{
+				Expr: scoreExpr,
+				Flag: plan.OrderBySpec_DESC,
+			})
+		}
+
 		sortByID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{idxID},
