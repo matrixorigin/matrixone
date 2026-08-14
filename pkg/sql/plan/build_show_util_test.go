@@ -941,7 +941,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "stage://s/part-*.csv",
 		Option:   []string{"format", "csv", "write_file_pattern", pattern},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(p)
+	out := formatInfileExternalOptionsForShowCreate(p, "")
 	require.Contains(t, out, "'WRITE_FILE_PATTERN'='"+pattern+"'")
 	require.Contains(t, out, "'FILEPATH'='stage://s/part-*.csv'")
 	require.NotContains(t, out, "JSONDATA")
@@ -954,7 +954,7 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	roOut := formatInfileExternalOptionsForShowCreate(ro)
+	roOut := formatInfileExternalOptionsForShowCreate(ro, "")
 	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
 	require.Contains(t, roOut, "'FILEPATH'=''")
 	require.NotContains(t, roOut, "/local/path.csv")
@@ -969,8 +969,273 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	out = formatS3ExternalOptionsForShowCreate(s3)
+	out = formatS3ExternalOptionsForShowCreate(s3, "")
 	require.Contains(t, out, "'write_file_pattern'='"+pattern+"'")
+}
+
+func TestConstructCreateTableSQLPreservesExternalOptionsAcrossSQLModes(t *testing.T) {
+	const (
+		filepath = "stage://s\\dir\\part-*.csv"
+		pattern  = "stage://s\\dir\\part-\\U.csv"
+	)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "default"},
+		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: filepath,
+				Format:   tree.CSV,
+				Option: []string{
+					"filepath", filepath,
+					"format", tree.CSV,
+					"write_file_pattern", pattern,
+				},
+			}}
+			createSQL, err := json.Marshal(param)
+			require.NoError(t, err)
+			tableDef := &plan.TableDef{
+				Name:      "external_options_" + strings.ReplaceAll(tc.name, " ", "_"),
+				TableType: catalog.SystemExternalRel,
+				Createsql: string(createSQL),
+				Cols: []*plan.ColDef{{
+					Name:    "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+			t.Cleanup(rewritten.Free)
+
+			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.sqlMode)
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replayedStmt.Free)
+			replayed := replayedStmt.(*tree.CreateTable)
+			requireExternalOptionEqual(t, replayed.Param, "filepath", filepath)
+			requireExternalOptionEqual(t, replayed.Param, "write_file_pattern", pattern)
+
+			internal := rewritten.(*tree.CreateTable)
+			requireExternalOptionEqual(t, internal.Param, "filepath", filepath)
+			requireExternalOptionEqual(t, internal.Param, "write_file_pattern", pattern)
+		})
+	}
+}
+
+func requireExternalOptionEqual(t *testing.T, param *tree.ExternParam, key, want string) {
+	t.Helper()
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], key) {
+			require.Equal(t, want, param.Option[i+1])
+			return
+		}
+	}
+	require.Failf(t, "missing external option", "option %q not found in %#v", key, param.Option)
+}
+
+func TestConstructCreateTableSQLPreservesS3OptionsAcrossSQLModes(t *testing.T) {
+	const filepath = "stage://s\\dir\\part-*.csv"
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "default"},
+		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				ScanType: tree.S3,
+				Filepath: filepath,
+				Format:   tree.CSV,
+				Option:   []string{"filepath", filepath, "format", tree.CSV},
+			}}
+			createSQL, err := json.Marshal(param)
+			require.NoError(t, err)
+			tableDef := &plan.TableDef{
+				Name:      "s3_options_" + strings.ReplaceAll(tc.name, " ", "_"),
+				TableType: catalog.SystemExternalRel,
+				Createsql: string(createSQL),
+				Cols: []*plan.ColDef{{
+					Name:    "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+			t.Cleanup(rewritten.Free)
+
+			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.sqlMode)
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replayedStmt.Free)
+			replayed := replayedStmt.(*tree.CreateTable)
+			requireExternalOptionEqual(t, replayed.Param, "filepath", filepath)
+
+			internal := rewritten.(*tree.CreateTable)
+			requireExternalOptionEqual(t, internal.Param, "filepath", filepath)
+		})
+	}
+}
+
+func TestConstructCreateTableSQLPreservesMongoOptionsAcrossSQLModes(t *testing.T) {
+	const (
+		connection = "source\\primary"
+		path       = "metadata\\segment"
+	)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "default"},
+		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
+			createSQL := sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+				Connection:     connection,
+				Database:       "telemetry\\db",
+				Collection:     "measurements\\collection",
+				SchemaMode:     sqlmongodb.SchemaExplicit,
+				Conversion:     sqlmongodb.ConversionStrict,
+				MaxParallelism: 1,
+				Columns: []sqlmongodb.ColumnMapping{{
+					Name:       "device_id",
+					Path:       path,
+					TypeID:     int32(types.T_varchar),
+					Conversion: sqlmongodb.ConversionStrict,
+				}},
+			})
+			tableDef := &plan.TableDef{
+				Name:        "mongo_options_" + strings.ReplaceAll(tc.name, " ", "_"),
+				TableType:   catalog.SystemExternalRel,
+				FeatureFlag: features.MongoDBExternal,
+				Createsql:   createSQL,
+				Cols: []*plan.ColDef{{
+					Name:    "device_id",
+					Typ:     plan.Type{Id: int32(types.T_varchar), Width: 64},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+			t.Cleanup(rewritten.Free)
+
+			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.sqlMode)
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replayedStmt.Free)
+			replayed := replayedStmt.(*tree.CreateTable)
+			requireMongoOptionEqual(t, replayed.MongoDBParam, "connection", connection)
+			requireMongoColumnPathEqual(t, replayed, path)
+
+			internal := rewritten.(*tree.CreateTable)
+			requireMongoOptionEqual(t, internal.MongoDBParam, "connection", connection)
+			requireMongoColumnPathEqual(t, internal, path)
+		})
+	}
+}
+
+func requireMongoOptionEqual(t *testing.T, param *tree.MongoDBTableParam, key, want string) {
+	t.Helper()
+	for _, option := range param.Options {
+		if strings.EqualFold(string(option.Key), key) {
+			require.Equal(t, want, option.Val)
+			return
+		}
+	}
+	require.Failf(t, "missing MongoDB option", "option %q not found in %#v", key, param.Options)
+}
+
+func requireMongoColumnPathEqual(t *testing.T, stmt *tree.CreateTable, want string) {
+	t.Helper()
+	for _, def := range stmt.Defs {
+		column, ok := def.(*tree.ColumnTableDef)
+		if !ok {
+			continue
+		}
+		for _, attribute := range column.Attributes {
+			if path, ok := attribute.(*tree.AttributeMongoDBPath); ok {
+				require.Equal(t, want, path.Path)
+				return
+			}
+		}
+	}
+	require.Failf(t, "missing MongoDB column mapping", "path %q not found in %#v", want, stmt.Defs)
+}
+
+func TestConstructCreateTableSQLPreservesIcebergOptionsAcrossSQLModes(t *testing.T) {
+	const catalogName = "catalog\\primary"
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+	}{
+		{name: "default"},
+		{name: "no backslash escapes", sqlMode: "NO_BACKSLASH_ESCAPES"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.SetSqlModeOverride(tc.sqlMode)
+			tableDef := &plan.TableDef{
+				Name:      "iceberg_options_" + strings.ReplaceAll(tc.name, " ", "_"),
+				TableType: catalog.SystemExternalRel,
+				Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+					Namespace:  "sales\\region",
+					TableName:  "orders\\current",
+					DefaultRef: model.DefaultRefMain,
+					ReadMode:   model.ReadModeAppendOnly,
+					WriteMode:  model.WriteModeReadOnly,
+				}, catalogName),
+				Cols: []*plan.ColDef{{
+					Name:    "id",
+					Typ:     plan.Type{Id: int32(types.T_int32)},
+					Default: &plan.Default{NullAbility: true},
+				}},
+			}
+
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+			t.Cleanup(rewritten.Free)
+
+			replayedStmt, err := mysql.ParseOneWithSQLMode(t.Context(), showSQL, 1, tc.sqlMode)
+			require.NoError(t, err, showSQL)
+			t.Cleanup(replayedStmt.Free)
+			replayed := replayedStmt.(*tree.CreateTable)
+			requireIcebergOptionEqual(t, replayed.IcebergParam, "catalog", catalogName)
+
+			internal := rewritten.(*tree.CreateTable)
+			requireIcebergOptionEqual(t, internal.IcebergParam, "catalog", catalogName)
+		})
+	}
+}
+
+func requireIcebergOptionEqual(t *testing.T, param *tree.IcebergTableParam, key, want string) {
+	t.Helper()
+	for _, option := range param.Options {
+		if strings.EqualFold(string(option.Key), key) {
+			require.Equal(t, want, option.Val)
+			return
+		}
+	}
+	require.Failf(t, "missing Iceberg option", "option %q not found in %#v", key, param.Options)
 }
 
 // TestShowCreateExternalCommentRoundTrip: the CSV reader skips lines whose raw
@@ -984,7 +1249,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv", "comment", "#"},
 	}}
-	out := formatInfileExternalOptionsForShowCreate(ro)
+	out := formatInfileExternalOptionsForShowCreate(ro, "")
 	require.Contains(t, out, "'COMMENT'='#'")
 
 	// no comment option => no COMMENT key
@@ -993,7 +1258,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		Filepath: "/local/path.csv",
 		Option:   []string{"format", "csv"},
 	}}
-	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment), "COMMENT")
+	require.NotContains(t, formatInfileExternalOptionsForShowCreate(noComment, ""), "COMMENT")
 
 	// S3 read-only table with a comment marker
 	s3 := &tree.ExternParam{
@@ -1004,7 +1269,7 @@ func TestShowCreateExternalCommentRoundTrip(t *testing.T) {
 		},
 		ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "b"}},
 	}
-	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3), "'comment'='REM'")
+	require.Contains(t, formatS3ExternalOptionsForShowCreate(s3, ""), "'comment'='REM'")
 }
 
 // TestFormatStrInSingleQuotes: FIELDS/LINES values emitted by SHOW CREATE must
