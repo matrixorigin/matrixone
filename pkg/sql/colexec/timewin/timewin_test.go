@@ -528,6 +528,129 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	normalStart := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+
+	starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(starts, []types.Timestamp{
+		types.ZeroTimestamp,
+		normalStart,
+	}, nil, proc.Mp()))
+
+	wstarts, err := appendTimestampIntervalBoundaryVector(starts, 0, false, typ, proc)
+	require.NoError(t, err)
+	wends, err := appendTimestampIntervalBoundaryVector(starts, hour, true, typ, proc)
+	require.NoError(t, err)
+
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		normalStart,
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wstarts))
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(normalStart) + int64(hour)),
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](wends))
+
+	starts.Free(proc.Mp())
+	wstarts.Free(proc.Mp())
+	wends.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinTimestampIntervalPathBoundaryVectorsAcrossBatchesAndReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	base := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: hour,
+		Sliding:  hour,
+	}
+
+	makeInput := func(values []types.Timestamp, measures []int32) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
+		bat.Vecs[1] = testutil.MakeInt32Vector(measures, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	run := func(bats []*batch.Batch) (vals []int32, starts []types.Timestamp, ends []types.Timestamp) {
+		arg.Children = nil
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs(bats))
+		require.NoError(t, arg.Prepare(proc))
+		for {
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			if res.Batch == nil {
+				break
+			}
+			n := res.Batch.Vecs[0].Length()
+			vals = append(vals, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0])[:n]...)
+			starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+			ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		}
+		return vals, starts, ends
+	}
+
+	first := makeInput([]types.Timestamp{
+		types.ZeroTimestamp,
+		base,
+	}, []int32{7, 11})
+	second := makeInput([]types.Timestamp{
+		types.Timestamp(int64(base) + int64(hour)),
+	}, []int32{13})
+	vals, starts, ends := run([]*batch.Batch{first, second})
+	require.Equal(t, []int32{7, 11, 13}, vals)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		base,
+		types.Timestamp(int64(base) + int64(hour)),
+	}, starts)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(hour)),
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, ends)
+
+	arg.Reset(proc, false, nil)
+
+	third := makeInput([]types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, []int32{17, 19})
+	vals, starts, ends = run([]*batch.Batch{third})
+	require.Equal(t, []int32{17, 19}, vals)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(2*hour)),
+	}, starts)
+	require.Equal(t, []types.Timestamp{
+		types.ZeroTimestamp,
+		types.Timestamp(int64(base) + int64(3*hour)),
+	}, ends)
+
+	arg.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	third.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // singleAggInfo is the basic information of single column agg.
 type singleAggInfo struct {
 	aggID    int64

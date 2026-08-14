@@ -746,7 +746,7 @@ func appendTimestampIntervalBoundaryVector(
 			}
 			continue
 		}
-		if end {
+		if end && value != types.ZeroTimestamp {
 			value = types.Timestamp(int64(value) + int64(interval))
 		}
 		if err := vector.AppendFixed(vec, value, false, proc.Mp()); err != nil {
@@ -862,6 +862,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 }
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
+	ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
 	ctr.bat = batch.NewWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
@@ -970,6 +971,33 @@ func (ctr *container) freeFlushedAggVecs(mp *mpool.MPool) {
 		ctr.startVec = nil
 	}
 	ctr.startVecInBatch = false
+	if ctr.endVecInBatch && ctr.endVec != nil {
+		ctr.endVec.Free(mp)
+		ctr.endVec = nil
+	}
+	ctr.endVecInBatch = false
+}
+
+// freeIntervalTimestampBoundaryVecs releases only the TIMESTAMP boundary
+// vectors that calResForInterval allocates and attaches to the output batch.
+// The interval path also places borrowed aggregate and partition vectors in
+// ctr.bat, so cleaning the whole batch here would free buffers still owned by
+// the input-vector cache.
+func (ctr *container) freeIntervalTimestampBoundaryVecs(mp *mpool.MPool) {
+	if ctr.bat != nil {
+		for i, vec := range ctr.bat.Vecs {
+			if vec != nil && ((ctr.startVecInBatch && vec == ctr.startVec) || (ctr.endVecInBatch && vec == ctr.endVec)) {
+				ctr.bat.SetVector(int32(i), nil)
+			}
+		}
+	}
+
+	if ctr.startVecInBatch && ctr.startVec != nil {
+		ctr.startVec.Free(mp)
+		ctr.startVec = nil
+	}
+	ctr.startVecInBatch = false
+
 	if ctr.endVecInBatch && ctr.endVec != nil {
 		ctr.endVec.Free(mp)
 		ctr.endVec = nil

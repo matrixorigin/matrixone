@@ -194,13 +194,17 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	// The last flushed batch and the aggregate executors belong to the finished
 	// generation. In the sliding path the batch owns its aggregate prefix (the
 	// boundaries belong to their expression executors and the partition keys to
-	// partOut); in the interval path every vector is a buffer that outlives the
-	// batch, so only the reference is dropped. Aggregates cannot be rewound
-	// once Flush has run (see makeAggExecutors), so they are discarded here and
-	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
-	// the cursors back at zero the next generation reuses them from index 0.
+	// partOut). In the interval path the aggregate/partition vectors are
+	// buffered inputs that outlive the batch, while TIMESTAMP boundaries are
+	// batch-owned decorations and must be released before the batch reference is
+	// dropped. Aggregates cannot be rewound once Flush has run (see
+	// makeAggExecutors), so they are discarded here and rebuilt by Prepare. The
+	// tsVec/aggVec/partVec buffers stay allocated: with the cursors back at zero
+	// the next generation reuses them from index 0.
 	if timeWin.EndExpr == nil {
 		ctr.freeFlushedAggVecs(proc.Mp())
+	} else {
+		ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
 	}
 	ctr.bat = nil
 	ctr.freeAgg()
