@@ -15,6 +15,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	btoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -278,9 +280,40 @@ type MongoDBParameters struct {
 	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
 	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
 	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+
+	// enableConfigured preserves the distinction between an omitted enable
+	// value and an explicit operator opt-out. It is intentionally unexported so
+	// it is neither emitted as configuration nor included in config reporting.
+	enableConfigured bool
+}
+
+// UnmarshalTOML records whether enable was explicitly configured while leaving
+// the public configuration shape as a bool. The alias prevents recursive calls
+// back into this method when decoding the remaining MongoDB settings.
+func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("mongodb configuration must be a TOML table")
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainMongoDBParameters MongoDBParameters
+	decoded := plainMongoDBParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = MongoDBParameters(decoded)
+	_, parameters.enableConfigured = table["enable"]
+	return nil
 }
 
 func (parameters *MongoDBParameters) SetDefaultValues() {
+	if !parameters.enableConfigured {
+		parameters.Enable = true
+	}
 	if parameters.ConnectTimeout.Duration == 0 {
 		parameters.ConnectTimeout.Duration = 10 * time.Second
 	}

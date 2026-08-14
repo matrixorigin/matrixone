@@ -16,7 +16,9 @@ package config
 
 import (
 	"testing"
+	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +26,11 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	var parameters MongoDBParameters
 	parameters.SetDefaultValues()
 	require.NoError(t, parameters.Validate(t.Context()))
+	require.True(t, parameters.Enable)
+	require.False(t, parameters.EnablePerAccount)
+	require.False(t, parameters.AllowLoopback)
+	require.Empty(t, parameters.AllowedHostSuffixes)
+	require.Empty(t, parameters.AllowedCIDRs)
 	require.Positive(t, parameters.MaxConversionErrors)
 	require.InDelta(t, 0.10, parameters.MaxConversionErrorRate, 0)
 	parameters.MaxValueBytes = parameters.MaxBatchBytes + 1
@@ -31,6 +38,66 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	parameters.MaxValueBytes = 1
 	parameters.MaxConversionErrorRate = 1.1
 	require.Error(t, parameters.Validate(t.Context()))
+}
+
+func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "mongodb section omitted", input: "", wantEnabled: true},
+		{name: "enable omitted", input: "[mongodb]\nallow-loopback = false\n", wantEnabled: true},
+		{name: "explicit disable", input: "[mongodb]\nenable = false\n", wantEnabled: false},
+		{name: "explicit enable", input: "[mongodb]\nenable = true\n", wantEnabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var parameters struct {
+				MongoDB MongoDBParameters `toml:"mongodb"`
+			}
+			_, err := toml.Decode(tc.input, &parameters)
+			require.NoError(t, err)
+			parameters.MongoDB.SetDefaultValues()
+			require.Equal(t, tc.wantEnabled, parameters.MongoDB.Enable)
+			require.False(t, parameters.MongoDB.EnablePerAccount)
+			require.False(t, parameters.MongoDB.AllowLoopback)
+			require.Empty(t, parameters.MongoDB.AllowedHostSuffixes)
+			require.Empty(t, parameters.MongoDB.AllowedCIDRs)
+			require.NoError(t, parameters.MongoDB.Validate(t.Context()))
+
+			// Re-running defaulting models validation/reload paths and must not
+			// overwrite an explicit false value.
+			parameters.MongoDB.SetDefaultValues()
+			require.Equal(t, tc.wantEnabled, parameters.MongoDB.Enable)
+		})
+	}
+}
+
+func TestMongoDBParametersUnmarshalPreservesOtherSettings(t *testing.T) {
+	var parameters struct {
+		MongoDB MongoDBParameters `toml:"mongodb"`
+	}
+	_, err := toml.Decode(`[mongodb]
+enable = false
+enable-per-account = true
+allowed-accounts = [7, 8]
+allow-loopback = true
+allowed-host-suffixes = ["mongo.example"]
+allowed-cidrs = ["10.0.0.0/8"]
+connect-timeout = "3s"
+max-pool-size = 17
+`, &parameters)
+	require.NoError(t, err)
+	parameters.MongoDB.SetDefaultValues()
+	require.False(t, parameters.MongoDB.Enable)
+	require.True(t, parameters.MongoDB.EnablePerAccount)
+	require.Equal(t, []uint32{7, 8}, parameters.MongoDB.AllowedAccounts)
+	require.True(t, parameters.MongoDB.AllowLoopback)
+	require.Equal(t, []string{"mongo.example"}, parameters.MongoDB.AllowedHostSuffixes)
+	require.Equal(t, []string{"10.0.0.0/8"}, parameters.MongoDB.AllowedCIDRs)
+	require.Equal(t, 3*time.Second, parameters.MongoDB.ConnectTimeout.Duration)
+	require.Equal(t, uint64(17), parameters.MongoDB.MaxPoolSize)
+	require.NoError(t, parameters.MongoDB.Validate(t.Context()))
 }
 
 func TestMongoDBParametersRejectMalformedEndpointPolicy(t *testing.T) {
