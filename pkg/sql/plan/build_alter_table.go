@@ -153,9 +153,24 @@ func reconcileIndexVisibility(
 	tableDef *TableDef,
 	snapshot *Snapshot,
 ) error {
-	if len(tableDef.Indexes) == 0 {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
 		return nil
 	}
+
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
+		}
+	}
+	if catalog.IsSystemTable(tableID) || isSystemDatabase(tableDef.DbName) {
+		// System schemas are fixed-visible bootstrap metadata and intentionally
+		// have no mo_indexes rows. Their absence is not incomplete user metadata.
+		for _, indexDef := range tableDef.Indexes {
+			catalog.SetIndexVisibility(indexDef, true)
+		}
+		return nil
+	}
+
 	result, err := runSqlWithSnapshot(ctx, fmt.Sprintf(
 		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
 		tableID,
@@ -196,20 +211,23 @@ func reconcileIndexVisibility(
 		return readErr
 	}
 
-	for _, indexDef := range tableDef.Indexes {
-		if indexDef == nil {
-			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
-		}
+	resolvedVisibility := make([]bool, len(tableDef.Indexes))
+	for i, indexDef := range tableDef.Indexes {
 		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
 		if !ok {
-			// Keep the historical default-visible behavior if legacy or synthetic
-			// metadata has no matching catalog row. An explicit catalog value still
-			// wins, including false for an invisible index.
-			visible = true
+			return moerr.NewInternalErrorf(ctx.GetContext(),
+				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)
 		}
-		indexDef.Visible = visible
+		resolvedVisibility[i] = visible
+	}
+	for i, indexDef := range tableDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, resolvedVisibility[i])
 	}
 	return nil
+}
+
+func isSystemDatabase(dbName string) bool {
+	return slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName))
 }
 
 func autoIncrementValueToOffset(value uint64) uint64 {
@@ -396,7 +414,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 
 	createTmpDdl, _, err := constructCreateTableSQL(
-		cctx, copyTableDef, snapshot, true, nil, true, true,
+		cctx, copyTableDef, snapshot, true, nil, true,
 	)
 	if err != nil {
 		return nil, err
