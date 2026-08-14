@@ -246,11 +246,11 @@ func TestColumnWindowSpillPathIsAnonymous(t *testing.T) {
 
 func TestLegacyColumnDecoderMatchAndFailurePaths(t *testing.T) {
 	var output bytes.Buffer
-	// One literal followed by a three-byte match at offset one.
+	// One literal followed by the minimum four-byte match at offset one.
 	require.NoError(t, decodeLegacyLZ4Block(
-		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00}), &output, 4,
+		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00}), &output, 5,
 	))
-	require.Equal(t, "aaaa", output.String())
+	require.Equal(t, "aaaaa", output.String())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
