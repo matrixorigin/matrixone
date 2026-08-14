@@ -416,6 +416,60 @@ func TestTimeWinReplacementFailurePreservesOwnership(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestMakeWindowBoundaryVecAppendFailurePreservesOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		tsType plan.Type
+	}{
+		{
+			name:   "datetime",
+			typ:    types.T_datetime.ToTypeWithScale(6),
+			tsType: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		},
+		{
+			name:   "timestamp",
+			typ:    types.T_timestamp.ToTypeWithScale(6),
+			tsType: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 4)
+			require.NoError(t, err)
+			account, err := registry.Open(128)
+			require.NoError(t, err)
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+
+			ctr := &container{}
+			reuseVec := vector.NewOffHeapVecWithType(tc.typ)
+			require.NoError(t, reuseVec.SetAllocationAccount(selection))
+			switch types.T(tc.tsType.Id) {
+			case types.T_timestamp:
+				require.NoError(t, vector.AppendFixedList(reuseVec, []types.Timestamp{1}, nil, proc.Mp()))
+			default:
+				require.NoError(t, vector.AppendFixedList(reuseVec, []types.Datetime{1}, nil, proc.Mp()))
+			}
+
+			boundaries := make([]types.Datetime, 1024)
+			returnedVec, err := ctr.makeWindowBoundaryVec(reuseVec, boundaries, tc.tsType, proc)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Same(t, reuseVec, returnedVec, "failed append must return the reused vector owner")
+
+			returnedVec.Free(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+			snapshot := account.Seal()
+			require.Zero(t, snapshot.Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			_, err = registry.Finalize(account)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func resetChildren(arg *TimeWin, m *mpool.MPool) {
 	bat := colexec.MakeMockTimeWinBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

@@ -811,7 +811,7 @@ func (ctr *container) makeWindowBoundaryVec(
 			values[i] = types.Timestamp(boundary)
 		}
 		if err := vector.AppendFixedList(reuseVec, values, nil, proc.Mp()); err != nil {
-			return nil, err
+			return reuseVec, err
 		}
 		return reuseVec, nil
 	}
@@ -827,7 +827,7 @@ func (ctr *container) makeWindowBoundaryVec(
 		reuseVec = vector.NewVec(typ)
 	}
 	if err := vector.AppendFixedList(reuseVec, boundaries, nil, proc.Mp()); err != nil {
-		return nil, err
+		return reuseVec, err
 	}
 	return reuseVec, nil
 }
