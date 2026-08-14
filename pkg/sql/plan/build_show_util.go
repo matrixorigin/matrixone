@@ -421,7 +421,7 @@ func constructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				formattedComment := formatStr(indexdef.Comment)
+				formattedComment := formatStrInSingleQuotesForSQLMode(indexdef.Comment, sqlMode)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
