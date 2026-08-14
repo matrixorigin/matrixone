@@ -42,6 +42,28 @@ type localBlockingDataCache struct {
 	once          sync.Once
 }
 
+func requireDirFilesClosed(
+	t *testing.T,
+	dirFiles map[string]*os.File,
+	closeFn func(),
+) {
+	t.Helper()
+	handles := make([]*os.File, 0, len(dirFiles))
+	for _, file := range dirFiles {
+		handles = append(handles, file)
+	}
+	require.NotEmpty(t, handles)
+
+	closeFn()
+	require.Empty(t, dirFiles)
+	for _, file := range handles {
+		require.Error(t, file.Sync())
+	}
+
+	// Close must remain safe when cleanup paths are duplicated.
+	closeFn()
+}
+
 func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -58,6 +80,7 @@ func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
 	}))
 	_, err = os.Stat(filepath.Join(root, "nested", "file"))
 	require.NoError(t, err)
+	requireDirFilesClosed(t, local.dirFiles, func() { local.Close(ctx) })
 }
 
 func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {

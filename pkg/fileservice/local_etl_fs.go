@@ -94,6 +94,7 @@ func (l *LocalETLFS) Name() string {
 }
 
 func (l *LocalETLFS) Close(ctx context.Context) {
+	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {

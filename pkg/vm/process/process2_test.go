@@ -134,6 +134,7 @@ func TestGetSpillFileService(t *testing.T) {
 				nil,
 			)
 			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
 			proc := &Process{
 				Ctx: tc.procCtx,
 				Base: &BaseProcess{

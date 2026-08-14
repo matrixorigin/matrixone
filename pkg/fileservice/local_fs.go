@@ -1395,6 +1395,16 @@ func (l *LocalFS) Close(ctx context.Context) {
 	if l.diskCache != nil {
 		l.diskCache.Close(ctx)
 	}
+	closeDirFiles(&l.RWMutex, l.dirFiles)
+}
+
+func closeDirFiles(mu *sync.RWMutex, dirFiles map[string]*os.File) {
+	mu.Lock()
+	defer mu.Unlock()
+	for path, file := range dirFiles {
+		_ = file.Close()
+		delete(dirFiles, path)
+	}
 }
 
 func (l *LocalFS) FlushCache(ctx context.Context) {
