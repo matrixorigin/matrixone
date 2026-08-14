@@ -30,6 +30,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -1024,6 +1026,137 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
 	ses.RemoveTempTable("db1", "alias")
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
+}
+
+func TestSessionTempTableTransactionJournal(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("statement rollback restores only that statement", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTable("db", "existing", "txn", "stmt-2")
+
+		ses.rollbackTempTableStatement("txn", "stmt-2")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		realName, ok = ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+	})
+
+	t.Run("transaction rollback restores its original aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "existing", "real-existing", "", "")
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt-1")
+		ses.commitTempTableStatement("txn", "stmt-1")
+		ses.removeTempTableByRealName("real-existing", "txn", "stmt-2")
+		ses.commitTempTableStatement("txn", "stmt-2")
+
+		ses.rollbackTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		_, ok = ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction commit preserves its aliases", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "created", "real-created", "txn", "stmt")
+		ses.commitTempTableStatement("txn", "stmt")
+
+		ses.commitTempTableTransaction("txn")
+
+		realName, ok := ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, ses.tempTableTxnJournals)
+	})
+
+	t.Run("transaction generations restore only aliases they own", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "first", "real-first", "txn-1", "stmt-1")
+		ses.addTempTable("db", "second", "real-second", "txn-2", "stmt-2")
+		ses.commitTempTableStatement("txn-2", "stmt-2")
+		ses.commitTempTableTransaction("txn-2")
+
+		ses.rollbackTempTableTransaction("txn-1")
+
+		_, ok := ses.GetTempTable("db", "first")
+		require.False(t, ok)
+		realName, ok := ses.GetTempTable("db", "second")
+		require.True(t, ok)
+		require.Equal(t, "real-second", realName)
+	})
+}
+
+type sessionCloseExecutor struct {
+	sql  string
+	opts executor.Options
+	done chan struct{}
+}
+
+func (e *sessionCloseExecutor) Exec(
+	ctx context.Context, sql string, opts executor.Options,
+) (executor.Result, error) {
+	e.sql, e.opts = sql, opts
+	close(e.done)
+	return executor.Result{}, nil
+}
+
+func (e *sessionCloseExecutor) ExecTxn(
+	context.Context, func(executor.TxnExecutor) error, executor.Options,
+) error {
+	return nil
+}
+
+func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
+	const service = "session-close-temp-table"
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, config.NewParameterUnit(sv, nil, nil, nil))
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	exec := &sessionCloseExecutor{done: make(chan struct{})}
+	runtime.ServiceRuntime(service).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	proto := &testMysqlWriter{}
+	ses := NewSession(context.Background(), service, proto, nil)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant: "tenant", TenantID: 42,
+		User: "admin", UserID: 7,
+		DefaultRole: "accountadmin", DefaultRoleID: 9,
+	})
+	ses.AddTempTable("db`name", "alias", "physical`table")
+	ses.Close()
+
+	select {
+	case <-exec.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("temporary table cleanup did not run")
+	}
+	require.Equal(t,
+		"DROP TABLE IF EXISTS "+sqlquote.QualifiedIdent("db`name", "physical`table"),
+		exec.sql,
+	)
+	require.Equal(t, uint32(42), exec.opts.AccountID())
+	require.True(t, exec.opts.HasAccountID())
+	statementOpts := exec.opts.StatementOption()
+	require.True(t, statementOpts.HasAccountID())
+	require.Equal(t, uint32(42), statementOpts.AccountID())
+	require.Equal(t, uint32(7), statementOpts.UserID())
+	require.Equal(t, uint32(9), statementOpts.RoleID())
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {
