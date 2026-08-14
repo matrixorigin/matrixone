@@ -4996,6 +4996,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
+	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
+		if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
 	}
 
 	// append TIME WINDOW node
@@ -8430,6 +8434,31 @@ func (builder *QueryBuilder) appendWhereNode(
 		FilterList:   boundFilterList,
 		NotCacheable: notCacheable,
 	}, ctx)
+}
+
+func (builder *QueryBuilder) appendNonAggregateHavingNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	if len(boundHavingList) == 0 {
+		return nodeID, nil
+	}
+
+	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		var expr *plan.Expr
+		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			return
+		}
+		newFilterList = append(newFilterList, expr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{nodeID},
+		FilterList: newFilterList,
+	}, ctx), nil
 }
 
 func (builder *QueryBuilder) appendSampleNode(

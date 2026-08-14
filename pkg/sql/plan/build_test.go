@@ -1929,6 +1929,29 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 	}
 }
 
+func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING EXISTS (
+		    SELECT n_name
+		    FROM nation2
+		    GROUP BY n_name
+		    HAVING COUNT(*) > nation.n_regionkey
+		)`)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
+}
+
 func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
 	sqls := []struct {
 		sql         string
