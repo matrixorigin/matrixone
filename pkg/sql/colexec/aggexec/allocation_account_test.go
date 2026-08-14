@@ -237,36 +237,54 @@ func TestAccountedDistinctGroupConcatDeduplicatesAndMerges(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, account, allocation := newTestAggregateAllocation(t)
 	makeExec := func() AggFuncExec {
-		exec, err := MakeAgg(
-			mp, AggIdOfGroupConcat, true, types.T_varchar.ToType())
-		require.NoError(t, err)
+		exec := newGroupConcatExec(mp, multiAggInfo{
+			aggID:    AggIdOfGroupConcat,
+			distinct: true,
+			argTypes: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(),
+			},
+			retType:   types.T_text.ToType(),
+			emptyNull: true,
+		}, "|")
 		require.NoError(t,
 			exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
 		require.NoError(t, exec.GroupGrow(1))
 		return exec
 	}
 	left, right := makeExec(), makeExec()
-	values := vector.NewVec(types.T_varchar.ToType())
-	for _, value := range []string{"b", "a", "b"} {
-		require.NoError(t,
-			vector.AppendBytes(values, []byte(value), false, mp))
-	}
-	groups := []uint64{1, 1, 1}
+	first := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"a", "ab", "aa", "aa"})
+	second := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"bc", "c", "bb", "bb"})
+	vectors := []*vector.Vector{first, second}
+	groups := []uint64{1, 1}
 	require.NoError(t, left.(BatchCapacityPreflight).
-		PreflightBatchFill(0, groups, []*vector.Vector{values}))
-	require.NoError(t, left.BatchFill(0, groups, []*vector.Vector{values}))
+		PreflightBatchFill(0, groups, vectors))
+	require.NoError(t, left.BatchFill(0, groups, vectors))
 	require.NoError(t, right.(BatchCapacityPreflight).
-		PreflightBatchFill(0, groups[:2], []*vector.Vector{values}))
-	require.NoError(t, right.BatchFill(0, groups[:2], []*vector.Vector{values}))
+		PreflightBatchFill(2, groups, vectors))
+	require.NoError(t, right.BatchFill(2, groups, vectors))
 	require.NoError(t, left.(BatchCapacityPreflight).
 		PreflightBatchMerge(right, 0, []uint64{1}))
 	require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+	var encoded bytes.Buffer
+	require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateResult(
+		1, 0, []uint8{1}, &encoded))
+	restored := makeExec()
+	require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	restoredResults, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "abc|abc|aabb", string(restoredResults[0].GetBytesAt(0)))
+	restoredResults[0].Free(mp)
+
 	results, err := left.Flush()
 	require.NoError(t, err)
-	require.Equal(t, "a,b", string(results[0].GetBytesAt(0)))
+	require.Equal(t, "abc|abc|aabb", string(results[0].GetBytesAt(0)))
 	results[0].Free(mp)
-	values.Free(mp)
-	for _, exec := range []AggFuncExec{left, right} {
+	first.Free(mp)
+	second.Free(mp)
+	for _, exec := range []AggFuncExec{left, right, restored} {
 		owner := exec.(AllocationAccountOwner)
 		exec.Free()
 		require.NoError(t, owner.ClearAllocationAccount(allocation))
@@ -336,6 +354,45 @@ func TestAccountedOrderedGroupConcatSortsDeduplicatesAndMerges(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestAccountedOrderedGroupConcatPreflightsNullOrderStorage(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID: AggIdOfGroupConcat,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(), types.T_int64.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|"), 0))
+	require.NoError(t, exec.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+
+	values := buildVarlenVec(
+		t, mp, types.T_varchar.ToType(), []string{"null-key", "one"})
+	order := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		order, []int64{0, 1}, []bool{true, false}, mp))
+	groups := []uint64{1, 1}
+	require.NoError(t, exec.PreflightBatchFill(
+		0, groups, []*vector.Vector{values, order}))
+	require.NoError(t, exec.BatchFill(
+		0, groups, []*vector.Vector{values, order}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "null-key|one", string(result[0].GetBytesAt(0)))
+
+	result[0].Free(mp)
+	values.Free(mp)
+	order.Free(mp)
+	exec.Free()
+	require.NoError(t, exec.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestAccountedOrderedGroupConcatFinalizationExactCap(t *testing.T) {

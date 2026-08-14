@@ -608,7 +608,7 @@ func TestAggStateMarshalerUnmarshalerErrorPaths(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		err := ag.writeAllStatesToBuf(&buf, &info)
+		err := ag.writeAllStatesToBuf(mp, &buf, &info)
 		require.ErrorIs(t, err, expectedErr)
 	})
 

@@ -349,10 +349,10 @@ func TestAggExecSpillRejectsSelectionBeyondStateRows(t *testing.T) {
 }
 
 func TestAggregateArgumentNodeSizeRejectsArenaOverflow(t *testing.T) {
-	_, err := aggregateArgumentNodeSize(math.MaxUint32)
+	_, err := aggregateArgumentNodeSize(math.MaxUint32, 0)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 
-	size, err := aggregateArgumentNodeSize(1)
+	size, err := aggregateArgumentNodeSize(1, 0)
 	require.NoError(t, err)
 	require.Positive(t, size)
 }

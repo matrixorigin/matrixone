@@ -714,7 +714,10 @@ func (ctr *container) accountGapFillWindow(timeWin *TimeWin) error {
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	// Aggregate results can carry a statement allocation account.  The result
+	// batch takes ownership of those vectors and therefore must preserve their
+	// off-heap/accounted storage class.
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
@@ -746,7 +749,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		ctr.wEnd = nil
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		if ctr.startVec != nil {
 			ctr.startVec.CleanOnlyData()
@@ -798,7 +801,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 }
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	// Input expressions can forward allocation-accounted vectors.  Both the
+	// result owner and the temporary expression batch must keep them off-heap.
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
 		if !vecs[0].HasPrepareParamKind() {
@@ -815,7 +820,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		bat.SetVector(0, ctr.tsVec[ctr.i-1])
 		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())

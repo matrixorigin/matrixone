@@ -94,6 +94,10 @@ type aggInfo struct {
 	saveArg            bool
 	opaqueArg          bool
 	boundedOpaqueState bool
+	// preserveDistinctInputOrder stores the first-seen ordinal in each DISTINCT
+	// saved-argument node. The wire format remains a sequence of keys in that
+	// order, so older partial-state readers see the same payload representation.
+	preserveDistinctInputOrder bool
 	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
 	// representation when its resident implementation can now omit empty state.
 	// Private spill records deliberately keep the compact zero-size marker.
@@ -251,7 +255,12 @@ func (ag *aggState) grow(mp *mpool.MPool, more int32, expandLen bool) (int32, in
 	return canAdd, toAdd, nil
 }
 
-func (ag *aggState) writeStateArg(i int32, writer io.Writer, info *aggInfo) error {
+func (ag *aggState) writeStateArg(
+	mp *mpool.MPool,
+	i int32,
+	writer io.Writer,
+	info *aggInfo,
+) error {
 	if err := types.WriteUint32(writer, ag.argCnt[i]); err != nil {
 		return err
 	}
@@ -263,38 +272,51 @@ func (ag *aggState) writeStateArg(i int32, writer io.Writer, info *aggInfo) erro
 		uk := ukb[:]
 		binary.BigEndian.PutUint16(lk, uint16(i))
 		binary.BigEndian.PutUint16(uk, uint16(i+1))
-		it := ag.argSkl.NewIter(lk, uk)
-		defer it.Close()
-		if !info.usesOpaqueArgEncoding() {
-			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
-				/*
-					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
-					if checkI != uint16(i) {
-						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
-					}
-				*/
-				value := k[kAggArgPrefixSz:]
-				n, err := writer.Write(value)
-				if err != nil {
-					return err
-				}
-				if n != len(value) {
-					return io.ErrShortWrite
-				}
-				xcnt++
-			}
-		} else {
-			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
-				/*
-					checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
-					if checkI != uint16(i) {
-						panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
-					}
-				*/
+		if info.preserveDistinctInputOrder {
+			err := ag.iterInputOrder(mp, uint16(i), func(k []byte) error {
 				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
 					return err
 				}
 				xcnt++
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			it := ag.argSkl.NewIter(lk, uk)
+			defer it.Close()
+			if !info.usesOpaqueArgEncoding() {
+				for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+					/*
+						checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
+						if checkI != uint16(i) {
+							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
+						}
+					*/
+					value := k[kAggArgPrefixSz:]
+					n, err := writer.Write(value)
+					if err != nil {
+						return err
+					}
+					if n != len(value) {
+						return io.ErrShortWrite
+					}
+					xcnt++
+				}
+			} else {
+				for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+					/*
+						checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
+						if checkI != uint16(i) {
+							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
+						}
+					*/
+					if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
+						return err
+					}
+					xcnt++
+				}
 			}
 		}
 
@@ -336,7 +358,14 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
-			if err = ag.insertArg(mp, kbuf); err != nil {
+			if info.preserveDistinctInputOrder {
+				var ordinal [kAggArgOrdinalSz]byte
+				binary.BigEndian.PutUint32(ordinal[:], ui)
+				err = ag.insertArgValue(mp, kbuf, ordinal[:])
+			} else {
+				err = ag.insertArg(mp, kbuf)
+			}
+			if err != nil {
 				return err
 			}
 		} else {
@@ -355,7 +384,14 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 			if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
-			if err = ag.insertArg(mp, kbuf); err != nil {
+			if info.preserveDistinctInputOrder {
+				var ordinal [kAggArgOrdinalSz]byte
+				binary.BigEndian.PutUint32(ordinal[:], ui)
+				err = ag.insertArgValue(mp, kbuf, ordinal[:])
+			} else {
+				err = ag.insertArg(mp, kbuf)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -435,7 +471,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		}
 		for i := range flags {
 			if flags[i] != 0 {
-				if err := ag.writeStateArg(int32(i), writer, info); err != nil {
+				if err := ag.writeStateArg(mp, int32(i), writer, info); err != nil {
 					return err
 				}
 			}
@@ -445,6 +481,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 }
 
 func (ag *aggState) writeSpillState(
+	mp *mpool.MPool,
 	info *aggInfo,
 	flags []uint8,
 	writer io.Writer,
@@ -505,7 +542,7 @@ func (ag *aggState) writeSpillState(
 	}
 	for row, selected := range flags {
 		if selected != 0 {
-			if err := ag.writeStateArg(int32(row), writer, info); err != nil {
+			if err := ag.writeStateArg(mp, int32(row), writer, info); err != nil {
 				return 0, err
 			}
 		}
@@ -590,7 +627,11 @@ func (ag *aggState) readSpillState(
 	return cnt, nil
 }
 
-func (ag *aggState) writeAllStatesToBuf(writer io.Writer, info *aggInfo) error {
+func (ag *aggState) writeAllStatesToBuf(
+	mp *mpool.MPool,
+	writer io.Writer,
+	info *aggInfo,
+) error {
 	if err := types.WriteInt32(writer, ag.length); err != nil {
 		return err
 	}
@@ -638,7 +679,7 @@ func (ag *aggState) writeAllStatesToBuf(writer io.Writer, info *aggInfo) error {
 			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 		}
 		for i := range ag.length {
-			if err := ag.writeStateArg(int32(i), writer, info); err != nil {
+			if err := ag.writeStateArg(mp, int32(i), writer, info); err != nil {
 				return err
 			}
 		}
@@ -798,7 +839,7 @@ func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other
 			binary.BigEndian.PutUint16(lk, uint16(i))
 			binary.BigEndian.PutUint16(uk, uint16(i+1))
 			it := other.argSkl.NewIter(lk, uk)
-			for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+			for ok, k, value := it.SeekGE(lk); ok; ok, k, value = it.Next() {
 				kcpy, err := ag.resizeArgScratch(mp, len(k))
 				if err != nil {
 					it.Close()
@@ -806,7 +847,7 @@ func (ag *aggState) appendFromStateArg(mp *mpool.MPool, otherOffset int32, other
 				}
 				copy(kcpy, k)
 				binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], uint16(ag.length))
-				if err := ag.insertArg(mp, kcpy); err != nil {
+				if err := ag.insertArgValue(mp, kcpy, value); err != nil {
 					it.Close()
 					return 0, err
 				}
@@ -825,7 +866,7 @@ func (ag *aggState) resizeArgScratch(
 	if ag == nil || mp == nil || length < 0 {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	if _, err := aggregateArgumentNodeSize(uint64(length)); err != nil {
+	if _, err := aggregateArgumentNodeSize(uint64(length), 0); err != nil {
 		return nil, err
 	}
 	if cap(ag.argScratch) >= length {
@@ -843,11 +884,11 @@ func (ag *aggState) resizeArgScratch(
 	return ag.argScratch, nil
 }
 
-func aggregateArgumentNodeSize(keySize uint64) (uint64, error) {
-	if keySize > math.MaxUint32 {
+func aggregateArgumentNodeSize(keySize, valueSize uint64) (uint64, error) {
+	if keySize > math.MaxUint32 || valueSize > math.MaxUint32 {
 		return 0, mpool.ErrAllocationAllocatorLimit
 	}
-	need := arenaskl.MaxNodeSize(uint32(keySize), 0)
+	need := arenaskl.MaxNodeSize(uint32(keySize), uint32(valueSize))
 	// Arena offsets and a complete node are both uint32-sized. NewArena and
 	// newNode panic when those limits are exceeded, so reject the row as a
 	// controlled allocation error before either is called.
@@ -858,23 +899,29 @@ func aggregateArgumentNodeSize(keySize uint64) (uint64, error) {
 }
 
 func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
+	return ag.insertArgValue(mp, kbuf, nil)
+}
+
+func (ag *aggState) insertArgValue(mp *mpool.MPool, kbuf, value []byte) error {
 	if ag.argSkl == nil {
 		return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
-	nodeSize, err := aggregateArgumentNodeSize(uint64(len(kbuf)))
+	nodeSize, err := aggregateArgumentNodeSize(
+		uint64(len(kbuf)), uint64(len(value)))
 	if err != nil {
 		return err
 	}
 
 	add := func(list *arenaskl.Skiplist, key []byte) error {
 		if ag.allocation != nil {
-			return list.AddWithPlan(key, nil, arenaskl.MakeAddPlan(key))
+			return list.AddWithPlan(key, value, arenaskl.MakeAddPlan(key))
 		}
-		return list.Add(key, nil)
+		return list.Add(key, value)
 	}
 	if ag.allocation != nil {
 		plan := arenaskl.MakeAddPlan(kbuf)
-		consumed, _, ok := plan.ArenaFootprint(uint32(len(kbuf)), 0)
+		consumed, _, ok := plan.ArenaFootprint(
+			uint32(len(kbuf)), uint32(len(value)))
 		if !ok {
 			return mpool.ErrAllocationAllocatorLimit
 		}
@@ -896,7 +943,8 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 	grow := uint64(kAggArgArenaSize)
 	if ag.allocation != nil {
 		plan := arenaskl.MakeAddPlan(kbuf)
-		consumed, _, ok := plan.ArenaFootprint(uint32(len(kbuf)), 0)
+		consumed, _, ok := plan.ArenaFootprint(
+			uint32(len(kbuf)), uint32(len(value)))
 		if !ok || consumed > math.MaxUint64-arenaskl.MaxNodeTrailingSize() {
 			return mpool.ErrAllocationAllocatorLimit
 		}
@@ -923,8 +971,15 @@ func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
 	// I am pretty sure a realloc then fix a few pointers in skl should work, but
 	// let's not do that for now, until the profiling shows this is a bottleneck.
 	it := ag.argSkl.NewIter(nil, nil)
-	for ok, k, _ := it.First(); ok; ok, k, _ = it.Next() {
-		if err := add(newArgSkl, k); err != nil {
+	for ok, k, oldValue := it.First(); ok; ok, k, oldValue = it.Next() {
+		if ag.allocation != nil {
+			if err := newArgSkl.AddWithPlan(
+				k, oldValue, arenaskl.MakeAddPlan(k)); err != nil {
+				it.Close()
+				mp.Free(argBuf)
+				return err
+			}
+		} else if err := newArgSkl.Add(k, oldValue); err != nil {
 			it.Close()
 			mp.Free(argBuf)
 			return err
@@ -965,6 +1020,28 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 	return ag.insertPreparedArg(mp, y, k, distinct)
 }
 
+func (ag *aggState) fillDistinctArgInInputOrder(
+	mp *mpool.MPool,
+	y uint16,
+	key []byte,
+) error {
+	var ordinal [kAggArgOrdinalSz]byte
+	binary.BigEndian.PutUint32(ordinal[:], ag.argCnt[y])
+	err := ag.insertArgValue(mp, key, ordinal[:])
+	if err == arenaskl.ErrRecordExists {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ag.argCnt[y]++
+	if ag.argCnt[y] == 0 {
+		return moerr.NewInternalErrorNoCtx(
+			"agg fillArg: too many distinct arguments")
+	}
+	return nil
+}
+
 func (ag *aggState) insertPreparedArg(
 	mp *mpool.MPool,
 	y uint16,
@@ -990,7 +1067,7 @@ func (ag *aggState) insertPreparedArg(
 }
 
 func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY uint16, info *aggInfo) error {
-	err := other.iter(otherY, func(k []byte) error {
+	merge := func(k []byte) error {
 		kcpy, err := ag.resizeArgScratch(mp, len(k))
 		if err != nil {
 			return err
@@ -999,6 +1076,9 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], y)
 		if !info.isDistinct {
 			binary.BigEndian.PutUint32(kcpy[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
+		}
+		if info.preserveDistinctInputOrder {
+			return ag.fillDistinctArgInInputOrder(mp, y, kcpy)
 		}
 		fnerr := ag.insertArg(mp, kcpy)
 		if fnerr == nil {
@@ -1016,8 +1096,11 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		} else {
 			return fnerr
 		}
-	})
-	return err
+	}
+	if info.preserveDistinctInputOrder {
+		return other.iterInputOrder(mp, otherY, merge)
+	}
+	return other.iter(otherY, merge)
 }
 
 func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
@@ -1030,6 +1113,55 @@ func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
 	defer it.Close()
 	for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
 		if err := fn(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type orderedDistinctArgument struct {
+	key []byte
+}
+
+func (ag *aggState) iterInputOrder(
+	mp *mpool.MPool,
+	idx uint16,
+	fn func(k []byte) error,
+) error {
+	count := int(ag.argCnt[idx])
+	entries, err := makeAccountedScratch[orderedDistinctArgument](
+		ag.allocation, mp, count)
+	if err != nil {
+		return err
+	}
+	defer mpool.FreeSlice(mp, entries)
+
+	var lkb, ukb [kAggArgPrefixSz]byte
+	lk, uk := lkb[:], ukb[:]
+	binary.BigEndian.PutUint16(lk, idx)
+	binary.BigEndian.PutUint16(uk, idx+1)
+	it := ag.argSkl.NewIter(lk, uk)
+	defer it.Close()
+	seen := 0
+	for ok, key, value := it.SeekGE(lk); ok; ok, key, value = it.Next() {
+		if len(value) != kAggArgOrdinalSz {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		ordinal := int(binary.BigEndian.Uint32(value))
+		if ordinal < 0 || ordinal >= count || entries[ordinal].key != nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		entries[ordinal].key = key
+		seen++
+	}
+	if seen != count {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	for i := range entries {
+		if entries[i].key == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if err := fn(entries[i].key); err != nil {
 			return err
 		}
 	}
@@ -1376,7 +1508,8 @@ func (ae *aggExec) SaveSpillIntermediateResult(
 	if err := types.WriteUint64(writer, spillMagicNumber); err != nil {
 		return err
 	}
-	written, err := ae.state[chunk].writeSpillState(&ae.aggInfo, flags, writer)
+	written, err := ae.state[chunk].writeSpillState(
+		ae.mp, &ae.aggInfo, flags, writer)
 	if err != nil {
 		return err
 	}
@@ -1440,7 +1573,8 @@ func (ae *aggExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) er
 	if err := types.WriteInt32(writer, int32(1)); err != nil {
 		return err
 	}
-	if err := ae.state[chunk].writeAllStatesToBuf(writer, &ae.aggInfo); err != nil {
+	if err := ae.state[chunk].writeAllStatesToBuf(
+		ae.mp, writer, &ae.aggInfo); err != nil {
 		return err
 	}
 	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer); err != nil {

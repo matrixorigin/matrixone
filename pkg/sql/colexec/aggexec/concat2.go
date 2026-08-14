@@ -61,11 +61,24 @@ func (exec *groupConcatExec) SetAllocationAccount(
 	// The saved-argument arena provides the exact DISTINCT set in accounted
 	// Group mode. It replaces the auxiliary Go hash and uses the same bounded
 	// spill representation as ordinary saved arguments.
-	exec.aggInfo.isDistinct = exec.distinct && exec.orderArgCnt == 0
+	preserveDistinctInputOrder := exec.distinct && exec.orderArgCnt == 0
 	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
 		return err
 	}
+	exec.aggInfo.isDistinct = preserveDistinctInputOrder
+	exec.aggInfo.preserveDistinctInputOrder = preserveDistinctInputOrder
 	exec.distinctHash.free()
+	return nil
+}
+
+func (exec *groupConcatExec) ClearAllocationAccount(
+	allocation *AllocationAccount,
+) error {
+	if err := exec.aggExec.ClearAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.aggInfo.isDistinct = false
+	exec.aggInfo.preserveDistinctInputOrder = false
 	return nil
 }
 
@@ -356,13 +369,17 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 			if vec.IsConst() {
 				physicalRow = 0
 			}
-			fieldSize := 0
-			if !vec.IsNull(uint64(physicalRow)) {
-				fieldSize = len(groupConcatFieldBytes(
-					vec, physicalRow, exec.argTypes[index]))
-				if uint64(fieldSize) > math.MaxUint32 {
+			if vec.IsNull(uint64(physicalRow)) {
+				if payloadSize == math.MaxInt {
 					return mpool.ErrAllocationAllocatorLimit
 				}
+				payloadSize++
+				continue
+			}
+			fieldSize := len(groupConcatFieldBytes(
+				vec, physicalRow, exec.argTypes[index]))
+			if uint64(fieldSize) > math.MaxUint32 {
+				return mpool.ErrAllocationAllocatorLimit
 			}
 			if fieldSize > math.MaxInt-payloadSize-5 {
 				return mpool.ErrAllocationAllocatorLimit
@@ -429,8 +446,10 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 			offset += len(field)
 		}
 	}
-	return state.insertPreparedArg(
-		exec.mp, y, key, exec.aggInfo.isDistinct)
+	if exec.aggInfo.preserveDistinctInputOrder {
+		return state.fillDistinctArgInInputOrder(exec.mp, y, key)
+	}
+	return state.insertPreparedArg(exec.mp, y, key, exec.aggInfo.isDistinct)
 }
 
 func (exec *groupConcatExec) maybeSpillOrdered() error {
@@ -1555,6 +1574,9 @@ func (exec *groupConcatExec) setOrderVectorRow(
 			vec := orderVectors[column]
 			vec.GetNulls().Del(uint64(row))
 			if isNull {
+				if err := vec.PreExtendNulls(vec.Length(), exec.mp); err != nil {
+					return err
+				}
 				vec.GetNulls().Add(uint64(row))
 				return nil
 			}
@@ -1656,7 +1678,13 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 		binaryResult: exec.retType.Oid == types.T_blob,
 	}
 	first := true
-	return st.iter(group, func(key []byte) error {
+	visit := st.iter
+	if exec.aggInfo.preserveDistinctInputOrder {
+		visit = func(group uint16, fn func([]byte) error) error {
+			return st.iterInputOrder(exec.mp, group, fn)
+		}
+	}
+	return visit(group, func(key []byte) error {
 		if writer.truncated {
 			return nil
 		}

@@ -100,11 +100,23 @@ func addArgumentChunkCapacity(
 	chunk int,
 	key []byte,
 ) error {
-	if len(key) > math.MaxUint32 {
+	return addArgumentChunkCapacityWithValue(
+		needs, count, chunk, key, 0)
+}
+
+func addArgumentChunkCapacityWithValue(
+	needs *[hashmap.UnitLimit]argumentChunkCapacity,
+	count *int,
+	chunk int,
+	key []byte,
+	valueSize int,
+) error {
+	if len(key) > math.MaxUint32 || valueSize < 0 || valueSize > math.MaxUint32 {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	plan := arenaskl.MakeAddPlan(key)
-	consumed, _, ok := plan.ArenaFootprint(uint32(len(key)), 0)
+	consumed, _, ok := plan.ArenaFootprint(
+		uint32(len(key)), uint32(valueSize))
 	if !ok {
 		return mpool.ErrAllocationAllocatorLimit
 	}
@@ -582,8 +594,12 @@ func (ae *aggExec) preflightBatchMergeArgs(
 					ordinal,
 				)
 			}
-			return addArgumentChunkCapacity(
-				&needs, &needCount, x, candidate)
+			valueSize := 0
+			if ae.preserveDistinctInputOrder {
+				valueSize = kAggArgOrdinalSz
+			}
+			return addArgumentChunkCapacityWithValue(
+				&needs, &needCount, x, candidate, valueSize)
 		})
 		if err != nil {
 			return err
@@ -1533,11 +1549,15 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				if err != nil {
 					return err
 				}
-				fieldSize := 0
-				if !vec.IsNull(uint64(physicalRow)) {
-					fieldSize = len(groupConcatFieldBytes(
-						vec, physicalRow, exec.argTypes[index]))
+				if vec.IsNull(uint64(physicalRow)) {
+					if payload == math.MaxInt {
+						return mpool.ErrAllocationAllocatorLimit
+					}
+					payload++
+					continue
 				}
+				fieldSize := len(groupConcatFieldBytes(
+					vec, physicalRow, exec.argTypes[index]))
 				if fieldSize > math.MaxInt-payload-5 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
@@ -1641,8 +1661,12 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				continue
 			}
 		}
-		if err := addArgumentChunkCapacity(
-			&needs, &needCount, x, key); err != nil {
+		valueSize := 0
+		if exec.aggInfo.preserveDistinctInputOrder {
+			valueSize = kAggArgOrdinalSz
+		}
+		if err := addArgumentChunkCapacityWithValue(
+			&needs, &needCount, x, key, valueSize); err != nil {
 			return err
 		}
 	}

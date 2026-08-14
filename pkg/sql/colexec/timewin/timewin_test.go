@@ -161,6 +161,39 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, value.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(value, int64(42), false, mp))
+	ctr := container{
+		colCnt: 1,
+		i:      1,
+		aggVec: [][][]*vector.Vector{{{value}}},
+	}
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, ctr.calResForInterval(&TimeWin{}, proc))
+	require.Same(t, value, ctr.bat.Vecs[0])
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](ctr.bat.Vecs[0]))
+
+	// The interval buffer, not the forwarding batch, owns the vector.
+	ctr.bat = nil
+	value.Free(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := &TimeWin{
