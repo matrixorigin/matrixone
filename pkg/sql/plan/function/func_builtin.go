@@ -609,6 +609,12 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 			if err := typ.Unmarshal(v); err != nil {
 				return err
 			}
+			if typ.Oid == types.T_text {
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
+					return err
+				}
+				continue
+			}
 			if typ.Oid.IsMySQLString() {
 				if err := rs.Append(int64(typ.Width), false); err != nil {
 					return err
@@ -638,11 +644,19 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 				return err
 			}
 			switch typ.Oid {
-			case types.T_char, types.T_varchar, types.T_text:
+			case types.T_char, types.T_varchar:
 				// Width is measured in characters for character strings. The
 				// information schema needs the maximum encoded byte length, not
 				// the size of MatrixOne's internal Varlena storage slot.
 				if err := rs.Append(int64(typ.Width)*utf8.UTFMax, false); err != nil {
+					return err
+				}
+				continue
+			case types.T_text:
+				// MySQL TEXT-family limits are byte limits. Width zero is
+				// MatrixOne's persisted marker for ordinary TEXT, not a zero-byte
+				// column, so expose the MySQL-compatible 64 KiB catalog bound.
+				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
 					return err
 				}
 				continue
@@ -659,6 +673,13 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 		}
 	}
 	return nil
+}
+
+func internalTextMetadataLength(typ types.Type) int64 {
+	if typ.Width > 0 {
+		return int64(typ.Width)
+	}
+	return int64(types.MaxStringSize)
 }
 
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

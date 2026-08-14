@@ -143,6 +143,94 @@ func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
 	return string(databaseName), string(viewName), snapshot, nil
 }
 
+// ValidateSnapshotScope verifies that a relation belongs to the object covered
+// by a named snapshot. Timestamp-only snapshots have no object restriction.
+func ValidateSnapshotScope(
+	snapshot *Snapshot,
+	databaseName string,
+	tableName string,
+	databaseID uint64,
+	tableID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		if snapshot.ExtraInfo.ObjId != tableID {
+			return moerr.NewInternalErrorNoCtxf(
+				"table-level snapshot(%s) does not belong to the table(%s-%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+				tableName,
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
+// ValidateSnapshotDatabaseScope verifies that an operation scoped to a
+// database is compatible with a named snapshot. A table snapshot cannot read
+// database-wide metadata because it represents a single relation.
+func ValidateSnapshotDatabaseScope(
+	snapshot *Snapshot,
+	databaseName string,
+	databaseID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		return moerr.NewInternalErrorNoCtxf(
+			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
+			snapshot.ExtraInfo.Name,
+			databaseName,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
@@ -240,6 +328,7 @@ type QueryBuilder struct {
 	ctxByNode                   []*BindContext
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
+	updateTargetScans           map[int32]struct{}
 	projectSpecialGuards        map[int32]*specialIndexGuard
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
@@ -250,6 +339,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -266,9 +360,8 @@ type QueryBuilder struct {
 	isRestoreByTs          bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
-	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	aggSpillMem int64
@@ -309,6 +402,7 @@ type QueryBuilder struct {
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
 	irregularMaintSkipInsert  bool
+	irregularUpdateMaints     []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -332,6 +426,16 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep  int32
+	deleteStep  int32
+	deletePkPos int32
+	deletePkTyp plan.Type
+	indexes     []*plan.IndexDef
+	tableDef    *plan.TableDef
+	objRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -493,6 +597,8 @@ type BindContext struct {
 	results    []*plan.Expr
 	windows    []*plan.Expr
 	times      []*plan.Expr
+
+	timeBoundaryType *plan.Type
 
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
