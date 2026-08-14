@@ -950,6 +950,9 @@ func checkRestorePriv(ctx context.Context, ses *Session, snapshot *snapshotRecor
 		if string(stmt.AccountName) != ses.GetTenantInfo().GetTenant() {
 			return moerr.NewInternalError(ctx, "can't restore table from other account's snapshot")
 		}
+		if snapshot.level == tree.RESTORELEVELDATABASE.String() && snapshot.databaseName != string(stmt.DatabaseName) {
+			return moerr.NewInternalErrorf(ctx, "databaseName(%v) does not match snapshot.databaseName(%v)", string(stmt.DatabaseName), snapshot.databaseName)
+		}
 		if snapshot.level == tree.RESTORELEVELTABLE.String() {
 			if snapshot.databaseName != string(stmt.DatabaseName) || snapshot.tableName != string(stmt.TableName) {
 				return moerr.NewInternalErrorf(ctx, "tableName(%v) does not match snapshot.tableName(%v)", string(stmt.TableName), snapshot.tableName)
@@ -1230,7 +1233,7 @@ func restoreToDatabaseOrTable(
 
 	var createDbSql string
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, dbName, restoreAccount)
+	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
@@ -2278,12 +2281,13 @@ func getCreateDatabaseSql(ctx context.Context,
 	sid string,
 	bh BackgroundExec,
 	snapshotName string,
+	snapshotTs int64,
 	dbName string,
 	accountId uint32) (string, error) {
 
 	sql := "select datname, dat_createsql from mo_catalog.mo_database"
-	if len(snapshotName) > 0 {
-		sql += fmt.Sprintf(" {snapshot = '%s'}", snapshotName)
+	if snapshotTs > 0 {
+		sql += fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Debug(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))

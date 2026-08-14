@@ -1065,7 +1065,9 @@ func buildCreateTable(
 			}
 		}
 		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+		if tableDef.TableType == catalog.SystemViewRel ||
+			tableDef.TableType == catalog.SystemExternalRel ||
+			tableDef.TableType == catalog.SystemSequenceRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
 				return nil, err

@@ -22,8 +22,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -5403,6 +5401,35 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
 }
 
+func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	query := &plan0.Query{
+		StmtType: plan0.Query_DELETE,
+		Nodes:    []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps:    []int32{0},
+	}
+
+	err := writeExplainResult(
+		ctx,
+		ses,
+		tree.NewExplainStmt(&tree.Delete{}, "text"),
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		explain.NewExplainDefaultOptions(),
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+
+	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
+	require.NoError(t, err)
+	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
+	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
+	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -6670,87 +6697,6 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
-func Test_ExecRequest_SidecarSuccess(t *testing.T) {
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = ":8888"
-
-	// Mock sidecar returning a valid JSONCompact response.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"meta":[{"name":"x","type":"INTEGER"}],"data":[[42]],"rows":1}`))
-	}))
-	defer srv.Close()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
-	require.NoError(t, err)
-	ses.SetDatabaseName("testdb")
-	setRowCount(ses, ses.GetProc(), 7)
-	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 42 AS x FROM testdb.t1"),
-	}
-
-	resp, err := ExecRequest(ses, ec, req)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, ResultResponse, resp.category)
-	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
-	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
-	assert.Zero(t, ses.diagnosticsSnapshot().length())
-}
-
-func Test_ExecRequest_SidecarError(t *testing.T) {
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = ":8888"
-
-	// Mock sidecar that returns 500.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("boom"))
-	}))
-	defer srv.Close()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-	err := ses.SetSessionSysVar(ctx, "sidecar_url", srv.URL)
-	require.NoError(t, err)
-	ses.SetDatabaseName("testdb")
-	setRowCount(ses, ses.GetProc(), 7)
-	ses.appendErrorDiagnostic(1000, "stale diagnostic marker")
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1 FROM testdb.t1"),
-	}
-
-	resp, err := ExecRequest(ses, ec, req)
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	// Should be an error response (from sidecar), not a success.
-	assert.Equal(t, ErrorResponse, resp.category)
-	assert.Equal(t, int64(-1), ses.GetLastAffectedRows())
-	assert.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
-	// Sending the response records the current sidecar error later; ExecRequest
-	// must first discard diagnostics from the preceding statement.
-	assert.Zero(t, ses.diagnosticsSnapshot().length())
-}
-
 func TestExecRequestRewriteFailureMarksRowCountFailed(t *testing.T) {
 	for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE} {
 		t.Run(cmd.String(), func(t *testing.T) {
@@ -7000,16 +6946,12 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 	}
 }
 
-func Test_ExecRequest_SidecarFallthrough(t *testing.T) {
-	// SIDECAR hint present but sidecar not configured → strips hint, falls through.
-	// doComQuery will fail (no engine), but we verify the fallthrough happened.
+func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
+	// The hint is stripped and carried as compile intent. With no service Sirius
+	// runtime, compilation remains on the normal native query path.
 	ctx := context.TODO()
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-
-	saved := debugHTTPAddr
-	defer func() { debugHTTPAddr = saved }()
-	debugHTTPAddr = "" // no manifest URL → errSidecarNotConfigured
 
 	ses := newTestSession(t, ctrl)
 	ses.txnHandler = &TxnHandler{}

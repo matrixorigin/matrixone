@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
-	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -136,25 +135,27 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			StmtType: queryType,
 			MaxDop:   int64(maxDop),
 		},
-		compCtx:                ctx,
-		ctxByNode:              []*BindContext{},
-		nameByColRef:           make(map[[2]int32]string),
-		protectedScans:         make(map[int32]int),
-		projectSpecialGuards:   make(map[int32]*specialIndexGuard),
-		setBitmapByDisplayNode: make(map[[2]int32]int32),
-		indexHintOwnerByNode:   make(map[int32]int32),
-		nextBindTag:            0,
-		mysqlCompatible:        mysqlCompatible,
-		mysqlFullGroupByCompat: mysqlFullGroupByCompat,
-		aggSpillMem:            aggSpillMem,
-		joinSpillMem:           joinSpillMem,
-		sortSpillMem:           sortSpillMem,
-		tag2Table:              make(map[int32]*TableDef),
-		tag2NodeID:             make(map[int32]int32),
-		isPrepareStatement:     isPrepareStatement,
-		deleteNode:             make(map[uint64]int32),
-		skipStats:              skipStats,
-		optimizationHistory:    make([]string, 0),
+		compCtx:                  ctx,
+		ctxByNode:                []*BindContext{},
+		nameByColRef:             make(map[[2]int32]string),
+		protectedScans:           make(map[int32]int),
+		projectSpecialGuards:     make(map[int32]*specialIndexGuard),
+		setBitmapByDisplayNode:   make(map[[2]int32]int32),
+		indexHintOwnerByNode:     make(map[int32]int32),
+		userWindowNodes:          make(map[int32]struct{}),
+		partitionTopNWindowNodes: make(map[int32]struct{}),
+		nextBindTag:              0,
+		mysqlCompatible:          mysqlCompatible,
+		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		aggSpillMem:              aggSpillMem,
+		joinSpillMem:             joinSpillMem,
+		sortSpillMem:             sortSpillMem,
+		tag2Table:                make(map[int32]*TableDef),
+		tag2NodeID:               make(map[int32]int32),
+		isPrepareStatement:       isPrepareStatement,
+		deleteNode:               make(map[uint64]int32),
+		skipStats:                skipStats,
+		optimizationHistory:      make([]string, 0),
 		// -1 means "no old-row delete maintenance" (set only on ODKU into an
 		// irregular-index table); step 0 is a valid index so it cannot be the zero value.
 		irregularMaintDeleteStep: -1,
@@ -2145,11 +2146,26 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for _, expr := range node.WinSpecList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+		_, partitionTopN := builder.partitionTopNWindowNodes[nodeID]
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, 1, colRefCnt)
+				}
+			}
+		}
 
 		// remap children node
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+		if partitionTopN {
+			for _, expr := range node.WinSpecList {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					increaseRefCnt(partitionExpr, -1, colRefCnt)
+				}
+			}
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
@@ -2202,6 +2218,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
+			}
+			if _, ok := builder.partitionTopNWindowNodes[nodeID]; ok {
+				for _, partitionExpr := range expr.GetW().PartitionBy {
+					if err = builder.remapColRefForExpr(partitionExpr, childRemapping.globalToLocal, &remapInfo); err != nil {
+						return nil, err
+					}
+				}
 			}
 
 			globalRef := [2]int32{windowTag, node.GetWindowIdx()}
@@ -3222,6 +3245,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID = builder.optimizeFilters(rootID)
+		builder.annotatePartitionTopN(rootID)
 		builder.pushdownLimitToTableScan(rootID)
 		builder.determineGroupByHashKeys(rootID)
 
@@ -8627,6 +8651,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
 		}, ctx)
+		builder.userWindowNodes[nodeID] = struct{}{}
 	}
 
 	for name, id := range ctx.windowByAst {
@@ -9540,12 +9565,7 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	viewLowerCaseTableNames := ctx.lower
-	if viewData.LowerCaseTableNames != nil {
-		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
-	}
-	originStmts, err := mysql.ParseWithSQLMode(
-		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
+	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -9571,18 +9591,6 @@ func (builder *QueryBuilder) bindView(
 	defaultDatabase := viewData.DefaultDatabase
 	if obj.PubInfo != nil {
 		defaultDatabase = obj.SubscriptionName
-		subscription := builder.compCtx.GetQueryingSubscription()
-		if subscription == nil || subscription.AccountId != obj.PubInfo.TenantId {
-			subscription = &SubscriptionMeta{
-				AccountId: obj.PubInfo.TenantId,
-				DbName:    viewData.DefaultDatabase,
-				SubName:   obj.SubscriptionName,
-				Tables:    pubsub.TableAll,
-			}
-		}
-		previousSubscription := builder.compCtx.GetQueryingSubscription()
-		builder.compCtx.SetQueryingSubscription(subscription)
-		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
 	viewCtx.defaultDatabase = defaultDatabase
 	viewKey := objectkey.Encode(schema, table)
@@ -9620,10 +9628,6 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
-	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
-		capture.enterNestedView()
-		defer capture.leaveNestedView()
-	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -9633,7 +9637,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
+	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -10086,6 +10090,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
+		explicitNamedSnapshot := false
 		if tbl.AtTsExpr != nil {
 			if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
@@ -10099,6 +10104,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			explicitNamedSnapshot = tbl.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT
 		}
 
 		var snapshot *Snapshot
@@ -10114,11 +10120,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 
 		var subMeta *SubscriptionMeta
 		subMeta, err = builder.compCtx.GetSubscriptionMeta(schema, snapshot)
-		if err == nil && subMeta != nil {
-			previousSubscription := builder.compCtx.GetQueryingSubscription()
-			builder.compCtx.SetQueryingSubscription(subMeta)
-			defer builder.compCtx.SetQueryingSubscription(previousSubscription)
-		}
 		if err == nil && builder.isSkipResolveTableDef && snapshot == nil && subMeta == nil {
 			var tableDef *TableDef
 			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(schema, table)
@@ -10146,10 +10147,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if tableDef == nil {
 			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
 		}
-		// Compiler contexts return immutable catalog metadata. Own the planner
-		// shell and column slice, which are replaced locally, without copying the
-		// immutable column definitions, indexes, constraints, or expressions.
-		tableDef = CloneTableDefForPlan(tableDef, true)
+		if explicitNamedSnapshot {
+			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
+		}
+		if err != nil {
+			return 0, err
+		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)

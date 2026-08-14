@@ -498,6 +498,39 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := NewMockCompilerContext2(ctrl)
+	snapshot := &Snapshot{ExtraInfo: &plan.SnapshotExtraInfo{
+		Name: "snapshot", Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: 1,
+	}}
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1))
+	ctx.EXPECT().GetSnapshot().Return(nil)
+	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
+	ctx.EXPECT().DatabaseExists("db", snapshot).Return(true)
+	ctx.EXPECT().GetSubscriptionMeta("db", snapshot).Return(nil, nil)
+	ctx.EXPECT().Resolve("db", "other_table", snapshot).Return(
+		&plan.ObjectRef{SchemaName: "db", ObjName: "other_table"},
+		&plan.TableDef{DbId: 1, TblId: 2},
+		nil,
+	)
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = snapshot
+	table := &tree.TableName{}
+	table.SchemaName = "db"
+	table.ObjectName = "other_table"
+	table.AtTsExpr = &tree.AtTimeStamp{
+		Type: tree.ATTIMESTAMPSNAPSHOT,
+		Expr: tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}
+	_, err := builder.buildTable(table, bindCtx, nil)
+	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) does not belong to the table(db-other_table)")
+}
+
 func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
 	sqlMode := "PIPES_AS_CONCAT"
 	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
