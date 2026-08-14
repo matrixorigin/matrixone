@@ -59,6 +59,33 @@ func newTestRoutineManager(t *testing.T, ctx context.Context) *RoutineManager {
 	return rm
 }
 
+func TestRoutineManagerGetConnIDUsesConnectTimeout(t *testing.T) {
+	const connectTimeout = 17 * time.Second
+	var observed time.Duration
+	client := newMockHAKeeperClient()
+	client.allocateIDByKey = func(ctx context.Context, key string) (uint64, error) {
+		require.Equal(t, ConnIDAllocKey, key)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		observed = time.Until(deadline)
+		return 0, context.DeadlineExceeded
+	}
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	sv.ConnectTimeout.Duration = connectTimeout
+	rm := &RoutineManager{
+		ctx: context.Background(),
+		pu: &config.ParameterUnit{
+			SV:             sv,
+			HAKeeperClient: client,
+		},
+	}
+
+	_, err := rm.getConnID()
+	require.Error(t, err)
+	require.InDelta(t, connectTimeout, observed, float64(time.Second))
+}
+
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()

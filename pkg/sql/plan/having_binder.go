@@ -446,6 +446,19 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
+func needsTimeWindowResultAggRemap(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	funcId, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	switch funcId {
+	case function.MAX_BY, function.MAX_BY_NON_NULL:
+		return true
+	default:
+		return false
+	}
+}
+
 func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
 	name := ""
 	if colPos >= 0 && int(colPos) < len(bindCtx.times) {
@@ -718,7 +731,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	// be reused.
 	outerFn.AggConfig = nil
 	outerFn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
-	if b.ctx.sliding {
+	if b.ctx.sliding || needsTimeWindowResultAggRemap(expr) {
 		expr, err = b.remapAggToTimeWindowResultAgg(expr)
 		if err != nil {
 			return nil, err
