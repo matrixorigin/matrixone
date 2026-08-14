@@ -723,7 +723,7 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 		return nodeID, true, err
 	}
 
-	var multiTableIndexKeys []string
+	multiTableIndexKeys := make([]string, 0, len(multiTableIndexes))
 	for key := range multiTableIndexes {
 		multiTableIndexKeys = append(multiTableIndexKeys, key)
 	}
