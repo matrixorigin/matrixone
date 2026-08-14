@@ -788,7 +788,7 @@ func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
 // deliberately not considered top-level limits.
 func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 	for stmt != nil {
-		if stmt.Limit != nil {
+		if stmt.Limit != nil && stmt.Limit.Count != nil {
 			return true
 		}
 		paren, ok := stmt.Select.(*tree.ParenSelect)

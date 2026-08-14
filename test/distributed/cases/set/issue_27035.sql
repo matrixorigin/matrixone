@@ -1,4 +1,6 @@
-use test;
+drop database if exists sql_select_limit_27035_db;
+create database sql_select_limit_27035_db;
+use sql_select_limit_27035_db;
 
 drop table if exists sql_select_limit_27035;
 create table sql_select_limit_27035 (id int primary key);
@@ -24,4 +26,4 @@ set @@sql_select_limit = 0;
 select id from sql_select_limit_27035 order by id;
 
 set @@sql_select_limit = default;
-drop table sql_select_limit_27035;
+drop database sql_select_limit_27035_db;

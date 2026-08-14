@@ -19,6 +19,7 @@ import (
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +46,13 @@ func TestSQLSelectLimitCapsWholeUnion(t *testing.T) {
 	query := buildSQLSelectLimitTestQuery(t,
 		"select n_name from nation union all select r_name from region")
 	require.True(t, query.ApplySqlSelectLimit)
+}
+
+func TestOffsetOnlyDoesNotDisableSQLSelectLimit(t *testing.T) {
+	stmt := &tree.Select{Limit: &tree.Limit{
+		Offset: tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+	}}
+	require.False(t, selectHasExplicitTopLevelLimit(stmt))
 }
 
 func buildSQLSelectLimitTestQuery(t *testing.T, sql string) *planpb.Query {
