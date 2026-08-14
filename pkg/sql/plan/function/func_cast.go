@@ -897,6 +897,7 @@ const (
 	castModeAssignment
 	castModeAssignmentIgnore
 	castModeComparison
+	castModeSetOperation
 )
 
 func (m castMode) strictStringWidth() bool {
@@ -914,6 +915,13 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 // PAD SPACE semantics.
 func NewComparisonCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeComparison, false)
+}
+
+// NewSetOperationCast keeps CHAR branches at the common set-operation width
+// when PAD_CHAR_TO_FULL_LENGTH is enabled. Set branches can run concurrently,
+// so UNION must not expose whichever physical padding happened to arrive first.
+func NewSetOperationCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, castModeSetOperation, false)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2703,7 +2711,7 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong, mode == castModeComparison)
+			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong, mode)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -7979,11 +7987,18 @@ func strToStr(
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool,
-	comparisonCast bool) error {
+	mode castMode) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
-	trimCharPadding := comparisonCast &&
+	trimCharPadding := mode == castModeComparison &&
 		from.GetSourceVector().GetType().Oid == types.T_char && toType.Oid == types.T_varchar
+	padSetOperationChar := false
+	if mode == castModeSetOperation && toType.Oid == types.T_char {
+		var err error
+		if padSetOperationChar, err = process.ResolvePadCharToFullLength(proc); err != nil {
+			return err
+		}
+	}
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -8095,6 +8110,9 @@ func strToStr(
 					v = append(v, 0)
 				}
 			}
+			if padSetOperationChar {
+				v = padVarlenaToRuneWidth(v, destLen)
+			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
@@ -8117,6 +8135,19 @@ func strToStr(
 		}
 	}
 	return nil
+}
+
+func padVarlenaToRuneWidth(value []byte, width int) []byte {
+	missing := width - utf8.RuneCount(value)
+	if missing <= 0 {
+		return value
+	}
+	padded := make([]byte, len(value)+missing)
+	copy(padded, value)
+	for i := len(value); i < len(padded); i++ {
+		padded[i] = ' '
+	}
+	return padded
 }
 
 func strToBit(

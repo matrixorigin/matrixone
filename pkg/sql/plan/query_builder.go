@@ -3860,6 +3860,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
+					} else if targetArgType.Oid == types.T_char {
+						node.ProjectList[columnIdx], err = appendSetOperationCastBeforeExpr(
+							builder.GetContext(), node.ProjectList[columnIdx], targetType,
+						)
+						if err != nil {
+							return 0, err
+						}
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {

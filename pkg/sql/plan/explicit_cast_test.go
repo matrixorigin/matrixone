@@ -76,6 +76,20 @@ func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {
 	}
 }
 
+func TestSetOperationCharCastUsesDedicatedOverload(t *testing.T) {
+	ctx := context.Background()
+	sourceType := types.New(types.T_char, 4, 0)
+	targetType := types.New(types.T_char, 8, 0)
+	source := makePlan2StringConstExprWithType("MO")
+	source.Typ = makePlan2Type(&sourceType)
+
+	cast, err := appendSetOperationCastBeforeExpr(ctx, source, makePlan2TypeValue(&targetType))
+	require.NoError(t, err)
+	require.Equal(t, "cast", cast.GetF().GetFunc().GetObjName())
+	_, overload := function.DecodeOverloadID(cast.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(3), overload)
+}
+
 func TestUseExplicitCastOverload(t *testing.T) {
 	tests := []struct {
 		name string

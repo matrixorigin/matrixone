@@ -5323,6 +5323,10 @@ func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
+func appendSetOperationCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 3)
+}
+
 func isPadSpaceComparisonFunction(name string) bool {
 	switch name {
 	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between":

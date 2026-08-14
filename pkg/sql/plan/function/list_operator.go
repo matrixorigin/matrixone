@@ -2857,6 +2857,15 @@ var supportedOperators = []FuncNew{
 					return NewComparisonCast
 				},
 			},
+			{
+				overloadId: 3,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewSetOperationCast
+				},
+			},
 		},
 	},
 
