@@ -552,7 +552,7 @@ func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
 	require.ErrorIs(t, err, lookupErr)
 }
 
-func TestReconcileIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) {
+func TestReconcileIndexVisibilityRejectsMissingMetadata(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
@@ -569,8 +569,19 @@ func TestReconcileIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) 
 	)
 
 	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_missing"}}}
+	err := reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil)
+	require.ErrorContains(t, err, "missing visibility metadata for index \"idx_missing\" on table 272464")
+}
+
+func TestReconcileIndexVisibilitySkipsExplicitMarker(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_invisible"}}}
+	catalog.SetIndexVisibility(tableDef.Indexes[0], false)
+
 	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil))
-	require.True(t, tableDef.Indexes[0].Visible)
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.False(t, visible)
 }
 
 func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {

@@ -1094,7 +1094,6 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
-			true,
 		)
 		if err != nil {
 			return nil, err
@@ -2517,9 +2516,6 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
-		for _, idxDef := range idxDefs {
-			idxDef.Visible = indexOptionVisible(indexInfo.IndexOption)
-		}
 		// Capture the plugin's build-time session vars (BuildSessionVars) into each
 		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
 		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
@@ -2597,7 +2593,6 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
-		indexDef.Visible = indexOptionVisible(indexInfo.IndexOption)
 
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true)
 

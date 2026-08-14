@@ -326,7 +326,6 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 		Parts:          indexParts,
 		IndexTableName: indexTableName,
 		TableExist:     true,
-		Visible:        indexOptionVisible(uniKey.IndexOption),
 		Comment:        "",
 	}
 	setIndexDefVisibility(indexDef, uniKey.IndexOption)

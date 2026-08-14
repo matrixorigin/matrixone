@@ -2192,6 +2192,8 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 			visibility := make(map[string]bool, len(createTable.TableDef.Indexes))
 			for _, indexDef := range createTable.TableDef.Indexes {
 				visibility[indexDef.IndexName] = indexDef.Visible
+				_, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
 			}
 			require.True(t, visibility["idx_legacy_visible"])
 			require.False(t, visibility["idx_invisible"])

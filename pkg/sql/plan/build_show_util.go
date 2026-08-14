@@ -47,72 +47,11 @@ func ConstructCreateTableSQL(
 	// default-visible indexes and for explicitly invisible indexes. Public
 	// reconstruction callers do not have authoritative catalog metadata, so they
 	// must keep the legacy default-visible rendering.
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true, false)
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
 }
 
-// indexVisibilityResolver supplies the authoritative catalog value for legacy
-// index constraints. It is intentionally optional so context-free schema
-// formatting remains usable by offline callers; normal SQL compilation uses
-// TxnCompilerContext, which implements this resolver.
-type indexVisibilityResolver interface {
-	ResolveIndexVisibility(tableID uint64, snapshot *Snapshot) (map[string]bool, error)
-}
-
-func resolveLegacyIndexVisibilities(
-	ctx CompilerContext,
-	tableDef *plan.TableDef,
-	snapshot *Snapshot,
-) (map[string]bool, error) {
-	if ctx == nil || tableDef == nil || tableDef.TblId == 0 {
-		return nil, nil
-	}
-
-	legacyIndexNames := make(map[string]struct{})
-	for _, indexDef := range tableDef.Indexes {
-		if indexDef == nil {
-			continue
-		}
-		if _, isSet := catalog.GetIndexVisibility(indexDef); !isSet {
-			legacyIndexNames[strings.ToLower(indexDef.IndexName)] = struct{}{}
-		}
-	}
-	if len(legacyIndexNames) == 0 {
-		return nil, nil
-	}
-	if catalog.IsSystemTable(tableDef.TblId) {
-		// Bootstrap system indexes are fixed-visible schema and intentionally do
-		// not have mo_indexes rows. Their absence is therefore expected rather
-		// than incomplete user-table metadata.
-		visibilityByName := make(map[string]bool, len(legacyIndexNames))
-		for indexName := range legacyIndexNames {
-			visibilityByName[indexName] = true
-		}
-		return visibilityByName, nil
-	}
-
-	resolver, ok := ctx.(indexVisibilityResolver)
-	if !ok {
-		return nil, nil
-	}
-	visibilityByName, err := resolver.ResolveIndexVisibility(tableDef.TblId, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	for indexName := range legacyIndexNames {
-		if _, ok := visibilityByName[indexName]; !ok {
-			return nil, moerr.NewInternalErrorNoCtxf(
-				"missing visibility metadata for index %q on table %d", indexName, tableDef.TblId,
-			)
-		}
-	}
-	return visibilityByName, nil
-}
-
-func createTableIndexVisible(indexDef *plan.IndexDef, legacyVisibilities map[string]bool) bool {
+func createTableIndexVisible(indexDef *plan.IndexDef) bool {
 	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
-		return visible
-	}
-	if visible, ok := legacyVisibilities[strings.ToLower(indexDef.IndexName)]; ok {
 		return visible
 	}
 	// A context-free caller cannot query mo_indexes. Preserve proto3's
@@ -127,7 +66,6 @@ func constructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
-	indexVisibilityKnown bool,
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
@@ -312,10 +250,6 @@ func constructCreateTableSQL(
 	}
 
 	if tableDef.Indexes != nil {
-		legacyIndexVisibilities, err := resolveLegacyIndexVisibilities(ctx, tableDef, snapshot)
-		if err != nil {
-			return "", nil, err
-		}
 		// We only print distinct index names. This is used to avoid printing the same index multiple times for IVFFLAT or
 		// other multi-table indexes.
 		indexNames := make(map[string]bool)
@@ -335,7 +269,7 @@ func constructCreateTableSQL(
 			}
 
 			var indexStr string
-			indexVisible := createTableIndexVisible(indexdef, legacyIndexVisibilities)
+			indexVisible := createTableIndexVisible(indexdef)
 			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
 				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
 					indexStr += " FULLTEXT2 "
