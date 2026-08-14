@@ -115,21 +115,40 @@ func TestAffectedRows(t *testing.T) {
 }
 
 func TestGetSpillFileService(t *testing.T) {
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	assert.Nil(t, err)
-	proc := &Process{
-		Base: &BaseProcess{
-			FileService: localFS,
-		},
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name    string
+		procCtx context.Context
+	}{
+		{name: "nil process context"},
+		{name: "canceled process context", procCtx: canceledCtx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localFS, err := fileservice.NewLocalFS(
+				context.Background(),
+				defines.LocalFileServiceName,
+				t.TempDir(),
+				fileservice.DisabledCacheConfig,
+				nil,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
+			proc := &Process{
+				Ctx: tc.procCtx,
+				Base: &BaseProcess{
+					FileService: localFS,
+				},
+			}
+
+			spillFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			file, err := spillFS.CreateAndRemoveFile(context.Background(), "probe")
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+		})
 	}
-	_, err = proc.GetSpillFileService()
-	assert.Nil(t, err)
 }
 
 func TestGetSpillFileServiceError(t *testing.T) {

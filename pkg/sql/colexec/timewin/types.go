@@ -244,6 +244,8 @@ func calcDatetime(diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 		return 0, err
 	}
 	switch iTyp {
+	case types.MicroSecond:
+		num = diff
 	case types.Second:
 		num = diff * types.MicroSecsPerSec
 	case types.Minute:
@@ -253,7 +255,7 @@ func calcDatetime(diff int64, iTyp types.IntervalType) (types.Datetime, error) {
 	case types.Day:
 		num = diff * types.SecsPerDay * types.MicroSecsPerSec
 	default:
-		return 0, moerr.NewNotSupportedNoCtx("Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit")
+		return 0, moerr.NewNotSupportedNoCtx("Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
 	return types.Datetime(num), nil
 }

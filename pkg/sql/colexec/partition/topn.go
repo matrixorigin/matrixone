@@ -153,7 +153,10 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 			nullsLast = true
 		}
 		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
-		ctr.compares[i] = compare.New(typ, desc, nullsLast)
+		// Top-N order keys must use the same total order as the window sorter.
+		// In particular, native float comparison is not a strict weak order for
+		// NaNs and can make the heap discard rows from the SQL-order prefix.
+		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
 	}
 	return nil
 }

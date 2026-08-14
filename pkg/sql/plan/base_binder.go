@@ -518,8 +518,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
+		typ := plan.Type{Id: int32(types.T_timestamp), NotNullable: true}
+		if b.ctx.timeBoundaryType != nil {
+			typ = *DeepCopyType(b.ctx.timeBoundaryType)
+			typ.NotNullable = true
+		}
 		expr = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_timestamp)},
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -4029,12 +4034,21 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		sourceType := makeTypeByPlan2Expr(args[0])
-		targetType := types.T_datetime.ToType()
-		function.SetTargetScaleFromSource(&sourceType, &targetType)
-		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
-		if err != nil {
-			return nil, err
+		if types.T(args[0].Typ.Id) == types.T_timestamp {
+			if timeWindowIntervalUsesMicrosecond(args[1]) && args[0].Typ.Scale < 6 {
+				args[0].Typ.Scale = 6
+			}
+		} else {
+			sourceType := makeTypeByPlan2Expr(args[0])
+			targetType := types.T_datetime.ToType()
+			function.SetTargetScaleFromSource(&sourceType, &targetType)
+			if timeWindowIntervalUsesMicrosecond(args[1]) && targetType.Scale < 6 {
+				targetType.Scale = 6
+			}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
 		}
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
@@ -4981,6 +4995,19 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {
+	list := expr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	lit := list.List[1].GetLit()
+	if lit == nil {
+		return false
+	}
+	unit, err := types.IntervalTypeOf(lit.GetSval())
+	return err == nil && unit == types.MicroSecond
 }
 
 func controlFlowValueIndexes(name string, argsLength int) []int {
@@ -6507,7 +6534,8 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if firstExpr.GetLit() != nil {
 		lit = firstExpr.GetLit()
 		innerExpr = firstExpr
-	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
+	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
+		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
 			lit = funcExpr.F.Args[0].GetLit()

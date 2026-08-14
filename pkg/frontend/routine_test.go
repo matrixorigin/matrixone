@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -157,6 +158,23 @@ func TestRoutineStateHelpers(t *testing.T) {
 	require.NotZero(t, rt.getGoroutineId())
 	require.Same(t, rt.parameters, rt.getParameters())
 	require.Nil(t, (*Routine)(nil).getSession())
+}
+
+func TestRoutineShouldCloseConnectionIgnoresRequestDeadline(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 46)
+	routineCtx := rt.getCancelRoutineCtx()
+
+	requestCtx, cancelRequest := context.WithCancelCause(routineCtx)
+	cancelRequest(moerr.CauseNewMOHungSpan)
+	require.Error(t, context.Cause(requestCtx))
+	require.False(t, rt.shouldCloseConnection())
+
+	rt.setCancelled(true)
+	require.True(t, rt.shouldCloseConnection())
+	rt.setCancelled(false)
+
+	rt.releaseRoutineCtx()
+	require.True(t, rt.shouldCloseConnection())
 }
 
 func TestRoutineRequestCallbacksAndCancelContexts(t *testing.T) {

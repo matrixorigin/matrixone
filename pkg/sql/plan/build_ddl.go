@@ -1046,6 +1046,12 @@ func buildCreateTable(
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
+		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
+		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
+		// the source definition and asks the normal CREATE planner to rebuild it.
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, err
+		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
@@ -1088,6 +1094,7 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			true,
 		)
 		if err != nil {
 			return nil, err
@@ -2510,6 +2517,9 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if err != nil {
 			return err
 		}
+		for _, idxDef := range idxDefs {
+			idxDef.Visible = indexOptionVisible(indexInfo.IndexOption)
+		}
 		// Capture the plugin's build-time session vars (BuildSessionVars) into each
 		// index def's algo_params.session_vars — mirroring CreateIndexDef's vector
 		// path — so background builds (idxcron reindex, ISCP async, clone/restore)
@@ -2586,6 +2596,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	for _, indexInfo := range indexInfos {
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
+		indexDef.Visible = indexOptionVisible(indexInfo.IndexOption)
 
 		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), true)
 
@@ -2768,11 +2779,18 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 		if err != nil {
 			return err
 		}
+		for _, idx := range indexDef {
+			idx.Visible = indexOptionVisible(indexInfo.IndexOption)
+		}
 		createTable.IndexTables = append(createTable.IndexTables, tableDef...)
 		createTable.TableDef.Indexes = append(createTable.TableDef.Indexes, indexDef...)
 
 	}
 	return nil
+}
+
+func indexOptionVisible(option *tree.IndexOption) bool {
+	return option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {
@@ -3242,6 +3260,7 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 
 	indexDef.Unique = isUnique
 	indexDef.TableExist = true
+	indexDef.Visible = indexOptionVisible(indexInfo.IndexOption)
 
 	// Algorithm related fields
 	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
@@ -4113,6 +4132,24 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+func rejectCrossDatabaseTableRename(
+	ctx context.Context,
+	sourceDatabase string,
+	option *tree.AlterOptionTableName,
+) error {
+	target := option.Name.ToTableName()
+	if !target.ExplicitSchema || string(target.Schema()) == sourceDatabase {
+		return nil
+	}
+
+	return moerr.NewNotSupportedf(
+		ctx,
+		"cross-database table rename from database '%s' to '%s'",
+		sourceDatabase,
+		target.Schema(),
+	)
+}
+
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
 	type renamedInfo struct {
@@ -4149,6 +4186,13 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
+		}
+		for _, option := range alterTable.Options {
+			if rename, ok := option.(*tree.AlterOptionTableName); ok {
+				if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if tableDef.IsTemporary {

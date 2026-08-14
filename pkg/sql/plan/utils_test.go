@@ -137,6 +137,49 @@ func TestHasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestHasTrailingZerosDoesNotUnwrapNonCastFunction(t *testing.T) {
+	dec, _, err := types.Parse128("99.990000000")
+	require.NoError(t, err)
+	constType := types.Type{
+		Oid:   types.T_decimal128,
+		Width: 38,
+		Scale: 9,
+	}
+	litExpr := &plan.Expr{
+		Typ: plan.Type{
+			Id:    int32(types.T_decimal128),
+			Width: 38,
+			Scale: 9,
+		},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{
+						A: int64(dec.B0_63),
+						B: int64(dec.B64_127),
+					},
+				},
+			},
+		},
+	}
+	dynamicExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 9},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	nonCastExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal128), Width: 38, Scale: 9},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "+"},
+				Args: []*plan.Expr{litExpr, dynamicExpr},
+			},
+		},
+	}
+
+	require.False(t, hasTrailingZeros(nonCastExpr, constType, 2),
+		"only cast(literal) may expose an inner literal; a literal-first operator is still row-dependent")
+}
+
 func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T) {
 	newParam := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
