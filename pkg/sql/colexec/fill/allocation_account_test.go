@@ -246,8 +246,8 @@ func TestAccountedFillLinearSpillLifecycle(t *testing.T) {
 	}
 	require.Equal(t, []types.Decimal128{
 		types.Decimal128FromInt64(10),
-		types.Decimal128FromInt64(50),
-		types.Decimal128FromInt64(50),
+		types.Decimal128FromInt64(37),
+		types.Decimal128FromInt64(63),
 		types.Decimal128FromInt64(90),
 	}, values)
 	require.Positive(t, op.OpAnalyzer.GetOpStats().SpillSize)

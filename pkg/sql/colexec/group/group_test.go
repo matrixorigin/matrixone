@@ -646,6 +646,7 @@ func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
 	input.SetRowCount(1)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	partialOp := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
+	partialOp.NeedEval = false
 	partialOp.AppendChild(child)
 	require.NoError(t, partialOp.Prepare(proc))
 	partials := collectBatches(t, partialOp, proc)

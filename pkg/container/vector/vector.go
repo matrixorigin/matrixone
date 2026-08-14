@@ -350,31 +350,6 @@ func AppendCheckpointScratch(storage []byte, count int) ([]AppendCheckpoint, int
 		(*AppendCheckpoint)(unsafe.Pointer(&storage[0])), count), required, nil
 }
 
-// AppendCheckpointScratch interprets allocator-backed byte storage as append
-// checkpoints. It keeps the checkpoint layout private to vector while letting
-// wide batch operators account scratch by its real physical capacity.
-func AppendCheckpointScratch(storage []byte, count int) ([]AppendCheckpoint, int, error) {
-	if count < 0 {
-		return nil, 0, mpool.ErrAllocationAccountInvalid
-	}
-	size := int(unsafe.Sizeof(AppendCheckpoint{}))
-	if count != 0 && count > math.MaxInt/size {
-		return nil, 0, mpool.ErrAllocationAllocatorLimit
-	}
-	required := count * size
-	if len(storage) < required {
-		return nil, required, nil
-	}
-	if count == 0 {
-		return nil, 0, nil
-	}
-	if uintptr(unsafe.Pointer(&storage[0]))%unsafe.Alignof(AppendCheckpoint{}) != 0 {
-		return nil, required, mpool.ErrAllocationAccountInvalid
-	}
-	return unsafe.Slice(
-		(*AppendCheckpoint)(unsafe.Pointer(&storage[0])), count), required, nil
-}
-
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	binaryStringRowsUniform := false
 	if v.binaryStringRowsActive {
