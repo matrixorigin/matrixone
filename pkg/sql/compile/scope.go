@@ -1672,24 +1672,14 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// Should get relation first to generate Reader.
 	// FIXME:: s.NodeInfo.Rel == nil, partition table? -- this is an old comment, I just do a copy here.
 	default:
-		// This cannot modify the c.proc.Ctx here, but I don't know why.
-		// Maybe there are some account related things stores in the context (using the context.WithValue),
-		// and modify action will change the account.
-		ctx := c.proc.Ctx
-
-		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-
 		// todo:
 		//  these following codes were very likely to `compile.go:compileTableScanDataSource `.
 		//  I kept the old codes here without any modify. I don't know if there is one `GetRelation(txn, scanNode, scheme, table)`
-		txnOp, scanCtx, resolveErr := c.getCompileTableScanDataSourceTxn(s)
+		txnOp, ctx, resolveErr := c.getCompileTableScanDataSourceTxn(s)
 		if resolveErr != nil {
 			err = resolveErr
 			return
 		}
-		ctx = scanCtx
 		s.TxnReadView = txnReadViewForOperator(txnOp, c.TxnReadView)
 
 		var mainRds []engine.Reader

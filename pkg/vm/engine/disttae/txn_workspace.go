@@ -4455,11 +4455,10 @@ func (w *txnWorkspace) tablePointInsertEntries(
 	}
 	ids := make([]workspaceMutationID, 0, len(encodedKeys))
 	for _, encodedKey := range encodedKeys {
-		key := string(encodedKey)
 		ids = appendVisibleWorkspaceOwnerIDs(
-			ids, overlay.activeInsertPKMutations[key], w.mutations, view)
+			ids, overlay.activeInsertPKMutations[string(encodedKey)], w.mutations, view)
 		ids = appendVisibleWorkspaceIntervalIDs(
-			ids, overlay.historicalInsertPKMutations[key], view)
+			ids, overlay.historicalInsertPKMutations[string(encodedKey)], view)
 	}
 	slices.SortStableFunc(ids, func(aID, bID workspaceMutationID) int {
 		return compareWorkspaceCommitOrder(

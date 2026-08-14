@@ -1256,22 +1256,6 @@ func (txn *Transaction) WriteFileLocked(
 		databaseName, tableName, fileName, inputBat, tnStore, 0, false)
 }
 
-func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
-	typ int,
-	accountId uint32,
-	databaseId,
-	tableId uint64,
-	databaseName,
-	tableName string,
-	fileName string,
-	inputBat *batch.Batch,
-	tnStore DNStore,
-	autoIncrEpoch uint32,
-) (err error) {
-	return txn.writeFileLockedWithAutoIncrEpochKnown(typ, accountId, databaseId, tableId,
-		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
-}
-
 func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	typ int,
 	accountId uint32,
@@ -1582,15 +1566,6 @@ func (txn *Transaction) deleteBatch(
 
 func (txn *Transaction) addWorkspaceEntrySelectionsLocked(entry *Entry, sels []int64) {
 	if err := txn.workspace.addMutationSelections(entry.workspaceMutationID, sels); err != nil {
-		panic(err)
-	}
-}
-
-func (txn *Transaction) selectAllWorkspaceEntryRowsLocked(entry *Entry) {
-	if err := txn.workspace.selectAllMutationRows(
-		entry.workspaceMutationID,
-		entry.bat.RowCount(),
-	); err != nil {
 		panic(err)
 	}
 }
@@ -1985,7 +1960,6 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) (err er
 	limit := make(chan struct{}, min(runtime.NumCPU(), 4))
 	var waiter sync.WaitGroup
 	for idx := range dirty {
-		idx := idx
 		waiter.Add(1)
 		go func() {
 			defer waiter.Done()

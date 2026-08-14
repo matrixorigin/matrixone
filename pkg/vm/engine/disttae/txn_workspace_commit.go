@@ -44,21 +44,21 @@ type workspaceCommitBuilder struct {
 	mp                  *mpool.MPool
 }
 
-func (txnCommit *Transaction) newWorkspaceCommitBuilder() (*workspaceCommitBuilder, error) {
-	txnCommit.Lock()
-	defer txnCommit.Unlock()
+func (txn *Transaction) newWorkspaceCommitBuilder() (*workspaceCommitBuilder, error) {
+	txn.Lock()
+	defer txn.Unlock()
 
-	entries, err := txnCommit.workspace.commitEntries()
+	entries, err := txn.workspace.commitEntries()
 	if err != nil {
 		return nil, err
 	}
 	return &workspaceCommitBuilder{
 		entries:             entries,
-		droppedTables:       txnCommit.workspace.droppedTablesSnapshot(),
-		op:                  txnCommit.op,
-		service:             txnCommit.proc.GetService(),
-		syncProtectionJobID: txnCommit.syncProtectionJobID,
-		mp:                  txnCommit.proc.Mp(),
+		droppedTables:       txn.workspace.droppedTablesSnapshot(),
+		op:                  txn.op,
+		service:             txn.proc.GetService(),
+		syncProtectionJobID: txn.syncProtectionJobID,
+		mp:                  txn.proc.Mp(),
 	}, nil
 }
 

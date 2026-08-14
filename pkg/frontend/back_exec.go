@@ -1029,6 +1029,11 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	// statementBoundaryManagedExternally is set only while a caller owns one
+	// workspace statement across multiple background SQL executions.  Those
+	// nested executions still compile and run normally, but must not advance or
+	// close the shared workspace statement independently.
+	statementBoundaryManagedExternally bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
