@@ -51,6 +51,8 @@ type ivfSearchState struct {
 	keys           []any
 	distances      []float64
 	includeColumns []string
+	// slots caches the pk/score/include output positions for the current result layout.
+	slots vectorSearchSlots
 	// includeData stays keyed by column name for round-merge lookups and test
 	// assertions; output order still comes from includeColumns, not map iteration.
 	includeData          map[string][]any
@@ -159,17 +161,17 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 			}
 		}
 
-		// Positions resolved by name: the planner projects only the columns the query
-		// reads, so pkid, score or an INCLUDE column may be absent (see
-		// vector_search_layout.go).
-		if pkPos := vectorSearchAttrPos(u.batch.Attrs, "pkid"); pkPos >= 0 {
-			vector.AppendAny(u.batch.Vecs[pkPos], u.keys[u.offset], false, proc.Mp())
+		// Slots resolved once per layout (see vector_search_layout.go): the planner projects
+		// only the columns the query reads, so pkid, score or an INCLUDE column may be
+		// absent, which is what a -1 slot means.
+		if u.slots.pk >= 0 {
+			vector.AppendAny(u.batch.Vecs[u.slots.pk], u.keys[u.offset], false, proc.Mp())
 		}
-		if scorePos := vectorSearchAttrPos(u.batch.Attrs, "score"); scorePos >= 0 {
-			vector.AppendFixed(u.batch.Vecs[scorePos], u.distances[u.offset], false, proc.Mp())
+		if u.slots.score >= 0 {
+			vector.AppendFixed(u.batch.Vecs[u.slots.score], u.distances[u.offset], false, proc.Mp())
 		}
-		for _, col := range u.includeColumns {
-			pos := vectorSearchAttrPos(u.batch.Attrs, catalog.SystemSI_IVFFLAT_IncludeColPrefix+col)
+		for ci, col := range u.includeColumns {
+			pos := u.slots.include[ci]
 			if pos < 0 {
 				continue
 			}
@@ -438,6 +440,9 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		u.batch = tf.createResultBatch()
 		u.includeColumns = requestedIvfIncludeColumns(tf.Attrs)
+		// Resolve the output slots once for this layout; the emit loop below indexes them.
+		u.slots = resolveVectorSearchSlots(u.batch.Attrs, u.includeColumns,
+			catalog.SystemSI_IVFFLAT_IncludeColPrefix)
 		if u.limit == 0 && (!u.multiRoundEnabled || len(u.includeColumns) == 0) {
 			u.limit = 1
 		}

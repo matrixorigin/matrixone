@@ -32,3 +32,32 @@ func vectorSearchAttrPos(attrs []string, name string) int {
 	}
 	return -1
 }
+
+// vectorSearchSlots is that resolution done ONCE per result layout: -1 means the planner
+// pruned the column. The layout cannot change while a batch is being filled -- Attrs are
+// fixed when createResultBatch builds it -- so resolving per emitted row was a linear
+// string scan repeated 8192 times a batch, and for IVF-FLAT once more per INCLUDE column
+// per row, in the vector-search output hot path.
+type vectorSearchSlots struct {
+	pk    int
+	score int
+	// include is parallel to the state's includeColumns, so the emit loop indexes it
+	// positionally instead of rebuilding the prefixed name and scanning for it.
+	include []int
+}
+
+// resolveVectorSearchSlots resolves pk/score and, when includeColumns is non-empty, one slot
+// per INCLUDE column. Call it right after createResultBatch, with the same Attrs.
+func resolveVectorSearchSlots(attrs []string, includeColumns []string, includePrefix string) vectorSearchSlots {
+	slots := vectorSearchSlots{
+		pk:    vectorSearchAttrPos(attrs, "pkid"),
+		score: vectorSearchAttrPos(attrs, "score"),
+	}
+	if len(includeColumns) > 0 {
+		slots.include = make([]int, len(includeColumns))
+		for i, col := range includeColumns {
+			slots.include[i] = vectorSearchAttrPos(attrs, includePrefix+col)
+		}
+	}
+	return slots
+}

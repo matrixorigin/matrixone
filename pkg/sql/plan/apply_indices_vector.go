@@ -129,6 +129,24 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		}
 	}
 
+	// SORT anchor only (projNode == nil): the child PROJECT is detached and each of its
+	// non-distance expressions is published through idxColMap, which applyIndices then
+	// substitutes into EVERY ancestor referencing that column -- a deep copy per reference.
+	// Fine for a column reference, wrong for anything evaluated: two ancestors would each
+	// get their own rand()/uuid()/now(), so the value a JOIN predicate admitted a row on can
+	// differ from the value projected out of it, and moving evaluation above a JOIN changes
+	// how many times it runs.
+	//
+	// The PROJECT anchor is unaffected: spliceVectorRewrite applies its remap to that one
+	// node, so the expression is still evaluated exactly once.
+	//
+	// exprCanRemoveProject is the planner's existing answer to this same question --
+	// removeSimpleProjections refuses to inline a PROJECT holding a CannotFold or
+	// IsRealTimeRelated function. Reuse it rather than restate it, so the two cannot drift.
+	if projNode == nil && childNode != nil && !vectorChildProjectIsDetachable(childNode, orderExpr) {
+		return nil
+	}
+
 	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
 	if limit == nil {
 		return nil
@@ -683,6 +701,29 @@ func (builder *QueryBuilder) spliceVectorRewrite(
 		idxColMap[k] = v
 	}
 	return newRootID
+}
+
+// vectorChildProjectIsDetachable reports whether the PROJECT below the Top-K may be removed
+// with its expressions republished to arbitrarily many ancestors.
+//
+// The distance entry is exempt: it is replaced by a single ColRef to the index score, so it
+// is not duplicated however many ancestors read it. Every other entry is deep-copied per
+// reference, which is only sound for something whose value does not depend on being
+// evaluated once -- precisely what exprCanRemoveProject already decides.
+func vectorChildProjectIsDetachable(childNode *plan.Node, orderExpr *plan.Expr) bool {
+	sortIdx := -1
+	if col := orderExpr.GetCol(); col != nil {
+		sortIdx = int(col.ColPos)
+	}
+	for i, proj := range childNode.ProjectList {
+		if i == sortIdx {
+			continue
+		}
+		if !exprCanRemoveProject(proj) {
+			return false
+		}
+	}
+	return true
 }
 
 // vectorRemapForChildProject builds the column remap for the PROJECT that sits between the

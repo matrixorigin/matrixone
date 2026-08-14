@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -274,4 +275,73 @@ func TestIvfIndexOnlyBoundary(t *testing.T) {
 
 	gotProj, _ = ivfIndexOnlyBoundary(nil, &plan.Node{NodeType: plan.Node_AGG})
 	require.Nil(t, gotProj, "only a PROJECT bounds the readable columns")
+}
+
+// TestBuildVectorSortContextFromSort_RejectsVolatileChildProjection
+//
+// The SORT-anchored rewrite detaches the PROJECT below the Top-K and republishes each of
+// its non-distance expressions through idxColMap. applyIndices then substitutes that
+// expression into EVERY ancestor referencing the column, deep-copying it per reference.
+//
+// For a column reference that is free. For rand() / uuid() / now() it is not: each ancestor
+// gets its OWN evaluation. In
+//
+//	with knn as (select id, rand() as r, l2_distance(v,'[…]') as d
+//	             from t order by d limit 10)
+//	select k.id, k.r from knn k join thresholds x on k.r < x.value
+//
+// the JOIN predicate and the outer projection would each evaluate rand() independently, so
+// the r that comes back can differ from the r the row was admitted on -- and pushing the
+// evaluation above a JOIN changes how many times it runs.
+//
+// removeSimpleProjections already refuses to inline such a PROJECT (exprCanRemoveProject);
+// this rewrite must not route around that. The context builder therefore declines, leaving
+// the query on its previous plan.
+func TestBuildVectorSortContextFromSort_RejectsVolatileChildProjection(t *testing.T) {
+	volatileExpr := func(t *testing.T, name string) *plan.Expr {
+		t.Helper()
+		e, err := BindFuncExprImplByPlanExpr(context.TODO(), name, nil)
+		require.NoError(t, err, "%s must bind", name)
+		require.False(t, exprCanRemoveProject(e),
+			"%s must be one of the expressions removeSimpleProjections keeps at its project", name)
+		return e
+	}
+
+	for _, name := range []string{"rand", "uuid"} {
+		t.Run(name, func(t *testing.T) {
+			tc := newTopKPlan(t, 10, 2)
+
+			// Sanity: this exact shape rewrites while the projection is plain columns.
+			require.NotNil(t, tc.builder.buildVectorSortContextFromSort(tc.sortNode),
+				"baseline Top-K must be recognised, or the case below proves nothing")
+
+			// Add the volatile output the ancestors would read, as `id, dist, <volatile>`.
+			tc.childNode.ProjectList = append(tc.childNode.ProjectList, volatileExpr(t, name))
+
+			require.Nil(t, tc.builder.buildVectorSortContextFromSort(tc.sortNode),
+				"a detachable-by-copy rewrite must decline when the child project holds %s()", name)
+		})
+	}
+
+	// The distance entry itself is exempt: it is replaced by ONE score ColRef, not copied
+	// per ancestor, so a non-foldable distance expression must not block the rewrite.
+	t.Run("distance entry is exempt", func(t *testing.T) {
+		tc := newTopKPlan(t, 10, 2)
+		require.True(t, vectorChildProjectIsDetachable(tc.childNode, tc.sortNode.OrderBy[0].Expr))
+	})
+
+	// A PROJECT anchor keeps its remap on that one node (spliceVectorRewrite), so the
+	// expression is still evaluated exactly once and the rewrite stays available.
+	t.Run("project anchor still rewrites", func(t *testing.T) {
+		tc := newTopKPlan(t, 10, 2)
+		tc.childNode.ProjectList = append(tc.childNode.ProjectList, volatileExpr(t, "rand"))
+		projNode := &plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{tc.sortNodeID},
+			BindingTags: []int32{tc.builder.genNewBindTag()},
+		}
+		tc.builder.appendNode(projNode, tc.ctx)
+		require.NotNil(t, tc.builder.buildVectorSortContextFrom(projNode, tc.sortNode),
+			"the project anchor evaluates the expression once, so it must not be declined")
+	})
 }
