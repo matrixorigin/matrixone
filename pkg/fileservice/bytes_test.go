@@ -230,8 +230,8 @@ func (*recordingDataCache) Available() int64                           { return 
 func (*recordingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, bool) {
 	return nil, false
 }
-func (*recordingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
-	return nil
+func (*recordingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
+	return true, nil
 }
 func (*recordingDataCache) DeletePaths(context.Context, []string) {}
 func (*recordingDataCache) Flush(context.Context)                 {}
@@ -361,7 +361,8 @@ func TestFileServiceCacheDataAllocatorsReserveBackingCapacity(t *testing.T) {
 				defer cache.Close(ctx)
 
 				seed := NewBytes(make([]byte, 1))
-				require.NoError(t, cache.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed))
+				_, err := cache.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: 1}, seed)
+				require.NoError(t, err)
 				seed.Release()
 
 				allocator := allocatorTest.new(cache)
@@ -382,13 +383,13 @@ func TestMemCachesUseIndependentJemallocArenas(t *testing.T) {
 	second := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "second")
 	defer second.Close(context.Background())
 
-	require.NotNil(t, first.jemalloc)
-	require.NotNil(t, second.jemalloc)
-	require.NotEqual(t, first.jemalloc.Arena(), second.jemalloc.Arena())
+	require.NotNil(t, first.arenaAllocator)
+	require.NotNil(t, second.arenaAllocator)
+	require.NotSame(t, first.arenaAllocator, second.arenaAllocator)
 
 	data := first.AllocateCacheData(context.Background(), 1024)
 	defer data.Release()
-	stats, err := first.jemalloc.Stats()
+	stats, err := first.arenaAllocator.Stats()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, stats.Allocated, uint64(data.Capacity()))
 }

@@ -31,7 +31,7 @@ type DataCache interface {
 	Used() int64
 	Available() int64
 	Get(context.Context, CacheKey) (Data, bool)
-	Set(context.Context, CacheKey, Data) error
+	Set(context.Context, CacheKey, Data) (inserted bool, err error)
 	DeletePaths(context.Context, []string)
 	Flush(ctx context.Context)
 	Evict(ctx context.Context, done chan int64)

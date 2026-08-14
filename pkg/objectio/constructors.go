@@ -60,6 +60,7 @@ type validatedVectorCacheData struct {
 
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
 var _ fscache.DataOwnership = (*validatedVectorCacheData)(nil)
+var _ fscache.DataCacheReservation = (*validatedVectorCacheData)(nil)
 
 func (d *validatedVectorCacheData) Bytes() []byte {
 	return d.validatedVectorSnapshot()
@@ -90,6 +91,12 @@ func (d *validatedVectorCacheData) Retain() {
 
 func (d *validatedVectorCacheData) Release() {
 	d.data.Release()
+}
+
+func (d *validatedVectorCacheData) CommitCacheReservation() {
+	if reserved, ok := d.data.(fscache.DataCacheReservation); ok {
+		reserved.CommitCacheReservation()
+	}
 }
 
 func (d *validatedVectorCacheData) CacheDataOwner() *fscache.DataOwner {

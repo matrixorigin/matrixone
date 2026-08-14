@@ -123,21 +123,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// JemallocStats is a point-in-time view of one explicit jemalloc arena.
-// Allocated is the size-class-rounded live payload. Active contains the pages
-// currently held by the arena; Active-Allocated is allocator-side slack, not
-// caller slice-capacity rounding. Dirty and Muzzy are reclaimable pages.
-type JemallocStats struct {
-	Allocated uint64
-	Active    uint64
-	Metadata  uint64
-	Resident  uint64
-	Mapped    uint64
-	Retained  uint64
-	Dirty     uint64
-	Muzzy     uint64
-}
-
 // JemallocAllocator uses one explicit jemalloc arena. It deliberately bypasses
 // per-thread tcaches so a Memory Cache's arena statistics and reclamation are
 // attributable to that cache instead of to whichever goroutine last used it.
@@ -174,7 +159,7 @@ func NewJemallocAllocator() (*JemallocAllocator, error) {
 	return ret, nil
 }
 
-var _ Allocator = new(JemallocAllocator)
+var _ MemoryCacheAllocator = new(JemallocAllocator)
 
 func (j *JemallocAllocator) Allocate(size uint64, hints Hints) ([]byte, Deallocator, error) {
 	backingSize, err := j.BackingSize(size)
@@ -222,12 +207,12 @@ func (j *JemallocAllocator) Arena() uint {
 }
 
 // Stats refreshes jemalloc's epoch and returns stats for this allocator only.
-func (j *JemallocAllocator) Stats() (JemallocStats, error) {
+func (j *JemallocAllocator) Stats() (MemoryCacheStats, error) {
 	var stats C.mo_jemalloc_stats
 	if err := C.mo_jemalloc_read_stats(C.uint(j.arena), &stats); err != 0 {
-		return JemallocStats{}, moerr.NewInternalErrorNoCtxf("read jemalloc arena %d stats: %d", j.arena, int(err))
+		return MemoryCacheStats{}, moerr.NewInternalErrorNoCtxf("read jemalloc arena %d stats: %d", j.arena, int(err))
 	}
-	return JemallocStats{
+	return MemoryCacheStats{
 		Allocated: uint64(stats.allocated),
 		Active:    uint64(stats.active),
 		Metadata:  uint64(stats.metadata),

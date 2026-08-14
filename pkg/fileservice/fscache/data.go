@@ -44,3 +44,11 @@ type DataOwnership interface {
 	CacheDataOwner() *DataOwner
 	RehomeCacheData(copyData func([]byte) Data) Data
 }
+
+// DataCacheReservation is implemented by data whose allocation has reserved
+// cache capacity before the data can be retained by the FIFO. Cache insertion
+// commits the reservation; Release handles the uninserted path.
+type DataCacheReservation interface {
+	Data
+	CommitCacheReservation()
+}

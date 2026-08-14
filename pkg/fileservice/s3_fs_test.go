@@ -288,12 +288,12 @@ func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *i
 	return b.ObjectStorage.Read(ctx, key, min, max)
 }
 
-func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	if b.updateCount.Add(1) == 1 {
 		close(b.updateStarted)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-b.releaseUpdate:
 		}
 	}

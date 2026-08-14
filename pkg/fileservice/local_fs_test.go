@@ -83,11 +83,11 @@ func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
 	requireDirFilesClosed(t, local.dirFiles, func() { local.Close(ctx) })
 }
 
-func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	c.once.Do(func() { close(c.updateStarted) })
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	case <-c.releaseUpdate:
 	}
 	return c.DataCache.Set(ctx, key, data)

@@ -38,11 +38,11 @@ func decorateAllocator(allocator malloc.Allocator) malloc.Allocator {
 	return allocator
 }
 
-// newMemoryCacheAllocator creates one dedicated jemalloc arena. Memory caches
-// must not silently fall back: admission uses this allocator's size classes and
-// its arena is the source of the per-cache fragmentation metrics.
-func newMemoryCacheAllocator() (malloc.Allocator, *malloc.JemallocAllocator) {
-	raw, err := malloc.NewJemallocAllocator()
+// newMemoryCacheAllocator creates one dedicated Memory Cache allocator. Memory
+// caches must not silently fall back: admission uses its size classes and its
+// isolated resource statistics are the source of fragmentation metrics.
+func newMemoryCacheAllocator() (malloc.Allocator, malloc.MemoryCacheAllocator) {
+	raw, err := malloc.NewMemoryCacheAllocator()
 	if err != nil {
 		panic(fmt.Sprintf("initialize memory cache jemalloc arena: %v", err))
 	}
@@ -68,7 +68,7 @@ var memoryCacheAllocator = sync.OnceValue(func() malloc.Allocator {
 	return allocator
 })
 
-func newMemoryCacheDataAllocator() (*bytesAllocator, *malloc.JemallocAllocator) {
+func newMemoryCacheDataAllocator() (*bytesAllocator, malloc.MemoryCacheAllocator) {
 	allocator, raw := newMemoryCacheAllocator()
 	return newBytesAllocator(allocator), raw
 }

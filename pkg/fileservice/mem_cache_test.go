@@ -32,6 +32,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func requireDataCacheSet(t *testing.T, cache fscache.DataCache, ctx context.Context, key fscache.CacheKey, data fscache.Data) {
+	t.Helper()
+	_, err := cache.Set(ctx, key, data)
+	require.NoError(t, err)
+}
+
 func TestMemCacheLeak(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
@@ -168,6 +174,111 @@ func TestMemCacheUpdateRetainsOwnedDataWithoutCopy(t *testing.T) {
 	vector.Release()
 }
 
+func TestMemCacheRehomeReservesCapacityBeforeCopy(t *testing.T) {
+	ctx := context.Background()
+	const capacity = 1 << 20
+	const request = 700 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+
+	seed := &IOVector{
+		FilePath: "shared:/seed",
+		Entries: []IOEntry{{
+			Size:       capacity,
+			CachedData: cache.CopyToCacheData(ctx, make([]byte, capacity)),
+		}},
+	}
+	require.NoError(t, cache.Update(ctx, seed, false))
+	seed.Release()
+	require.Equal(t, int64(capacity), cache.cache.Used())
+
+	foreign := DefaultCacheDataAllocator().CopyToCacheData(ctx, make([]byte, request))
+	defer foreign.Release()
+	rehomed := cache.admitCacheData(ctx, foreign)
+	rehomedBytes := rehomed.(*Bytes)
+	require.Same(t, cache.allocator.owner, rehomedBytes.CacheDataOwner())
+	require.Equal(t, int64(0), cache.cache.Used())
+
+	stats, err := cache.arenaAllocator.Stats()
+	require.NoError(t, err)
+	require.LessOrEqual(t, stats.Allocated, uint64(capacity))
+	require.Equal(t, int64(backing), cache.reservedBytes)
+
+	rehomed.Release()
+	require.Equal(t, int64(0), cache.reservedBytes)
+}
+
+func TestMemCacheCapacityReservationWaitsForPendingAllocation(t *testing.T) {
+	ctx := context.Background()
+	const capacity = 1 << 20
+	const request = 700 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+	first := cache.reserveCacheData(ctx, backing)
+
+	secondReady := make(chan *memoryCacheReservation, 1)
+	go func() {
+		secondReady <- cache.reserveCacheData(ctx, backing)
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case reservation := <-secondReady:
+			reservation.release()
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 5*time.Millisecond)
+
+	first.release()
+	select {
+	case second := <-secondReady:
+		second.release()
+	case <-time.After(time.Second):
+		t.Fatal("second reservation did not proceed after the first was released")
+	}
+}
+
+func TestMemCacheDuplicateSetKeepsReservationUntilDataRelease(t *testing.T) {
+	ctx := context.Background()
+	const capacity = 2 << 20
+	const request = 700 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+
+	first := &IOVector{
+		FilePath: "shared:/same-key",
+		Entries: []IOEntry{{
+			Size:       request,
+			CachedData: cache.CopyToCacheData(ctx, make([]byte, request)),
+		}},
+	}
+	require.NoError(t, cache.Update(ctx, first, false))
+	first.Release()
+	require.Equal(t, int64(0), cache.reservedBytes)
+
+	duplicate := &IOVector{
+		FilePath: "shared:/same-key",
+		Entries: []IOEntry{{
+			Size:       request,
+			CachedData: cache.CopyToCacheData(ctx, make([]byte, request)),
+		}},
+	}
+	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.NoError(t, cache.Update(ctx, duplicate, false))
+	require.Equal(t, int64(backing), cache.reservedBytes)
+
+	duplicate.Release()
+	require.Equal(t, int64(0), cache.reservedBytes)
+}
+
 func TestMemCacheAllocatorMetricsRefreshAfterBurst(t *testing.T) {
 	ctx := context.Background()
 	name := t.Name()
@@ -276,7 +387,7 @@ func TestMemCacheSeparatesPhysicalAndLogicalBytesMetrics(t *testing.T) {
 	backingOverhead := metric.GetFsCacheBackingOverheadBytesGauge(name, "mem")
 	data := NewBytes(make([]byte, 3, 8))
 	key := fscache.CacheKey{Path: "foo", Sz: 3}
-	require.NoError(t, cache.cache.Set(ctx, key, data))
+	requireDataCacheSet(t, cache.cache, ctx, key, data)
 	data.Release()
 
 	require.Equal(t, int64(8), cache.cache.Used())
@@ -463,7 +574,8 @@ func TestMemCacheRetainsBeforeSetVisible(t *testing.T) {
 	key := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- cache.cache.Set(ctx, key, data)
+		_, err := cache.cache.Set(ctx, key, data)
+		setDone <- err
 	}()
 
 	<-data.retainStarted
@@ -562,19 +674,20 @@ func TestMemCacheSkipsStalePostEvictAfterReinsert(t *testing.T) {
 
 	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
 	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
-	assert.NoError(t, cache.cache.Set(ctx, key1, &blockingReleaseData{
+	requireDataCacheSet(t, cache.cache, ctx, key1, &blockingReleaseData{
 		bytes:   []byte("a"),
 		started: releaseStarted,
 		unblock: releaseUnblock,
-	}))
+	})
 
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+		_, err := cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+		setDone <- err
 	}()
 
 	<-releaseStarted
-	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("c"))))
+	requireDataCacheSet(t, cache.cache, ctx, key1, staticTestData([]byte("c")))
 	close(releaseUnblock)
 	assert.NoError(t, <-setDone)
 
@@ -628,18 +741,20 @@ func TestMemCacheSerializesSameKeyCallbacks(t *testing.T) {
 
 	key1 := fscache.CacheKey{Path: "foo", Offset: 0, Sz: 1}
 	key2 := fscache.CacheKey{Path: "bar", Offset: 0, Sz: 1}
-	assert.NoError(t, cache.cache.Set(ctx, key1, staticTestData([]byte("a"))))
+	requireDataCacheSet(t, cache.cache, ctx, key1, staticTestData([]byte("a")))
 	assert.Equal(t, "set", <-events)
 
 	firstSetDone := make(chan error, 1)
 	go func() {
-		firstSetDone <- cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+		_, err := cache.cache.Set(ctx, key2, staticTestData([]byte("b")))
+		firstSetDone <- err
 	}()
 
 	<-evictStarted
 	secondSetDone := make(chan error, 1)
 	go func() {
-		secondSetDone <- cache.cache.Set(ctx, key1, staticTestData([]byte("c")))
+		_, err := cache.cache.Set(ctx, key1, staticTestData([]byte("c")))
+		secondSetDone <- err
 	}()
 
 	select {
@@ -761,7 +876,7 @@ func benchmarkMemCacheSet(b *testing.B, parallel bool) {
 	b.ResetTimer()
 	if !parallel {
 		for i := 0; i < b.N; i++ {
-			if err := cache.cache.Set(ctx, keys[i%len(keys)], data); err != nil {
+			if _, err := cache.cache.Set(ctx, keys[i%len(keys)], data); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -772,7 +887,7 @@ func benchmarkMemCacheSet(b *testing.B, parallel bool) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			i := next.Add(1) - 1
-			if err := cache.cache.Set(ctx, keys[i%uint64(len(keys))], data); err != nil {
+			if _, err := cache.cache.Set(ctx, keys[i%uint64(len(keys))], data); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -828,7 +943,7 @@ func TestMemoryCacheEvictToCapacityPercent(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		key := fscache.CacheKey{Path: fmt.Sprintf("key-%d", i), Offset: int64(i), Sz: 1}
-		assert.NoError(t, cache.cache.Set(ctx, key, staticTestData([]byte{byte(i)})))
+		requireDataCacheSet(t, cache.cache, ctx, key, staticTestData([]byte{byte(i)}))
 	}
 	assert.Equal(t, int64(10), cache.cache.Used())
 
@@ -864,6 +979,7 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 			}},
 		}
 		assert.NoError(t, cache.Update(ctx, vec, false))
+		vec.Release()
 	}
 	assert.Equal(t, 5*unit, cache.cache.Used())
 
@@ -968,6 +1084,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, coldVec, false))
+	coldVec.Release()
 	assert.Equal(t, 2*unit, cache.cache.Used())
 	_, ok = cache.cache.Get(ctx, key3)
 	assert.False(t, ok)
@@ -981,6 +1098,7 @@ func TestMemoryCachePressureAdmissionAdmitsGhostEntry(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, ghostVec, false))
+	ghostVec.Release()
 	assert.Equal(t, 2*unit, cache.cache.Used())
 	_, ok = cache.cache.Get(ctx, key0)
 	assert.True(t, ok)
@@ -1014,5 +1132,6 @@ func TestMemoryCachePressureAdmissionExpires(t *testing.T) {
 		}},
 	}
 	assert.NoError(t, cache.Update(ctx, vec, false))
+	vec.Release()
 	assert.Equal(t, unit, cache.cache.Used())
 }

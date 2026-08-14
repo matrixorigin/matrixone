@@ -39,12 +39,45 @@ type MemCache struct {
 	// here: that would merge unrelated FileService caches into one allocator
 	// arena and make fragmentation metrics untrustworthy.
 	allocator           *bytesAllocator
-	jemalloc            *malloc.JemallocAllocator
+	arenaAllocator      malloc.MemoryCacheAllocator
 	allocatorGauges     metric.FsCacheAllocatorStatsGauges
 	metricKey           memoryCacheMetricKey
 	lastStatsUpdate     atomic.Int64
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
+
+	capacityMu      sync.Mutex
+	reservedBytes   int64
+	capacityChanged chan struct{}
+}
+
+// memoryCacheReservation accounts for an allocated buffer until FIFO insertion
+// transfers its capacity into cache.Used(), or buffer Release deallocates it.
+// This closes the allocation-before-Set window for foreign cache data.
+type memoryCacheReservation struct {
+	cache *MemCache
+	bytes int64
+	state atomic.Uint32
+}
+
+const (
+	memoryCacheReservationPending uint32 = iota
+	memoryCacheReservationCommitted
+	memoryCacheReservationReleased
+)
+
+var _ cacheDataReservation = (*memoryCacheReservation)(nil)
+
+func (r *memoryCacheReservation) commit() {
+	if r.state.CompareAndSwap(memoryCacheReservationPending, memoryCacheReservationCommitted) {
+		r.cache.releaseReservedBytes(r.bytes)
+	}
+}
+
+func (r *memoryCacheReservation) release() {
+	if r.state.CompareAndSwap(memoryCacheReservationPending, memoryCacheReservationReleased) {
+		r.cache.releaseReservedBytes(r.bytes)
+	}
 }
 
 type memoryCacheMetricKey struct {
@@ -204,13 +237,14 @@ func newMemCacheWithMetricScope(
 	}
 
 	var dataCache *fifocache.DataCache
-	cacheAllocator, jemallocAllocator := newMemoryCacheDataAllocator()
+	cacheAllocator, arenaAllocator := newMemoryCacheDataAllocator()
 	ret := &MemCache{
 		counterSets:     counterSets,
 		allocator:       cacheAllocator,
-		jemalloc:        jemallocAllocator,
+		arenaAllocator:  arenaAllocator,
 		allocatorGauges: allocatorGauges,
 		metricKey:       memoryCacheMetricKey{scope: metricScope, name: name},
+		capacityChanged: make(chan struct{}),
 	}
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
@@ -287,6 +321,7 @@ func newMemCacheWithMetricScope(
 
 		// release
 		value.Release()
+		ret.signalCapacityChanged()
 		ret.refreshAllocatorMetrics(false)
 
 		// callbacks
@@ -333,26 +368,87 @@ var _ CacheDataAllocator = new(MemCache)
 func (*MemCache) cacheDataAllocationCapacityGuarded() {}
 
 func (m *MemCache) AllocateCacheData(ctx context.Context, size int) fscache.Data {
-	ensureCacheDataCapacity(ctx, m.cache, m.allocator, size)
-	return m.allocator.AllocateCacheData(ctx, size)
+	return m.allocateCacheData(ctx, size, malloc.NoHints)
 }
 
 func (m *MemCache) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	ensureCacheDataCapacity(ctx, m.cache, m.allocator, size)
-	return m.allocator.AllocateCacheDataWithHint(ctx, size, hints)
+	return m.allocateCacheData(ctx, size, hints)
 }
 
 func (m *MemCache) CopyToCacheData(ctx context.Context, data []byte) fscache.Data {
-	ensureCacheDataCapacity(ctx, m.cache, m.allocator, len(data))
-	return m.allocator.CopyToCacheData(ctx, data)
+	ret := m.allocateCacheData(ctx, len(data), malloc.NoClear)
+	copy(ret.Bytes(), data)
+	return ret
 }
 
 func (m *MemCache) BackingSize(size int) int {
 	return m.allocator.BackingSize(size)
 }
 
+func (m *MemCache) allocateCacheData(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
+	reservation := m.reserveCacheData(ctx, m.allocator.BackingSize(size))
+	ret := m.allocator.allocateCacheBytes(size, hints)
+	ret.reservation = reservation
+	return ret
+}
+
+func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCacheReservation {
+	if bytes <= 0 {
+		panic("memory cache reservation requires positive bytes")
+	}
+
+	want := int64(bytes)
+	for {
+		m.capacityMu.Lock()
+		capacity := m.cache.Capacity()
+		used := m.cache.Used()
+		if want <= capacity-used-m.reservedBytes {
+			m.reservedBytes += want
+			m.capacityMu.Unlock()
+			return &memoryCacheReservation{cache: m, bytes: want}
+		}
+		target := capacity - m.reservedBytes - want
+		changed := m.capacityChanged
+		m.capacityMu.Unlock()
+
+		if target >= 0 {
+			if m.cache.EvictToTargetWithWait(withoutEventLogger(ctx), target) <= target {
+				continue
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			panic(ctx.Err())
+		case <-changed:
+		}
+	}
+}
+
+func (m *MemCache) releaseReservedBytes(bytes int64) {
+	m.capacityMu.Lock()
+	m.reservedBytes -= bytes
+	if m.reservedBytes < 0 {
+		m.capacityMu.Unlock()
+		panic("memory cache reservation underflow")
+	}
+	m.signalCapacityChangedLocked()
+	m.capacityMu.Unlock()
+}
+
+func (m *MemCache) signalCapacityChanged() {
+	m.capacityMu.Lock()
+	m.signalCapacityChangedLocked()
+	m.capacityMu.Unlock()
+}
+
+func (m *MemCache) signalCapacityChangedLocked() {
+	close(m.capacityChanged)
+	m.capacityChanged = make(chan struct{})
+}
+
 func (m *MemCache) refreshAllocatorMetrics(force bool) {
-	if m.jemalloc == nil {
+	if m.arenaAllocator == nil {
 		return
 	}
 
@@ -396,18 +492,18 @@ func (m *MemCache) refreshAllocatorMetrics(force bool) {
 // Cache capacity gauges already aggregate values from same-named MemCaches, so
 // publishing only the last arena would make allocator fragmentation appear
 // smaller than the logical cache it is meant to explain.
-func (m *MemCache) allocatorStats() (malloc.JemallocStats, error) {
+func (m *MemCache) allocatorStats() (malloc.MemoryCacheStats, error) {
 	if m.metricKey.name == "" {
-		return m.jemalloc.Stats()
+		return m.arenaAllocator.Stats()
 	}
 
-	var total malloc.JemallocStats
+	var total malloc.MemoryCacheStats
 	var statsErr error
 	allMemoryCaches.Range(func(key, value any) bool {
 		if value.(memoryCacheRegistration).metricKey != m.metricKey {
 			return true
 		}
-		stats, err := key.(*MemCache).jemalloc.Stats()
+		stats, err := key.(*MemCache).arenaAllocator.Stats()
 		if err != nil {
 			statsErr = err
 			return false
@@ -423,7 +519,7 @@ func (m *MemCache) allocatorStats() (malloc.JemallocStats, error) {
 		return true
 	})
 	if statsErr != nil {
-		return malloc.JemallocStats{}, statsErr
+		return malloc.MemoryCacheStats{}, statsErr
 	}
 	return total, nil
 }
@@ -542,7 +638,7 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		err := m.cache.Set(ctx, key, entry.CachedData)
+		inserted, err := m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
@@ -550,6 +646,11 @@ func (m *MemCache) Update(
 		}
 		if err != nil {
 			return err
+		}
+		if inserted {
+			if reserved, ok := entry.CachedData.(fscache.DataCacheReservation); ok {
+				reserved.CommitCacheReservation()
+			}
 		}
 	}
 	return nil
@@ -560,11 +661,10 @@ func (m *MemCache) Update(
 // path. Data from a vector cache, disk cache, or a legacy caller can originate
 // elsewhere; it is copied once here before MemCache retains it.
 func (m *MemCache) admitCacheData(ctx context.Context, data fscache.Data) fscache.Data {
-	// DataCache.Set is the sole FIFO admission decision for rehomed data.
-	// The public MemCache allocation methods reserve capacity before allocation
-	// for FileService read paths, which would reserve the same entry twice here.
+	// CopyToCacheData reserves capacity before allocation. The reservation remains
+	// attached until postSet transfers it to FIFO accounting or the data releases.
 	copyData := func(bytes []byte) fscache.Data {
-		return m.allocator.CopyToCacheData(ctx, bytes)
+		return m.CopyToCacheData(ctx, bytes)
 	}
 	if owned, ok := data.(fscache.DataOwnership); ok {
 		if owned.CacheDataOwner() == m.allocator.owner {
