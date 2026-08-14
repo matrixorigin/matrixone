@@ -18,11 +18,38 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+type namedSnapshotCompilerContext struct {
+	*MockCompilerContext
+	snapshot *Snapshot
+}
+
+func (c *namedSnapshotCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
+	return c.snapshot, nil
+}
+
+func snapshotScopeExprContainsObjectID(expr *planpb.Expr, objectID uint64) bool {
+	literal := expr.GetLit()
+	if literal != nil && (literal.GetI64Val() == int64(objectID) || literal.GetU64Val() == objectID) {
+		return true
+	}
+	if function := expr.GetF(); function != nil {
+		for _, argument := range function.Args {
+			if snapshotScopeExprContainsObjectID(argument, objectID) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func TestValidateSnapshotScope(t *testing.T) {
 	newSnapshot := func(level string, objectID uint64) *Snapshot {
@@ -101,6 +128,62 @@ func TestSnapshotTableID(t *testing.T) {
 	require.Zero(t, SnapshotTableID(nil))
 	require.Equal(t, uint64(2), SnapshotTableID(&planpb.TableDef{TblId: 2}))
 	require.Equal(t, uint64(3), SnapshotTableID(&planpb.TableDef{TblId: 2, LogicalId: 3}))
+}
+
+func TestBuildShowDatabasesRejectsTableSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := NewMockCompilerContext2(ctrl)
+	snapshot := &Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &planpb.SnapshotTenant{},
+		ExtraInfo: &planpb.SnapshotExtraInfo{
+			Name:  "snapshot",
+			Level: tree.SNAPSHOTLEVELTABLE.String(),
+			ObjId: 7,
+		},
+	}
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil)
+	ctx.EXPECT().GetSnapshot().Return(nil)
+	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+
+	_, err := buildShowDatabases(&tree.ShowDatabases{AtTsExpr: &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: "snapshot",
+		Expr:         tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}}, ctx)
+	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) cannot list databases")
+}
+
+func TestBuildShowDatabasesRestrictsDatabaseSnapshot(t *testing.T) {
+	ctx := &namedSnapshotCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		snapshot: &Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 42},
+			Tenant: &planpb.SnapshotTenant{},
+			ExtraInfo: &planpb.SnapshotExtraInfo{
+				Name:  "snapshot",
+				Level: tree.SNAPSHOTLEVELDATABASE.String(),
+				ObjId: 7,
+			},
+		},
+	}
+	ctx.tables["mo_database"].Cols = append(ctx.tables["mo_database"].Cols, &planpb.ColDef{
+		Name: "dat_id",
+		Typ:  planpb.Type{Id: int32(types.T_uint64)},
+	})
+
+	plan, err := buildShowDatabases(&tree.ShowDatabases{AtTsExpr: &tree.AtTimeStamp{
+		Type:         tree.ATTIMESTAMPSNAPSHOT,
+		SnapshotName: "snapshot",
+		Expr:         tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}}, ctx)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	require.True(t, queryContainsExpr(plan.GetQuery(), func(expr *planpb.Expr) bool {
+		return snapshotScopeExprContainsObjectID(expr, 7)
+	}))
 }
 
 func TestCheckPrivilegeUsesSnapshotLogicalTableID(t *testing.T) {

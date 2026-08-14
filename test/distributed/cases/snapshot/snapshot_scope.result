@@ -41,6 +41,8 @@ select 'database_snapshot_other_database' as case_name, v from snapshot_scope_b.
 internal error: database-level snapshot(snapshot_scope_database) does not belong to the database(snapshot_scope_b)
 data branch diff snapshot_scope_a.other{snapshot = 'snapshot_scope_table'} against snapshot_scope_a.t;
 internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
+data branch diff snapshot_scope_a.t against snapshot_scope_a.other{snapshot = 'snapshot_scope_table'};
+internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
 show create table snapshot_scope_a.t {snapshot = 'snapshot_scope_table'};
 ➤ Table[12,0,0]  ¦  Create Table[12,70,0]  𝄀
 t  ¦  CREATE TABLE `t` (

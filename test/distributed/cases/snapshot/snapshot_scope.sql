@@ -34,6 +34,7 @@ select 'database_snapshot_other_table_control' as case_name, v from snapshot_sco
 select 'database_snapshot_other_database' as case_name, v from snapshot_scope_b.t{snapshot = 'snapshot_scope_database'};
 
 data branch diff snapshot_scope_a.other{snapshot = 'snapshot_scope_table'} against snapshot_scope_a.t;
+data branch diff snapshot_scope_a.t against snapshot_scope_a.other{snapshot = 'snapshot_scope_table'};
 
 show create table snapshot_scope_a.t {snapshot = 'snapshot_scope_table'};
 show create table snapshot_scope_a.other {snapshot = 'snapshot_scope_table'};
