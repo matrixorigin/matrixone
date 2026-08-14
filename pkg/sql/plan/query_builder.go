@@ -7959,11 +7959,18 @@ func inferGapFillBounds(
 		return nil, nil, err
 	}
 
+	// mo_win_truncate represents TIMESTAMP windows as DATETIME values whose raw
+	// microseconds are the source instants. Keep inferred TIMESTAMP bounds in
+	// their source type so the executor can reinterpret them in that same instant
+	// coordinate without applying the session timezone a second time.
+	if types.T(timestamp.Typ.Id) == types.T_timestamp {
+		return start, finish, nil
+	}
+
 	// The time-window key is evaluated as DATETIME by mo_win_truncate. Convert
 	// the already-combined bounds through the same cast path so every temporal
 	// input accepted by the binder (notably TIME and YEAR) reaches the executor
-	// in one representation. Combining first also preserves TIMESTAMP ordering
-	// across session-timezone/DST conversions.
+	// in one representation.
 	datetimeType := plan.Type{Id: int32(types.T_datetime), Scale: timestamp.Typ.Scale}
 	start, err = appendCastBeforeExpr(ctx, start, datetimeType)
 	if err != nil {

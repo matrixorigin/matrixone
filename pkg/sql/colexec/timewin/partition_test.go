@@ -390,10 +390,10 @@ func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Bat
 	return
 }
 
-func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process) (starts []types.Datetime, sums []int64) {
+func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process, inputs ...*batch.Batch) (starts []types.Datetime, sums []int64) {
 	t.Helper()
 	arg.Children = nil
-	arg.AppendChild(colexec.NewMockOperator())
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
 	require.NoError(t, arg.Prepare(proc))
 
 	for {
@@ -821,15 +821,28 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	arg.GapFillEnd = timestampBound(t, zone, "2023-08-01 00:00:15")
 	arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
 
-	starts, sums := runTemporalBoundArg(t, arg, proc)
+	// The planner feeds TimeWin DATETIME keys produced by mo_win_truncate. For a
+	// TIMESTAMP source these carry the raw instant microseconds, not local wall
+	// clock microseconds. Include an observed row to ensure inferred bounds use
+	// that same coordinate instead of merely producing correctly labelled gaps.
+	observed, err := types.ParseTimestamp(zone, "2023-08-01 00:00:05", 6)
+	require.NoError(t, err)
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Datetime(observed), false, proc.Mp()))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	in.SetRowCount(1)
+
+	starts, sums := runTemporalBoundArg(t, arg, proc, in)
 	require.Equal(t, []types.Datetime{
 		mustDatetime(t, "2023-08-01 00:00:00"),
 		mustDatetime(t, "2023-08-01 00:00:05"),
 		mustDatetime(t, "2023-08-01 00:00:10"),
 	}, starts)
-	require.Equal(t, []int64{0, 0, 0}, sums)
+	require.Equal(t, []int64{0, 7, 0}, sums)
 
 	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

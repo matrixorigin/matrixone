@@ -2907,6 +2907,38 @@ func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
 	}
 }
 
+func TestInferGapFillBoundsPreservesTimestampInstantBounds(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	boundFilter := func(op string, value int64) *plan.Expr {
+		bound := makePlan2TimestampConstExprWithType(value)
+		bound.Typ.Scale = timestamp.Typ.Scale
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: op},
+				Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		boundFilter(">=", 1),
+		boundFilter("<", 2),
+	}, timestamp)
+
+	require.NoError(t, err)
+	for _, bound := range []*plan.Expr{start, finish} {
+		require.Equal(t, int32(types.T_timestamp), bound.Typ.Id)
+		require.Equal(t, int32(types.T_timestamp), bound.GetF().Args[0].Typ.Id)
+	}
+}
+
 func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(3))

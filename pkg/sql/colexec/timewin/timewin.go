@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"slices"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -160,10 +159,6 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	if !timeWin.hasGapFillBounds() {
 		return nil
 	}
-	loc := time.Local
-	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
-		loc = proc.GetSessionInfo().TimeZone
-	}
 	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, bool, error) {
 		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 		if err != nil {
@@ -178,7 +173,10 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 		case types.T_datetime:
 			return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[0], false, nil
 		case types.T_timestamp:
-			return vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0].ToDatetime(loc), false, nil
+			// TruncateTimestamp stores timestamp instants as raw DATETIME keys.
+			// Reinterpret the inferred bound identically; converting it through the
+			// session timezone would put bounds and observed rows in different grids.
+			return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0]), false, nil
 		default:
 			return 0, false, moerr.NewInternalErrorNoCtxf("GAPFILL %s bound has non-temporal type %s", name, vec.GetType().Oid.String())
 		}
