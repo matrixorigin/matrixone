@@ -5,13 +5,29 @@ use db0;
 create table s1(a int);
 insert into s1 select * from generate_series(1,5)g;
 
+-- issue#27091: database clone must restore database-scoped stored procedures,
+-- including arguments and the SQL mode used to parse their bodies on CALL.
+create procedure db0.p_answer() 'begin select 42 as answer; end';
+create procedure db0.p_double(in input_value int, out output_value int) 'begin set output_value = input_value * 2; end';
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
+set sql_mode = default;
+
 create database db0_copy_0 clone db0;
 show tables from db0_copy_0;
 select * from db0_copy_0.s1;
+select name from mo_catalog.mo_stored_procedure
+where db = 'db0_copy_0'
+order by name;
+call db0_copy_0.p_answer();
+call db0_copy_0.p_double(21, @db0_copy_double);
+select @db0_copy_double;
+call db0_copy_0.p_sql_mode();
 
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
 select * from db0_copy_1.s1;
+call db0_copy_1.p_answer();
 
 drop database if exists db1;
 create database db1;
@@ -26,6 +42,7 @@ create account acc2 admin_name "root2" identified by "111";
 create table t1(a int, b int);
 create table t2(a int, b int, primary key (a));
 create table t3(a int, b int, primary key (a), index(a));
+create procedure db1.p_cross_account() 'begin select 42 as answer; end';
 
 insert into t1 select *,* from generate_series(1,5)g;
 insert into t2 select *,* from generate_series(1,5)g;
@@ -40,6 +57,7 @@ drop snapshot sp_temp;
 -- @session:id=2&user=acc1:root1&password=111
 show tables from db1_copy;
 select * from db1_copy.t1;
+call db1_copy.p_cross_account();
 -- @session
 
 drop snapshot if exists sp0;
@@ -49,6 +67,7 @@ create database db1_copy_copy clone db1_copy {snapshot = "sp0"} to account acc2;
 -- @session:id=3&user=acc2:root2&password=111
 show tables from db1_copy_copy;
 select * from db1_copy_copy.t1;
+call db1_copy_copy.p_cross_account();
 -- @session
 
 drop database if exists db2;

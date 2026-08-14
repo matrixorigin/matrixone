@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -26,6 +27,38 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	procedure := storedProcedureDefinition{
+		name:    "p_double",
+		args:    `[{"ArgName":"input_value","InOutType":0},{"ArgName":"output_value","InOutType":1}]`,
+		lang:    "sql",
+		body:    "begin set output_value = input_value * 2; end",
+		sqlMode: "PIPES_AS_CONCAT",
+	}
+	checkSQL := getSqlForCheckProcedureExistence(procedure.name, "target_db")
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
+	require.NoError(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"))
+	require.Len(t, bh.executedSQLs, 2)
+	require.Equal(t, checkSQL, bh.executedSQLs[0])
+	require.Contains(t, bh.executedSQLs[1], procedure.args)
+	require.Contains(t, bh.executedSQLs[1], "'PIPES_AS_CONCAT'")
+	require.Contains(t, bh.executedSQLs[1], "'target_db'")
+	require.NotContains(t, bh.executedSQLs[1], "create procedure")
+	require.NotContains(t, bh.executedSQLs, "begin;")
+
+	bh = &backgroundExecTest{}
+	bh.init()
+	wantErr := errors.New("lookup failed")
+	bh.sql2err[checkSQL] = wantErr
+	require.ErrorIs(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"), wantErr)
+	require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+}
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	source := cloneDatabaseSource{

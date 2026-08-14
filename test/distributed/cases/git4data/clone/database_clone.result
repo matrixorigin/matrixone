@@ -3,6 +3,11 @@ create database db0;
 use db0;
 create table s1(a int);
 insert into s1 select * from generate_series(1,5)g;
+create procedure db0.p_answer() 'begin select 42 as answer; end';
+create procedure db0.p_double(in input_value int, out output_value int) 'begin set output_value = input_value * 2; end';
+set sql_mode = 'PIPES_AS_CONCAT';
+create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
+set sql_mode = default;
 create database db0_copy_0 clone db0;
 show tables from db0_copy_0;
 Tables_in_db0_copy_0
@@ -14,6 +19,23 @@ a
 3
 4
 5
+select name from mo_catalog.mo_stored_procedure
+where db = 'db0_copy_0'
+order by name;
+name
+p_answer
+p_double
+p_sql_mode
+call db0_copy_0.p_answer();
+answer
+42
+call db0_copy_0.p_double(21, @db0_copy_double);
+select @db0_copy_double;
+@db0_copy_double
+42
+call db0_copy_0.p_sql_mode();
+answer
+ab
 create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
 Tables_in_db0_copy_1
@@ -25,6 +47,9 @@ a
 3
 4
 5
+call db0_copy_1.p_answer();
+answer
+42
 drop database if exists db1;
 create database db1;
 use db1;
@@ -35,6 +60,7 @@ create account acc2 admin_name "root2" identified by "111";
 create table t1(a int, b int);
 create table t2(a int, b int, primary key (a));
 create table t3(a int, b int, primary key (a), index(a));
+create procedure db1.p_cross_account() 'begin select 42 as answer; end';
 insert into t1 select *,* from generate_series(1,5)g;
 insert into t2 select *,* from generate_series(1,5)g;
 insert into t3 select *,* from generate_series(1,5)g;
@@ -55,6 +81,9 @@ a    b
 3    3
 4    4
 5    5
+call db1_copy.p_cross_account();
+answer
+42
 drop snapshot if exists sp0;
 create snapshot sp0 for account acc1;
 create database db1_copy_copy clone db1_copy {snapshot = "sp0"} to account acc2;
@@ -70,6 +99,9 @@ a    b
 3    3
 4    4
 5    5
+call db1_copy_copy.p_cross_account();
+answer
+42
 drop database if exists db2;
 create database db2;
 use db2;

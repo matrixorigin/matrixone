@@ -11180,44 +11180,47 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 	return b.String()
 }
 
-func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
-	var initMoProcedure string
-	var dbName string
-	var checkExistence string
-	parserSQLMode := sessionSQLModeForParser(ses)
-	var argsJson []byte
-	// var fmtctx *tree.FmtCtx
-	var erArray []ExecResult
+// storedProcedureDefinition is the procedure metadata kept outside mo_tables.
+// Callers control the transaction that persists it.
+type storedProcedureDefinition struct {
+	name    string
+	args    string
+	lang    string
+	body    string
+	sqlMode string
+	dbName  string
+}
 
-	// a database must be selected or specified as qualifier when create a function
-	if cp.Name.HasNoNameQualifier() {
-		if ses.DatabaseNameIsEmpty() {
-			return moerr.NewNoDBNoCtx()
-		}
-		dbName = ses.GetDatabaseName()
-	} else {
-		dbName = string(cp.Name.Name.SchemaName)
+func newStoredProcedureDefinition(ctx context.Context, ses *Session, cp *tree.CreateProcedure) (storedProcedureDefinition, error) {
+	definition := storedProcedureDefinition{
+		name:    string(cp.Name.Name.ObjectName),
+		lang:    cp.Lang,
+		body:    cp.Body,
+		sqlMode: sessionSQLModeForParser(ses),
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
+	if cp.Name.HasNoNameQualifier() {
+		if ses.DatabaseNameIsEmpty() {
+			return storedProcedureDefinition{}, moerr.NewNoDBNoCtx()
+		}
+		definition.dbName = ses.GetDatabaseName()
+	} else {
+		definition.dbName = string(cp.Name.Name.SchemaName)
+	}
 
-	// build argmap and marshal as json
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
-	// build argmap and marshal as json
 	argList := make([]tree.ProcedureArgForMarshal, len(cp.Args))
 	for i := 0; i < len(cp.Args); i++ {
 		curName := cp.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
 
 		if curName == "mo" || strings.HasPrefix(curName, "mo.") || strings.HasPrefix(curName, "out_") {
-			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
+			return storedProcedureDefinition{}, moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
 		}
 
 		argType, ok := cp.Args[i].(*tree.ProcedureArgDecl).Type.(*tree.T)
 		if !ok {
-			return moerr.NewInternalError(ctx, "unknown stored procedure argument type")
+			return storedProcedureDefinition{}, moerr.NewInternalError(ctx, "unknown stored procedure argument type")
 		}
 		argList[i] = tree.ProcedureArgForMarshal{
 			ArgName:   curName,
@@ -11226,59 +11229,99 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
 		}
 	}
-	argsJson, err = json.Marshal(argList)
+
+	argsJSON, err := json.Marshal(argList)
+	if err != nil {
+		return storedProcedureDefinition{}, err
+	}
+	definition.args = string(argsJSON)
+	return definition, nil
+}
+
+// upsertStoredProcedure persists a procedure in the caller-owned transaction.
+func upsertStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	replace bool,
+) error {
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, replace)
 	if err != nil {
 		return err
 	}
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
+}
 
-	// validate duplicate procedure declaration
+func prepareStoredProcedurePersistence(
+	ctx context.Context,
+	bh BackgroundExec,
+	definition storedProcedureDefinition,
+	replace bool,
+) ([]ExecResult, error) {
 	bh.ClearExecResultSet()
-	checkExistence = getSqlForCheckProcedureExistence(string(cp.Name.Name.ObjectName), dbName)
-	err = bh.Exec(ctx, checkExistence)
+	if err := bh.Exec(ctx, getSqlForCheckProcedureExistence(definition.name, definition.dbName)); err != nil {
+		return nil, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
+	if execResultArrayHasData(erArray) && !replace {
+		return nil, moerr.NewProcedureAlreadyExistsNoCtx(definition.name)
 	}
+	return erArray, nil
+}
 
-	if execResultArrayHasData(erArray) && !cp.Replace {
-		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
+func persistStoredProcedure(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	definition storedProcedureDefinition,
+	erArray []ExecResult,
+) error {
+	var persistSQL string
 	if execResultArrayHasData(erArray) {
-		var id int64
-		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
-		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
-			string(cp.Name.Name.ObjectName),
-			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
+		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
+			definition.name,
+			definition.args,
+			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
-	err = bh.Exec(ctx, initMoProcedure)
+	return bh.Exec(ctx, persistSQL)
+}
+
+func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tree.CreateProcedure) (err error) {
+	definition, err := newStoredProcedureDefinition(ctx, ses, cp)
 	if err != nil {
 		return err
 	}
-	return err
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
+	if err != nil {
+		return err
+	}
+	if err = bh.Exec(ctx, "begin;"); err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+
+	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
 }
 
 func doAlterDatabaseConfig(ctx context.Context, ses *Session, ad *tree.AlterDataBaseConfig) error {

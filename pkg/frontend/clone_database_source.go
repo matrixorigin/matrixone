@@ -16,12 +16,14 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -30,6 +32,7 @@ type cloneDatabaseSource struct {
 	srcResolveDBName   string
 	srcPrivilegeDBName string
 	srcTblInfos        []*tableInfo
+	storedProcedures   []storedProcedureDefinition
 	viewMap            map[string]*tableInfo
 	sortedFkTbls       []string
 	fkTableMap         map[string]*tableInfo
@@ -112,6 +115,10 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
+	storedProcedures, err := getStoredProcedureInfos(ctx, bh, snapshot, srcDBName)
+	if err != nil {
+		return source, err
+	}
 	fkDeps, err := getFkDeps(ctx, bh, snapshot, srcDBName, "")
 	if err != nil {
 		return source, err
@@ -135,6 +142,7 @@ func collectCloneDatabaseSource(
 
 	source.srcResolveDBName = srcDBName
 	source.srcTblInfos = srcTblInfos
+	source.storedProcedures = storedProcedures
 	source.sortedFkTbls = sortedFkTbls
 	source.fkTableMap = fkTableMap
 	source.hasFkCycle = hasFkCycle
@@ -142,6 +150,59 @@ func collectCloneDatabaseSource(
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil
+}
+
+func getStoredProcedureInfos(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	dbName string,
+) ([]storedProcedureDefinition, error) {
+	queryCtx := ctx
+	sql := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure"
+	if snapshot != nil {
+		if snapshot.TS != nil {
+			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		if snapshot.Tenant != nil {
+			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
+		}
+	}
+	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
+
+	rows, err := getStringColsList(queryCtx, bh, sql, 0, 1, 2, 3, 4)
+	if err != nil {
+		return nil, err
+	}
+
+	procedures := make([]storedProcedureDefinition, len(rows))
+	for i, row := range rows {
+		procedures[i] = storedProcedureDefinition{
+			name:    row[0],
+			args:    row[1],
+			lang:    row[2],
+			body:    row[3],
+			sqlMode: row[4],
+			dbName:  dbName,
+		}
+	}
+	return procedures, nil
+}
+
+func restoreCloneDatabaseStoredProcedures(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	procedures []storedProcedureDefinition,
+	dbName string,
+) error {
+	for _, procedure := range procedures {
+		procedure.dbName = dbName
+		if err := upsertStoredProcedure(ctx, bh, tenant, procedure, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateCloneDatabaseSourceAccess preserves the clone privilege contract

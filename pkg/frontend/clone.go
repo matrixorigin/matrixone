@@ -1255,6 +1255,12 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	if err = restoreCloneDatabaseStoredProcedures(
+		ctx1, bh, ses.GetTenantInfo(), source.storedProcedures, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+
 	return
 }
 
