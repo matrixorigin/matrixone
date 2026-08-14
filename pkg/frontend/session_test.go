@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -695,12 +696,27 @@ func TestSession_Migrate(t *testing.T) {
 		defer bhStub.Reset()
 
 		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			DB:               "d1",
-			LastAffectedRows: 7,
+			DB:                      "d1",
+			LastAffectedRows:        7,
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{
+				{
+					Name:             "ts0",
+					Value:            plan2.MakePlan2StringConstExprWithType("2026-08-07 04:20:01.123456"),
+					Sql:              "set @ts0 = (select updated_at from src limit 1)",
+					PrepareParamKind: uint32(vector.PrepareParamNone),
+				},
+				{
+					Name:  "mode",
+					Value: plan2.MakePlan2StringConstExprWithType("ONLY_FULL_GROUP_BY"),
+				},
+			},
+			SetVarStmts: []string{"set sql_mode = @mode"},
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
@@ -712,6 +728,10 @@ func TestSession_Migrate(t *testing.T) {
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
+		userVar, getErr := s.GetUserDefinedVar("ts0")
+		require.NoError(t, getErr)
+		require.Equal(t, "2026-08-07 04:20:01.123456", userVar.Value)
+		require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", userVar.Sql)
 		assert.Len(t, s.prepareStmts, 6)
 		for _, name := range []string{"a-b", "select", "a`b", "from"} {
 			assert.Contains(t, s.prepareStmts, name)
@@ -735,6 +755,85 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("typed user variables", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		source := genSession(ctrl, "d1", nil)
+		source.SetDatabaseName("d1")
+		source.SetLastAffectedRows(7)
+		require.NoError(t, source.SetUserDefinedVar("ts0", "2026-08-07 04:20:01.123456", "set @ts0 = (select updated_at from src limit 1)"))
+		require.NoError(t, source.SetUserDefinedVar("mode", "ONLY_FULL_GROUP_BY", "set @mode = 'ONLY_FULL_GROUP_BY'"))
+		routine := &Routine{mc: newMigrateController()}
+		routine.setSession(source)
+		exported := &query.MigrateConnFromResponse{}
+		require.NoError(t, routine.migrateConnectionFrom(exported))
+		require.True(t, exported.UserDefinedVarsExported)
+
+		target := genSession(ctrl, "d1", nil)
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			ConnID:                  88,
+			DB:                      exported.DB,
+			SetVarStmts:             []string{"set sql_mode = @mode"},
+			PrepareStmts:            exported.PrepareStmts,
+			LastAffectedRows:        exported.LastAffectedRows,
+			UserDefinedVars:         exported.UserDefinedVars,
+			UserDefinedVarsExported: exported.UserDefinedVarsExported,
+		}))
+		restored, err := target.GetUserDefinedVar("ts0")
+		require.NoError(t, err)
+		require.Equal(t, "2026-08-07 04:20:01.123456", restored.Value)
+		require.Equal(t, "d1", target.GetDatabaseName())
+		require.Equal(t, int64(7), target.GetLastAffectedRows())
+	})
+
+	t.Run("typed user variables require protocol v21", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.proc.GetService())
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars: []*query.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: plan2.MakePlan2StringConstExprWithType("stable-value"),
+			}},
+		})
+		require.ErrorContains(t, err, "requires protocol version 21")
+		_, getErr := target.GetUserDefinedVar("ts0")
+		require.ErrorContains(t, getErr, "does not exist")
 	})
 
 	t.Run("reject user-level locks", func(t *testing.T) {

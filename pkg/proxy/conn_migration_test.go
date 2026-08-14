@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -161,6 +162,37 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		cc.migration.setVarStmts = append(cc.migration.setVarStmts, "set a=1")
 		err = cc.migrateConnTo(sc, resp)
 		assert.NoError(t, err)
+	})
+}
+
+func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.True(t, migration.UserDefinedVarsExported)
+		assert.Len(t, migration.UserDefinedVars, 1)
+		assert.Equal(t, "ts0", migration.UserDefinedVars[0].Name)
+		assert.Equal(t, []string{"set time_zone = @ts0"}, migration.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		c1, _ := net.Pipe()
+		sc := newMockServerConn(c1)
+		cc.migration.setVarStmts = []string{"set @ts0 = now()"}
+		cc.migration.systemSetVarStmts = []string{"set time_zone = @ts0"}
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			UserLevelLockReleaseSupported: true,
+			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
+				Name:  "ts0",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "stable-value"}}}},
+			}},
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
 	})
 }
 

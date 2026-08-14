@@ -23,6 +23,7 @@ import "lock.proto";
 import "txn.proto";
 import "timestamp.proto";
 import "statsinfo.proto";
+import "plan.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -556,6 +557,8 @@ message MigrateConnFromResponse {
   int64 LastAffectedRows = 3;
   repeated UserLevelLock UserLevelLocks = 4;
   bool UserLevelLockReleaseSupported = 5;
+  repeated MigrateUserDefinedVar UserDefinedVars = 6;
+  bool UserDefinedVarsExported = 7;
 }
 
 message MigrateConnToRequest {
@@ -565,6 +568,16 @@ message MigrateConnToRequest {
   repeated PrepareStmt PrepareStmts = 4;
   int64 LastAffectedRows = 5;
   repeated UserLevelLock UserLevelLocks = 6;
+  repeated MigrateUserDefinedVar UserDefinedVars = 7;
+  bool UserDefinedVarsExported = 8;
+}
+
+message MigrateUserDefinedVar {
+  string Name = 1;
+  plan.Expr Value = 2;
+  string Sql = 3;
+  bool IsBin = 4;
+  uint32 PrepareParamKind = 5;
 }
 
 message UserLevelLock {

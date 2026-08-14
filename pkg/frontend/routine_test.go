@@ -33,7 +33,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -363,6 +365,7 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
+	require.NoError(t, oldSession.SetUserDefinedVar("must_not_leak", "previous-client", ""))
 	oldSession.GetTxnHandler().Close()
 
 	eng := mock_frontend.NewMockEngine(ctrl)
@@ -480,6 +483,63 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(7), resp.LastAffectedRows)
 }
 
+func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"TS0",
+		"2026-08-07 04:20:01.123456",
+		"set @ts0 = (select updated_at from src limit 1)",
+		false,
+		vector.PrepareParamNone,
+	))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.Len(t, resp.UserDefinedVars, 1)
+	require.Equal(t, "ts0", resp.UserDefinedVars[0].Name)
+	require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", resp.UserDefinedVars[0].Sql)
+}
+
+func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	require.NoError(t, ses.SetUserDefinedVar("ts0", "stable-value", "set @ts0 = now()"))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+}
+
 func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
@@ -508,6 +568,8 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 
 	require.NotSame(t, oldSession, newSession)
 	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
+	_, err = newSession.GetUserDefinedVar("must_not_leak")
+	require.ErrorContains(t, err, "does not exist")
 	require.Same(t, timeZone, newSession.GetTimeZone())
 
 	registered := rm.sessionManager.GetAllSessions()

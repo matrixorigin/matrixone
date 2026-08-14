@@ -89,14 +89,17 @@ func (c *clientConn) migrateConnToContext(
 		return err
 	}
 
-	// First, we re-run the set variables statements.
-	for _, stmt := range c.migration.setVarStmts {
-		if _, err := execStmtWithContext(parent, sc, internalStmt{
-			cmdType: cmdQuery,
-			s:       stmt,
-		}, nil); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return err
+	// Old CNs do not export evaluated user variables. Preserve the legacy raw
+	// replay path until the cluster-wide protocol reaches v21.
+	if !info.UserDefinedVarsExported {
+		for _, stmt := range c.migration.setVarStmts {
+			if _, err := execStmtWithContext(parent, sc, internalStmt{
+				cmdType: cmdQuery,
+				s:       stmt,
+			}, nil); err != nil {
+				v2.ProxyConnectCommonFailCounter.Inc()
+				return err
+			}
 		}
 	}
 
@@ -113,10 +116,15 @@ func (c *clientConn) migrateConnToContext(
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:           c.connID,
-		DB:               info.DB,
-		PrepareStmts:     info.PrepareStmts,
-		LastAffectedRows: info.LastAffectedRows,
+		ConnID:                  c.connID,
+		DB:                      info.DB,
+		PrepareStmts:            info.PrepareStmts,
+		LastAffectedRows:        info.LastAffectedRows,
+		UserDefinedVars:         info.UserDefinedVars,
+		UserDefinedVarsExported: info.UserDefinedVarsExported,
+	}
+	if info.UserDefinedVarsExported {
+		req.MigrateConnToRequest.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()

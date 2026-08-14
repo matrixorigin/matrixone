@@ -2525,8 +2525,9 @@ func TestHandleSetVar(t *testing.T) {
 	var cc clientConn
 	cc.migration.setVarStmtMap = make(map[string]struct{})
 	e0 := &setVarEvent{
-		baseEvent: baseEvent{waitC: make(chan struct{}, 5)},
-		stmt:      "set autocommit=0",
+		baseEvent:  baseEvent{waitC: make(chan struct{}, 5)},
+		stmt:       "set autocommit=0",
+		systemStmt: "set autocommit = 0",
 	}
 	require.NoError(t, cc.handleSetVar(e0))
 	require.Equal(t, 1, len(cc.migration.setVarStmtMap))
@@ -2539,8 +2540,9 @@ func TestHandleSetVar(t *testing.T) {
 	require.Equal(t, e0.stmt, cc.migration.setVarStmts[len(cc.migration.setVarStmts)-1])
 
 	e1 := &setVarEvent{
-		baseEvent: baseEvent{waitC: make(chan struct{}, 5)},
-		stmt:      "set autocommit=1",
+		baseEvent:  baseEvent{waitC: make(chan struct{}, 5)},
+		stmt:       "set autocommit=1",
+		systemStmt: "set autocommit = 1",
 	}
 	require.NoError(t, cc.handleSetVar(e1))
 	require.Equal(t, 2, len(cc.migration.setVarStmtMap))
@@ -2556,6 +2558,7 @@ func TestHandleSetVar(t *testing.T) {
 	require.Equal(t, 2, len(cc.migration.setVarStmtMap))
 	require.Equal(t, 2, len(cc.migration.setVarStmts))
 	require.Equal(t, e1.stmt, cc.migration.setVarStmts[len(cc.migration.setVarStmts)-1])
+	require.Equal(t, []string{"set autocommit = 0", "set autocommit = 1"}, cc.migration.systemSetVarStmts)
 }
 
 // testTimeoutRouter is a router that simulates timeout errors for all CN servers.

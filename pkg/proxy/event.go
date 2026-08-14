@@ -109,7 +109,7 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 			return makeKillEvent(sql, s.ConnectionId), true
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
-			return makeSetVarEvent(sql), false
+			return makeSetVarEvent(sql, s), false
 		case *tree.UpgradeStatement:
 			return makeUpgradeEvent(sql), true
 		default:
@@ -158,15 +158,29 @@ type setVarEvent struct {
 	baseEvent
 	// stmt is the statement that will be sent to server.
 	stmt string
+	// systemStmt excludes user-variable assignments. On protocol v21 it is
+	// replayed only after the target CN has installed the evaluated user values.
+	systemStmt string
 }
 
 // makeSetVarEvent creates an event with TypeSetVar type.
-func makeSetVarEvent(stmt string) IEvent {
+func makeSetVarEvent(stmt string, parsed *tree.SetVar) IEvent {
+	systemAssignments := make([]*tree.VarAssignmentExpr, 0, len(parsed.Assignments))
+	for _, assignment := range parsed.Assignments {
+		if assignment.System {
+			systemAssignments = append(systemAssignments, assignment)
+		}
+	}
+	systemStmt := ""
+	if len(systemAssignments) > 0 {
+		systemStmt = tree.String(tree.NewSetVar(systemAssignments), dialect.MYSQL)
+	}
 	e := &setVarEvent{
 		baseEvent: baseEvent{
 			waitC: make(chan struct{}),
 		},
-		stmt: stmt,
+		stmt:       stmt,
+		systemStmt: systemStmt,
 	}
 	e.typ = TypeSetVar
 	return e

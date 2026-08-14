@@ -597,6 +597,14 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion21 {
+		vars, err := ses.snapshotUserDefinedVars(operationCtx)
+		if err != nil {
+			return err
+		}
+		resp.UserDefinedVars = vars
+		resp.UserDefinedVarsExported = true
+	}
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
 			Name:       st.Name,

@@ -116,6 +116,20 @@ func TestMakeEvent(t *testing.T) {
 			require.Nil(t, e)
 			require.False(t, r)
 		}
+
+		mixed := "set @seed = rand(), @@session.time_zone = @seed"
+		e, r = makeEvent(makeSimplePacket(mixed), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		setEvent := e.(*setVarEvent)
+		require.Equal(t, mixed, setEvent.stmt)
+		require.Equal(t, "set time_zone = @seed", setEvent.systemStmt)
+
+		userOnly := "set @ts0 = (select updated_at from src limit 1)"
+		e, r = makeEvent(makeSimplePacket(userOnly), nil)
+		require.NotNil(t, e)
+		require.False(t, r)
+		require.Empty(t, e.(*setVarEvent).systemStmt)
 	})
 
 	t.Run("upgrade", func(t *testing.T) {

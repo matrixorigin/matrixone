@@ -2614,6 +2614,27 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
 	}
+	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
+		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
+	}
+	if req.UserDefinedVarsExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion21 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 21")
+		}
+		vars, err := decodeUserDefinedVars(migrationCtx, req.UserDefinedVars)
+		if err != nil {
+			return err
+		}
+		ses.installUserDefinedVars(vars)
+	}
+	for _, stmt := range req.SetVarStmts {
+		tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+		err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+		tempExecCtx.Close()
+		if err != nil {
+			return moerr.AttachCause(migrationCtx, err)
+		}
+	}
 
 	var maxStmtID uint32
 	for _, p := range req.PrepareStmts {
