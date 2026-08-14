@@ -1431,6 +1431,25 @@ func orderedScalarUnionAll(nodeIdx int32, nodes []*plan.Node) bool {
 	}
 }
 
+// orderedScalarUnionAllResult keeps the compatibility behavior at the result
+// boundary. A scalar UNION ALL used as an input to a join or another blocking
+// operator must retain the normal concurrent topology: making that input lazy
+// can leave its consumer waiting for a branch that has not been started yet.
+func orderedScalarUnionAllResult(step, nodeIdx int32, qry *plan.Query) bool {
+	if qry == nil || step < 0 || int(step) >= len(qry.Steps) ||
+		nodeIdx < 0 || int(nodeIdx) >= len(qry.Nodes) {
+		return false
+	}
+
+	rootIdx := qry.Steps[step]
+	if rootIdx < 0 || int(rootIdx) >= len(qry.Nodes) || qry.Nodes[rootIdx] == nil {
+		return false
+	}
+	root := qry.Nodes[rootIdx]
+	return root.NodeType == plan.Node_PROJECT && len(root.Children) == 1 &&
+		root.Children[0] == nodeIdx && orderedScalarUnionAll(nodeIdx, qry.Nodes)
+}
+
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
 	return c.compilePlanScopeWithUnionAllDemand(step, curNodeIdx, nodes, false)
 }
@@ -1685,8 +1704,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		lazy := streamingUnionAllDemand(node, outerUnionAllDemand) ||
-			orderedScalarUnionAll(curNodeIdx, nodes)
+		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
+		if !lazy && c.pn != nil {
+			lazy = orderedScalarUnionAllResult(step, curNodeIdx, c.pn.GetQuery())
+		}
 		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
 		if err != nil {
 			return nil, err

@@ -279,6 +279,7 @@ func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
 	require.Len(t, query.Steps, 1)
 
 	c := newLazyUnionAllTestCompile(t)
+	c.pn = logicPlan
 	nodes, rootIdx := query.Nodes, query.Steps[0]
 	require.Equal(t, planpb.Node_PROJECT, nodes[rootIdx].NodeType)
 	require.Len(t, nodes[rootIdx].Children, 1)
@@ -329,6 +330,27 @@ func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
 	require.Equal(t, []int64{3, 1, 2}, got)
 
 	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestScalarUnionAllInsideJoinKeepsConcurrentTopology(t *testing.T) {
+	nodes := []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{2}},
+		{NodeType: planpb.Node_UNION_ALL, Children: []int32{1, 3}},
+		{NodeType: planpb.Node_TABLE_SCAN},
+		{NodeType: planpb.Node_JOIN, Children: []int32{4, 5}},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{6}},
+	}
+	query := &planpb.Query{Steps: []int32{7}, Nodes: nodes}
+
+	require.True(t, orderedScalarUnionAll(4, nodes))
+	require.False(t, orderedScalarUnionAllResult(0, 4, query))
+
+	query.Steps[0] = 7
+	nodes[7].Children[0] = 4
+	require.True(t, orderedScalarUnionAllResult(0, 4, query))
 }
 
 func compileNestedLazyUnionAllTestScope(
