@@ -904,7 +904,18 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	if err != nil || !parameters[1].GetType().Oid.IsMySQLString() {
 		return err
 	}
-	return propagateSelectedBinaryStringResultRows(parameters[0], result.GetResultVector(), length, proc)
+	resultVector := result.GetResultVector()
+	if err = propagateSelectedBinaryStringResultRows(parameters[0], resultVector, length, proc); err != nil {
+		return err
+	}
+	if kinds := parameters[0].GetPrepareParamKinds(); len(kinds) > 0 {
+		if proc == nil {
+			return resultVector.SetPrepareParamKindsWithMP(kinds, nil)
+		}
+		return resultVector.SetPrepareParamKindsWithMP(kinds, proc.Mp())
+	}
+	resultVector.SetPrepareParamKind(parameters[0].GetPrepareParamKind())
+	return nil
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

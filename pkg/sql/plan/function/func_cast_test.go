@@ -2846,6 +2846,9 @@ func TestImplicitStringCastPreservesPerRowDynamicBinarySemantics(t *testing.T) {
 	input := testutil.MakeVarlenaVector(
 		[][]byte{[]byte("text"), {0xe4, 0xbd, 0xa0}}, nil, types.T_text.ToType(), mp)
 	require.NoError(t, input.SetIsBinaryStringAt(1, true, mp))
+	require.NoError(t, input.SetPrepareParamKindsWithMP([]vector.PrepareParamKind{
+		vector.PrepareParamNone, vector.PrepareParamBinaryUserVariable,
+	}, mp))
 	target := vector.NewConstNull(types.T_varchar.ToType(), 2, mp)
 	defer input.Free(mp)
 	defer target.Free(mp)
@@ -2856,6 +2859,8 @@ func TestImplicitStringCastPreservesPerRowDynamicBinarySemantics(t *testing.T) {
 	require.NoError(t, NewCast([]*vector.Vector{input, target}, result, proc, 2, nil))
 	require.False(t, result.GetResultVector().GetIsBinaryStringAt(0))
 	require.True(t, result.GetResultVector().GetIsBinaryStringAt(1))
+	require.Equal(t, vector.PrepareParamNone, result.GetResultVector().GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamBinaryUserVariable, result.GetResultVector().GetPrepareParamKindAt(1))
 }
 
 func contains(slice []uint64, item uint64) bool {
