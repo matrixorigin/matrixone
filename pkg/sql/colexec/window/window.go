@@ -1364,6 +1364,7 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
+	ctr.ps = nil
 
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
@@ -1373,6 +1374,13 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	partitionKeyCount := 0
+	if ap.PartitionTopN {
+		// PartitionTopN coalesces input partitions, so its order-vector prefix
+		// contains identity partition keys followed by SQL ORDER BY keys.
+		partitionKeyCount = len(w.PartitionBy)
+	}
 
 	rowCount := bat.RowCount()
 	// if ctr.sels == nil {
@@ -1393,7 +1401,11 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
-			sort.SortForSQLOrder(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			if partitionKeyCount > 0 {
+				sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			} else {
+				sort.SortForSQLOrder(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+			}
 		}
 		if err := checkCanceled(proc, 0); err != nil {
 			return false, err
@@ -1410,20 +1422,29 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
-		ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
+		if i <= partitionKeyCount {
+			ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		} else {
+			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
+		}
 		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
-				for i, j := 0, len(ps); i < j; i++ {
-					if err := checkCanceled(proc, i); err != nil {
+				for group, groupCount := 0, len(ps); group < groupCount; group++ {
+					if err := checkCanceled(proc, group); err != nil {
 						return false, err
 					}
-					if i == j-1 {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
+					start := ps[group]
+					end := int64(len(ctr.sels))
+					if group < groupCount-1 {
+						end = ps[group+1]
+					}
+					if i < partitionKeyCount {
+						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:ps[i+1]], vec)
+						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					}
 				}
 			}
@@ -1432,9 +1453,17 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			return false, err
 		}
 		ovec = vec
+		if i == partitionKeyCount {
+			ctr.ps = append(ctr.ps, ps...)
+		}
 	}
 
-	if len(ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.OrderBy) > 0 {
+	if ap.PartitionTopN && partitionKeyCount == i {
+		ps = partition.Partition(ctr.sels, ds, ps, ovec)
+		ctr.ps = append(ctr.ps, ps...)
+	}
+
+	if len(w.OrderBy) > 0 {
 		ctr.os = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 	} else {
 		ctr.os = nil
@@ -1460,10 +1489,6 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
 			panic(err)
 		}
-	}
-
-	if !ap.PartitionTopN {
-		ctr.ps = nil
 	}
 
 	return false, nil

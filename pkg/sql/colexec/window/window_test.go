@@ -1642,6 +1642,58 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(partitionValue int32) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeInt32Vector(
+			[]int32{partitionValue, partitionValue, partitionValue}, nil, proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+			math.Float64frombits(0x7ff8000000000002),
+			math.Float64frombits(0x7ff8000000000001),
+			-1,
+		}, nil, proc.Mp()))
+		bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+		bat.SetRowCount(3)
+		return bat
+	}
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeBatch(1), makeBatch(2)})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 3}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 1, 2, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{0, 1, 2, 0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3, 1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowOrderHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name   string
