@@ -5350,7 +5350,7 @@ func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
 	if suffix == "" {
 		return false
 	}
-	if mysqlSingleTokenTimeSuffixForExtract(suffix) {
+	if mysqlShortNonNumericTimeSuffixForExtract(suffix) {
 		return false
 	}
 	trailingWhitespace := mysqlEndsWithWhitespaceForExtract(suffix)
@@ -5379,15 +5379,33 @@ func mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix, str string, space 
 		return false
 	}
 	clock := prefix[:space]
+	if mysqlShortNonNumericTimeSuffixForExtract(suffix) {
+		// A short non-numeric token terminates the consumed TIME candidate
+		// without discarding the prefix. MySQL preserves a single trailing
+		// separator ("12:34:56: x") and omitted fields ("12:34::56 x",
+		// "12::56 x"), but a double trailing separator remains invalid.
+		return strings.HasSuffix(clock, "::")
+	}
 	return strings.HasSuffix(clock, ":") && strings.Count(clock, ":") >= 2 ||
 		strings.Contains(clock, "::")
 }
 
-func mysqlSingleTokenTimeSuffixForExtract(suffix string) bool {
-	return len(suffix) == 1 &&
-		(suffix[0] < '0' || suffix[0] > '9') &&
-		!mysqlDatetimePunctuationForExtract(suffix[0]) &&
-		!mysqlWhitespaceForExtract(suffix[0])
+func mysqlShortNonNumericTimeSuffixForExtract(suffix string) bool {
+	for len(suffix) > 0 && mysqlWhitespaceForExtract(suffix[len(suffix)-1]) {
+		suffix = suffix[:len(suffix)-1]
+	}
+	if suffix == "" || utf8.RuneCountInString(suffix) > 2 {
+		return false
+	}
+	for _, r := range suffix {
+		if r >= '0' && r <= '9' {
+			return false
+		}
+		if r < utf8.RuneSelf && (mysqlDatetimePunctuationForExtract(byte(r)) || mysqlWhitespaceForExtract(byte(r))) {
+			return false
+		}
+	}
+	return true
 }
 
 func mysqlClockFieldsForExtractHasThreeFields(str string) bool {

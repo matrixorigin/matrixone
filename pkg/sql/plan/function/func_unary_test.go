@@ -11234,10 +11234,18 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 		want  string
 	}{
 		{input: "12:34:56 x", want: "12/34/56"},
+		{input: "12:34:56 xy", want: "12/34/56"},
+		{input: "12:34:56 abc", want: "NULL"},
+		{input: "12:34:56 é", want: "12/34/56"},
 		{input: "123:34:56 x", want: "123/34/56"},
+		{input: "123:34:56 xy", want: "123/34/56"},
+		{input: "123:34:56 abc", want: "NULL"},
 		{input: "12:34:56: 78", want: "NULL"},
+		{input: "12:34:56: x", want: "12/34/56"},
 		{input: "12:34:56:: x", want: "NULL"},
 		{input: "12:34::56 78", want: "NULL"},
+		{input: "12:34::56 x", want: "12/34/0"},
+		{input: "12::56 x", want: "0/0/12"},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {

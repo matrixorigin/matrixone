@@ -549,7 +549,19 @@ INSERT INTO time_extract_day_suffix_matrix (case_id, v, c, t, expected) VALUES
 (537, '838 12 78 ', '838 12 78 ', '838 12 78 ', '838/59/59'),
 (538, '838 12:', '838 12:', '838 12:', '838/59/59'),
 (539, '838 12:3', '838 12:3', '838 12:3', '838/59/59'),
-(540, '838 12:3:4', '838 12:3:4', '838 12:3:4', '838/59/59');
+(540, '838 12:3:4', '838 12:3:4', '838 12:3:4', '838/59/59'),
+(541, '12:34:56 x', '12:34:56 x', '12:34:56 x', '12/34/56'),
+(542, '12:34:56 xy', '12:34:56 xy', '12:34:56 xy', '12/34/56'),
+(543, '12:34:56 abc', '12:34:56 abc', '12:34:56 abc', 'NULL'),
+(544, '12:34:56 é', '12:34:56 é', '12:34:56 é', '12/34/56'),
+(545, '123:34:56 xy', '123:34:56 xy', '123:34:56 xy', '123/34/56'),
+(546, '123:34:56 abc', '123:34:56 abc', '123:34:56 abc', 'NULL'),
+(547, '12:34:56: x', '12:34:56: x', '12:34:56: x', '12/34/56'),
+(548, '12:34:56: 78', '12:34:56: 78', '12:34:56: 78', 'NULL'),
+(549, '12:34::56 x', '12:34::56 x', '12:34::56 x', '12/34/0'),
+(550, '12:34::56 78', '12:34::56 78', '12:34::56 78', 'NULL'),
+(551, '12::56 x', '12::56 x', '12::56 x', '0/0/12'),
+(552, '12::56 78', '12::56 78', '12::56 78', 'NULL');
 SELECT COUNT(*) AS case_count,
 SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
 + SUM(CASE WHEN COALESCE(concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)), 'NULL') <> expected THEN 1 ELSE 0 END)
@@ -557,4 +569,3 @@ SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') 
 FROM time_extract_day_suffix_matrix;
 DROP TABLE time_extract_day_suffix_matrix;
 DROP DATABASE time_extract_day_suffix_matrix_db;
-
