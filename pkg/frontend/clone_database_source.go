@@ -115,7 +115,7 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
-	storedProcedures, err := getStoredProcedureInfos(ctx, bh, snapshot, srcDBName)
+	storedProcedures, err := getCloneStoredProcedureInfos(ctx, bh, snapshot, srcDBName, subMeta)
 	if err != nil {
 		return source, err
 	}
@@ -150,6 +150,21 @@ func collectCloneDatabaseSource(
 	source.opAccountId = accounts.opAccountId
 	source.toAccountId = accounts.toAccountId
 	return source, nil
+}
+
+func getCloneStoredProcedureInfos(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	dbName string,
+	subMeta *plan.SubscriptionMeta,
+) ([]storedProcedureDefinition, error) {
+	// Publications scope tables only. Querying the publisher's procedure catalog
+	// for a subscription would bypass that boundary.
+	if subMeta != nil {
+		return nil, nil
+	}
+	return getStoredProcedureInfos(ctx, bh, snapshot, dbName)
 }
 
 func getStoredProcedureInfos(

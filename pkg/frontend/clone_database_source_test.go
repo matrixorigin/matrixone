@@ -95,6 +95,45 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 	})
 }
 
+func TestGetCloneStoredProcedureInfosRespectsSubscriptionBoundary(t *testing.T) {
+	t.Run("database source collects procedures", func(t *testing.T) {
+		const dbName = "source_db"
+		querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure where db = 'source_db' order by name"
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+			{"p_answer", "[]", "sql", "begin select 42; end", ""},
+		})
+
+		procedures, err := getCloneStoredProcedureInfos(context.Background(), bh, nil, dbName, nil)
+		require.NoError(t, err)
+		require.Equal(t, []storedProcedureDefinition{{
+			name:   "p_answer",
+			args:   "[]",
+			lang:   "sql",
+			body:   "begin select 42; end",
+			dbName: dbName,
+		}}, procedures)
+		require.Equal(t, []string{querySQL}, bh.executedSQLs)
+	})
+
+	t.Run("subscription source skips publisher procedure catalog", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		procedures, err := getCloneStoredProcedureInfos(
+			context.Background(),
+			bh,
+			nil,
+			"publisher_db",
+			&plan.SubscriptionMeta{DbName: "publisher_db", Tables: "t1"},
+		)
+		require.NoError(t, err)
+		require.Empty(t, procedures)
+		require.Empty(t, bh.executedSQLs)
+	})
+}
+
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	ctx := context.Background()
 	tenant := &TenantInfo{User: "root"}
