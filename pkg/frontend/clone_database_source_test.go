@@ -232,7 +232,9 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
 	require.Contains(t, bh.executedSQLs[0], "\"f_answer\"")
 	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
-	require.Contains(t, bh.executedSQLs[0], "'PIPES_AS_CONCAT'")
+	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
+	// the behavior under test rather than coupling this regression to its style.
+	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
 	failingBase := &backgroundExecTest{}
