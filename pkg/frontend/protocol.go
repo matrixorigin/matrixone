@@ -229,13 +229,71 @@ func (mp *MysqlProtocolImpl) Peer() string {
 	return tcp.RemoteAddress()
 }
 
+func snapshotServiceContext(ses *Session) context.Context {
+	if ses == nil {
+		return nil
+	}
+	rm := ses.getRoutineManager()
+	if rm == nil {
+		return nil
+	}
+	return rm.ctx
+}
+
+func (mp *MysqlProtocolImpl) sendErrorResponse(resp *Response) error {
+	err := resp.data.(error)
+	if err == nil {
+		mp.m.Lock()
+		defer mp.m.Unlock()
+		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+	}
+
+	// Snapshot the session without holding the protocol lock while consulting
+	// session state. Session.Close holds Session.mu while closing the protocol,
+	// so nesting these locks in the opposite order can deadlock teardown.
+	ses := mp.GetSession()
+	serviceCtx := snapshotServiceContext(ses)
+	var code uint16
+	var sqlState, errMsg string
+	if errors.Is(err, context.Canceled) && serviceCtx != nil && serviceCtx.Err() != nil {
+		shutdown := moerr.MysqlErrorMsgRefer[moerr.ER_SERVER_SHUTDOWN]
+		code = shutdown.ErrorCode
+		sqlState = shutdown.SqlStates[0]
+		errMsg = shutdown.ErrorMsgOrFormat
+	} else {
+		var myerr *moerr.Error
+		if errors.As(err, &myerr) {
+			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
+				code = myerr.MySQLCode()
+			} else {
+				code = myerr.ErrorCode()
+			}
+			sqlState = myerr.SqlState()
+			errMsg = err.Error()
+		} else {
+			code = moerr.ER_UNKNOWN_ERROR
+			sqlState = DefaultMySQLState
+			errMsg = fmt.Sprintf("%v", err)
+		}
+	}
+
+	// Error diagnostics use Session.mu and therefore must be recorded before
+	// taking the protocol lock used to serialize the packet.
+	if ses != nil {
+		ses.appendErrorDiagnostic(code, errMsg)
+	}
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.sendErrPacketWithoutDiagnostic(code, sqlState, errMsg)
+}
+
 func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
-	//move here to prohibit potential recursive lock
-	var attachAbort string
+	if resp.category == ErrorResponse {
+		return mp.sendErrorResponse(resp)
+	}
 
 	mp.m.Lock()
 	defer mp.m.Unlock()
-
 	switch resp.category {
 	case OkResponse:
 		s, ok := resp.data.(string)
@@ -245,32 +303,6 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, s)
 	case EoFResponse:
 		return mp.sendEOFPacket(0, uint16(resp.status))
-	case ErrorResponse:
-		err := resp.data.(error)
-		if err == nil {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
-		}
-		var myerr *moerr.Error
-		if errors.As(err, &myerr) {
-			var code uint16
-			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
-				code = myerr.MySQLCode()
-			} else {
-				code = myerr.ErrorCode()
-			}
-			errMsg := err.Error()
-			if attachAbort != "" {
-				errMsg = fmt.Sprintf("%s\n%s", myerr.Error(), attachAbort)
-			}
-			return mp.sendErrPacket(code, myerr.SqlState(), errMsg)
-		}
-		errMsg := ""
-		if attachAbort != "" {
-			errMsg = fmt.Sprintf("%s\n%s", err, attachAbort)
-		} else {
-			errMsg = fmt.Sprintf("%v", err)
-		}
-		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, errMsg)
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {

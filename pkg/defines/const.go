@@ -54,8 +54,9 @@ const (
 	MORPCVersion16     int64 = 16 // information_schema CHECK_CONSTRAINTS table function
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
 	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
-	MORPCVersion19     int64 = 19 // target-aware multi-table UPDATE pipeline fields
-	MORPCLatestVersion       = MORPCVersion19
+	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
+	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
+	MORPCLatestVersion       = MORPCVersion20
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
