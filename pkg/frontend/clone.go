@@ -1218,7 +1218,7 @@ func handleCloneDatabaseWithSource(
 
 	// clone view table
 	if len(source.viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
 		fromAccount := source.opAccountId
 		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
 			fromAccount = viewSnapshot.Tenant.TenantID

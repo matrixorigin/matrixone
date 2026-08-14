@@ -132,8 +132,10 @@ func TestIssue27055DatabaseCloneReadsExplicitTransactionSource(t *testing.T) {
 		exec("create database " + createdSource)
 		exec("create table " + createdSource + ".items (id int primary key, v varchar(20), txn_col int)")
 		exec("insert into " + createdSource + ".items values (1, 'created', 9)")
+		exec("create view " + createdSource + ".item_view as select id, v, txn_col from " + createdSource + ".items")
 		exec("create database " + createdTarget + " clone " + createdSource)
 		assertItems(createdTarget, "items", []issue27055Item{{id: 1, value: "created", txnCol: 9}})
+		assertItems(createdTarget, "item_view", []issue27055Item{{id: 1, value: "created", txnCol: 9}})
 		exec("commit")
 
 		// Autocommit retains the latest source state, while a named snapshot retains its point in time.
