@@ -326,6 +326,7 @@ func TestLazyCacheFSInvalidatedFillCannotPublishStaleData(t *testing.T) {
 	require.Equal(t, int32(2), reads.Load())
 
 	vec := &fileservice.IOVector{FilePath: "dir/file", Entries: []fileservice.IOEntry{{Offset: 0, Size: -1}}}
+	defer vec.Release()
 	require.NoError(t, fs.Read(ctx, vec))
 	require.Equal(t, []byte("new"), vec.Entries[0].Data)
 }
@@ -408,6 +409,7 @@ func TestLazyCacheFSReadsMagicPrefixedRemoteObjectsWithoutLocalChecksum(t *testi
 			WriterForRead: &buf,
 		}},
 	}
+	defer cacheVec.Release()
 	require.NoError(t, fs.ReadCache(ctx, cacheVec))
 	require.Equal(t, payload[4:14], buf.Bytes())
 }
@@ -450,8 +452,9 @@ func TestLazyCacheFSEvictsOldEntriesWhenOverLimit(t *testing.T) {
 				Size:   -1,
 			}},
 		}
+		defer vec.Release()
 		require.NoError(t, fs.Read(ctx, vec))
-		return vec.Entries[0].Data
+		return bytes.Clone(vec.Entries[0].Data)
 	}
 
 	require.Equal(t, first, readAll("ckp/first"))
@@ -518,6 +521,7 @@ func TestLazyCacheFSDelegatesMetadataAndInvalidatesCachedWrites(t *testing.T) {
 			Size:   -1,
 		}},
 	}
+	defer vec.Release()
 	require.NoError(t, fs.Read(ctx, vec))
 	require.Equal(t, []byte("new"), vec.Entries[0].Data)
 
