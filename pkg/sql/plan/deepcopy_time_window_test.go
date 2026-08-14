@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -109,6 +110,35 @@ func TestVisitPlanReachesTimeWindowPartitionBy(t *testing.T) {
 	require.True(t, rule.seen[partExpr], "partition keys must be visited")
 	require.True(t, rule.seen[startExpr], "GAPFILL start must be visited")
 	require.True(t, rule.seen[endExpr], "GAPFILL finish must be visited")
+}
+
+type twFailVisitRule struct{}
+
+func (*twFailVisitRule) MatchNode(*Node) bool  { return false }
+func (*twFailVisitRule) IsApplyExpr() bool     { return true }
+func (*twFailVisitRule) ApplyNode(*Node) error { return nil }
+func (*twFailVisitRule) ApplyExpr(*Expr) (*Expr, error) {
+	return nil, errors.New("time-window expression visit failed")
+}
+
+func TestVisitPlanPropagatesGapFillBoundErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		node *plan.Node
+	}{
+		{name: "start", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, GapFillStart: twTestColExpr(3, 1)}},
+		{name: "finish", node: &plan.Node{NodeType: plan.Node_TIME_WINDOW, GapFillEnd: twTestColExpr(3, 2)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pl := &Plan{Plan: &plan.Plan_Query{Query: &Query{
+				Steps: []int32{0},
+				Nodes: []*plan.Node{tc.node},
+			}}}
+
+			err := NewVisitPlan(pl, []VisitPlanRule{&twFailVisitRule{}}).Visit(t.Context())
+			require.EqualError(t, err, "time-window expression visit failed")
+		})
+	}
 }
 
 // replaceColumnsForNode rewrites column references when a projection is

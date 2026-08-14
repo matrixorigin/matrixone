@@ -2973,6 +2973,60 @@ func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type)
 	}
 }
 
+func TestGapFillBoundContainsColumnTraversesExpressionTrees(t *testing.T) {
+	timestamp := &plan.ColRef{RelPos: 1, ColPos: 2}
+	timestampExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: timestamp.RelPos, ColPos: timestamp.ColPos}},
+	}
+	otherColumn := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 3, ColPos: 4}},
+	}
+
+	require.False(t, gapFillBoundContainsColumn(nil, timestamp))
+	require.True(t, gapFillBoundContainsColumn(timestampExpr, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.False(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn}}},
+	}, timestamp))
+}
+
+func TestInferGapFillBoundsAcceptsReversedHalfOpenEdges(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	}
+	bound := func(value int64) *plan.Expr {
+		expr := makePlan2Int64ConstExprWithType(value)
+		expr.Typ = timestamp.Typ
+		return expr
+	}
+	filter := func(name string, left, right *plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: []*plan.Expr{left, right},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		filter("<=", bound(1), DeepCopyExpr(timestamp)),
+		filter(">", bound(2), DeepCopyExpr(timestamp)),
+	}, timestamp)
+
+	require.NoError(t, err)
+	require.NotNil(t, start)
+	require.NotNil(t, finish)
+	require.Equal(t, int32(types.T_datetime), start.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), finish.Typ.Id)
+}
+
 func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
 	err := validateTimeWindowIntervalUnit(context.Background(), "century")
 	require.ErrorContains(t, err, "invalid interval type 'century'")
