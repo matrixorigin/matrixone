@@ -1676,7 +1676,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
 	}
-	arg.TsType = node.Timestamp.Typ
+	arg.TsType = plan2.TimeWindowBoundaryType(node.Timestamp.Typ)
 	return arg
 }
 
@@ -2515,13 +2515,18 @@ func constructTableClone(
 		}
 	}()
 
+	dstTableName := clonePlan.DstTableName
+	if createTable := clonePlan.GetCreateTable().GetDdl().GetCreateTable(); createTable.GetTemporary() {
+		dstTableName = physicalTemporaryTableName(c.proc, clonePlan.DstDatabaseName, dstTableName)
+	}
+
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
 		SrcTblDef: clonePlan.SrcTableDef,
 		SrcObjDef: clonePlan.SrcObjDef,
 
 		ScanSnapshot:    clonePlan.ScanSnapshot,
-		DstTblName:      clonePlan.DstTableName,
+		DstTblName:      dstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 	dstTblDef := clonePlan.SrcTableDef

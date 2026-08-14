@@ -299,7 +299,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case fill:
 
-			if err = ctr.fillRows(); err != nil {
+			if err = ctr.fillRows(timeWin); err != nil {
 				return result, err
 			}
 
@@ -571,7 +571,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 	return nil
 }
 
-func (ctr *container) fillRows() error {
+func (ctr *container) fillRows(t *TimeWin) error {
 	cnt := ctr.tsVec[ctr.curVecIdx].Length()
 	vals := vector.MustFixedColNoTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])
 
@@ -662,6 +662,20 @@ func (ctr *container) fillRows() error {
 			ctr.status = nextWindow
 		}
 	case outRange:
+		if ctr.withoutFill && !t.GapFill && t.Sliding > 0 {
+			val := vals[ctr.curRowIdx]
+			if val >= ctr.right {
+				skip := (val-ctr.right)/t.Sliding + 1
+				ctr.left += skip * t.Sliding
+				ctr.right += skip * t.Sliding
+				ctr.nextLeft = ctr.left + t.Sliding
+				ctr.nextRight = ctr.nextLeft + t.Interval
+				ctr.curVecIdx = ctr.preVecIdx
+				ctr.curRowIdx = ctr.preRowIdx
+				ctr.status = fill
+				return nil
+			}
+		}
 		if ctr.group > maxTimeWindowRows {
 			ctr.wStart = append(ctr.wStart, ctr.left)
 			ctr.wEnd = append(ctr.wEnd, ctr.right)
@@ -737,7 +751,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if ctr.startVec != nil {
 			ctr.startVec.CleanOnlyData()
 		} else {
-			ctr.startVec = vector.NewVec(types.T_datetime.ToType())
+			ctr.startVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 		}
 		err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
 		if err != nil {
@@ -757,7 +771,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		if ctr.endVec != nil {
 			ctr.endVec.CleanOnlyData()
 		} else {
-			ctr.endVec = vector.NewVec(types.T_datetime.ToType())
+			ctr.endVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
 		}
 		err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
 		if err != nil {
