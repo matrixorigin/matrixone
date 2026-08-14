@@ -3009,6 +3009,36 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_PRE_INSERT:
+		var selectorRefs [3][2]int32
+		if node.PreInsertCtx.HasTargetSelector {
+			selectorInput := builder.qry.Nodes[node.Children[0]]
+			// Target-aware UPDATE can place pass-through ASSERT/FILTER nodes and
+			// another PRE_INSERT between this operator and the project that owns
+			// the selector columns. Walk through any single-child node without an
+			// output binding instead of assuming only nested PRE_INSERT can occur.
+			for len(selectorInput.BindingTags) == 0 {
+				if len(selectorInput.Children) != 1 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+				}
+				selectorInput = builder.qry.Nodes[selectorInput.Children[0]]
+			}
+			if len(selectorInput.BindingTags) == 0 {
+				return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector input")
+			}
+			selectorProject := selectorInput.ProjectList
+			selectorPositions := []int32{
+				node.PreInsertCtx.TargetRowNumberCol,
+				node.PreInsertCtx.TargetActiveCol,
+				node.PreInsertCtx.TargetRowIdCol,
+			}
+			for i, pos := range selectorPositions {
+				if pos < 0 || int(pos) >= len(selectorProject) {
+					return nil, moerr.NewInternalError(builder.GetContext(), "invalid PRE_INSERT target selector")
+				}
+				selectorRefs[i] = [2]int32{selectorInput.BindingTags[0], pos}
+				colRefCnt[selectorRefs[i]]++
+			}
+		}
 		if _, preserve := builder.preservePreInsertProjection[nodeID]; preserve {
 			for _, expr := range builder.qry.Nodes[node.Children[0]].ProjectList {
 				increaseRefCnt(expr, 1, colRefCnt)
@@ -3020,9 +3050,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
 				continue
+			}
+			if node.PreInsertCtx.HasTargetSelector {
+				for selectorIdx, selectorRef := range selectorRefs {
+					if globalRef == selectorRef {
+						selectorOutputPos[selectorIdx] = int32(len(node.ProjectList))
+					}
+				}
 			}
 
 			remapping.addColRef(globalRef)
@@ -3037,6 +3075,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+		if node.PreInsertCtx.HasTargetSelector {
+			for _, pos := range selectorOutputPos {
+				if pos < 0 {
+					return nil, moerr.NewInternalError(builder.GetContext(), "PRE_INSERT target selector was pruned")
+				}
+			}
+			node.PreInsertCtx.TargetRowNumberCol = selectorOutputPos[0]
+			node.PreInsertCtx.TargetActiveCol = selectorOutputPos[1]
+			node.PreInsertCtx.TargetRowIdCol = selectorOutputPos[2]
 		}
 
 		if node.PreInsertCtx.CompPkeyExpr != nil {
@@ -10095,6 +10143,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			}
 		}
 
+		explicitNamedSnapshot := false
 		if tbl.AtTsExpr != nil {
 			if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
@@ -10108,6 +10157,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if err != nil {
 				return 0, err
 			}
+			explicitNamedSnapshot = tbl.AtTsExpr.Type == tree.ATTIMESTAMPSNAPSHOT
 		}
 
 		var snapshot *Snapshot
@@ -10149,6 +10199,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		}
 		if tableDef == nil {
 			return 0, moerr.NewNoSuchTablef(builder.GetContext(), "SQL parser error: table %q does not exist", table)
+		}
+		if explicitNamedSnapshot {
+			err = ValidateSnapshotScope(snapshot, schema, table, tableDef.DbId, SnapshotTableID(tableDef))
+		}
+		if err != nil {
+			return 0, err
 		}
 
 		tableDef.Name2ColIndex = map[string]int32{}
