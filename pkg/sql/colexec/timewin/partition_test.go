@@ -932,6 +932,21 @@ func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newPartArg(t, proc, makeInterval(), false)
+	arg.GapFill = true
+
+	starts, sums, parts := runPartArgBats(t, arg, proc, nil)
+	require.Empty(t, starts)
+	require.Empty(t, sums)
+	require.Empty(t, parts)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestBoundedGapFillSkipsEmptyChildBatches(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	in := makePartInput(t, proc.Mp(), nil)

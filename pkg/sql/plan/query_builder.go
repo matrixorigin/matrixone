@@ -7888,54 +7888,61 @@ func inferGapFillBounds(
 		return nil, nil, nil
 	}
 
-	// Do not merely skip a volatile constraint when stable repeated bounds are
-	// also present: the remaining fixed domain could then be wider than the
-	// WHERE range evaluated at execution time. Any volatile range edge makes the
-	// whole inferred grid unsafe, so retain the legacy observed-range behavior.
+	// Every predicate that references the window column must participate in the
+	// inferred domain. Skipping an unsupported edge and using only the remaining
+	// half-open subset can widen a contradictory WHERE range into a non-empty
+	// synthetic grid. Retain legacy observed-range behavior unless all such
+	// predicates are direct, constant half-open edges.
 	var starts, finishes []*Expr
 	for _, filter := range filters {
-		fn := filter.GetF()
-		if fn == nil || len(fn.Args) != 2 {
+		if !gapFillBoundContainsColumn(filter, tsCol) {
 			continue
 		}
+		fn := filter.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return nil, nil, nil
+		}
 		left, right := fn.Args[0], fn.Args[1]
+		leftMatches := gapFillBoundColumnMatches(left, tsCol)
+		rightMatches := gapFillBoundColumnMatches(right, tsCol)
+		if leftMatches == rightMatches {
+			// Either the timestamp is nested in a more complex expression or it
+			// appears on both sides. Neither shape defines a safe fixed edge.
+			return nil, nil, nil
+		}
 		name := strings.ToLower(fn.Func.ObjName)
 		switch {
-		case gapFillBoundColumnMatches(left, tsCol):
+		case leftMatches:
 			switch name {
 			case ">=":
-				if containsVolatileFunction(right) {
+				if !gapFillBoundIsConstant(right) {
 					return nil, nil, nil
 				}
-				if gapFillBoundIsConstant(right) {
-					starts = append(starts, right)
-				}
+				starts = append(starts, right)
 			case "<":
-				if containsVolatileFunction(right) {
+				if !gapFillBoundIsConstant(right) {
 					return nil, nil, nil
 				}
-				if gapFillBoundIsConstant(right) {
-					finishes = append(finishes, right)
-				}
+				finishes = append(finishes, right)
+			default:
+				return nil, nil, nil
 			}
-		case gapFillBoundColumnMatches(right, tsCol):
+		case rightMatches:
 			// constant <= timestamp and constant > timestamp are the reversed
 			// spellings of the same canonical half-open predicates.
 			switch name {
 			case "<=":
-				if containsVolatileFunction(left) {
+				if !gapFillBoundIsConstant(left) {
 					return nil, nil, nil
 				}
-				if gapFillBoundIsConstant(left) {
-					starts = append(starts, left)
-				}
+				starts = append(starts, left)
 			case ">":
-				if containsVolatileFunction(left) {
+				if !gapFillBoundIsConstant(left) {
 					return nil, nil, nil
 				}
-				if gapFillBoundIsConstant(left) {
-					finishes = append(finishes, left)
-				}
+				finishes = append(finishes, left)
+			default:
+				return nil, nil, nil
 			}
 		}
 	}
@@ -7972,6 +7979,30 @@ func inferGapFillBounds(
 func gapFillBoundColumnMatches(expr *Expr, timestamp *plan.ColRef) bool {
 	col := expr.GetCol()
 	return col != nil && col.RelPos == timestamp.RelPos && col.ColPos == timestamp.ColPos
+}
+
+func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
+	if expr == nil {
+		return false
+	}
+	if gapFillBoundColumnMatches(expr, timestamp) {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func gapFillBoundIsConstant(expr *Expr) bool {
