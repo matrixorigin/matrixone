@@ -439,6 +439,54 @@ func makeInterval() types.Datetime {
 	return t
 }
 
+func makeTimeWinIntervalExpr(value int64, unit string) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_List{
+			List: &plan.ExprList{
+				List: []*plan.Expr{
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_I64Val{I64Val: value},
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{Sval: unit},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestMakeIntervalAndSlidingValidatesMicrosecondWindows(t *testing.T) {
+	timeWin := &TimeWin{}
+	require.NoError(t, timeWin.MakeIntervalAndSliding(
+		makeTimeWinIntervalExpr(1000, "microsecond"),
+		makeTimeWinIntervalExpr(250, "microsecond"),
+	))
+	require.Equal(t, types.Datetime(1000), timeWin.Interval)
+	require.Equal(t, types.Datetime(250), timeWin.Sliding)
+
+	require.ErrorContains(t,
+		(&TimeWin{}).MakeIntervalAndSliding(makeTimeWinIntervalExpr(0, "microsecond"), nil),
+		"time window interval must be greater than zero",
+	)
+	require.ErrorContains(t,
+		(&TimeWin{}).MakeIntervalAndSliding(makeTimeWinIntervalExpr(1, "microsecond"), makeTimeWinIntervalExpr(0, "microsecond")),
+		"time window sliding value must be greater than zero",
+	)
+	require.ErrorContains(t,
+		(&TimeWin{}).MakeIntervalAndSliding(makeTimeWinIntervalExpr(1, "month"), nil),
+		"Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit",
+	)
+}
+
 func TestCalcDatetimeSupportsMicrosecond(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -471,6 +519,51 @@ func TestCalcDatetimeSupportsMicrosecond(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestMakeWindowBoundaryVecPreservesTimestampTypeAndReusesBuffers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+
+	ctr := &container{}
+	reuse := vector.NewVec(types.T_datetime.ToType())
+	var got *vector.Vector
+	t.Cleanup(func() {
+		if got != nil {
+			got.Free(proc.Mp())
+		}
+	})
+
+	got, err := ctr.makeWindowBoundaryVec(
+		reuse,
+		[]types.Datetime{types.ZeroDatetime, types.Datetime(1234)},
+		plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		proc,
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.T_timestamp, got.GetType().Oid)
+	require.Equal(t, int32(6), got.GetType().Scale)
+	require.Equal(t, []types.Timestamp{types.ZeroTimestamp, types.Timestamp(1234)}, vector.MustFixedColNoTypeCheck[types.Timestamp](got))
+
+	got, err = ctr.makeWindowBoundaryVec(
+		got,
+		[]types.Datetime{types.Datetime(5678)},
+		plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		proc,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.Timestamp{types.Timestamp(5678)}, vector.MustFixedColNoTypeCheck[types.Timestamp](got))
+
+	got, err = ctr.makeWindowBoundaryVec(
+		got,
+		[]types.Datetime{types.Datetime(9012)},
+		plan.Type{Id: int32(types.T_datetime), Scale: 3},
+		proc,
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, got.GetType().Oid)
+	require.Equal(t, int32(3), got.GetType().Scale)
+	require.Equal(t, []types.Datetime{types.Datetime(9012)}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
 }
 
 func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
