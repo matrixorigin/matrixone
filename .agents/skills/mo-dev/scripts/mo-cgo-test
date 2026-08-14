@@ -100,13 +100,50 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
     cuda_rpaths="-Wl,-rpath,/usr/local/cuda/lib64 -Wl,-rpath,$CONDA_PREFIX/lib"
     cuda_runtime_paths=":/usr/local/cuda/lib64:$CONDA_PREFIX/lib"
 
-    # The Makefile adds `-tags gpu` under the same switch. Do not add it when the caller
-    # already passed -tags: go test keeps only the last -tags, so appending would
-    # silently discard theirs.
+    # The Makefile adds `-tags gpu` under the same switch, so MO_CL_CUDA=1 must always end up
+    # building the gpu-tagged files. It cannot be appended as a second -tags: go test keeps
+    # only the LAST one, which would discard the caller's. Nor can it be skipped when the
+    # caller passes -tags -- that was the old behaviour, and it silently excluded every
+    # //go:build gpu file while still reporting a pass, so
+    #     MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/
+    # validated no GPU code at all and went green. MERGE instead: gpu joins the caller's tag
+    # set, in whichever form they wrote it.
+    merge_gpu_tag() {
+        # Go accepts comma-separated tags, and historically space-separated ones. Treat both
+        # as separators so `gpu` is not added twice to `-tags "foo gpu"`.
+        case ",$(printf '%s' "$1" | tr ' ' ',')," in
+            *,gpu,*) printf '%s' "$1" ;;
+            ,,) printf 'gpu' ;;
+            *) printf '%s,gpu' "$1" ;;
+        esac
+    }
+
     caller_set_tags=0
-    for arg in "$@"; do
+    argc=$#
+    i=0
+    while [ "$i" -lt "$argc" ]; do
+        arg="$1"
+        shift
+        i=$((i + 1))
         case "$arg" in
-            -tags | --tags | -tags=* | --tags=*) caller_set_tags=1 ;;
+            -tags | --tags)
+                caller_set_tags=1
+                if [ "$i" -lt "$argc" ] && [ $# -gt 0 ]; then
+                    val="$1"
+                    shift
+                    i=$((i + 1))
+                else
+                    val=
+                fi
+                set -- "$@" "$arg" "$(merge_gpu_tag "$val")"
+                ;;
+            -tags=* | --tags=*)
+                caller_set_tags=1
+                set -- "$@" "${arg%%=*}=$(merge_gpu_tag "${arg#*=}")"
+                ;;
+            *)
+                set -- "$@" "$arg"
+                ;;
         esac
     done
     if [ "$caller_set_tags" -eq 0 ]; then
