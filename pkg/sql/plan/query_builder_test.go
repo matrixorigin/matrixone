@@ -2787,8 +2787,10 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 
 			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[0].Typ.Id)
 			require.Equal(t, int32(6), root.ProjectList[0].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[0].Typ.Width)
 			require.Equal(t, int32(tt.typ.Oid), root.ProjectList[1].Typ.Id)
 			require.Equal(t, int32(6), root.ProjectList[1].Typ.Scale)
+			require.Equal(t, int32(6), root.ProjectList[1].Typ.Width)
 
 			var timeWindowNode *plan.Node
 			for _, node := range query.Nodes {
@@ -2800,9 +2802,11 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.NotNil(t, timeWindowNode)
 			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.Timestamp.Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Width)
 			require.Len(t, timeWindowNode.GroupBy, 1)
 			require.Equal(t, int32(types.T_datetime), timeWindowNode.GroupBy[0].Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
+			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
 		})
 	}
 }

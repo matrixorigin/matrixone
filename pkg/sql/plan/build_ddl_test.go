@@ -3157,6 +3157,26 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		"create table hf_scale_materialized as "+
+			"select _wstart, _wend, count(*) as row_count "+
+			"from tw_scale interval(ts, 1, microsecond)")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.GreaterOrEqual(t, len(createTable.TableDef.Cols), 2)
+	for _, col := range createTable.TableDef.Cols[:2] {
+		require.Equal(t, int32(types.T_datetime), col.Typ.Id, col.Name)
+		require.Equal(t, int32(6), col.Typ.Scale, col.Name)
+		require.Equal(t, int32(6), col.Typ.Width, col.Name)
+	}
+}
+
 func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")

@@ -200,8 +200,8 @@ where table_schema = database() and table_name = 'hf_scale_materialized'
 and column_name in ('_wstart', '_wend')
 order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  𝄀
-_wstart  ¦  datetime(6)  𝄀
-_wend  ¦  datetime(6)
+_wstart  ¦  DATETIME(6)  𝄀
+_wend  ¦  DATETIME(6)
 drop table hf_scale_materialized;
 drop table hf_scale_boundaries;
 drop table hf_readings;

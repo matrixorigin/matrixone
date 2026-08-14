@@ -7582,6 +7582,11 @@ func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type, astTimeWindow *t
 	if ctx == nil || astTimeWindow == nil {
 		return
 	}
+	typ = normalizeTimeWindowBoundaryType(typ, astTimeWindow)
+	ctx.timeBoundaryType = &typ
+}
+
+func normalizeTimeWindowBoundaryType(typ plan.Type, astTimeWindow *tree.TimeWindow) plan.Type {
 	if typ.Id == 0 {
 		typ.Id = int32(types.T_timestamp)
 	}
@@ -7591,8 +7596,15 @@ func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type, astTimeWindow *t
 	if timeWindowUsesMicrosecond(astTimeWindow) && typ.Scale < 6 {
 		typ.Scale = 6
 	}
+	if timeWindowBoundaryTypeHasFsp(types.T(typ.Id)) && typ.Scale > 0 {
+		typ.Width = typ.Scale
+	}
 	typ.NotNullable = true
-	ctx.timeBoundaryType = &typ
+	return typ
+}
+
+func timeWindowBoundaryTypeHasFsp(typ types.T) bool {
+	return typ == types.T_time || typ == types.T_datetime || typ == types.T_timestamp
 }
 
 func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.TimeWindow, fallback *plan.Type) plan.Type {
@@ -7603,14 +7615,7 @@ func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.Ti
 	if fallback != nil && boundaryType.Scale < fallback.Scale {
 		boundaryType.Scale = fallback.Scale
 	}
-	if types.T(boundaryType.Id) == types.T_date {
-		boundaryType.Id = int32(types.T_datetime)
-	}
-	if timeWindowUsesMicrosecond(astTimeWindow) && boundaryType.Scale < 6 {
-		boundaryType.Scale = 6
-	}
-	boundaryType.NotNullable = true
-	return boundaryType
+	return normalizeTimeWindowBoundaryType(boundaryType, astTimeWindow)
 }
 
 func timeWindowUsesMicrosecond(astTimeWindow *tree.TimeWindow) bool {
