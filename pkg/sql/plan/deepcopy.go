@@ -108,6 +108,8 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			InsertPkColIdx:        ctx.InsertPkColIdx,
 			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
+			DedupByTargetRowId:    ctx.DedupByTargetRowId,
+			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
 		}
 	}
 
@@ -150,14 +152,18 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:           DeepCopyObjectRef(ctx.Ref),
-		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:    ctx.HasAutoCol,
-		ColOffset:     ctx.ColOffset,
-		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:   ctx.IsOldUpdate,
-		IsNewUpdate:   ctx.IsNewUpdate,
+		Ref:                DeepCopyObjectRef(ctx.Ref),
+		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:         ctx.HasAutoCol,
+		ColOffset:          ctx.ColOffset,
+		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:        ctx.IsOldUpdate,
+		IsNewUpdate:        ctx.IsNewUpdate,
+		HasTargetSelector:  ctx.HasTargetSelector,
+		TargetRowNumberCol: ctx.TargetRowNumberCol,
+		TargetActiveCol:    ctx.TargetActiveCol,
+		TargetRowIdCol:     ctx.TargetRowIdCol,
 	}
 
 	return newCtx
@@ -284,6 +290,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
+		PartitionByCount:       node.PartitionByCount,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -407,22 +414,24 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:        col.ColId,
-		Name:         col.Name,
-		OriginName:   col.OriginName,
-		Alg:          col.Alg,
-		Typ:          col.Typ,
-		Default:      DeepCopyDefault(col.Default),
-		Primary:      col.Primary,
-		Pkidx:        col.Pkidx,
-		Comment:      col.Comment,
-		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),
-		GeneratedCol: DeepCopyGeneratedCol(col.GeneratedCol),
-		ClusterBy:    col.ClusterBy,
-		Hidden:       col.Hidden,
-		Seqnum:       col.Seqnum,
-		TblName:      col.TblName,
-		DbName:       col.DbName,
+		ColId:         col.ColId,
+		Name:          col.Name,
+		OriginName:    col.OriginName,
+		Alg:           col.Alg,
+		Typ:           col.Typ,
+		Default:       DeepCopyDefault(col.Default),
+		Primary:       col.Primary,
+		Unique:        col.Unique,
+		Pkidx:         col.Pkidx,
+		Comment:       col.Comment,
+		OnUpdate:      DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol:  DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:     col.ClusterBy,
+		Hidden:        col.Hidden,
+		Seqnum:        col.Seqnum,
+		TblName:       col.TblName,
+		OriginTblName: col.OriginTblName,
+		DbName:        col.DbName,
 	}
 }
 
@@ -464,7 +473,6 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexTableName:     indexDef.IndexTableName,
 		Comment:            indexDef.Comment,
 		Visible:            indexDef.Visible,
-		VisibilitySet:      indexDef.VisibilitySet,
 		IndexAlgo:          indexDef.IndexAlgo,
 		IndexAlgoTableType: indexDef.IndexAlgoTableType,
 		IndexAlgoParams:    indexDef.IndexAlgoParams,

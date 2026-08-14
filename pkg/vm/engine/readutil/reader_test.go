@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -36,6 +38,53 @@ import (
 type readerOwnershipDataSource struct {
 	closeCount int32
 }
+
+type singlePersistedBlockSource struct {
+	info       objectio.BlockInfo
+	emitted    bool
+	closeCount int32
+}
+
+func (s *singlePersistedBlockSource) Next(
+	context.Context,
+	[]string,
+	[]types.Type,
+	[]uint16,
+	int32,
+	any,
+	*mpool.MPool,
+	*batch.Batch,
+) (*objectio.BlockInfo, engine.DataState, error) {
+	if s.emitted {
+		return nil, engine.End, nil
+	}
+	s.emitted = true
+	return &s.info, engine.Persisted, nil
+}
+
+func (*singlePersistedBlockSource) ApplyTombstones(
+	context.Context,
+	*objectio.Blockid,
+	[]int64,
+	engine.TombstoneApplyPolicy,
+) ([]int64, error) {
+	return nil, nil
+}
+
+func (*singlePersistedBlockSource) GetTombstones(
+	context.Context,
+	*objectio.Blockid,
+) (objectio.Bitmap, error) {
+	return objectio.Bitmap{}, nil
+}
+
+func (*singlePersistedBlockSource) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*singlePersistedBlockSource) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*singlePersistedBlockSource) SetFilterZM(objectio.ZoneMap)    {}
+func (s *singlePersistedBlockSource) Close() {
+	atomic.AddInt32(&s.closeCount, 1)
+}
+func (*singlePersistedBlockSource) String() string { return "singlePersistedBlockSource" }
 
 func (*readerOwnershipDataSource) Next(
 	context.Context,
@@ -167,6 +216,98 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 	require.NoError(t, reader.Close())
 	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
 	require.Equal(t, int32(1), atomic.LoadInt32(&filter.freeCount))
+}
+
+func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	writeMP := mpool.MustNewZero()
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_text.ToType())
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, writeMP))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("persisted-payload"), false, writeMP))
+	}
+	input.SetRowCount(8)
+	writer := ioutil.ConstructWriter(0, []uint16{0, 1}, -1, false, false, fs)
+	_, err := writer.WriteBatch(input)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	input.Clean(writeMP)
+	require.Zero(t, writeMP.CurrNB())
+	mpool.DeleteMPool(writeMP)
+
+	tableDef := &plan.TableDef{
+		Name:          "late_reader_test",
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+		}, {
+			Name:   "payload",
+			Seqnum: 1,
+			Typ:    plan.Type{Id: int32(types.T_text)},
+		}},
+	}
+	source := &singlePersistedBlockSource{info: stats.ConstructBlockInfo(0)}
+	queryMP := mpool.MustNewZero()
+	r, err := NewReader(
+		ctx,
+		queryMP,
+		nil,
+		fs,
+		tableDef,
+		timestamp.Timestamp{},
+		nil,
+		source,
+		0,
+		engine.FilterHint{},
+	)
+	require.NoError(t, err)
+	mr := NewMergeReader([]engine.Reader{r})
+
+	output := batch.NewWithSize(2)
+	output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+	isEnd, err := mr.ReadWithFilter(
+		ctx,
+		[]string{"id", "payload"},
+		[]int{0},
+		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+			require.Equal(t, []int{0}, loaded)
+			require.Equal(t, 8, bat.Vecs[0].Length())
+			require.Zero(t, bat.Vecs[1].Length())
+			bat.Vecs[0].CleanOnlyData()
+			bat.SetRowCount(0)
+			return engine.ReaderFilterResult{}, nil
+		},
+		queryMP,
+		output,
+	)
+	require.NoError(t, err)
+	require.False(t, isEnd)
+	require.Zero(t, output.RowCount())
+	require.Zero(t, output.Vecs[0].Length())
+	require.Zero(t, output.Vecs[1].Length())
+
+	require.NoError(t, mr.Close())
+	require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
+
+	output.Clean(queryMP)
+	require.Zero(t, queryMP.CurrNB())
+	mpool.DeleteMPool(queryMP)
+}
+
+func TestMergeReaderRejectsNilReaderFilter(t *testing.T) {
+	mr := NewMergeReader(nil)
+	_, err := mr.ReadWithFilter(context.Background(), nil, nil, nil, nil, nil)
+	require.ErrorContains(t, err, "nil reader filter")
 }
 
 func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {

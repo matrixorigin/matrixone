@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -412,24 +413,40 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	targetRowNumberPos, targetActivePos int32,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
-) int32 {
+) (int32, error) {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
+	maintStep := joinStep
+	if targetRowNumberPos >= 0 {
+		selectedScanID := builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+		selectedScan := builder.qry.Nodes[selectedScanID]
+		selected, err := builder.buildTargetSelectedExpr(
+			finalProjTag, selectedScan, targetRowNumberPos, targetActivePos)
+		if err != nil {
+			return 0, err
+		}
+		selectedID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{selectedScanID}, FilterList: []*plan.Expr{selected},
+		}, bindCtx)
+		selectedSinkID := appendSinkNodeWithTag(builder, bindCtx, selectedID, finalProjTag)
+		maintStep = builder.appendStep(selectedSinkID)
+	}
 
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
-	builder.irregularMaintSourceStep = joinStep
-	builder.irregularMaintDeleteStep = joinStep
+	builder.irregularMaintSourceStep = maintStep
+	builder.irregularMaintDeleteStep = maintStep
 	builder.irregularMaintDeletePkPos = deletePkPos
 	builder.irregularMaintDeletePkTyp = deletePkTyp
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
-	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag), nil
 }
 
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
@@ -607,7 +624,7 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -695,7 +712,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -861,10 +878,23 @@ func (builder *QueryBuilder) buildIrregularMasterDeleteByPk(bindCtx *BindContext
 // path uses (reduceSinkSinkScanNodes + tempOptimizeForDML). It is a no-op when the
 // table has no irregular indexes. Shared by the modern INSERT and LOAD paths.
 func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, bindCtx *BindContext) error {
-	if len(builder.irregularMaintIndexes) == 0 {
+	if len(builder.irregularMaintIndexes) == 0 && len(builder.irregularUpdateMaints) == 0 {
 		return nil
 	}
-	if len(builder.irregularMaintIndexes) > 0 {
+	if len(builder.irregularUpdateMaints) > 0 {
+		for _, maint := range builder.irregularUpdateMaints {
+			builder.irregularMaintSourceStep = maint.sourceStep
+			builder.irregularMaintDeleteStep = maint.deleteStep
+			builder.irregularMaintDeletePkPos = maint.deletePkPos
+			builder.irregularMaintDeletePkTyp = maint.deletePkTyp
+			builder.irregularMaintIndexes = maint.indexes
+			builder.irregularMaintTableDef = maint.tableDef
+			builder.irregularMaintObjRef = maint.objRef
+			if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
+				return err
+			}
+		}
+	} else if len(builder.irregularMaintIndexes) > 0 {
 		if err := builder.buildIrregularIndexMaintenance(bindCtx); err != nil {
 			return err
 		}
@@ -1179,6 +1209,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
 			if !partsEqual(pkeyNames, referencedNames) {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
@@ -1260,6 +1293,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					}
 				}
 			} else {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
@@ -2908,9 +2944,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			lastNodeID = builder.appendOnDupIrregularMaintSource(
+			lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
+				-1, -1,
 				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+			if err != nil {
+				return 0, err
+			}
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}

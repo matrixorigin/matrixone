@@ -2622,38 +2622,28 @@ func pkCommitTSMatchedInRange(
 	sels []int64,
 	from, to types.TS,
 ) (bool, bool) {
-	if commitTSVec == nil ||
-		commitTSVec.GetType().Oid != types.T_TS ||
-		commitTSVec.IsConstNull() {
+	if commitTSVec == nil {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
-	var aborts []bool
-	if abortVec != nil && !abortVec.IsConstNull() {
-		if abortVec.GetType().Oid != types.T_bool {
-			return false, false
-		}
-		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(timestamps) {
-			return false, false
-		}
+	rowCount := commitTSVec.Length()
+	timestamps, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, commitTSVec)
+	if err != nil {
+		return false, false
+	}
+	abortColumn, err := ioutil.ValidateTombstoneAbortColumn(rowCount, abortVec)
+	if err != nil {
+		return false, false
 	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
-		if commitTSVec.IsNull(uint64(sel)) {
-			return false, false
-		}
-		if aborts != nil {
-			if abortVec.IsNull(uint64(sel)) {
-				return false, false
-			}
-			if aborts[sel] {
+		if abortColumn.IsPresent() {
+			if abortColumn.IsAborted(int(sel)) {
 				continue
 			}
 		}
-		ts := timestamps[sel]
+		ts := timestamps.At(int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}

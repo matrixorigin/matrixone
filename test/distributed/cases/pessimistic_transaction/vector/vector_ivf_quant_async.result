@@ -11,9 +11,26 @@ create index xbf using ivfflat on qbf(v) lists=2 op_type 'vector_l2_ops' quantiz
 create table qf(a int primary key, v vecf32(4));
 insert into qf values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index xf using ivfflat on qf(v) lists=2 op_type 'vector_l2_ops' quantization 'float16' ASYNC;
-select sleep(30);
-sleep(30)
-0
+set @qi8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qi8') limit 1);
+set @qi8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qi8') limit 1);
+set @qu8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qu8') limit 1);
+set @qu8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qu8') limit 1);
+set @qbf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qbf') limit 1);
+set @qbf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qbf') limit 1);
+set @qf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qf') limit 1);
+set @qf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qf') limit 1);
+set @wait_quant_entries_sql = concat(
+'select ',
+'(select count(*) from `', database(), '`.`', @qi8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qi8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qi8_ready, ',
+'(select count(*) from `', database(), '`.`', @qu8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qu8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qu8_ready, ',
+'(select count(*) from `', database(), '`.`', @qbf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qbf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qbf_ready, ',
+'(select count(*) from `', database(), '`.`', @qf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qf_ready'
+);
+prepare wait_quant_entries from @wait_quant_entries_sql;
+set @expected_ivf_entries = 6;
+execute wait_quant_entries;
+qi8_ready    qu8_ready    qbf_ready    qf_ready
+1    1    1    1
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
@@ -58,9 +75,10 @@ insert into qi8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qu8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qbf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
-select sleep(30);
-sleep(30)
-0
+set @expected_ivf_entries = 8;
+execute wait_quant_entries;
+qi8_ready    qu8_ready    qbf_ready    qf_ready
+1    1    1    1
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 1
@@ -105,9 +123,6 @@ update qi8 set v = '[55,55,55,55]' where a = 1;
 update qu8 set v = '[55,55,55,55]' where a = 1;
 update qbf set v = '[55,55,55,55]' where a = 1;
 update qf set v = '[55,55,55,55]' where a = 1;
-select sleep(30);
-sleep(30)
-0
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 a
 7
@@ -128,6 +143,7 @@ a
 7
 2
 3
+deallocate prepare wait_quant_entries;
 drop table qi8;
 drop table qu8;
 drop table qbf;

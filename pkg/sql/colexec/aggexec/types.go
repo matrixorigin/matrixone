@@ -194,6 +194,22 @@ type AggFuncExec interface {
 	Free()
 }
 
+// sourcePreservingMerger is implemented only by aggregate executors whose
+// Merge method leaves the source group unchanged. Merge normally permits
+// ownership transfer because distributed aggregation consumes partial states;
+// window execution needs the stronger contract when it snapshots a running
+// aggregate into multiple result groups.
+type sourcePreservingMerger interface {
+	sourcePreservingMerge()
+}
+
+// MergePreservesSource reports whether repeated merges can safely snapshot
+// exec without consuming or otherwise mutating its source group.
+func MergePreservesSource(exec AggFuncExec) bool {
+	_, ok := exec.(sourcePreservingMerger)
+	return ok
+}
+
 // PrepareParamKindStateAccessor is an optional capability implemented by the
 // aggregate state backed executors.  It exposes the provenance of the value
 // vector without widening AggFuncExec (value-window and other non-serializable
@@ -201,6 +217,7 @@ type AggFuncExec interface {
 // use this capability to carry the winner category alongside the packed state
 // rows.
 type PrepareParamKindStateAccessor interface {
+	HasBinaryStringMetadata() bool
 	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
 	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
 	// Row counts let transient provenance decoders validate an exact record
@@ -212,6 +229,13 @@ type PrepareParamKindStateAccessor interface {
 	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
 	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
 	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
+	BinaryStringRowsForChunk(chunk int) []bool
+	BinaryStringRowsForSelection(flags [][]uint8) []bool
+	BinaryStringSummaryForChunk(chunk int) bool
+	BinaryStringSummaryForSelection(flags [][]uint8) bool
+	RestoreBinaryStringRowsForChunk(chunk int, rows []bool, mp *mpool.MPool) error
+	RestoreBinaryStringRowsFlat(rows []bool, mp *mpool.MPool) error
+	SetBinaryStringSummary(binaryString bool)
 }
 
 // indicate who implements the AggFuncExec interface.
@@ -316,6 +340,18 @@ func makeSpecialAggExec(
 		return makeHllMerge(mp, id, params[0]), true, nil
 	case AggIdOfApproxPercentile:
 		exec, err := makeApproxPercentile(mp, id, isDistinct, params[0])
+		return exec, true, err
+	case AggIdOfPercentileCont:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_cont requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileContinuous)
+		return exec, true, err
+	case AggIdOfPercentileDisc:
+		if len(params) != 1 {
+			return nil, true, moerr.NewInternalErrorNoCtx("percentile_disc requires one value argument")
+		}
+		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
 		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)

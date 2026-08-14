@@ -126,6 +126,16 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
+	// Give the fulltext2 sink the CN engine/txn handles so it can open a short txn with a
+	// FULL sqlproc to resolve DATALINK columns to file CONTENT during CDC (stage:// +
+	// PDF/DOCX extraction) — parity with the sync build. Done here because the write path
+	// itself has no proc. Only when the index actually has a datalink column.
+	if w, ok := sqlwriter.(*Fulltext2SqlWriter); ok && w.datalinkPos {
+		w.cnEngine = cnEngine
+		w.cnTxnClient = cnTxnClient
+		w.cnUUID = cnUUID
+	}
+
 	c := &IndexConsumer{cnUUID: cnUUID,
 		cnEngine:    cnEngine,
 		cnTxnClient: cnTxnClient,
@@ -530,6 +540,13 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 	datatype := r.GetDataType()
 
+	// Give the fulltext2 writer the SOURCE tenant so it resolves a DATALINK stage:// under
+	// the account that owns the table — the consumer ctx tenant is System_Account here
+	// (iteration.go), which is the wrong tenant for a per-account stage lookup.
+	if w, ok := c.sqlWriter.(*Fulltext2SqlWriter); ok {
+		w.srcAccountID = r.GetAccountID()
+	}
+
 	// create thread to poll sql
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -561,12 +578,26 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
+// valueRepr picks the value representation the paired writer needs: the fulltext2
+// writer binary-encodes the pk (encodePk), so it needs native Go values (a datetime/
+// time/timestamp/decimal/uuid pk delivered as its SQL-display string would make
+// encodePk's native type assertion panic and crash the consumer goroutine, permanently
+// stalling index maintenance); every other writer builds SQL text and needs the
+// SQL-display string (the historical default).
+func (c *IndexConsumer) valueRepr() ValueRepr {
+	switch c.sqlWriter.(type) {
+	case *Fulltext2SqlWriter:
+		return ReprNative
+	}
+	return ReprSQLString
+}
+
 func (c *IndexConsumer) sinkSnapshot(ctx context.Context, errch chan error, upsertBatch *AtomicBatch) error {
 	var err error
 
 	for _, bat := range upsertBatch.Batches {
 		for i := 0; i < batchRowCount(bat); i++ {
-			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
+			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata, c.valueRepr()); err != nil {
 				return err
 			}
 
@@ -642,7 +673,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, errch chan error, upsertBa
 func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
+	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
 		return err
 	}
 
@@ -675,7 +706,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsert
 func (c *IndexConsumer) sinkDelete(ctx context.Context, errch chan error, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	if err = deleteIter.Row(ctx, c.rowdelete); err != nil {
+	if err = deleteIter.Row(ctx, c.rowdelete, c.valueRepr()); err != nil {
 		return err
 	}
 

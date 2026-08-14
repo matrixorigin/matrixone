@@ -17,6 +17,7 @@ package intersectall
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,6 +94,54 @@ func TestIntersectAll(t *testing.T) {
 	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
 }
 
+func TestIntersectAllMultiBuildBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := newIntersectAllTestCase(proc)
+	newKey := int64(hashmap.UnitLimit * 3)
+
+	for range 2 {
+		setMultiBuildBatchProcForTest(proc, c.arg, newKey)
+		require.NoError(t, c.arg.Prepare(c.proc))
+
+		var values []int64
+		nullCount := 0
+		rowCount := 0
+		for {
+			result, err := vm.Exec(c.arg, c.proc)
+			require.NoError(t, err)
+			if result.Batch == nil {
+				break
+			}
+
+			rows := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+			for row, value := range rows {
+				rowCount++
+				if result.Batch.Vecs[0].IsNull(uint64(row)) {
+					nullCount++
+				} else {
+					values = append(values, value)
+				}
+			}
+		}
+
+		require.Equal(t, 5, rowCount)
+		require.Equal(t, []int64{newKey, newKey, 0}, values)
+		require.Equal(t, 2, nullCount)
+
+		for _, child := range c.arg.Children {
+			child.Reset(proc, false, nil)
+		}
+		c.arg.Reset(c.proc, false, nil)
+	}
+
+	for _, child := range c.arg.Children {
+		child.Free(proc, false, nil)
+	}
+	c.arg.Free(c.proc, false, nil)
+	c.proc.Free()
+	require.Equal(t, int64(0), c.proc.Mp().CurrNB())
+}
+
 func newIntersectAllTestCase(proc *process.Process) intersectAllTestCase {
 	arg := new(IntersectAll)
 	arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
@@ -145,4 +194,37 @@ func setProcForTest(proc *process.Process, intersetAll *IntersectAll) {
 	rightChild := colexec.NewMockOperator().WithBatchs(rightBatches)
 	intersetAll.AppendChild(leftChild)
 	intersetAll.AppendChild(rightChild)
+}
+
+func setMultiBuildBatchProcForTest(proc *process.Process, intersectAll *IntersectAll, newKey int64) {
+	for _, child := range intersectAll.Children {
+		child.Free(proc, false, nil)
+	}
+	intersectAll.Children = nil
+
+	buildValues := make([]int64, newKey)
+	for i := range buildValues {
+		buildValues[i] = int64(i)
+	}
+	leftValues := []int64{newKey, newKey, newKey, 0, 0, 0, 0, 0}
+	leftNulls := []bool{false, false, false, true, true, true, false, false}
+	rightValues := []int64{newKey, newKey, 0, 0}
+	rightNulls := []bool{false, false, true, true}
+
+	leftBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVectorWithNulls(len(leftValues), types.T_int64.ToType(), proc.Mp(), false, leftNulls, leftValues),
+		}, nil),
+	}
+	rightBatches := []*batch.Batch{
+		testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(len(buildValues), types.T_int64.ToType(), proc.Mp(), false, buildValues),
+		}, nil),
+		testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVectorWithNulls(len(rightValues), types.T_int64.ToType(), proc.Mp(), false, rightNulls, rightValues),
+		}, nil),
+	}
+
+	intersectAll.AppendChild(colexec.NewMockOperator().WithBatchs(leftBatches))
+	intersectAll.AppendChild(colexec.NewMockOperator().WithBatchs(rightBatches))
 }

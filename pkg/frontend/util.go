@@ -2198,7 +2198,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetName(col.Name)
 	c.SetOrgName(col.GetOriginCaseName())
 	c.SetTable(col.TblName)
-	c.SetOrgTable(col.TblName)
+	orgTable := col.OriginTblName
+	if orgTable == "" {
+		orgTable = col.TblName
+	}
+	c.SetOrgTable(orgTable)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
 	typ := types.NewWithCharset(
@@ -2207,7 +2211,7 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	setColFlag(c)
+	setColFlag(c, col)
 
 	// For TIMESTAMPADD function compatibility with MySQL:
 	// GetResultColumnsFromPlan sets the return type based on input type and unit:
