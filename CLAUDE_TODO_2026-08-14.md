@@ -69,3 +69,10 @@ binary-string provenance 必须由所有合法来源产生，经参数/变量/�
 4. REPEAT 每行读取自身 binary-string metadata，覆盖首行 NULL、混合行和顺序变化；禁止第 0 行影响整批限制。
 5. `CONVERT/CHAR ... USING binary` 返回 VARBINARY/BLOB 并保留精确宽度，CTAS 同步物化相同类型约束；覆盖 70KB BLOB、raw literal CTAS 和后续超宽插入边界。
 6. 删除 `sourceUnbounded` 的无效赋值并运行 SCA 对应检查；完成 owning package 全量测试、完整 diff 自审、提交并普通 push。
+
+## PR #26907 第三次主线冲突修复
+
+1. 锁定 PR head `deaad1a3b2` 与最新 `mo/main` `2909687dc7`，使用 merge 保留历史，不 rebase、不 force-push。
+2. 逐文件解析冲突；若涉及 parser 生成物，以 `mysql_sql.y` 为源并强制重新生成 `mysql_sql.go`，禁止手工拼接生成代码。
+3. 检查 `MERGE_HEAD`、未解决索引、冲突标记和完整 merge diff，确保 binary provenance、REGEXP、CTAS 契约与主线改动同时保留。
+4. 运行冲突相关 focused tests、受影响 owning package 全量测试和 `git diff --check`；完成 self-review 后提交 merge commit并普通 push。
