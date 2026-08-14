@@ -1395,6 +1395,42 @@ func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
 	return outerDemand || node.Limit != nil
 }
 
+// orderedScalarUnionAll reports whether node is a UNION ALL tree whose leaves
+// are the single-row, tableless PROJECT -> VALUE_SCAN shape produced for
+// statements such as "SELECT 3 UNION ALL SELECT 1". Connector/ODBC uses this
+// shape to execute parameter arrays and maps returned rows back to parameter
+// sets by branch position, matching MySQL's left-to-right result order.
+//
+// Keep the recognition deliberately narrow. General UNION ALL inputs retain
+// their concurrent topology; only cheap scalar branches use sequential branch
+// activation to make that compatibility order deterministic.
+func orderedScalarUnionAll(nodeIdx int32, nodes []*plan.Node) bool {
+	if nodeIdx < 0 || int(nodeIdx) >= len(nodes) || nodes[nodeIdx] == nil {
+		return false
+	}
+
+	node := nodes[nodeIdx]
+	switch node.NodeType {
+	case plan.Node_UNION_ALL:
+		return len(node.Children) == 2 &&
+			orderedScalarUnionAll(node.Children[0], nodes) &&
+			orderedScalarUnionAll(node.Children[1], nodes)
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 {
+			return false
+		}
+		childIdx := node.Children[0]
+		if childIdx < 0 || int(childIdx) >= len(nodes) || nodes[childIdx] == nil {
+			return false
+		}
+		child := nodes[childIdx]
+		return child.NodeType == plan.Node_VALUE_SCAN &&
+			len(child.Children) == 0 && child.RowsetData == nil && child.TableDef == nil
+	default:
+		return false
+	}
+}
+
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
 	return c.compilePlanScopeWithUnionAllDemand(step, curNodeIdx, nodes, false)
 }
@@ -1649,7 +1685,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
+		lazy := streamingUnionAllDemand(node, outerUnionAllDemand) ||
+			orderedScalarUnionAll(curNodeIdx, nodes)
 		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
 		if err != nil {
 			return nil, err
