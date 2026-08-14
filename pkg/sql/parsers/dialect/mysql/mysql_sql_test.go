@@ -5664,6 +5664,253 @@ func TestLimitByRank(t *testing.T) {
 	}
 }
 
+func TestOffsetWithoutLimit(t *testing.T) {
+	testCases := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{
+			name:   "literal offset",
+			input:  "SELECT id FROM t ORDER BY id OFFSET 1",
+			output: "select id from t order by id offset 1",
+		},
+		{
+			name:   "parenthesized literal offset",
+			input:  "SELECT id FROM t OFFSET (1)",
+			output: "select id from t offset (1)",
+		},
+		{
+			name:   "offset after parenthesized expression",
+			input:  "SELECT (1) OFFSET (c)",
+			output: "select (1) offset (c)",
+		},
+		{
+			name:   "prepared parameter",
+			input:  "SELECT id FROM t ORDER BY id OFFSET ?",
+			output: "select id from t order by id offset ?",
+		},
+		{
+			name:   "parenthesized select",
+			input:  "(SELECT 1) OFFSET 1",
+			output: "(select 1) offset 1",
+		},
+		{
+			name:   "parenthesized select with parenthesized identifier offset",
+			input:  "(SELECT 1) OFFSET (c)",
+			output: "(select 1) offset (c)",
+		},
+		{
+			name:   "parenthesized select with cte",
+			input:  "WITH cte AS (SELECT 1) (SELECT * FROM cte) OFFSET 1",
+			output: "with cte as (select 1) (select * from cte) offset 1",
+		},
+		{
+			name:   "parenthesized select with outer order",
+			input:  "(SELECT 1) ORDER BY 1 OFFSET 1",
+			output: "(select 1) order by 1 offset 1",
+		},
+		{
+			name:   "parenthesized select with cte and outer order",
+			input:  "WITH cte AS (SELECT 1) (SELECT * FROM cte) ORDER BY 1 OFFSET ?",
+			output: "with cte as (select 1) (select * from cte) order by 1 offset ?",
+		},
+		{
+			name:   "offset remains an identifier",
+			input:  "SELECT offset FROM offset ORDER BY offset OFFSET 1",
+			output: "select offset from offset order by offset offset 1",
+		},
+		{
+			name:   "explicit offset alias",
+			input:  "SELECT 1 AS offset OFFSET 1",
+			output: "select 1 as offset offset 1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.Limit)
+			require.Nil(t, selectStmt.Limit.Count)
+			require.NotNil(t, selectStmt.Limit.Offset)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	aliases := []struct {
+		name   string
+		input  string
+		output string
+	}{
+		{
+			name:   "implicit projection alias",
+			input:  "SELECT 1 offset",
+			output: "select 1 as offset",
+		},
+		{
+			name:   "implicit projection alias before from",
+			input:  "SELECT 1 offset FROM t",
+			output: "select 1 as offset from t",
+		},
+		{
+			name:   "implicit table alias",
+			input:  "SELECT * FROM t offset",
+			output: "select * from t as offset",
+		},
+		{
+			name:   "implicit projection alias before limit",
+			input:  "SELECT 1 offset LIMIT 1",
+			output: "select 1 as offset limit 1",
+		},
+		{
+			name:   "implicit table alias before where",
+			input:  "SELECT * FROM t offset WHERE true",
+			output: "select * from t as offset where true",
+		},
+		{
+			name:   "implicit projection alias before rank",
+			input:  "SELECT 1 offset BY RANK WITH OPTION 'nprobe=1'",
+			output: "select 1 as offset by rank with option 'nprobe=1'",
+		},
+		{
+			name:   "implicit projection alias before interval",
+			input:  "SELECT 1 offset INTERVAL(ts, 1, day)",
+			output: "select 1 as offset interval(ts, 1, day)",
+		},
+		{
+			name:   "implicit table alias before full join",
+			input:  "SELECT * FROM t offset FULL JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
+			name:   "implicit table alias before full outer join",
+			input:  "SELECT * FROM t offset FULL OUTER JOIN u ON t.a = u.a",
+			output: "select * from t as offset full join u on t.a = u.a",
+		},
+		{
+			name:   "implicit projection alias before comment and from",
+			input:  "SELECT 1 offset /* comment */ FROM t",
+			output: "select 1 as offset from t",
+		},
+		{
+			name:   "offset remains a function name",
+			input:  "SELECT offset(1)",
+			output: "select offset(1)",
+		},
+		{
+			name:   "offset remains a table name",
+			input:  "SELECT * FROM offset",
+			output: "select * from offset",
+		},
+		{
+			name:   "implicit derived table alias",
+			input:  "SELECT * FROM (SELECT 1) offset",
+			output: "select * from (select 1) as offset",
+		},
+		{
+			name:   "explicit derived table alias with columns",
+			input:  "SELECT * FROM (SELECT 1) AS offset(c)",
+			output: "select * from (select 1) as offset(c)",
+		},
+		{
+			name:   "implicit derived table alias with spaced columns",
+			input:  "SELECT * FROM (SELECT 1) offset (c)",
+			output: "select * from (select 1) as offset(c)",
+		},
+		{
+			name:   "implicit nested derived table alias with spaced columns",
+			input:  "SELECT * FROM ((SELECT 1)) offset (c)",
+			output: "select * from ((select 1)) as offset(c)",
+		},
+		{
+			name:   "implicit comma derived table alias with spaced columns",
+			input:  "SELECT * FROM t, (SELECT 1) offset (c)",
+			output: "select * from t cross join (select 1) as offset(c)",
+		},
+	}
+
+	for _, tc := range aliases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			if tc.name != "implicit projection alias before limit" {
+				require.Nil(t, selectStmt.Limit)
+			}
+			if tc.name == "implicit projection alias before interval" {
+				require.NotNil(t, selectStmt.TimeWindow)
+			}
+		})
+	}
+}
+
+func TestParenthesizedTimeWindowPagination(t *testing.T) {
+	testCases := []struct {
+		name       string
+		input      string
+		output     string
+		wantCount  bool
+		wantOffset bool
+		wantOrder  bool
+	}{
+		{
+			name:      "limit",
+			input:     "(SELECT 1) INTERVAL(ts, 1, day) LIMIT 1",
+			output:    "(select 1) interval(ts, 1, day) limit 1",
+			wantCount: true,
+		},
+		{
+			name:       "offset without order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) OFFSET 1",
+			output:     "(select 1) interval(ts, 1, day) offset 1",
+			wantOffset: true,
+		},
+		{
+			name:       "offset with order",
+			input:      "(SELECT 1) INTERVAL(ts, 1, day) ORDER BY 1 OFFSET 1",
+			output:     "(select 1) order by 1 interval(ts, 1, day) offset 1",
+			wantOffset: true,
+			wantOrder:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), tc.input, 1)
+			require.NoError(t, err)
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			require.NotNil(t, selectStmt.TimeWindow)
+			require.NotNil(t, selectStmt.Limit)
+			require.Equal(t, tc.wantCount, selectStmt.Limit.Count != nil)
+			require.Equal(t, tc.wantOffset, selectStmt.Limit.Offset != nil)
+			require.Equal(t, tc.wantOrder, len(selectStmt.OrderBy) != 0)
+			require.Equal(t, tc.output, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestOffsetContextReset(t *testing.T) {
+	parser := &MySQLParser{}
+	stmts, err := parser.Parse(context.Background(), "SELECT * FROM (SELECT 1) offset (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "select * from (select 1) as offset(c)", tree.String(stmts[0], dialect.MYSQL))
+
+	stmts, err = parser.Parse(context.Background(), "(SELECT 1) OFFSET (c)", 1)
+	require.NoError(t, err)
+	require.Equal(t, "(select 1) offset (c)", tree.String(stmts[0], dialect.MYSQL))
+	selectStmt, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selectStmt.Limit)
+}
+
 // Test WITH clause support for INSERT statement (Issue #22583)
 func TestWithInsert(t *testing.T) {
 	tests := []struct {

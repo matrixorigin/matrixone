@@ -888,6 +888,9 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
+		if lower == "offset" && !s.offsetClauseAhead() {
+			return ID, keywordName
+		}
 		// make transaction statements coexist with plsql
 		if lower == "begin" {
 			cur := s.Pos
@@ -915,6 +918,118 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		return ID, keywordName
 	}
 	return ID, keywordName
+}
+
+// offsetClauseAhead distinguishes the query clause from OFFSET used as an
+// implicit alias. OFFSET is intentionally non-reserved, so a trailing OFFSET
+// or one followed by another clause must remain an identifier. If the next
+// token can start an expression, the parser receives the OFFSET keyword.
+func (s *Scanner) offsetClauseAhead() bool {
+	// Preserve OFFSET(...) as a non-reserved function name. OFFSET followed by
+	// a parenthesized clause expression remains available with whitespace, as
+	// in OFFSET (1).
+	if s.Pos < len(s.buf) && s.buf[s.Pos] == '(' {
+		return false
+	}
+
+	pos := s.skipBlankAndCommentsFrom(s.Pos)
+	if hasKeywordAt(s.buf, pos, "offset") {
+		return false
+	}
+
+	lookahead := *s
+	next, _ := lookahead.Scan()
+
+	return !isOffsetAliasFollower(next)
+}
+
+// isOffsetAliasFollower is the complete union of tokens that may immediately
+// follow a projection or table alias in the query grammar. Keep the groups in
+// grammar order: SELECT clauses, query suffixes, set operations, joins, table
+// index hints, and statement/table-reference terminators.
+func isOffsetAliasFollower(next int) bool {
+	switch next {
+	case 0, int(','), int(')'), int('}'), int(';'),
+		FROM, WHERE, GROUP, HAVING,
+		INTERVAL, FILL, ORDER, LIMIT, OFFSET, BY, INTO, FOR, LOCK,
+		UNION, EXCEPT, INTERSECT, MINUS, RETURNING,
+		JOIN, STRAIGHT_JOIN, LEFT, RIGHT, FULL, INNER, OUTER, CROSS, NATURAL,
+		APPLY, DEDUP, CENTROIDX, ON, USING, SET, USE, FORCE, IGNORE:
+		return true
+	default:
+		return false
+	}
+}
+
+func isTableFactorStart(previous int) bool {
+	switch previous {
+	case FROM, JOIN, STRAIGHT_JOIN, APPLY, USING:
+		return true
+	default:
+		return false
+	}
+}
+
+// offsetAliasColumnListAhead reports whether the text following OFFSET is a
+// parenthesized identifier list. The lexer uses it only after a closing ')'
+// to preserve the pre-existing derived-table form `(...) offset (c1, c2)`.
+func (s *Scanner) offsetAliasColumnListAhead() bool {
+	pos := s.skipBlankAndCommentsFrom(s.Pos)
+	if pos >= len(s.buf) || s.buf[pos] != '(' {
+		return false
+	}
+	pos++
+
+	for {
+		pos = s.skipBlankAndCommentsFrom(pos)
+		var ok bool
+		pos, ok = scanAliasIdentifierFrom(s.buf, pos, s.sqlMode.Has(SQLModeANSIQuotes))
+		if !ok {
+			return false
+		}
+		pos = s.skipBlankAndCommentsFrom(pos)
+		if pos >= len(s.buf) {
+			return false
+		}
+		switch s.buf[pos] {
+		case ')':
+			return true
+		case ',':
+			pos++
+		default:
+			return false
+		}
+	}
+}
+
+func scanAliasIdentifierFrom(sql string, pos int, ansiQuotes bool) (int, bool) {
+	if pos >= len(sql) {
+		return pos, false
+	}
+	if sql[pos] == '`' || (sql[pos] == '"' && ansiQuotes) {
+		quote := sql[pos]
+		for pos = pos + 1; pos < len(sql); pos++ {
+			if sql[pos] != quote {
+				continue
+			}
+			if pos+1 < len(sql) && sql[pos+1] == quote {
+				pos++
+				continue
+			}
+			return pos + 1, true
+		}
+		return pos, false
+	}
+	if !isLetter(uint16(sql[pos])) {
+		return pos, false
+	}
+	for pos++; pos < len(sql); pos++ {
+		ch := uint16(sql[pos])
+		if !isLetter(ch) && !isDigit(ch) && ch != '@' {
+			break
+		}
+	}
+	return pos, true
 }
 
 func (s *Scanner) withinGroupPhraseAhead(pos int) bool {
