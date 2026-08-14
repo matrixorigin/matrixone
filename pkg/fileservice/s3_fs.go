@@ -175,21 +175,27 @@ func (s *S3FS) CopyObject(
 	srcPath string,
 	dstPath string,
 ) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if _, err := parseFilePathAtService(srcPath, ""); err != nil {
+		return false, err
+	}
+	dstParsed, err := parseFilePathAtService(dstPath, s.name)
+	if err != nil {
+		return false, err
+	}
 	src, srcPath, err := resolveS3CopySource(srcFS, srcPath)
 	if err != nil || src == nil {
+		return false, err
+	}
+	srcParsed, err := parseFilePathAtService(srcPath, src.name)
+	if err != nil {
 		return false, err
 	}
 	copier, ok := s.storage.(objectStorageCopier)
 	if !ok {
 		return false, nil
-	}
-	srcParsed, err := ParsePathAtService(srcPath, src.name)
-	if err != nil {
-		return false, err
-	}
-	dstParsed, err := ParsePathAtService(dstPath, s.name)
-	if err != nil {
-		return false, err
 	}
 	srcKey := src.pathToKey(srcParsed.File)
 	dstKey := s.pathToKey(dstParsed.File)
@@ -216,13 +222,13 @@ func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error)
 	case *S3FS:
 		return f, filePath, nil
 	case *subPathFS:
-		p, err := f.toUpstreamPath(filePath)
+		p, err := f.toUpstreamFilePath(filePath)
 		if err != nil {
 			return nil, "", err
 		}
 		return resolveS3CopySource(f.upstream, p)
 	case *FileServices:
-		p, err := ParsePathAtService(filePath, "")
+		p, err := parseFilePathAtService(filePath, "")
 		if err != nil {
 			return nil, "", err
 		}
@@ -393,13 +399,16 @@ func (s *S3FS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, er
 }
 
 func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ctx, span := trace.Start(ctx, "S3FS.StatFile")
 	defer span.End()
 	start := time.Now()
 	defer func() {
 		metric.FSReadDurationStat.Observe(time.Since(start).Seconds())
 	}()
-	path, err := ParsePathAtService(filePath, s.name)
+	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +427,10 @@ func (s *S3FS) StatFile(ctx context.Context, filePath string) (*DirEntry, error)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
-	path, err := ParsePathAtService(filePath, s.name)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -488,7 +500,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	}()
 
 	// check existence
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -511,7 +523,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	ctx, span := trace.Start(ctx, "S3FS.write")
 	defer span.End()
 
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return 0, err
 	}
@@ -638,6 +650,9 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
+	}
+	if _, err := parseFilePathAtService(vector.FilePath, s.name); err != nil {
+		return err
 	}
 
 	for _, cache := range vector.Caches {
@@ -937,6 +952,9 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+	if _, err := parseFilePathAtService(vector.FilePath, s.name); err != nil {
+		return err
+	}
 
 	for _, cache := range vector.Caches {
 		if err := readCache(ctx, cache, vector); err != nil {
@@ -971,7 +989,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		return nil
 	}
 
-	path, err := ParsePathAtService(vector.FilePath, s.name)
+	path, err := parseFilePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -1474,12 +1492,15 @@ func (r *fullObjectDiskCacheReader) fillVector(
 }
 
 func (s *S3FS) Delete(ctx context.Context, filePaths ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ctx, span := trace.Start(ctx, "S3FS.Delete")
 	defer span.End()
 
 	keys := make([]string, 0, len(filePaths))
 	for _, filePath := range filePaths {
-		path, err := ParsePathAtService(filePath, s.name)
+		path, err := parseFilePathAtService(filePath, s.name)
 		if err != nil {
 			return err
 		}
