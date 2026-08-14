@@ -82,8 +82,12 @@ func TestTmpFileServiceInstancesOwnTheirRoots(t *testing.T) {
 	defer second.Close(ctx)
 
 	require.NotSame(t, first, second)
-	require.Equal(t, firstRoot, first.FileService.(*LocalETLFS).rootPath)
-	require.Equal(t, secondRoot, second.FileService.(*LocalETLFS).rootPath)
+	canonicalFirstRoot, err := filepath.EvalSymlinks(firstRoot)
+	require.NoError(t, err)
+	canonicalSecondRoot, err := filepath.EvalSymlinks(secondRoot)
+	require.NoError(t, err)
+	require.Equal(t, canonicalFirstRoot, first.FileService.(*LocalETLFS).rootPath)
+	require.Equal(t, canonicalSecondRoot, second.FileService.(*LocalETLFS).rootPath)
 	for fs, value := range map[*TmpFileService]byte{first: 1, second: 2} {
 		require.NoError(t, fs.Write(ctx, IOVector{
 			FilePath: "same-name",

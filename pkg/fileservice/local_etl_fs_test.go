@@ -32,7 +32,9 @@ func TestLocalETLFSCanonicalizesEmptyRoot(t *testing.T) {
 
 	fs, err := NewLocalETLFS("etl", "")
 	require.NoError(t, err)
-	require.Equal(t, root, fs.rootPath)
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	require.Equal(t, canonicalRoot, fs.rootPath)
 	require.NoError(t, fs.Write(context.Background(), IOVector{
 		FilePath: "nested/file",
 		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
