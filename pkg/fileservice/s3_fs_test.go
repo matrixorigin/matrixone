@@ -1548,11 +1548,16 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
-	storage := &generatedRangeObjectStorage{}
+	generatedStorage := &generatedRangeObjectStorage{}
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: generatedStorage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
+	}
 	fs.storage = storage
 	vector := &IOVector{
 		FilePath: "foo/bar",
-		Policy:   SkipFullFilePreloads,
+		Policy:   SkipFullFilePreloads | SkipDiskCacheWrites,
 		Entries:  []IOEntry{{Offset: 0, Size: 1}},
 	}
 	t.Cleanup(vector.Release)
@@ -1561,22 +1566,58 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 	require.Nil(t, waitMerge)
 	releaseMerge := sync.OnceFunc(finishMerge)
 	t.Cleanup(releaseMerge)
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	t.Cleanup(releaseRead)
 
+	readCtx := WithEventLogger(context.Background())
+	waiterLogger := readCtx.Value(EventLoggerKey).(*eventLogger)
 	readDone := make(chan error, 1)
-	go func() { readDone <- fs.Read(context.Background(), vector) }()
+	readExited := make(chan struct{})
+	go func() {
+		defer close(readExited)
+		readDone <- fs.Read(readCtx, vector)
+	}()
+	t.Cleanup(func() {
+		releaseRead()
+		releaseMerge()
+		select {
+		case <-readExited:
+		case <-time.After(5 * time.Second):
+			t.Error("range follower goroutine did not terminate")
+		}
+	})
+	require.Eventually(t, func() bool {
+		waiterLogger.mu.Lock()
+		defer waiterLogger.mu.Unlock()
+		for _, ev := range *waiterLogger.events {
+			if ev.ev == str_ioMerger_Merge_wait {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, time.Millisecond,
+		"range follower did not join the held merge generation")
+	select {
+	case <-storage.readStarted:
+		require.True(t, fs.ioMerger.IsMerging(fs.readMergeKey(vector)),
+			"the timed-out follower must bypass, rather than replace, the held generation")
+	case err := <-readDone:
+		require.NoError(t, err)
+		t.Fatal("range follower completed before its fallback storage read was observed")
+	case <-time.After(5 * time.Second):
+		releaseMerge()
+		releaseRead()
+		t.Fatal("range follower did not bypass the timed-out merge generation")
+	}
+	releaseRead()
 	select {
 	case err := <-readDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		releaseMerge()
-		select {
-		case <-readDone:
-		case <-time.After(time.Second):
-			t.Fatal("range follower did not terminate after merge release")
-		}
-		t.Fatal("range follower rejoined a timed-out merge generation")
+		t.Fatal("range follower did not terminate after its fallback storage read was released")
 	}
-	reads := storage.readRanges()
+	reads := generatedStorage.readRanges()
 	require.Len(t, reads, 1)
 	require.Equal(t, int64(0), *reads[0].min)
 	require.Equal(t, int64(1), *reads[0].max)

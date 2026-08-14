@@ -43,41 +43,44 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
+	// An empty root historically meant the current working directory for final
+	// paths, but os.CreateTemp("", ...) uses the system temporary directory.
+	// Canonicalize the root first so temporary writes and their atomic rename
+	// target always belong to the same configured filesystem tree.
+	if rootPath == "" {
+		rootPath = "."
+	}
+	var err error
+	rootPath, err = filepath.Abs(rootPath)
+	if err != nil {
+		return nil, err
+	}
 
-	// get absolute path
-	if rootPath != "" {
-		var err error
-		rootPath, err = filepath.Abs(rootPath)
+	// ensure dir
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		// not exists, create
+		err := os.MkdirAll(rootPath, 0755)
 		if err != nil {
 			return nil, err
 		}
 
-		// ensure dir
-		f, err := os.Open(rootPath)
-		if os.IsNotExist(err) {
-			// not exists, create
-			err := os.MkdirAll(rootPath, 0755)
-			if err != nil {
-				return nil, err
-			}
+	} else if err != nil {
+		// stat error
+		return nil, err
 
-		} else if err != nil {
-			// stat error
-			return nil, err
-
-		} else {
-			defer f.Close()
-		}
-
-		// resolve symlinks in the path to get the canonical path
-		// This is best-effort: if EvalSymlinks fails (e.g., due to race conditions
-		// in concurrent tests), we fall back to using the original path
-		if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
-			rootPath = resolved
-		}
-		// If EvalSymlinks fails, continue with the original rootPath
-		// This makes the code more resilient to race conditions in test environments
+	} else {
+		defer f.Close()
 	}
+
+	// resolve symlinks in the path to get the canonical path
+	// This is best-effort: if EvalSymlinks fails (e.g., due to race conditions
+	// in concurrent tests), we fall back to using the original path
+	if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+		rootPath = resolved
+	}
+	// If EvalSymlinks fails, continue with the original rootPath
+	// This makes the code more resilient to race conditions in test environments
 
 	return &LocalETLFS{
 		name:     name,

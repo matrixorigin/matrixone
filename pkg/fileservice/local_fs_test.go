@@ -42,6 +42,24 @@ type localBlockingDataCache struct {
 	once          sync.Once
 }
 
+func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Chdir(root)
+
+	local, err := NewLocalFS(ctx, "local", "", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { local.Close(ctx) })
+	require.Equal(t, root, local.RootPath())
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "nested/file",
+		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+		Policy:   SkipAllCache,
+	}))
+	_, err = os.Stat(filepath.Join(root, "nested", "file"))
+	require.NoError(t, err)
+}
+
 func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
 	c.once.Do(func() { close(c.updateStarted) })
 	select {

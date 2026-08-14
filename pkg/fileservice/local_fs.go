@@ -108,30 +108,33 @@ func newLocalFS(
 	noChecksum bool,
 ) (*LocalFS, error) {
 
-	// get absolute path
-	if rootPath != "" {
-		var err error
-		rootPath, err = filepath.Abs(rootPath)
+	// Keep os.CreateTemp and the final rename under one filesystem root. An
+	// empty root still means the current working directory, but make that
+	// meaning explicit before any temporary file is created.
+	if rootPath == "" {
+		rootPath = "."
+	}
+	var err error
+	rootPath, err = filepath.Abs(rootPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure dir
+	f, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		// not exists, create
+		err := os.MkdirAll(rootPath, 0755)
 		if err != nil {
 			return nil, err
 		}
 
-		// ensure dir
-		f, err := os.Open(rootPath)
-		if os.IsNotExist(err) {
-			// not exists, create
-			err := os.MkdirAll(rootPath, 0755)
-			if err != nil {
-				return nil, err
-			}
+	} else if err != nil {
+		// stat error
+		return nil, err
 
-		} else if err != nil {
-			// stat error
-			return nil, err
-
-		} else {
-			defer f.Close()
-		}
+	} else {
+		defer f.Close()
 
 	}
 

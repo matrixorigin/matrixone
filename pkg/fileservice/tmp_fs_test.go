@@ -16,7 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"iter"
 
@@ -25,10 +30,11 @@ import (
 )
 
 type errorListFileService struct {
-	name      string
-	listErr   error
-	entryName string
-	withEntry bool
+	name       string
+	listErr    error
+	entryName  string
+	withEntry  bool
+	closeCount atomic.Int64
 }
 
 func (e *errorListFileService) Name() string { return e.name }
@@ -61,6 +67,55 @@ func (e *errorListFileService) PrefetchFile(ctx context.Context, filePath string
 }
 func (e *errorListFileService) Cost() *CostAttr { return nil }
 func (e *errorListFileService) Close(ctx context.Context) {
+	e.closeCount.Add(1)
+}
+
+func TestTmpFileServiceInstancesOwnTheirRoots(t *testing.T) {
+	ctx := context.Background()
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	first, err := NewTmpFileService("tmp", firstRoot, time.Hour)
+	require.NoError(t, err)
+	defer first.Close(ctx)
+	second, err := NewTmpFileService("tmp", secondRoot, time.Hour)
+	require.NoError(t, err)
+	defer second.Close(ctx)
+
+	require.NotSame(t, first, second)
+	require.Equal(t, firstRoot, first.FileService.(*LocalETLFS).rootPath)
+	require.Equal(t, secondRoot, second.FileService.(*LocalETLFS).rootPath)
+	for fs, value := range map[*TmpFileService]byte{first: 1, second: 2} {
+		require.NoError(t, fs.Write(ctx, IOVector{
+			FilePath: "same-name",
+			Entries:  []IOEntry{{Size: 1, Data: []byte{value}}},
+		}))
+	}
+	firstData, err := os.ReadFile(filepath.Join(firstRoot, "same-name"))
+	require.NoError(t, err)
+	secondData, err := os.ReadFile(filepath.Join(secondRoot, "same-name"))
+	require.NoError(t, err)
+	require.Equal(t, []byte{1}, firstData)
+	require.Equal(t, []byte{2}, secondData)
+}
+
+func TestTmpFileServiceConcurrentCloseHasOneOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	storage := &errorListFileService{name: "tmp"}
+	fs := &TmpFileService{
+		FileService: storage,
+		cancel:      cancel,
+	}
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fs.Close(ctx)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int64(1), storage.closeCount.Load())
 }
 
 func TestTmpFileServiceGCHandlesNilEntry(t *testing.T) {
@@ -86,6 +141,18 @@ func TestTmpFileServiceGCHandlesNilEntry(t *testing.T) {
 	require.NotPanics(t, func() {
 		fs.gc(context.Background())
 	})
+}
+
+func TestTmpFileServiceInitHandlesNilEntry(t *testing.T) {
+	fs := &TmpFileService{
+		FileService: &errorListFileService{
+			name:    "tmp",
+			listErr: moerr.NewInternalErrorNoCtx("list failed"),
+		},
+		apps: make(map[string]*AppFS),
+	}
+
+	require.NotPanics(t, fs.init)
 }
 
 func TestTmpFileServiceGCHandlesErrorWithEntry(t *testing.T) {
