@@ -456,6 +456,7 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericTextFloat},
+		{name: "77 digit fractional prefix", width: 77, scale: 41, wantMode: preparedNumericTextFloat},
 		{name: "36 integral plus 10 scale", width: 46, scale: 10, full: true, wantMode: preparedNumericExact, wantWidth: 46, wantScale: 10},
 		{name: "36 integral plus 9 scale", width: 45, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 45, wantScale: 9},
 	}
@@ -518,6 +519,7 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "999999999999999999999999999999999999tail", wantWidth: 36, wantBindingMode: preparedNumericExact},
+		{value: "999999999999999999999999999999999999.11111111111111111111111111111111111111111tail", wantWidth: 77, wantScale: 41, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e67tail", wantWidth: 68, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "1e75tail", wantWidth: 76, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "1e76tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
@@ -736,6 +738,8 @@ func TestInitExecuteStmtParamUsesApproximateDomainForOversizedNumericPrefix(t *t
 		"1e76",
 		"1e76tail",
 		"10000000000000000000000000000000000000000000000000000000000000000000000000000tail",
+		"999999999999999999999999999999999999.11111111111111111111111111111111111111111",
+		"999999999999999999999999999999999999.11111111111111111111111111111111111111111tail",
 	} {
 		t.Run(value, func(t *testing.T) {
 			prepareStmt.params.CleanOnlyData()
@@ -1594,6 +1598,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
+		{name: "prepared decimal upgrade", from: defines.MORPCVersion20, to: defines.MORPCVersion21},
+		{name: "prepared decimal rollback", from: defines.MORPCVersion21, to: defines.MORPCVersion20},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
@@ -1632,7 +1638,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -1645,7 +1651,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
 
 	for _, tc := range []struct {
 		name      string
@@ -1669,7 +1675,7 @@ func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 				}
 			}()
-			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
 			prepareStmt.params = vector.NewVec(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
 			prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0}

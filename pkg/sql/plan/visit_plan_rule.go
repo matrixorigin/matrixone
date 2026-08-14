@@ -664,8 +664,6 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 	}
 	count := 0
 	real := false
-	hasFloat := false
-	hasString := false
 	for _, item := range fn.Args[1].GetList().List {
 		cast, ok := preparedDecimalComparisonCast(item)
 		if !ok {
@@ -674,13 +672,10 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 		count++
 		pos := int(cast.Args[0].GetP().Pos)
 		if pos >= 0 && pos < len(params) {
-			paramType := types.T(params[pos].Typ.Id)
-			hasFloat = hasFloat || paramType == types.T_float32 || paramType == types.T_float64
-			hasString = hasString || paramType.IsMySQLString()
 			real = real || preparedDecimalParamRequiresReal(params[pos])
 		}
 	}
-	return count > 1, real || hasFloat && hasString
+	return count > 1, real
 }
 
 func preparedDecimalGroupNeedsReal(expr *plan.Expr) bool {

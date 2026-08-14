@@ -667,12 +667,12 @@ func TestPreparedDecimalGroupsUseExecutionCommonDomain(t *testing.T) {
 		{
 			name: "in text float", predicate: "p_retailprice in (?,?)",
 			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", PrepareParamKind: vector.PrepareParamFloat}},
-			expectedID: types.T_float64,
+			expectedID: types.T_decimal128,
 		},
 		{
 			name: "not in text float", predicate: "p_retailprice not in (?,?)",
 			params:     []any{"9007199254740992.0001", ParamValue{Value: "9007199254740992", PrepareParamKind: vector.PrepareParamFloat}},
-			expectedID: types.T_float64,
+			expectedID: types.T_decimal128,
 		},
 		{
 			name: "in text integer", predicate: "p_retailprice in (?,?)",

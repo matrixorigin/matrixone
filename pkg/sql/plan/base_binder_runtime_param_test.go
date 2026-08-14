@@ -22,8 +22,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -31,6 +33,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestPreparedDecimalPrefixCastStartsAtMORPCVersion21(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	proc := testutil.NewProc(t)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+	require.False(t, preparedDecimalPrefixCastEnabled(proc))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion21)
+	require.True(t, preparedDecimalPrefixCastEnabled(proc))
+}
 
 func TestBaseBindParamMaterializesRuntimeProtocolKindOnlyWhenMarked(t *testing.T) {
 	proc := testutil.NewProc(t)
@@ -349,7 +362,7 @@ func exprContainsParam(expr *planpb.Expr) bool {
 	return false
 }
 
-func TestRuntimeMixedINUsesOneRealDomainBeforeVectorConstruction(t *testing.T) {
+func TestRuntimeMixedINPreservesIndependentComparisonDomains(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	column := &planpb.Expr{
 		Typ:  MakePlan2Type(&decimalType),
@@ -357,7 +370,7 @@ func TestRuntimeMixedINUsesOneRealDomainBeforeVectorConstruction(t *testing.T) {
 	}
 	textParam := makePlan2StringConstExprWithType("9007199254740992.0001")
 	textParam.ExactDecimalParam = true
-	floatParam := makePlan2Float64ConstExprWithType(9007199254740992)
+	floatParam := makePlan2Float64ConstExprWithType(0)
 	floatParam.ExactDecimalParam = true
 	list := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_tuple)},
@@ -368,7 +381,12 @@ func TestRuntimeMixedINUsesOneRealDomainBeforeVectorConstruction(t *testing.T) {
 
 	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in", []*planpb.Expr{column, list})
 	require.NoError(t, err)
-	require.True(t, expressionComparisonsUseType(expr, types.T_float64))
+	comparisonTypes := collectComparisonOperandTypes(expr)
+	require.Len(t, comparisonTypes, 2)
+	require.True(t, comparisonTypes[0][0].IsDecimal())
+	require.True(t, comparisonTypes[0][1].IsDecimal())
+	require.True(t, comparisonTypes[1][0].IsDecimal())
+	require.True(t, comparisonTypes[1][1].IsDecimal())
 }
 
 func TestTupleRuntimeFloatNormalizesToExactDecimal(t *testing.T) {
@@ -605,4 +623,23 @@ func expressionComparisonsUseType(expr *planpb.Expr, expected types.T) bool {
 		}
 	}
 	return true
+}
+
+func collectComparisonOperandTypes(expr *planpb.Expr) (ret [][]types.T) {
+	if expr == nil {
+		return nil
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && (fn.Func.ObjName == "=" || fn.Func.ObjName == "!=") {
+			operandTypes := make([]types.T, len(fn.Args))
+			for i, arg := range fn.Args {
+				operandTypes[i] = types.T(arg.Typ.Id)
+			}
+			ret = append(ret, operandTypes)
+		}
+		for _, arg := range fn.Args {
+			ret = append(ret, collectComparisonOperandTypes(arg)...)
+		}
+	}
+	return ret
 }

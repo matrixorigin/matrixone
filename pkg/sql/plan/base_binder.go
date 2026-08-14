@@ -4316,22 +4316,6 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 			}
-			if !leftIsPreparedParam && len(rightList.List) > 1 {
-				hasRuntimeFloat := false
-				hasOtherRuntime := false
-				for _, item := range rightList.List {
-					if !item.ExactDecimalParam {
-						continue
-					}
-					itemType := types.T(item.Typ.Id)
-					if itemType == types.T_float32 || itemType == types.T_float64 {
-						hasRuntimeFloat = true
-					} else {
-						hasOtherRuntime = true
-					}
-				}
-				useRuntimeLeftReal = hasRuntimeFloat && hasOtherRuntime
-			}
 			if useRuntimeLeftReal {
 				floatType := types.T_float64.ToType()
 				target := makePlan2Type(&floatType)
@@ -4347,7 +4331,7 @@ func bindFuncExprImplByPlanExpr(
 				}
 			}
 			groupID := int32(0)
-			if preparedListParams > 1 {
+			if leftIsPreparedParam && preparedListParams > 1 {
 				groupID = nextExactDecimalListGroupID()
 			}
 			typLeft := makeTypeByPlan2Expr(args[0])
@@ -5598,7 +5582,7 @@ func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
 	}
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion20
+	return ok && valid && version >= defines.MORPCVersion21
 }
 
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {

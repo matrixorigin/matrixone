@@ -203,4 +203,36 @@ SET @p='9007199254740992.0000000002';
 EXECUTE pc_one USING @p;
 DEALLOCATE PREPARE pc_one;
 
+-- Each multi-element IN comparison keeps its own coercion domain. A FLOAT
+-- peer must not erase precision from an independent DECIMAL/string comparison.
+PREPARE p_mixed_in FROM 'SELECT id FROM t WHERE d128 IN (?,?) ORDER BY id';
+PREPARE p_mixed_not_in FROM 'SELECT id FROM t WHERE d128 NOT IN (?,?) ORDER BY id';
+PREPARE p_mixed_or FROM 'SELECT id FROM t WHERE d128=? OR d128=? ORDER BY id';
+SET @exact='9007199254740992.0000000002';
+SET @float_zero=CAST(0 AS DOUBLE);
+EXECUTE p_mixed_in USING @exact,@float_zero;
+EXECUTE p_mixed_in USING @float_zero,@exact;
+EXECUTE p_mixed_not_in USING @exact,@float_zero;
+EXECUTE p_mixed_or USING @exact,@float_zero;
+DEALLOCATE PREPARE p_mixed_in;
+DEALLOCATE PREPARE p_mixed_not_in;
+DEALLOCATE PREPARE p_mixed_or;
+
+-- A Decimal256-overflowing numeric prefix remains numeric when it has a suffix.
+PREPARE p_fractional_overflow FROM
+  'SELECT COALESCE(?,CAST(0 AS DECIMAL(1,0)))';
+SET @overflow='999999999999999999999999999999999999.11111111111111111111111111111111111111111';
+EXECUTE p_fractional_overflow USING @overflow;
+SET @overflow='999999999999999999999999999999999999.11111111111111111111111111111111111111111tail';
+EXECUTE p_fractional_overflow USING @overflow;
+DEALLOCATE PREPARE p_fractional_overflow;
+
+PREPARE p_fractional_overflow_ctas FROM
+  'CREATE TABLE fractional_overflow_ctas AS SELECT COALESCE(?,CAST(0 AS DECIMAL(1,0))) AS v';
+EXECUTE p_fractional_overflow_ctas USING @overflow;
+SHOW CREATE TABLE fractional_overflow_ctas;
+SELECT v FROM fractional_overflow_ctas;
+DEALLOCATE PREPARE p_fractional_overflow_ctas;
+DROP TABLE fractional_overflow_ctas;
+
 DROP DATABASE prepare_decimal_common_type;
