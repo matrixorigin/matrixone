@@ -66,22 +66,22 @@ max-conversion-error-rate = 0.2
 	require.Equal(t, uint64(20), disabled.MongoDB.MaxPoolSize)
 	require.InDelta(t, 0.2, disabled.MongoDB.MaxConversionErrorRate, 0)
 
-	// A reload that keeps the MongoDB section but omits enable restores the
-	// default and must not retain the previous explicit opt-out.
-	_, err = toml.Decode("[mongodb]\nallowed-cidrs = [\"10.0.0.0/8\"]\n", &disabled)
-	require.NoError(t, err)
-	disabled.SetDefaultValues()
-	require.True(t, disabled.MongoDB.Enable)
-	require.False(t, disabled.MongoDB.EnablePerAccount)
-	require.Empty(t, disabled.MongoDB.AllowedAccounts)
-	require.Equal(t, []string{"10.0.0.0/8"}, disabled.MongoDB.AllowedCIDRs)
+}
+
+func TestMongoDBParametersProgrammaticOptOutSurvivesRepeatedDefaulting(t *testing.T) {
+	parameters := NewMongoDBParameters()
+	parameters.SetDefaultValues()
+	parameters.Enable = false
+
+	parameters.SetDefaultValues()
+	require.False(t, parameters.Enable)
 }
 
 func TestMongoDBParametersCaseInsensitiveEnablement(t *testing.T) {
 	for _, input := range []string{
-		"[mongodb]\\nEnable = false\\n",
-		"[mongodb]\\nENABLE = false\\n",
-		"[mongodb]\\neNaBlE = false\\n",
+		"[mongodb]\nEnable = false\n",
+		"[mongodb]\nENABLE = false\n",
+		"[mongodb]\neNaBlE = false\n",
 	} {
 		var parameters FrontendParameters
 		_, err := toml.Decode(input, &parameters)
@@ -93,7 +93,7 @@ func TestMongoDBParametersCaseInsensitiveEnablement(t *testing.T) {
 
 func TestMongoDBParametersRejectConflictingEnableKeys(t *testing.T) {
 	var parameters FrontendParameters
-	_, err := toml.Decode("[mongodb]\\nenable = false\\nEnable = true\\n", &parameters)
+	_, err := toml.Decode("[mongodb]\nenable = false\nEnable = true\n", &parameters)
 	require.ErrorContains(t, err, "conflicting enable keys")
 }
 

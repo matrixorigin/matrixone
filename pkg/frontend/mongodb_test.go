@@ -490,6 +490,15 @@ type mongoDBFeatureSession struct {
 func (s mongoDBFeatureSession) GetService() string   { return s.service }
 func (s mongoDBFeatureSession) GetAccountId() uint32 { return s.accountID }
 
+func TestMongoDBSystemVariablesDefaultEnablement(t *testing.T) {
+	parameters, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	require.True(t, parameters.MongoDB.Enable)
+
+	parameters.SetDefaultValues()
+	require.True(t, parameters.MongoDB.Enable)
+}
+
 func TestMongoDBFeatureGateAndRuntimeConfiguration(t *testing.T) {
 	require.ErrorContains(t, ensureMongoDBFeatureEnabledForSession(t.Context(), nil), "requires a session")
 

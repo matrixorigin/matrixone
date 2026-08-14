@@ -171,7 +171,7 @@ func NewConfig() *Config {
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
-				MongoDB: config.DefaultMongoDBParameters(),
+				MongoDB: *config.NewMongoDBParameters(),
 			},
 		},
 	}

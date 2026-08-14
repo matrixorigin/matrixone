@@ -203,3 +203,19 @@ func TestMongoDBEnableDefaultAndExplicitDisable(t *testing.T) {
 	cfg.CN.Frontend.SetDefaultValues()
 	require.False(t, cfg.CN.Frontend.MongoDB.Enable)
 }
+
+func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
+	op := &operator{cfg: newServiceConfig()}
+	require.True(t, op.cfg.CN.Frontend.MongoDB.Enable)
+
+	// Model the public WithPreStart callback path.
+	op.Adjust(func(cfg *ServiceConfig) {
+		cfg.CN.Frontend.MongoDB.Enable = false
+	})
+
+	serviceCfg := op.GetServiceConfig()
+	cfg := serviceCfg.getCNServiceConfig()
+	cfg.SetDefaultValue()
+	cfg.Frontend.SetDefaultValues()
+	require.False(t, cfg.Frontend.MongoDB.Enable)
+}
