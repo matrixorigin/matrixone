@@ -649,6 +649,14 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
 					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
+		} else {
+			// No single scan under this project: a JOIN in between takes the per-child route,
+			// which has no project node and so never replaced a MATCH in the select list.
+			// The children were rewritten before this node was visited, so resolve against the
+			// scans they built.
+			if builder.resolveProjectMatchesOverJoin(projNode, builder.sortNodeBelowProject(projNode)) {
+				return nodeID, nil
+			}
 		}
 	}
 

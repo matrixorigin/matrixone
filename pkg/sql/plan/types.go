@@ -251,6 +251,13 @@ type QueryBuilder struct {
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
 
+	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
+	// paired with the fulltext node producing each score. applyIndices recurses children
+	// first, so those scans already exist when the PROJECT above the join is visited -- but
+	// that PROJECT is a different call frame and gets no return value from them. A MATCH in
+	// its select list is resolved against this.
+	ftJoinServed []fulltextServedMatch
+
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 

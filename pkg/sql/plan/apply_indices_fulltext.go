@@ -1168,6 +1168,64 @@ func remapCoveredBaseColRefs(expr *plan.Expr, scanTag, ftTag, pkColPos int32,
 	return expr
 }
 
+// sortNodeBelowProject returns the SORT sitting directly under projNode, if any. ORDER BY over
+// a join lands there, and its expressions carry their own MATCH rather than referencing the
+// projection.
+func (builder *QueryBuilder) sortNodeBelowProject(projNode *plan.Node) *plan.Node {
+	if projNode == nil || len(projNode.Children) != 1 {
+		return nil
+	}
+	child := builder.qry.Nodes[projNode.Children[0]]
+	if child != nil && child.NodeType == plan.Node_SORT {
+		return child
+	}
+	return nil
+}
+
+// resolveProjectMatchesOverJoin replaces MATCHes in a PROJECT's select list with the score
+// column of the fulltext scan that answers them, when those scans were built while rewriting
+// the children of a JOIN below it.
+//
+// A join takes a different route than a single scan: applyFullTextFiltersForJoinChildren
+// rewrites each TABLE_SCAN child on its own, with no project node in hand, so nothing ever
+// replaced a MATCH sitting in the select list above. It survived optimization and threw --
+// `select a.id, match(a.body) against('x') from a join b ... where match(a.body) against('x')`
+// failed while the same query without the projected score worked.
+//
+// applyIndices recurses children before parents, so those scans and their score columns
+// already exist by the time this runs; the column is reached by binding tag, which the join
+// carries up. Matching is binding-tag-aware (servedFullTextScoreSameTable): with two tables in
+// scope, comparing index parts by column name alone would answer match(b.body) with a's score.
+//
+// A MATCH nothing answers is left alone and still raises 20105.
+func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, sortNode *plan.Node) bool {
+	if projNode == nil || len(builder.ftJoinServed) == 0 {
+		return false
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	changed := false
+	for i, expr := range projNode.ProjectList {
+		if !exprCallsFunc(expr, "fulltext_match") {
+			continue
+		}
+		projNode.ProjectList[i] = replaceScoreFnInExprBy(expr, rewriter)
+		changed = true
+	}
+	// ORDER BY match(...) is bound as its own expression, not a reference to the projection.
+	if sortNode != nil {
+		for _, ob := range sortNode.OrderBy {
+			if ob == nil || !exprCallsFunc(ob.Expr, "fulltext_match") {
+				continue
+			}
+			ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
+			changed = true
+		}
+	}
+	return changed
+}
+
 // scanHasMatchedFullTextFilter reports whether this scan's filters will be rewritten by the
 // fulltext path. Two guards depend on it: applyIndicesForFilters leaves such a scan to that
 // path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary.
@@ -1229,7 +1287,7 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	}
 
 	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
-	newNodeID, _, _, _, err := builder.applyJoinFullTextIndices(
+	newNodeID, _, _, served, err := builder.applyJoinFullTextIndices(
 		ctxNodeID,
 		nil,
 		scanNode,
@@ -1248,6 +1306,9 @@ func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, sca
 	if err != nil {
 		return -1, false, err
 	}
+	// The PROJECT above the join is visited later, in a call frame that gets nothing back from
+	// here; a MATCH in its select list is resolved against this.
+	builder.ftJoinServed = append(builder.ftJoinServed, served...)
 	joinNode := builder.qry.Nodes[newNodeID]
 	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
 	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
@@ -1329,6 +1390,62 @@ func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []f
 	return false
 }
 
+// equalsFullTextMatchFuncSameTable is equalsFullTextMatchFunc plus the requirement that the
+// index-part columns come from the SAME binding, i.e. the same table instance.
+//
+// equalsFullTextMatchFunc compares index parts by column NAME, which is sound while both sides
+// belong to one scan. Resolving a MATCH across the children of a JOIN breaks that assumption:
+// `match(a.body) against('hello')` and `match(b.body) against('hello')` differ only in the
+// binding tag of their column argument, so by name alone they look like the same question and
+// one table's relevance would be reported for the other's.
+func (builder *QueryBuilder) equalsFullTextMatchFuncSameTable(fn1, fn2 *plan.Function) bool {
+	if !builder.equalsFullTextMatchFunc(fn1, fn2) {
+		return false
+	}
+	for i := 2; i < len(fn1.Args); i++ {
+		c1, c2 := fn1.Args[i].GetCol(), fn2.Args[i].GetCol()
+		if c1 == nil || c2 == nil || c1.RelPos != c2.RelPos || c1.ColPos != c2.ColPos {
+			return false
+		}
+	}
+	return true
+}
+
+// servedFullTextScoreSameTable is servedFullTextScore with the binding-tag-aware comparison,
+// for callers whose served set spans more than one table.
+func (builder *QueryBuilder) servedFullTextScoreSameTable(fn *plan.Function, served []fulltextServedMatch) *plan.Expr {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
+		return nil
+	}
+	for _, s := range served {
+		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFuncSameTable(fn, s.fn) {
+			continue
+		}
+		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
+			return expr
+		}
+	}
+	return nil
+}
+
+// fullTextScoreColRef builds a reference to nodeID's score column, or nil if that node cannot
+// supply one.
+func (builder *QueryBuilder) fullTextScoreColRef(nodeID int32) *plan.Expr {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil
+	}
+	ftnode := builder.qry.Nodes[nodeID]
+	if ftnode == nil || ftnode.TableDef == nil || len(ftnode.TableDef.Cols) < 2 || len(ftnode.BindingTags) == 0 {
+		return nil
+	}
+	return &plan.Expr{
+		Typ: ftnode.TableDef.Cols[1].Typ, // score column
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
+		},
+	}
+}
+
 // servedFullTextScore returns the score column of the index scan built for fn, or nil when no
 // served scan answers this particular MATCH or its node is not usable. Only meaningful after
 // the build loop has filled in the node ids.
@@ -1340,18 +1457,8 @@ func (builder *QueryBuilder) servedFullTextScore(fn *plan.Function, served []ful
 		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFunc(fn, s.fn) {
 			continue
 		}
-		if s.nodeID < 0 || int(s.nodeID) >= len(builder.qry.Nodes) {
-			continue
-		}
-		ftnode := builder.qry.Nodes[s.nodeID]
-		if ftnode == nil || ftnode.TableDef == nil || len(ftnode.TableDef.Cols) < 2 || len(ftnode.BindingTags) == 0 {
-			continue
-		}
-		return &plan.Expr{
-			Typ: ftnode.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: ftnode.BindingTags[0], ColPos: 1},
-			},
+		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
+			return expr
 		}
 	}
 	return nil
