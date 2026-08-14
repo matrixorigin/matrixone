@@ -1740,14 +1740,15 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 			concat_ws(X'2c', X'61', X'62', X'63') joined,
 			char(65) char_value,
 			_binary 'a' binary_introducer,
-			char(228, 189, 160 using utf8mb4) char_using`, 1)
+			char(228, 189, 160 using utf8mb4) char_using,
+			convert(X'61' using binary) converted`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 7)
+	require.GreaterOrEqual(t, len(cols), 8)
 	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
 	require.Equal(t, int32(5), cols[0].Typ.Width)
 	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)

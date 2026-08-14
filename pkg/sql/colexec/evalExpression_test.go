@@ -718,12 +718,16 @@ func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value := "AB\x00\x00"
 	isBin := true
+	binaryString := true
 	prepareParamKind := vector.PrepareParamNone
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return value, nil
 	})
 	proc.SetResolveVariableIsBinFunc(func(string, bool, bool) (bool, error) {
 		return isBin, nil
+	})
+	proc.SetResolveVariableBinaryStringFunc(func(string, bool, bool) (bool, error) {
+		return binaryString, nil
 	})
 	proc.SetResolveVariablePrepareParamKindFunc(func(string, bool, bool) (vector.PrepareParamKind, error) {
 		return prepareParamKind, nil
@@ -739,13 +743,15 @@ func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	vec, err := executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.True(t, vec.GetIsBinaryStringAt(0))
 	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
 
-	value, isBin, prepareParamKind = "5.0", false, vector.PrepareParamFloat
+	value, isBin, binaryString, prepareParamKind = "5.0", false, false, vector.PrepareParamFloat
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.False(t, vec.GetIsBin())
+	require.False(t, vec.GetIsBinaryStringAt(0))
 	require.Equal(t, vector.PrepareParamFloat, vec.GetPrepareParamKind())
 	require.Equal(t, "5.0", vec.GetStringAt(0))
 
@@ -756,10 +762,11 @@ func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "text", vec.GetStringAt(0))
 
-	value, isBin = "CD\x00\x00", true
+	value, isBin, binaryString = "CD\x00\x00", true, true
 	vec, err = executor.Eval(proc, nil, nil)
 	require.NoError(t, err)
 	require.True(t, vec.GetIsBin())
+	require.True(t, vec.GetIsBinaryStringAt(0))
 	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 }

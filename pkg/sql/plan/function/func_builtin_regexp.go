@@ -39,6 +39,34 @@ const (
 	mapSizeForRegexp = 100
 )
 
+// Parameter markers are exempt from MySQL's static binary/nonbinary regexp
+// compatibility check. Their protocol BLOB provenance must therefore not force
+// the byte-oriented regexp implementation; only a statically binary expression
+// selects that branch.
+func isBinaryRegexpVector(vec *vector.Vector) bool {
+	typ := vec.GetType()
+	if typ.Charset == types.CharsetBinary {
+		return true
+	}
+	switch typ.Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func regexpBytesForExecution(vec *vector.Vector, row int, value []byte) ([]byte, bool) {
+	staticBinary := isBinaryRegexpVector(vec)
+	if !staticBinary && vec.GetIsBin() && vec.GetIsBinaryStringAt(row) {
+		return value, true
+	}
+	if !staticBinary && vec.GetIsBinaryStringAt(row) {
+		return []byte(binaryBytesToRegexpString(value)), false
+	}
+	return value, staticBinary
+}
+
 type opBuiltInRegexp struct {
 	regMap regexpSet
 }
@@ -515,9 +543,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
-				match, res, err := regularSubstr(v1, v2, 1, 1, binaryInput,
-					parameters[1].GetIsBinaryStringAt(int(i)))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, binaryPattern := regexpBytesForExecution(parameters[1], int(i), v2)
+				match, res, err := regularSubstr(v1, v2, 1, 1, binaryInput, binaryPattern)
 				if err != nil {
 					return err
 				}
@@ -543,9 +571,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
-				match, res, err := regularSubstr(v1, v2, pos, 1, binaryInput,
-					parameters[1].GetIsBinaryStringAt(int(i)))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, binaryPattern := regexpBytesForExecution(parameters[1], int(i), v2)
+				match, res, err := regularSubstr(v1, v2, pos, 1, binaryInput, binaryPattern)
 				if err != nil {
 					return err
 				}
@@ -573,9 +601,9 @@ func (op *opBuiltInRegexp) builtInRegexpSubstr(parameters []*vector.Vector, resu
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
-				match, res, err := regularSubstr(v1, v2, pos, ocur, binaryInput,
-					parameters[1].GetIsBinaryStringAt(int(i)))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, binaryPattern := regexpBytesForExecution(parameters[1], int(i), v2)
+				match, res, err := regularSubstr(v1, v2, pos, ocur, binaryInput, binaryPattern)
 				if err != nil {
 					return err
 				}
@@ -804,7 +832,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, _ = regexpBytesForExecution(parameters[1], int(i), v2)
+				v3, _ = regexpBytesForExecution(parameters[2], int(i), v3)
 				val, err := regularReplace(v1, v2, v3, 1, 0, binaryInput)
 				if err != nil {
 					return err
@@ -830,7 +860,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, _ = regexpBytesForExecution(parameters[1], int(i), v2)
+				v3, _ = regexpBytesForExecution(parameters[2], int(i), v3)
 				val, err := regularReplace(v1, v2, v3, v4, 0, binaryInput)
 				if err != nil {
 					return err
@@ -858,7 +890,9 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 					return err
 				}
 			} else {
-				binaryInput := parameters[0].GetIsBinaryStringAt(int(i))
+				v1, binaryInput := regexpBytesForExecution(parameters[0], int(i), v1)
+				v2, _ = regexpBytesForExecution(parameters[1], int(i), v2)
+				v3, _ = regexpBytesForExecution(parameters[2], int(i), v3)
 				val, err := regularReplace(v1, v2, v3, v4, v5, binaryInput)
 				if err != nil {
 					return err

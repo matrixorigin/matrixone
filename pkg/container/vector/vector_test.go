@@ -2119,6 +2119,18 @@ func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
 
 func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	mp := mpool.MustNewZero()
+	static := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(static, []byte("binary"), false, mp))
+	require.NoError(t, static.SetBinaryStringRowsWithMP([]bool{false}, mp))
+	require.True(t, static.GetIsBinaryStringAt(0))
+	encodedStatic, err := static.MarshalBinary()
+	require.NoError(t, err)
+	static.Free(mp)
+	decodedStatic := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, decodedStatic.UnmarshalBinary(encodedStatic))
+	require.True(t, decodedStatic.GetIsBinaryStringAt(0))
+	decodedStatic.Free(mp)
+
 	plain := NewVec(types.T_text.ToType())
 	require.NoError(t, AppendBytes(plain, []byte("plain"), false, mp))
 	stable, err := plain.MarshalBinary()
@@ -4872,15 +4884,18 @@ func TestSetPrepareParamKindsAndBinaryStringFromReader(t *testing.T) {
 	require.True(t, vec.GetIsBinaryStringAt(2))
 }
 
-func TestStaticBinaryTypeAllowsRowTextOverride(t *testing.T) {
+func TestStaticBinaryTypeRejectsRowTextOverride(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varbinary.ToType())
 	require.NoError(t, AppendBytes(vec, []byte("text"), false, mp))
 	defer vec.Free(mp)
 	require.True(t, vec.GetIsBinaryStringAt(0))
 	require.NoError(t, vec.SetIsBinaryStringAt(0, false, mp))
-	require.True(t, vec.HasBinaryStringRows())
-	require.False(t, vec.GetIsBinaryStringAt(0))
+	require.False(t, vec.HasBinaryStringRows())
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.NoError(t, vec.SetBinaryStringRowsWithMP([]bool{false}, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.True(t, vec.GetIsBinaryStringAt(0))
 }
 
 func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {

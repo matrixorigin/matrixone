@@ -510,6 +510,7 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 	if result.Oid == types.T_blob && name != "insert" && name != "concat_ws" {
 		return result
 	}
+	sourceUnbounded := result.Oid == types.T_blob
 	if result.Oid == types.T_binary {
 		result.Oid = types.T_varbinary
 	}
@@ -548,6 +549,9 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 		if len(args) >= 4 {
 			if literalType, ok := nestedBinaryLiteralStringType(args[0]); ok {
 				result = literalType
+				sourceUnbounded = false
+			} else if sourceUnbounded {
+				return types.T_blob.ToType()
 			}
 			insertType := makeTypeByPlan2Expr(args[3])
 			if binaryType, ok := nestedBinaryLiteralStringType(args[3]); ok {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -537,6 +538,7 @@ func runBinaryStringRegexpCase(
 	t.Helper()
 	tcc := NewFunctionTestCase(proc, inputs, expected, fn)
 	require.NoError(t, tcc.parameters[0].SetIsBinaryStringAt(0, true, proc.Mp()))
+	tcc.parameters[0].SetIsBin(true)
 	succeed, errInfo := tcc.Run()
 	require.True(t, succeed, errInfo)
 
@@ -841,6 +843,23 @@ func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
 				newOpBuiltInRegexp().builtInRegexpSubstr, true)
 		})
 	}
+}
+
+func TestBinaryProtocolBlobRegexpUsesParameterMarkerSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input, err := vector.NewConstBytes(types.T_text.ToType(), []byte{0xe4, 0xbd, 0xa0}, 1, proc.Mp())
+	require.NoError(t, err)
+	defer input.Free(proc.Mp())
+	input.SetIsBinaryString(true)
+	pattern, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("."), 1, proc.Mp())
+	require.NoError(t, err)
+	defer pattern.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
+		[]*vector.Vector{input, pattern}, result, proc, 1, nil))
+	require.Equal(t, []byte{0xc3, 0xa4}, result.GetResultVector().GetBytesAt(0))
 }
 
 func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {

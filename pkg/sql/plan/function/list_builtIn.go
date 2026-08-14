@@ -2480,6 +2480,12 @@ var supportedStringBuiltIns = []FuncNew{
 					return Left
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return Left },
+			},
 		},
 	},
 
@@ -2518,6 +2524,12 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return Right
 				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return Right },
 			},
 		},
 	},
@@ -2771,6 +2783,18 @@ var supportedStringBuiltIns = []FuncNew{
 					return Replace
 				},
 			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return Replace },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return Replace },
+			},
 		},
 	},
 
@@ -2801,6 +2825,18 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return Insert
 				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_int64, types.T_varchar},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return Insert },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_blob, types.T_int64, types.T_int64, types.T_varchar},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return Insert },
 			},
 		},
 	},
@@ -2946,6 +2982,66 @@ var supportedStringBuiltIns = []FuncNew{
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
 		},
 	},
 
@@ -2984,6 +3080,66 @@ var supportedStringBuiltIns = []FuncNew{
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return derivedStringReturnType(parameters, 0, types.T_varchar)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_varbinary)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_blob, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return derivedStringReturnType(parameters, 0, types.T_blob)
 				},
 				newOp: func() executeLogicOfOverload {
 					return newOpBuiltInRegexp().builtInRegexpSubstr
@@ -4057,6 +4213,18 @@ var supportedStringBuiltIns = []FuncNew{
 					return SubStrIndex[int64]
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp:      func() executeLogicOfOverload { return SubStrIndex[int64] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_blob, types.T_varchar, types.T_int64},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubStrIndex[int64] },
+			},
 		},
 	},
 
@@ -4301,6 +4469,18 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return Trim
 				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varbinary},
+				retType:    func(parameters []types.Type) types.Type { return binaryStringTransformReturnType(parameters[2:]) },
+				newOp:      func() executeLogicOfOverload { return Trim },
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_blob},
+				retType:    func([]types.Type) types.Type { return types.T_blob.ToType() },
+				newOp:      func() executeLogicOfOverload { return Trim },
 			},
 		},
 	},

@@ -51,3 +51,12 @@ binary-string provenance 必须由所有合法来源产生，经参数/变量/�
 6. CTAS 内部 SQL 使用 mode-independent binary literal 格式，并修正 `_binary` 与 `CHAR(... USING ...)` 的 formatter/parser 往返。
 7. 为 unary `+` 增加 binary-string identity 语义，同时保持普通文本/数值的一元加号规则。
 8. 每项增加 focused UT；对外语义增加真实 SQL/CTAS、SQL PREPARE 和 COM_STMT 回归，覆盖评论中的失败例及相邻 text/binary/NULL 控制组。
+## PR review comments（第二轮：provenance 持久化与大 BLOB 闭环）
+
+1. 统一静态 binary 类型与行级 provenance：静态 BINARY/VARBINARY/BLOB 不能被来源行的 false marker 降级；序列化、UnionOne、fresh/flush 路径必须语义等价。
+2. raw X/0x/B/0b literal 在常量执行时写入 binary-string metadata；user variable 执行器读取 frontend resolver；binary charset 同样进入字节语义。
+3. IF/CASE/COALESCE/ELT/CONCAT_WS/UNION 使用统一的结果 common-domain 规则，避免静态类型与行 marker 相互覆盖。
+4. 补齐 BLOB overload 与返回宽度推导，覆盖 70,000 bytes 的 LEFT/RIGHT/REPLACE/INSERT/SUBSTRING_INDEX/REGEXP/TRIM/REPEAT/LPAD/RPAD 以及 CTAS。
+5. 修复 binary protocol BLOB 参数的 REGEXP 字节分支，并补 BLOB→STRING→BLOB 重绑测试。
+6. 为 CONVERT(expr USING charset) 设置并保留 UsingCharset，验证 CTAS 格式化—重解析。
+7. 验证矩阵：fresh/flush、非法 UTF-8、batch marshal/spill、mixed flow-control、direct user var、UNION、binary charset、70KB BLOB、真实 COM_STMT；最后跑受影响包全量测试、自审、提交并推送。

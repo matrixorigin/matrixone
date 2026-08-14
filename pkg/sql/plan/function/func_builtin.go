@@ -1595,7 +1595,7 @@ func doRpad(src string, tgtLen int64, pad string) (string, bool) {
 }
 
 func doLpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+	if tgtLen < 0 || tgtLen > types.MaxBlobLen {
 		return nil, true
 	}
 	if tgtLen <= int64(len(src)) {
@@ -1613,7 +1613,7 @@ func doLpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
 }
 
 func doRpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
-	if tgtLen < 0 || tgtLen > types.MaxVarcharLen {
+	if tgtLen < 0 || tgtLen > types.MaxBlobLen {
 		return nil, true
 	}
 	if tgtLen <= int64(len(src)) {
@@ -1644,7 +1644,11 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if n > int64(types.MaxVarcharLen)/sourceLen {
+		limit := int64(types.MaxVarcharLen)
+		if parameters[0].GetIsBinaryStringAt(0) {
+			limit = int64(types.MaxBlobLen)
+		}
+		if n > limit/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false
@@ -4288,6 +4292,9 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func isBinaryStringVector(vec *vector.Vector) bool {
+	if vec.GetType().Charset == types.CharsetBinary {
+		return true
+	}
 	switch vec.GetType().Oid {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true

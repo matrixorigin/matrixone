@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -24,6 +25,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBlobStringFunctionsPreserveSeventyThousandBytes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	payload := bytes.Repeat([]byte{'x'}, 70_000)
+	blob, err := vector.NewConstBytes(types.T_blob.ToType(), payload, 1, mp)
+	require.NoError(t, err)
+	defer blob.Free(mp)
+	length, err := vector.NewConstFixed(types.T_int64.ToType(), int64(len(payload)), 1, mp)
+	require.NoError(t, err)
+	defer length.Free(mp)
+	one, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, mp)
+	require.NoError(t, err)
+	defer one.Free(mp)
+	pad, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte{'y'}, 1, mp)
+	require.NoError(t, err)
+	defer pad.Free(mp)
+
+	for name, tc := range map[string]struct {
+		fn   fEvalFn
+		args []*vector.Vector
+	}{
+		"left":   {Left, []*vector.Vector{blob, length}},
+		"right":  {Right, []*vector.Vector{blob, length}},
+		"repeat": {builtInRepeat, []*vector.Vector{blob, one}},
+		"lpad":   {builtInLpad, []*vector.Vector{blob, length, pad}},
+		"rpad":   {builtInRpad, []*vector.Vector{blob, length, pad}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, tc.fn(tc.args, result, proc, 1, nil))
+			got := result.GetResultVector().GetBytesAt(0)
+			require.Len(t, got, len(payload))
+			require.Equal(t, byte('x'), got[0])
+			require.Equal(t, byte('x'), got[len(got)-1])
+		})
+	}
+}
 
 // Test_BuiltInConcat tests the CONCAT function with multiple parameters
 // This is a complex function that calls many other string handling functions
@@ -175,6 +216,7 @@ func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
 	binary := testutil.MakeVarlenaVector(
 		[][]byte{{0xe4, 0xbd, 0xa0, 0x61}, {0xff, 0x61}}, nil, types.T_varchar.ToType(), mp)
 	binary.SetIsBinaryString(true)
+	binary.SetIsBin(true)
 	defer binary.Free(mp)
 
 	lengths := testutil.MakeInt64Vector([]int64{1, 1}, nil, mp)
@@ -473,6 +515,7 @@ func TestBinaryAuxiliaryArgumentsDoNotChangeSubjectSemantics(t *testing.T) {
 	pattern := testutil.MakeVarlenaVector(
 		[][]byte{[]byte(".")}, nil, types.T_varchar.ToType(), mp)
 	pattern.SetIsBinaryString(true)
+	pattern.SetIsBin(true)
 	defer regexpSubject.Free(mp)
 	defer pattern.Free(mp)
 	regexpResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)

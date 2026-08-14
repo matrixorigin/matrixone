@@ -11967,6 +11967,7 @@ simple_expr:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, es},
+			UsingCharset: true,
         }
     }
 |   function_call_generic
