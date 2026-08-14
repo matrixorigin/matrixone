@@ -432,7 +432,10 @@ func charsetForName(name string) (uint32, bool) {
 	switch strings.ToLower(name) {
 	case "binary":
 		return uint32(types.CharsetBinary), true
-	case "utf8", "utf8mb3", "utf8mb4":
+	case "utf8", "utf8mb3", "utf8mb4", "latin1", "ascii":
+		// MatrixOne stores text as UTF-8. Accept MySQL's single-byte charset
+		// spellings for DDL compatibility and normalize them to the supported
+		// general-ci text identity rather than pretending to preserve encoding.
 		return uint32(types.CharsetUTF8), true
 	default:
 		return 0, false
@@ -445,7 +448,8 @@ func collationForName(name string) (uint32, bool) {
 		return uint32(types.CharsetBinary), true
 	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci":
+	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci",
+		"latin1_swedish_ci", "ascii_general_ci":
 		return uint32(types.CharsetUTF8), true
 	default:
 		// Do not silently alias advertised UCA/0900 collations to either legacy
