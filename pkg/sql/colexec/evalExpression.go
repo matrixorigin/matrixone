@@ -547,6 +547,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	// User variables carry values, not protocol parameter markers. A value with
+	// binary-string provenance must retain raw-byte REGEXP semantics even when
+	// its original literal IsBin bit was lost while assigning the variable.
+	isBin = isBin || binaryString
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
@@ -890,7 +894,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
-			binaryString := value.GetBinaryStringMetadataAt(row)
+			binaryString := value.GetIsBinaryStringAt(row)
 			if binaryString || len(expr.flowControlBinaryStrings) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
 				expr.flowControlBinaryStrings[row] = binaryString
@@ -921,9 +925,15 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
+	resultType := result.GetType()
+	if len(expr.flowControlBinaryStrings) == 0 &&
+		(resultType.Charset == types.CharsetBinary || resultType.Oid == types.T_binary ||
+			resultType.Oid == types.T_varbinary || resultType.Oid == types.T_blob) {
+		expr.ensureFlowControlBinaryStringRows(rows)
+	}
 	if len(expr.flowControlBinaryStrings) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
-		if err := result.SetBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
+		if err := result.SetSelectedValueBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
 			return err
 		}
 	}

@@ -1632,7 +1632,7 @@ func doRpadBytes(src []byte, tgtLen int64, pad []byte) ([]byte, bool) {
 
 func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// repeat the string n times.
-	repeatNTimes := func(base string, n int64) (r string, null bool) {
+	repeatNTimes := func(base string, n int64, binaryString bool) (r string, null bool) {
 		if n <= 0 {
 			return "", false
 		}
@@ -1645,7 +1645,7 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
 		limit := int64(types.MaxVarcharLen)
-		if parameters[0].GetIsBinaryStringAt(0) {
+		if binaryString {
 			limit = int64(types.MaxBlobLen)
 		}
 		if n > limit/sourceLen {
@@ -1666,7 +1666,8 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		if null1 || null2 {
 			err = rs.AppendMustNullForBytesResult()
 		} else {
-			r, null := repeatNTimes(functionUtil.QuickBytesToStr(v1), v2)
+			r, null := repeatNTimes(
+				functionUtil.QuickBytesToStr(v1), v2, parameters[0].GetIsBinaryStringAt(int(i)))
 			if null {
 				err = rs.AppendMustNullForBytesResult()
 			} else {

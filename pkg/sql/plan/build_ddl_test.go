@@ -1759,6 +1759,9 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 	}
 	require.Equal(t, int32(types.T_varbinary), cols[5].Typ.Id)
 	require.Equal(t, int32(1), cols[5].Typ.Width)
+	require.Equal(t, int32(types.T_varchar), cols[6].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[7].Typ.Id)
+	require.Equal(t, int32(1), cols[7].Typ.Width)
 	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		p.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
 	require.NoError(t, err)

@@ -241,7 +241,28 @@ func convertReturnType(parameters []types.Type) types.Type {
 	// The binder records the constant USING charset on the synthetic charset
 	// argument. Keeping the derivation here also covers callers that resolve the
 	// overload directly with a charset-aware second argument type.
+	if len(parameters) > 1 && parameters[1].Charset == types.CharsetBinary {
+		if parameters[0].Oid == types.T_blob || parameters[0].Oid == types.T_text ||
+			parameters[0].Width > types.MaxVarBinaryLen {
+			return types.T_blob.ToType()
+		}
+		result := types.T_varbinary.ToType()
+		result.Width = parameters[0].Width
+		result.Charset = types.CharsetBinary
+		return result
+	}
 	return derivedStringReturnType(parameters, 1, types.T_varchar)
+}
+
+func charReturnType(parameters []types.Type) types.Type {
+	width := int32(len(parameters) * 4)
+	if width > types.MaxVarBinaryLen {
+		return types.T_blob.ToType()
+	}
+	result := types.T_varbinary.ToType()
+	result.Width = width
+	result.Charset = types.CharsetBinary
+	return result
 }
 
 // wkbConstructor builds a typed WKB geometry constructor function definition
@@ -500,9 +521,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
-				},
+				retType:    charReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInChar
 				},
@@ -546,6 +565,30 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return builtInConvertUsingCharset
 				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varbinary, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         convertReturnType,
+				newOp:           func() executeLogicOfOverload { return builtInConvertUsingCharset },
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_blob, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         convertReturnType,
+				newOp:           func() executeLogicOfOverload { return builtInConvertUsingCharset },
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_text, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         convertReturnType,
+				newOp:           func() executeLogicOfOverload { return builtInConvertUsingCharset },
 			},
 		},
 	},

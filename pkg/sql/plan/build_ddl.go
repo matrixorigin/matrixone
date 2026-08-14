@@ -549,7 +549,6 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 		if len(args) >= 4 {
 			if literalType, ok := nestedBinaryLiteralStringType(args[0]); ok {
 				result = literalType
-				sourceUnbounded = false
 			} else if sourceUnbounded {
 				return types.T_blob.ToType()
 			}

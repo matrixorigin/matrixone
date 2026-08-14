@@ -466,6 +466,31 @@ func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 		})
 	}
 
+	t.Run("coalesce common varbinary keeps selected text row", func(t *testing.T) {
+		binaryColumn := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varbinary)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}
+		textColumn := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+		}
+		expression := bindFunction("coalesce", binaryColumn, textColumn)
+		expression.Typ.Id = int32(types.T_varbinary)
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.MakeVarlenaVector([][]byte{nil, []byte("binary")}, []uint64{0}, types.T_varbinary.ToType(), proc.Mp()),
+			testutil.MakeVarlenaVector([][]byte{[]byte("你"), []byte("text")}, nil, types.T_varchar.ToType(), proc.Mp()),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		executor, err := NewExpressionExecutor(proc, expression)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.False(t, result.GetIsBinaryStringAt(0))
+		require.True(t, result.GetIsBinaryStringAt(1))
+	})
+
 	mixedInput := testutil.NewBatchWithVectors([]*vector.Vector{
 		testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false}),
 	}, nil)
@@ -746,6 +771,12 @@ func TestVarExpressionExecutorPreservesProtocolMetadataOnReuse(t *testing.T) {
 	require.True(t, vec.GetIsBinaryStringAt(0))
 	require.Equal(t, vector.PrepareParamNone, vec.GetPrepareParamKind())
 	require.Equal(t, "AB\x00\x00", vec.GetStringAt(0))
+
+	value, isBin, binaryString = string([]byte{0xe4, 0xbd, 0xa0}), false, true
+	vec, err = executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.True(t, vec.GetIsBin(), "direct binary user variables retain raw-byte semantics")
+	require.True(t, vec.GetIsBinaryStringAt(0))
 
 	value, isBin, binaryString, prepareParamKind = "5.0", false, false, vector.PrepareParamFloat
 	vec, err = executor.Eval(proc, nil, nil)

@@ -776,7 +776,8 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 		}
 	}
 	mixedBinary := binaryCount > 0 && binaryCount < nonNull
-	if mixedBinary {
+	overrideStatic := v.staticBinaryStringType() && binaryCount < nonNull
+	if mixedBinary || overrideStatic {
 		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
 			releaseKinds()
 			return err
@@ -784,7 +785,7 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 	}
 	// All fallible work is complete. Publish the new generation from here.
 	switch {
-	case binaryCount == 0:
+	case binaryCount == 0 && !overrideStatic:
 		v.setBinaryStringScalar(false)
 	case binaryCount == nonNull:
 		v.setBinaryStringScalar(true)
@@ -1851,11 +1852,11 @@ func (v *Vector) GetIsBinaryStringAt(row int) bool {
 	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
 		return false
 	}
-	if v.staticBinaryStringType() {
-		return true
-	}
 	if v.binaryStringRowsActive {
 		return v.binaryStringRows.Contains(uint64(row))
+	}
+	if v.staticBinaryStringType() {
+		return true
 	}
 	return v.binaryString
 }
@@ -1952,6 +1953,16 @@ func (v *Vector) SetBinaryStringRows(rows []bool) error {
 }
 
 func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
+	return v.setBinaryStringRowsWithMP(rows, mp, false)
+}
+
+// SetSelectedValueBinaryStringRowsWithMP records the provenance of values
+// selected by a flow-control expression, which may override its common type.
+func (v *Vector) SetSelectedValueBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
+	return v.setBinaryStringRowsWithMP(rows, mp, true)
+}
+
+func (v *Vector) setBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool, overrideStatic bool) error {
 	if len(rows) != v.length {
 		return moerr.NewInvalidInputNoCtxf(
 			"binary-string row count %d does not match vector length %d", len(rows), v.length)
@@ -1960,11 +1971,23 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 		v.resetBinaryString()
 		return nil
 	}
-	if v.staticBinaryStringType() {
+	if v.staticBinaryStringType() && !overrideStatic {
 		v.setBinaryStringScalar(true)
 		return nil
 	}
 	if v.IsConst() {
+		if overrideStatic && v.staticBinaryStringType() {
+			if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+				return err
+			}
+			v.binaryStringRows.InitWithSize(int64(v.length))
+			v.binaryStringRowsActive = true
+			v.binaryString = rows[0]
+			if rows[0] && !v.IsNull(0) {
+				v.binaryStringRows.Add(0)
+			}
+			return nil
+		}
 		if v.IsNull(0) {
 			v.setBinaryStringScalar(false)
 		} else {
@@ -1982,7 +2005,7 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 			binaryCount++
 		}
 	}
-	if binaryCount == 0 {
+	if binaryCount == 0 && !(overrideStatic && v.staticBinaryStringType()) {
 		v.setBinaryStringScalar(false)
 		return nil
 	}
@@ -2000,7 +2023,9 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 			v.binaryStringRows.Add(uint64(row))
 		}
 	}
-	v.normalizeBinaryStringRows()
+	if !(overrideStatic && v.staticBinaryStringType()) {
+		v.normalizeBinaryStringRows()
+	}
 	return nil
 }
 

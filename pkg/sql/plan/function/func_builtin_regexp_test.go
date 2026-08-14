@@ -860,6 +860,12 @@ func TestBinaryProtocolBlobRegexpUsesParameterMarkerSemantics(t *testing.T) {
 	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
 		[]*vector.Vector{input, pattern}, result, proc, 1, nil))
 	require.Equal(t, []byte{0xc3, 0xa4}, result.GetResultVector().GetBytesAt(0))
+
+	input.SetIsBin(true)
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
+		[]*vector.Vector{input, pattern}, result, proc, 1, nil))
+	require.Equal(t, []byte{0xe4}, result.GetResultVector().GetBytesAt(0))
 }
 
 func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {

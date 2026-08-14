@@ -60,3 +60,12 @@ binary-string provenance 必须由所有合法来源产生，经参数/变量/�
 5. 修复 binary protocol BLOB 参数的 REGEXP 字节分支，并补 BLOB→STRING→BLOB 重绑测试。
 6. 为 CONVERT(expr USING charset) 设置并保留 UsingCharset，验证 CTAS 格式化—重解析。
 7. 验证矩阵：fresh/flush、非法 UTF-8、batch marshal/spill、mixed flow-control、direct user var、UNION、binary charset、70KB BLOB、真实 COM_STMT；最后跑受影响包全量测试、自审、提交并推送。
+
+## PR review comments（第三轮：类型域与值来源解耦）
+
+1. 静态 binary 列继续保证 fresh/flush、wire/spill 的字节语义，但 flow-control 结果允许逐行 selected-value provenance 覆盖公共 VARBINARY 类型；增加 planner 实际 VARBINARY result wrapper 回归。
+2. REGEXP 运行时用 `PrepareParamKind` 区分协议参数与直接 user variable/raw literal：仅真实 prepared BLOB 参数走参数标记例外转换，直接变量保持原始字节语义。
+3. 按 MySQL item/type 规则重写 REGEXP 绑定期检查：BLOB/VARBINARY 列与 text pattern 合法，raw binary/`CONVERT ... USING binary` 与 text 的差异由表达式来源和 binary charset 决定，并覆盖全部 REGEXP 入口。
+4. REPEAT 每行读取自身 binary-string metadata，覆盖首行 NULL、混合行和顺序变化；禁止第 0 行影响整批限制。
+5. `CONVERT/CHAR ... USING binary` 返回 VARBINARY/BLOB 并保留精确宽度，CTAS 同步物化相同类型约束；覆盖 70KB BLOB、raw literal CTAS 和后续超宽插入边界。
+6. 删除 `sourceUnbounded` 的无效赋值并运行 SCA 对应检查；完成 owning package 全量测试、完整 diff 自审、提交并普通 push。

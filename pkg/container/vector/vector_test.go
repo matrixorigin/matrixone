@@ -4896,6 +4896,12 @@ func TestStaticBinaryTypeRejectsRowTextOverride(t *testing.T) {
 	require.NoError(t, vec.SetBinaryStringRowsWithMP([]bool{false}, mp))
 	require.False(t, vec.HasBinaryStringRows())
 	require.True(t, vec.GetIsBinaryStringAt(0))
+
+	selected, err := NewConstBytes(types.T_varbinary.ToType(), []byte("text"), 1, mp)
+	require.NoError(t, err)
+	defer selected.Free(mp)
+	require.NoError(t, selected.SetSelectedValueBinaryStringRowsWithMP([]bool{false}, mp))
+	require.False(t, selected.GetIsBinaryStringAt(0))
 }
 
 func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {

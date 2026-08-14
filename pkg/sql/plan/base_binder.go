@@ -4405,6 +4405,15 @@ func regexpOperandIsBinaryString(expr *Expr) bool {
 	if _, ok := binaryLiteralStringType(expr); ok {
 		return true
 	}
+	if expr.Typ.Charset == uint32(types.CharsetBinary) {
+		return true
+	}
+	// MySQL's static regexp check uses the expression item category. A stored
+	// BLOB/VARBINARY column is accepted with a text pattern, while a typed
+	// binary expression such as CAST(NULL AS BINARY) still participates.
+	if expr.GetCol() != nil {
+		return false
+	}
 	switch types.T(expr.Typ.Id) {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true
