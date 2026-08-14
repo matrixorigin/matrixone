@@ -850,8 +850,10 @@ func (s *mysqlSinker2) Sink(ctx context.Context, data *DecoderOutput) {
 	var cmd *Command
 	if data.outputTyp == OutputTypeSnapshot {
 		cmd = NewInsertBatchCommand(data.checkpointBat, data.mp, data.fromTs, data.toTs)
+		cmd.snapshotPermit = data.snapshotPermit
 		data.checkpointBat = nil
 		data.mp = nil
+		data.snapshotPermit = nil
 	} else if data.outputTyp == OutputTypeTail {
 		cmd = NewInsertDeleteBatchCommand(data.insertAtmBatch, data.deleteAtmBatch, data.fromTs, data.toTs)
 		data.insertAtmBatch = nil

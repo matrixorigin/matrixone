@@ -2792,6 +2792,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 		colName       string
 		expectError   bool
 		expectCast    bool
+		expectWEnd    types.T
 		errorContains string
 	}{
 		// Temporal types - should work without casting
@@ -2801,6 +2802,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "DATE type should work",
@@ -2808,6 +2810,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TIMESTAMP type should work",
@@ -2815,6 +2818,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_timestamp,
 		},
 		{
 			name:        "TIME type should work",
@@ -2822,6 +2826,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_time,
 		},
 		// String types - should be automatically cast to DATETIME
 		{
@@ -2830,6 +2835,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "CHAR type should be cast to DATETIME",
@@ -2837,6 +2843,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TEXT type should be cast to DATETIME",
@@ -2844,6 +2851,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		// Non-temporal types - should return error
 		{
@@ -2951,7 +2959,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 				// Verify wEnd is set when sliding is nil
 				if astTimeWindow.Sliding == nil {
 					require.NotNil(t, wEnd)
-					require.Equal(t, ts.Typ.Id, wEnd.Typ.Id)
+					require.Equal(t, int32(tt.expectWEnd), wEnd.Typ.Id)
 				} else {
 					require.NotNil(t, sliding)
 				}

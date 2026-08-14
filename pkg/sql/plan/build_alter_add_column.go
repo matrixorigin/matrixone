@@ -326,6 +326,7 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 		Parts:          indexParts,
 		IndexTableName: indexTableName,
 		TableExist:     true,
+		Visible:        indexOptionVisible(uniKey.IndexOption),
 		Comment:        "",
 	}
 
@@ -444,6 +445,7 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 			// handle unique index
 			if len(indexInfo.Parts) == 0 {
 				tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+				i--
 			}
 		} else if !indexInfo.Unique {
 			// handle secondary index
@@ -460,13 +462,16 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 					//NOTE: if the last SK column is an __mo_alias or __mo_fake or __mo_cp, then the index will be deleted.
 					// There is no way that user can add __mo_alias or __mo_fake or __mo_cp as the SK column.
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				} else if len(indexInfo.Parts) == 0 {
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			case catalog.MOIndexMasterAlgo.ToString():
 				if len(indexInfo.Parts) == 0 {
 					// TODO: verify this
 					tbInfo.Indexes = append(tbInfo.Indexes[:i], tbInfo.Indexes[i+1:]...)
+					i--
 				}
 			default:
 				// Plugin-registered indexes may span multiple hidden IndexDefs;
