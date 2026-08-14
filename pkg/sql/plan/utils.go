@@ -23,6 +23,7 @@ import (
 	"math"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -383,6 +384,9 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
+			// fulltext_match / bm25_match are rewritten to an index-scan join by the
+			// optimizer; leave them un-cast so the rewrite can find them by name in the
+			// filter list (a wrapping cast(... AS BOOL) would hide the function).
 			needCast = fn.Func.ObjName != "fulltext_match"
 		}
 		// expr must be bool type, if not, try to do type convert
@@ -3128,7 +3132,6 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
 		return nil, moerr.NewInvalidInput(ctx, "cannot prepare TCL and DCL statement")
 	}
-
 	copied := DeepCopyPlan(preparePlan)
 	switch pp := copied.Plan.(type) {
 
@@ -3150,8 +3153,68 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value            any
+	IsBin            bool
+	PrepareParamKind vector.PrepareParamKind
+}
+
+func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
+	if param := expr.GetP(); param != nil {
+		return param.Pos, true
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil {
+		return 0, false
+	}
+	return param.Pos, true
+}
+
+func isPositivePreparedInteger(value any) bool {
+	kind := vector.PrepareParamNone
+	if paramValue, ok := value.(ParamValue); ok {
+		value = paramValue.Value
+		kind = paramValue.PrepareParamKind
+	}
+	if value == nil || kind != vector.PrepareParamNone && kind != vector.PrepareParamInteger {
+		return false
+	}
+
+	switch value := value.(type) {
+	case int:
+		return value > 0
+	case int8:
+		return value > 0
+	case int16:
+		return value > 0
+	case int32:
+		return value > 0
+	case int64:
+		return value > 0
+	case uint:
+		return value > 0 && uint64(value) <= uint64(math.MaxInt64)
+	case uint8:
+		return value > 0
+	case uint16:
+		return value > 0
+	case uint32:
+		return value > 0
+	case uint64:
+		return value > 0 && value <= uint64(math.MaxInt64)
+	case types.MoYear:
+		return value > 0
+	case string:
+		if kind != vector.PrepareParamInteger {
+			return false
+		}
+		parsed, err := strconv.ParseUint(value, 10, 63)
+		return err == nil && parsed > 0
+	default:
+		return false
+	}
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
@@ -3183,6 +3246,22 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
+		if name != "nth_value" || len(args) != 2 {
+			return nil
+		}
+		pos, ok := preparedNthValueParamPosition(args[1])
+		if !ok {
+			return nil
+		}
+		if pos < 0 || int(pos) >= len(paramVals) {
+			return moerr.NewInternalErrorf(ctx, "get prepare params error, index %d not exists", pos)
+		}
+		if !isPositivePreparedInteger(paramVals[pos]) {
+			return moerr.NewWrongArguments(ctx, "nth_value")
+		}
+		return nil
+	}
 	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
 	err := VisitQuery.Visit(ctx)
 	if err != nil {

@@ -53,8 +53,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -727,13 +729,24 @@ func TestDebugLogFor19288(t *testing.T) {
 func TestPreferPrimaryScopeResult(t *testing.T) {
 	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
 	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	joinedExecutionErr := errors.Join(executionErr, context.Canceled)
+	joinedDeadlineErr := errors.Join(context.DeadlineExceeded, context.Canceled)
 	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+	joinedCancellationErr := errors.Join(context.Canceled, queryInterrupted)
 	internalCancelCtx, cancelInternal := context.WithCancelCause(context.Background())
 	cancelInternal(executionErr)
+	internalNormalCancelCtx, cancelInternalNormal := context.WithCancelCause(context.Background())
+	cancelInternalNormal(nil)
+	activeQueryCtx := context.Background()
 	externalCancelCtx, cancelExternal := context.WithCancel(context.Background())
 	cancelExternal()
 	externalDeadlineCtx, cancelExternalDeadline := context.WithTimeout(context.Background(), 0)
 	defer cancelExternalDeadline()
+	queryDeadlineCauseCtx, cancelQueryDeadlineCause := context.WithTimeoutCause(
+		context.Background(), 0, moerr.CauseInternalExecutorExec)
+	defer cancelQueryDeadlineCause()
+	pipelineDeadlineCauseCtx, cancelPipelineDeadlineCause := context.WithCancelCause(queryDeadlineCauseCtx)
+	defer cancelPipelineDeadlineCause(nil)
 	externalCause := moerr.NewInternalErrorNoCtx("client canceled query")
 	externalCauseCtx, cancelExternalCause := context.WithCancelCause(context.Background())
 	cancelExternalCause(externalCause)
@@ -746,16 +759,21 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 	}{
 		{name: "first error", candidate: scopeRunResult{err: cleanupErr}, want: cleanupErr},
 		{name: "execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "joined execution error replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedExecutionErr}, want: joinedExecutionErr},
+		{name: "joined independent deadline replaces cleanup fallback", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedDeadlineErr}, want: context.DeadlineExceeded},
 		{name: "causal cancellation replaces cleanup fallback with execution error", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, want: executionErr},
 		{name: "external cancellation replaces cleanup fallback with external cause", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, want: externalCause},
 		{name: "cleanup fallback does not replace execution error", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: cleanupErr}, want: executionErr},
 		{name: "unresolved canceled sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: context.Canceled}, want: cleanupErr},
 		{name: "unresolved interrupted sibling is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: queryInterrupted}, want: cleanupErr},
+		{name: "unresolved joined cancellation is secondary", current: scopeRunResult{err: cleanupErr}, candidate: scopeRunResult{err: joinedCancellationErr}, want: cleanupErr},
 		{name: "internally canceled sibling resolves to execution error", current: scopeRunResult{err: context.Canceled, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
+		{name: "normal internal cancellation is secondary", current: scopeRunResult{err: context.Canceled, ctx: internalNormalCancelCtx, queryCtx: activeQueryCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
 		{name: "internally interrupted sibling resolves to execution error", current: scopeRunResult{err: queryInterrupted, ctx: internalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: executionErr},
-		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
-		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
-		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
+		{name: "plain external cancellation remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCancelCtx, queryCtx: externalCancelCtx}, candidate: scopeRunResult{err: executionErr}, want: context.Canceled},
+		{name: "external deadline remains primary", current: scopeRunResult{err: context.DeadlineExceeded, ctx: externalDeadlineCtx, queryCtx: externalDeadlineCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "query deadline classification survives custom timeout cause", current: scopeRunResult{err: context.DeadlineExceeded, ctx: pipelineDeadlineCauseCtx, queryCtx: queryDeadlineCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: context.DeadlineExceeded},
+		{name: "external cancellation cause remains primary", current: scopeRunResult{err: context.Canceled, ctx: externalCauseCtx, queryCtx: externalCauseCtx}, candidate: scopeRunResult{err: executionErr}, want: externalCause},
 		{name: "first substantive error remains", current: scopeRunResult{err: executionErr}, candidate: scopeRunResult{err: moerr.NewInternalErrorNoCtx("later")}, want: executionErr},
 	}
 
@@ -768,6 +786,142 @@ func TestPreferPrimaryScopeResult(t *testing.T) {
 			} else {
 				require.Same(t, tt.want, got.err)
 			}
+		})
+	}
+}
+
+type scopeRunCancelErrorOperator struct {
+	*colexec.MockOperator
+	cancelCause error
+	runErr      error
+}
+
+func (op *scopeRunCancelErrorOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	proc.Cancel(op.cancelCause)
+	return vm.NewCallResult(), op.runErr
+}
+
+func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
+	primaryErr := moerr.NewInternalErrorNoCtx("hash build memory budget exceeded")
+	tests := []struct {
+		name        string
+		cancelCause error
+		runErr      error
+		want        error
+	}{
+		{
+			name:        "substantive execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      primaryErr,
+			want:        primaryErr,
+		},
+		{
+			name:        "joined execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(primaryErr, context.Canceled),
+			want:        primaryErr,
+		},
+		{
+			name:        "cancellation resolves to substantive pipeline cause",
+			cancelCause: primaryErr,
+			runErr:      context.Canceled,
+			want:        primaryErr,
+		},
+		{
+			name:        "normal internal cancellation remains secondary",
+			cancelCause: nil,
+			runErr:      context.Canceled,
+			want:        nil,
+		},
+		{
+			name:        "independent operator deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      context.DeadlineExceeded,
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined independent deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined cancellation fallout remains secondary",
+			cancelCause: nil,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: nil,
+		},
+		{
+			name:        "joined cancellation fallout resolves to substantive cause",
+			cancelCause: primaryErr,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: primaryErr,
+		},
+		{
+			name:        "joined independent deadline survives substantive cancellation cause",
+			cancelCause: primaryErr,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				cancelCause:  test.cancelCause,
+				runErr:       test.runErr,
+			}
+			scope := &Scope{RootOp: op, Proc: proc}
+			compile := &Compile{proc: proc}
+
+			got := scope.Run(compile)
+			if test.want == nil {
+				require.NoError(t, got)
+			} else {
+				require.ErrorIs(t, got, test.want)
+			}
+		})
+	}
+}
+
+func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
+	tests := []struct {
+		name   string
+		runErr error
+	}{
+		{name: "deadline", runErr: context.DeadlineExceeded},
+		{name: "canceled child", runErr: context.Canceled},
+		{name: "query interrupted", runErr: moerr.NewQueryInterrupted(context.Background())},
+		{name: "joined deadline and cancellation", runErr: errors.Join(context.DeadlineExceeded, context.Canceled)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+				context.Background(), 0, moerr.CauseInternalExecutorExec)
+			defer cancelDeadline()
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
+			proc.BuildPipelineContext(queryCtx)
+
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				runErr:       test.runErr,
+			}
+			got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
+			require.ErrorIs(t, got, context.DeadlineExceeded)
+			require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
+
+			attached := moerr.AttachCause(deadlineCtx, got)
+			require.ErrorIs(t, attached, context.DeadlineExceeded)
+			require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
 		})
 	}
 }
@@ -921,6 +1075,124 @@ func TestCompileShuffleGroupGatesOrderedAggregateByProtocolVersion(t *testing.T)
 	aggNode.AggList = nil
 	require.True(t, c.canCompileShuffleGroup(aggNode),
 		"legacy shuffle aggregates remain safe on protocol v5")
+}
+
+func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	require.False(t, c.supportsRemoteOrderedSetAggregates())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep ordered-set percentile aggregates local")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.True(t, c.supportsRemoteOrderedSetAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+	require.True(t, c.supportsRemotePartitionTopN())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
+}
+
+func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
+	newNode := func() *plan.Node {
+		return &plan.Node{
+			NodeType: plan.Node_PARTITION,
+			OrderBy: []*plan.OrderBySpec{
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+				{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}},
+			},
+			Limit:            plan2.MakePlan2Uint64ConstExprWithType(1),
+			PartitionByCount: 1,
+		}
+	}
+
+	t.Run("v18 coalesces candidates for window", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		require.Len(t, partitionScopes, 1)
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, physicalPartition.Limit)
+		require.True(t, physicalPartition.PreReduce)
+		partitionScopes[0].setRootOperator(projection.NewArgument())
+
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.True(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("v17 keeps legacy window contract", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
+
+		partitionScopes := c.compilePartition(newNode(), []*Scope{newShuffleGroupInputScope(t, 1)})
+		physicalPartition := partitionScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, physicalPartition.Limit)
+		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
+		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
+		require.False(t, physicalWindow.PartitionTopN)
+	})
+}
+
+func TestCompileOrderedSetPercentileUsesSingleStageForNonShuffleMerge(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.Stats.HashmapStats = nil
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				ObjName: plan2.NamePercentileCont,
+			},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	scope1 := newShuffleGroupInputScope(t, 1)
+	scope2 := newShuffleGroupInputScope(t, 1)
+
+	require.True(t, hasOrderedSetPercentile(aggNode))
+	result := c.compileOrderedAggregateSingleStage(aggNode, []*Scope{scope1, scope2}, nodes)
+
+	require.Len(t, result, 1)
+	groupOp, ok := result[0].RootOp.(*group.Group)
+	require.True(t, ok)
+	require.True(t, groupOp.NeedEval)
+	require.Len(t, result[0].PreScopes, 2)
+	require.Contains(t, result[0].PreScopes, scope1)
+	require.Contains(t, result[0].PreScopes, scope2)
 }
 
 func TestCompileShuffleGroupUsesDistributedPathWhenInputScopesNotSingle(t *testing.T) {

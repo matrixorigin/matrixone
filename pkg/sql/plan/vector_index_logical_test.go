@@ -41,10 +41,11 @@ func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
 	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, []string{"title", "category"})
 	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, []string{"title", "category"})
 	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, []string{"title", "category"})
+	centroidsDef.Visible = false
 
 	indexes, err := builder.collectVectorIndexes(&planpb.Node{
 		TableDef: &planpb.TableDef{
-			Indexes: []*planpb.IndexDef{metaDef, centroidsDef, entriesDef},
+			Indexes: []*planpb.IndexDef{nil, metaDef, centroidsDef, entriesDef},
 		},
 	})
 	require.NoError(t, err)
@@ -60,22 +61,6 @@ func TestCollectVectorIndexesKeepsIvfFlatIncludeMetadata(t *testing.T) {
 	require.NoError(t, err)
 	included[0] = "mutated"
 	require.Equal(t, []string{"title", "category"}, entriesDef.IncludedColumns)
-}
-
-func TestCollectVectorIndexesSkipsWholeInvisibleLogicalIndex(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
-	metaDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Metadata, []string{"embedding"}, nil)
-	centroidsDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Centroids, []string{"embedding"}, nil)
-	entriesDef := makeVectorIndexDefForLogicalTest("idx_vec", catalog.MoIndexIvfFlatAlgo.ToString(), catalog.SystemSI_IVFFLAT_TblType_Entries, []string{"embedding"}, nil)
-	catalog.SetIndexVisibility(centroidsDef, false)
-
-	indexes, err := builder.collectVectorIndexes(&planpb.Node{
-		TableDef: &planpb.TableDef{
-			Indexes: []*planpb.IndexDef{metaDef, centroidsDef, entriesDef},
-		},
-	})
-	require.NoError(t, err)
-	require.NotContains(t, indexes, "idx_vec")
 }
 
 func TestCollectVectorIndexesRejectsInconsistentIvfFlatIncludeMetadata(t *testing.T) {

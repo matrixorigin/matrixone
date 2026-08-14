@@ -446,8 +446,8 @@ func sqlTaskInt64(v any) int64 {
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY QUANTIZER_TRAIN_LIMIT
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -690,7 +690,7 @@ func sqlTaskInt64(v any) int64 {
 %type <direction> asc_desc_opt
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
-%type <orderBy> order_list order_by_clause order_by_opt
+%type <orderBy> order_list order_by_clause order_by_opt within_group_opt
 %type <limit> limit_opt limit_clause
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
@@ -953,6 +953,10 @@ func sqlTaskInt64(v any) int64 {
 %token <str> QUERY_RESULT
 %left <str> RETURNING
 %token <str> ARRAY
+// Ordered-set aggregate syntax. Keep these tokens at the end of the token
+// declarations so adding them does not renumber the existing generated lexer
+// constants and downstream serialized plans.
+%token <str> WITHIN PERCENTILE_CONT PERCENTILE_DISC
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -4393,6 +4397,19 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
+| REINDEX ident FULLTEXT2 index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $4 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        } else {
+            io = $4
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        }
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
 |   CHECK ident enforce
     {
         var checkType = $1
@@ -6612,6 +6629,15 @@ order_by_opt:
 |   order_by_clause
     {
         $$ = $1
+    }
+
+within_group_opt:
+    {
+        $$ = nil
+    }
+|   WITHIN GROUP '(' order_by_clause ')'
+    {
+        $$ = $4
     }
 
 order_by_clause:
@@ -8881,6 +8907,10 @@ index_prefix:
     {
         $$ = tree.INDEX_CATEGORY_FULLTEXT
     }
+|   FULLTEXT2
+    {
+        $$ = tree.INDEX_CATEGORY_FULLTEXT2
+    }
 |   SPATIAL
     {
         $$ = tree.INDEX_CATEGORY_SPATIAL
@@ -8949,19 +8979,23 @@ index_option_list:
 	    } else if opt2.AlgoParamM > 0 {
 	      opt1.AlgoParamM = opt2.AlgoParamM
 	    } else if opt2.HnswEfConstruction > 0 {
- 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
             } else if opt2.HnswEfSearch > 0 {
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
- 	    } else if opt2.Async {
+	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    } else if opt2.ForceSync {
+	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
- 	    } else if opt2.AutoUpdate {
+	    } else if opt2.Merge {
+	      opt1.Merge = opt2.Merge
+	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
- 	    } else if opt2.Day > 0 {
+	    } else if opt2.Day > 0 {
 	      opt1.Day = opt2.Day
- 	    } else if opt2.Hour > 0 {
+	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
+	    } else if opt2.Second > 0 {
+	      opt1.Second = opt2.Second
 	    } else if opt2.IntermediateGraphDegree > 0 {
               opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
 	    } else if opt2.GraphDegree > 0 {
@@ -8982,8 +9016,13 @@ index_option_list:
               opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
             } else if opt2.MaxIndexCapacity > 0 {
               opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
+            } else if opt2.MaxPostingsCapacity > 0 {
+              opt1.MaxPostingsCapacity = opt2.MaxPostingsCapacity
             } else if opt2.QuantizerTrainLimit > 0 {
               opt1.QuantizerTrainLimit = opt2.QuantizerTrainLimit
+            } else if opt2.PositionFreeSet {
+              opt1.PositionFree = opt2.PositionFree
+              opt1.PositionFreeSet = true
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -9179,6 +9218,31 @@ index_option:
 	io.MaxIndexCapacity = val
 	$$ = io
     }
+|   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("MAX_POSTINGS_CAPACITY should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxPostingsCapacity = val
+	$$ = io
+    }
+|   POSITION_FREE '=' TRUE
+    {
+	io := tree.NewIndexOption()
+	io.PositionFree = true
+	io.PositionFreeSet = true
+	$$ = io
+    }
+|   POSITION_FREE '=' FALSE
+    {
+	io := tree.NewIndexOption()
+	io.PositionFree = false
+	io.PositionFreeSet = true
+	$$ = io
+    }
 |    ASYNC
      {
 	io := tree.NewIndexOption()
@@ -9188,7 +9252,13 @@ index_option:
 |    FORCE_SYNC
      {
 	io := tree.NewIndexOption()
-	io.ForceSync = true	
+	io.ForceSync = true
+	$$ = io
+     }
+|    MERGE
+     {
+	io := tree.NewIndexOption()
+	io.Merge = true
 	$$ = io
      }
 |    AUTO_UPDATE '=' TRUE
@@ -9223,6 +9293,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.Hour = val
+	$$ = io
+     }
+|    SECOND equal_opt INTEGRAL
+     {
+        val := int64($3.(int64))
+	if val < 0 {
+		yylex.Error("SECOND should be greater than or equal to 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.Second = val
 	$$ = io
      }
 
@@ -9325,6 +9406,7 @@ create_database_stmt:
 |   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
+		t.IfNotExists = $3
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7
@@ -10987,6 +11069,21 @@ index_def:
             IndexOption,
         )
     }
+|   FULLTEXT2 key_or_index_opt index_name '(' index_column_list ')' index_option_list
+    {
+        var KeyParts = $5
+        var Name = $3
+        var Empty = true
+        var IndexOption = $7
+        fti := tree.NewFullTextIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
+        fti.IsV2 = true
+        $$ = fti
+    }
 |   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
         keyTyp := tree.INDEX_TYPE_INVALID
@@ -11225,6 +11322,7 @@ index_type:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 
 insert_method_options:
     NO
@@ -11615,6 +11713,10 @@ fulltext_search_opt:
     {
 	$$ = tree.FULLTEXT_QUERY_EXPANSION
     }
+|   IN BM25 MODE
+    {
+	$$ = tree.FULLTEXT_BM25
+    }
 
 index_column_list_opt:
     {
@@ -11902,9 +12004,8 @@ simple_expr:
 		yylex.Error(err.Error())
 		goto ret1
 	}
-	$$ = val		
+	$$ = val
     }
-
 search_pattern:
     STRING
     {
@@ -12516,17 +12617,50 @@ window_spec:
     }
 
 function_call_aggregate:
-    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' window_spec_opt
-    {
-	    name := tree.NewUnresolvedColName($1)
-	        $$ = &tree.FuncExpr{
-	        Func: tree.FuncName2ResolvableFunctionReference(name),
+    GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
+	    {
+	        name := tree.NewUnresolvedColName($1)
+	        if $5 != nil && $8 != nil {
+	            yylex.Error("group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+	            return 1
+	        }
+	        orderBy := $5
+	        if $8 != nil {
+	            orderBy = $8
+	        }
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-	        Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
-	        Type: $3,
-	        WindowSpec: $8,
-            OrderBy:$5,
-	    }
+            Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
+            Type: $3,
+            WindowSpec: $9,
+            OrderBy: orderBy,
+			WithinGroup: $8 != nil,
+        }
+    }
+|   PERCENTILE_CONT '(' expression ')' within_group_opt window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
+        }
+    }
+|   PERCENTILE_DISC '(' expression ')' within_group_opt window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $6,
+            OrderBy: $5,
+            WithinGroup: $5 != nil,
+        }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
@@ -15010,6 +15144,7 @@ non_reserved_keyword:
 |   HNSW
 |   CAGRA
 |   IVFPQ
+|   BM25
 |   PERSIST
 |   GRANT
 |   INCLUDE
@@ -15037,7 +15172,9 @@ non_reserved_keyword:
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
+|   POSITION_FREE
 |   KEYS
 |   LANGUAGE
 |   LESS
@@ -15416,6 +15553,8 @@ not_keyword:
 |   BITMAP_BIT_POSITION
 |   BITMAP_BUCKET_NUMBER
 |   BITMAP_COUNT
+|   PERCENTILE_CONT
+|   PERCENTILE_DISC
 
 //mo_keywords:
 //    PROPERTIES

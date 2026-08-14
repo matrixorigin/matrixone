@@ -3081,6 +3081,43 @@ func TestPreparedForeignKeyActionsMarkQueryUncacheable(t *testing.T) {
 	})
 }
 
+func TestPreparedInsertForeignKeyPlansRemainSensitiveAcrossChecks(t *testing.T) {
+	statements := []struct {
+		name string
+		sql  string
+	}{
+		{name: "plain insert", sql: "prepare stmt1 from insert into replace_fk_c values (?, ?)"},
+		{name: "insert ignore", sql: "prepare stmt1 from insert ignore into replace_fk_c values (?, ?)"},
+		{name: "on duplicate key update", sql: "prepare stmt1 from insert into replace_fk_c values (?, ?) on duplicate key update pid = values(pid)"},
+		{
+			name: "no real key on duplicate key update fallback",
+			sql:  "prepare stmt1 from insert into insert_fk_no_key_c values (?, ?) on duplicate key update pid = values(pid)",
+		},
+	}
+
+	for _, checks := range []int64{0, 1} {
+		for _, statement := range statements {
+			t.Run(fmt.Sprintf("%s/checks=%d", statement.name, checks), func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+					switch name {
+					case "foreign_key_checks":
+						return checks, nil
+					case "sql_mode":
+						return "", nil
+					default:
+						return nil, moerr.NewInternalError(context.Background(), "unexpected variable")
+					}
+				}
+
+				query := buildPreparedQuery(t, mock, statement.sql)
+				require.True(t, query.GetHasForeignKeyAction(),
+					"prepared INSERT into an FK child must observe foreign_key_checks at each execution")
+			})
+		}
+	}
+}
+
 func buildPreparedQuery(t *testing.T, mock *MockOptimizer, sql string) *plan.Query {
 	t.Helper()
 

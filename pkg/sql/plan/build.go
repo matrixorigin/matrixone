@@ -162,6 +162,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		return nil, err
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
+		// The in-plan child checks and self-reference DetectSqls depend on the
+		// session's foreign_key_checks value. Keep prepared INSERT plans sensitive
+		// even while checks are disabled, so a later EXECUTE rebuilds the plan
+		// after either an OFF->ON or ON->OFF transition.
+		query.HasForeignKeyAction = true
+
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
 			return nil, err
@@ -784,6 +790,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 
 			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				if columns[idx].TblName == "" {
+					columns[idx].TblName = source.tableName
+				}
+				if columns[idx].DbName == "" {
+					columns[idx].DbName = source.dbName
+				}
+				columns[idx].OriginTblName = source.tableName
+				columns[idx].OriginName = source.columnName
 				columns[idx].Primary = source.primary
 				columns[idx].Unique = source.unique
 				columns[idx].NotNull = source.notNull
@@ -839,6 +853,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 }
 
 type resultColumnSource struct {
+	dbName       string
+	tableName    string
+	columnName   string
 	primary      bool
 	unique       bool
 	notNull      bool
@@ -1180,11 +1197,18 @@ func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resu
 			}
 		}
 	}
+	tableName := tableDef.OriginalName
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
 	return &resultColumnSource{
-		primary:  primary,
-		unique:   unique,
-		notNull:  primary || col.NotNull || col.Typ.NotNullable,
-		autoIncr: col.Typ.AutoIncr,
+		dbName:     tableDef.DbName,
+		tableName:  tableName,
+		columnName: col.GetOriginCaseName(),
+		primary:    primary,
+		unique:     unique,
+		notNull:    primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr:   col.Typ.AutoIncr,
 	}
 }
 

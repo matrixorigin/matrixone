@@ -143,6 +143,94 @@ func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
 	return string(databaseName), string(viewName), snapshot, nil
 }
 
+// ValidateSnapshotScope verifies that a relation belongs to the object covered
+// by a named snapshot. Timestamp-only snapshots have no object restriction.
+func ValidateSnapshotScope(
+	snapshot *Snapshot,
+	databaseName string,
+	tableName string,
+	databaseID uint64,
+	tableID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		if snapshot.ExtraInfo.ObjId != tableID {
+			return moerr.NewInternalErrorNoCtxf(
+				"table-level snapshot(%s) does not belong to the table(%s-%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+				tableName,
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
+// ValidateSnapshotDatabaseScope verifies that an operation scoped to a
+// database is compatible with a named snapshot. A table snapshot cannot read
+// database-wide metadata because it represents a single relation.
+func ValidateSnapshotDatabaseScope(
+	snapshot *Snapshot,
+	databaseName string,
+	databaseID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		return moerr.NewInternalErrorNoCtxf(
+			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
+			snapshot.ExtraInfo.Name,
+			databaseName,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
@@ -250,6 +338,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -469,6 +562,7 @@ type BindContext struct {
 	isCorrelated              bool
 	hasSingleRow              bool
 	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -564,6 +658,24 @@ type BindContext struct {
 	groupingFlag []bool
 
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {

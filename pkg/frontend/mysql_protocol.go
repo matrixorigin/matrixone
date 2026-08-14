@@ -2097,6 +2097,10 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 	if mp.ses != nil {
 		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }
@@ -2466,7 +2470,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 				}
 			}
 
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
@@ -2727,7 +2732,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow(mrs *MysqlResultSet, r uint6
 					}
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for binary values, including legacy vectors
+		// described as MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 			defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_GEOMETRY:
 			if value, err2 := mrs.GetValue(mp.ctx, r, i); err2 != nil {
@@ -2988,7 +2994,8 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow2(mrs *MysqlResultSet, colS
 			if err != nil {
 				return err
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {
@@ -3306,7 +3313,8 @@ func (mp *MysqlProtocolImpl) appendResultSetTextRow2(mrs *MysqlResultSet, colSli
 					return err
 				}
 			}
-		// Binary/varbinary will be sent out as varchar type.
+		// Preserve raw bytes for legacy binary vectors described as
+		// MYSQL_TYPE_VARCHAR.
 		case defines.MYSQL_TYPE_VARCHAR:
 			typ := colSlices.GetType(i)
 			switch typ.Oid {

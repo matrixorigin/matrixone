@@ -33,6 +33,15 @@ type Hooks interface {
 	// callers index by name.
 	HiddenTableTypes() []string
 
+	// IsVectorIndex reports the index KIND: true for an ANN vector index
+	// (HNSW / IVF-FLAT / IVF-PQ / CAGRA), false for a fulltext-family engine
+	// (classic fulltext, fulltext2). It is the static per-plugin classification
+	// behind indexplugin.IsVectorIndexAlgo, so the multi-table-vector-index
+	// gate is a capability the plugin declares — not an algorithm-name exception
+	// each call site has to keep in sync. A new fulltext-style engine returns
+	// false here and is classified correctly everywhere for free.
+	IsVectorIndex() bool
+
 	// ParamsFromTree extracts and validates the WITH(...) options from a
 	// CREATE INDEX statement, returning the canonical params map that gets
 	// JSON-encoded into mo_indexes. Replaces one switch arm of
@@ -276,6 +285,13 @@ type SyncDescriptor struct {
 	// false for cuvs algorithms (CAGRA, IVF-PQ) which have no "lists"
 	// or training-sample concept — they always rebuild on cadence.
 	IdxcronListsAware bool
+
+	// IdxcronReindexOption is an extra REINDEX option keyword the executor
+	// inserts before FORCE_SYNC when building the cron-triggered ALTER —
+	// e.g. "MERGE" so a bm25 index runs incremental fold+tiered compaction
+	// instead of a full rebuild-from-source. Empty for the vector algorithms
+	// (plain rebuild); the executor omits it when unset.
+	IdxcronReindexOption string
 }
 
 // AlterTableCloneBehavior declares the per-hidden-table semantics

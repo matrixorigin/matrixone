@@ -41,6 +41,13 @@ type container struct {
 	bat     *batch.Batch
 	batAggs []aggexec.AggFuncExec
 
+	// runningAgg retains the one-group aggregate for a cumulative ROWS frame
+	// between bounded output chunks. runningNextRow is both the continuation
+	// cursor and a guard against accidentally reusing the state out of order.
+	runningAgg       aggexec.AggFuncExec
+	runningNextRow   int
+	runningPartition int
+
 	desc      []bool
 	nullsLast []bool
 	orderVecs []colexec.ExprEvalVector
@@ -65,6 +72,9 @@ type Window struct {
 	Fs []*plan.OrderBySpec
 	// agg func
 	Aggs []aggexec.AggFuncExecExpression
+	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
+	// candidate partitions and evaluate their explicit boundaries once.
+	PartitionTopN bool
 
 	vm.OperatorBase
 }
@@ -112,6 +122,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// otherwise keep their accumulated state (e.g. json payloads, distinct
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
+	ctr.freeRunningAgg()
 	if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
@@ -125,6 +136,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
+	ctr.freeRunningAgg()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -182,6 +194,15 @@ func (ctr *container) freeAggFun() {
 		}
 	}
 	ctr.batAggs = nil
+}
+
+func (ctr *container) freeRunningAgg() {
+	if ctr.runningAgg != nil {
+		ctr.runningAgg.Free()
+		ctr.runningAgg = nil
+	}
+	ctr.runningNextRow = 0
+	ctr.runningPartition = 0
 }
 
 func (ctr *container) freeExes() {
