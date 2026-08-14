@@ -7622,7 +7622,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
-	boundaryType := timeWindowBoundaryType(ts.Typ)
+	boundaryType := TimeWindowBoundaryType(ts.Typ)
 	setTimeWindowBoundaryType(ctx, boundaryType)
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
@@ -7646,7 +7646,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 		if tmp, err = projectionBinder.BindExpr(helpFunc.dateAdd, 0, true); err != nil {
 			return
 		}
-		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ); err != nil {
+		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, boundaryType); err != nil {
 			return
 		}
 	}
@@ -7709,15 +7709,6 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
-}
-
-func timeWindowBoundaryType(tsType plan.Type) plan.Type {
-	typ := *DeepCopyType(&tsType)
-	if types.T(typ.Id) == types.T_date {
-		typ.Id = int32(types.T_datetime)
-	}
-	typ.NotNullable = true
-	return typ
 }
 
 func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type) {

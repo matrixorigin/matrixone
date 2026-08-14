@@ -134,6 +134,33 @@ order by ordinal_position;
 
 select ws from boundary_type_rollup_dt;
 
+create table boundary_type_date(k int, event_d date, value int);
+insert into boundary_type_date values (1, '2026-01-01', 1);
+
+select _wstart, _wend, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+
+select min(ws), max(ws)
+from (
+    select _wstart as ws, count(*) as c
+    from boundary_type_date
+    group by k interval(event_d, 1, minute)
+) as x;
+
+create table boundary_type_rollup_date as
+select _wstart as ws, _wend as we, count(*) as c
+from boundary_type_date
+group by k interval(event_d, 1, minute);
+
+select column_name, data_type, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 'boundary_type_rollup_date'
+and column_name in ('ws', 'we', 'c')
+order by ordinal_position;
+
+select ws, we from boundary_type_rollup_date;
+
 create table boundary_type_ts(k int, event_ts timestamp, value int);
 insert into boundary_type_ts values (1, '2026-01-01 00:00:01', 1);
 

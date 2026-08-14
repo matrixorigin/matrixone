@@ -3164,6 +3164,7 @@ func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
 		oid      types.T
 		scale    int32
 	}{
+		{name: "date", castType: "date", oid: types.T_datetime, scale: 0},
 		{name: "datetime scale zero", castType: "datetime", oid: types.T_datetime, scale: 0},
 		{name: "datetime scale six", castType: "datetime(6)", oid: types.T_datetime, scale: 6},
 		{name: "timestamp scale three", castType: "timestamp(3)", oid: types.T_timestamp, scale: 3},
