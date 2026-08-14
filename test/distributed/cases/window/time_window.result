@@ -963,11 +963,11 @@ insert into tw_interval_timestamp_domain values
 (1, '9999-12-31 23:59:59.999999'),
 (2, '1970-01-01 00:00:01.000000');
 select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour);
-➤ _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  count(*)[-5,64,0]  𝄀
-9999-12-31 23:00:00.000000  ¦  null  ¦  1
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(*)[-5,64,0]  𝄀
+9999-12-31 23:00:00  ¦  null  ¦  1
 select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day);
-➤ _wstart[93,64,6]  ¦  _wend[93,64,6]  ¦  count(*)[-5,64,0]  𝄀
-null  ¦  1970-01-02 00:00:00.000000  ¦  1
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1970-01-02 00:00:00  ¦  1
 drop table tw_interval_timestamp_domain;
 set time_zone = @old_time_zone;
 drop table if exists tw_interval_bad_unit;
