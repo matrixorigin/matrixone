@@ -8,6 +8,12 @@ v varchar(8),
 short_c char(4)
 );
 insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
+drop table if exists pad_char_set8;
+drop table if exists pad_char_set4;
+create table pad_char_set8 (c char(8));
+create table pad_char_set4 (c char(4));
+insert into pad_char_set8 values ('MO');
+insert into pad_char_set4 values ('MO');
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
 char_length(unicode_c), length(unicode_c), hex(unicode_c),
 char_length(v), length(v), hex(v)
@@ -41,6 +47,15 @@ select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+➤ count(*)[-5,64,0]  𝄀
+0
 prepare pad_char_stmt from
 'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
 cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
@@ -79,6 +94,18 @@ select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  𝄀
+8  ¦  4D4F202020202020
 execute pad_char_stmt;
 ➤ c[1,6,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
 MO        ¦  8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  MO        ¦  8  ¦  4D4F202020202020
@@ -89,3 +116,5 @@ MO  ¦  2  ¦  2  ¦  4D4F  ¦  >MO<  ¦  MO  ¦  2  ¦  4D4F
 deallocate prepare pad_char_stmt;
 set sql_mode = @saved_sql_mode;
 drop table pad_char_to_full_length_t;
+drop table pad_char_set8;
+drop table pad_char_set4;

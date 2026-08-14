@@ -15,6 +15,13 @@ create table pad_char_to_full_length_t (
 );
 insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
 
+drop table if exists pad_char_set8;
+drop table if exists pad_char_set4;
+create table pad_char_set8 (c char(8));
+create table pad_char_set4 (c char(4));
+insert into pad_char_set8 values ('MO');
+insert into pad_char_set4 values ('MO');
+
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
        char_length(v), length(v), hex(v)
@@ -30,6 +37,9 @@ select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
 select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -52,6 +62,10 @@ select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
 select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 execute pad_char_stmt;
 
 set sql_mode = '';
@@ -60,3 +74,5 @@ execute pad_char_stmt;
 deallocate prepare pad_char_stmt;
 set sql_mode = @saved_sql_mode;
 drop table pad_char_to_full_length_t;
+drop table pad_char_set8;
+drop table pad_char_set4;
