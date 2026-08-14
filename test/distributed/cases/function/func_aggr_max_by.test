@@ -21,6 +21,19 @@ from readings
 group by grp
 order by grp;
 
+create table tw_readings(device_id int, event_ts datetime, seq bigint, value bigint);
+insert into tw_readings values
+    (1, '2026-01-01 00:00:01', 1, 10),
+    (1, '2026-01-01 00:00:02', 2, 20),
+    (1, '2026-01-01 00:01:01', 3, null);
+
+select device_id, _wstart,
+       max_by(value, event_ts, seq) as latest_value,
+       max_by_non_null(value, event_ts, seq) as latest_non_null_value
+from tw_readings
+group by device_id interval(event_ts, 1, minute)
+order by device_id, _wstart;
+
 create table window_readings(pump varchar(8), ts datetime, tie varchar(20), value varchar(20));
 insert into window_readings values
     ('p1', '2026-01-01 10:00:05', 'a', 'first'),
