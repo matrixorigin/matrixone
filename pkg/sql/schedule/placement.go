@@ -318,7 +318,10 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if req.CurrentCNPolicy == CurrentCNRequired && currentRejected {
 		return makeDecision(workers, currentRejectReason, false)
 	}
-	if req.RequireCurrentCN && len(workers) > 0 {
+	if req.RequireCurrentCN && hasAuthoritativeResolvedPool(req) {
+		// Internal ingress ownership requires positive membership proof from every
+		// authoritative resolution, including an explicitly empty result or one
+		// whose candidates were all filtered as runtime-ineligible.
 		var found bool
 		workers, dropped, found = canonicalizeIngressWorker(workers, dropped, req.CurrentCN)
 		eligibleCount = len(workers)

@@ -376,6 +376,80 @@ func TestDecideQueryPlacementDoesNotUseAddressAliasAsIngressIdentity(t *testing.
 	require.Empty(t, decision.Workers)
 }
 
+func TestDecideQueryPlacementDoesNotFallbackFromIneligibleIngressAddressAlias(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "shared:6001", Mcpu: 8}
+
+	for _, test := range []struct {
+		name       string
+		state      WorkerState
+		dropReason string
+	}{
+		{name: "draining", state: WorkerStateDraining, dropReason: ReasonDroppedDrainingCN},
+		{name: "drained", state: WorkerStateDrained, dropReason: ReasonDroppedDrainedCN},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alias := Worker{
+				ID:    "stale-ingress",
+				Addr:  ingress.Addr,
+				Mcpu:  16,
+				State: test.state,
+				Route: WorkerRouteLocal,
+			}
+			decision := DecideQueryPlacement(QueryRequest{
+				ExecKind:         QueryExecAPMultiCN,
+				CurrentCN:        ingress,
+				RequireCurrentCN: true,
+				ResolvedPool: ResolvedPool{
+					Identity:   "tenant:account-a",
+					Resolution: PoolResolutionTenantLabels,
+					Workers:    Workers{alias},
+				},
+			})
+
+			require.False(t, decision.Satisfied)
+			require.Equal(t, ReasonRequiredCurrentOutsidePool, decision.Reason)
+			require.Empty(t, decision.Workers)
+			require.Equal(t, 1, decision.ResolvedCandidateCount)
+			require.Zero(t, decision.EligibleCount)
+			require.Equal(t, DroppedWorkers{{Worker: alias, Reason: test.dropReason}}, decision.Dropped)
+		})
+	}
+}
+
+func TestDecideQueryPlacementDoesNotWidenAuthoritativeEmptyPoolForRequiredIngress(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "ingress:6001", Mcpu: 8}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:         QueryExecAPMultiCN,
+		CurrentCN:        ingress,
+		RequireCurrentCN: true,
+		ResolvedPool: ResolvedPool{
+			Identity:   "tenant:account-a",
+			Resolution: PoolResolutionTenantLabels,
+		},
+	})
+
+	require.False(t, decision.Satisfied)
+	require.Equal(t, ReasonRequiredCurrentOutsidePool, decision.Reason)
+	require.Empty(t, decision.Workers)
+	require.Zero(t, decision.ResolvedCandidateCount)
+	require.Zero(t, decision.EligibleCount)
+}
+
+func TestDecideQueryPlacementFallsBackToRequiredIngressWithoutResolution(t *testing.T) {
+	ingress := Worker{ID: "ingress", Addr: "ingress:6001", Mcpu: 8}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:         QueryExecAPMultiCN,
+		CurrentCN:        ingress,
+		RequireCurrentCN: true,
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonNoCandidateCN, decision.Reason)
+	require.Equal(t, Workers{ingress}, decision.Workers)
+}
+
 func TestDecideQueryPlacementDoesNotFallbackToResolvedDrainingIngress(t *testing.T) {
 	ingress := Worker{ID: "ingress", Addr: "ingress:6001", Mcpu: 8}
 	resolvedIngress := ingress
