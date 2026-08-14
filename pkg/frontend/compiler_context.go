@@ -693,6 +693,9 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(
 		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
 			WithAccountID(catalog.System_Account))
 	if err != nil {
+		if ignoreViewMetadataCatalogReadinessError(err, globallyEnabled) {
+			return false, nil
+		}
 		return false, err
 	}
 	defer result.Close()
@@ -713,6 +716,11 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(
 		return false
 	})
 	return !viewMetadataStatusIsCurrent(found, status, markerStatus, globalStatus, globallyEnabled), nil
+}
+
+func ignoreViewMetadataCatalogReadinessError(err error, globallyEnabled bool) bool {
+	return !globallyEnabled && (moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB))
 }
 
 func viewMetadataStatusIsCurrent(

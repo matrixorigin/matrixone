@@ -235,6 +235,53 @@ func TestSubscriberCanDescribePublishedView(t *testing.T) {
 	})
 }
 
+func TestViewMetadataInvalidatesBeyondSynchronousBudget(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		const database = "view_metadata_sync_budget"
+		execSQLMaybe(t, ctx, db, "drop database if exists `"+database+"`")
+		execSQLRequire(t, ctx, db, "create database `"+database+"`")
+		defer execSQLMaybe(t, context.Background(), db, "drop database if exists `"+database+"`")
+		waitForViewMetadataRevalidation(t, ctx, db)
+		execSQLRequire(t, ctx, db, "create table `"+database+"`.source_table (value int)")
+		for index := 1; index <= 33; index++ {
+			execSQLRequire(t, ctx, db, fmt.Sprintf(
+				"create view `%s`.v%02d as select value from `%s`.source_table",
+				database, index, database))
+		}
+		execSQLRequire(t, ctx, db,
+			"create view `"+database+"`.leaf_view as select value from `"+database+"`.v33")
+
+		var createdBefore string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(created_time as char) from mo_catalog.mo_tables "+
+				"where reldatabase=? and relname='v01'", database).Scan(&createdBefore))
+		execSQLRequire(t, ctx, db,
+			"alter table `"+database+"`.source_table modify value bigint")
+
+		require.Equal(t, "PENDING", viewRefreshStatus(t, ctx, db, database, "leaf_view"))
+		_, err = db.ExecContext(ctx, "desc `"+database+"`.leaf_view")
+		require.Error(t, err)
+
+		require.Eventually(t, func() bool {
+			return strings.EqualFold("BIGINT", viewColumnType(t, ctx, db, database, "leaf_view"))
+		}, 30*time.Second, 500*time.Millisecond)
+		var createdAfter string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(created_time as char) from mo_catalog.mo_tables "+
+				"where reldatabase=? and relname='v01'", database).Scan(&createdAfter))
+		require.Equal(t, createdBefore, createdAfter)
+	})
+}
+
 func waitForViewMetadataRevalidation(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	require.Eventually(t, func() bool {

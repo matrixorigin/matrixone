@@ -820,12 +820,11 @@ const (
 	// LOAD_TEXT reads a datalink and returns its EXTRACTED plain text (PDF/DOCX parsed
 	// via GetPlainText), unlike load_file which returns raw bytes. Renumbered as main
 	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
-	LOAD_TEXT             = 569
-	VIEW_METADATA_ENABLED = 570
+	LOAD_TEXT = 569
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 571
+	FUNCTION_END_NUMBER = 570
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1084,7 +1083,6 @@ var functionIdRegister = map[string]int32{
 	"conv":                           CONV,
 	"current_account_id":             CURRENT_ACCOUNT_ID,
 	"current_account_name":           CURRENT_ACCOUNT_NAME,
-	"mo_view_meta_enabled":           VIEW_METADATA_ENABLED,
 	"current_role":                   CURRENT_ROLE,
 	"current_role_id":                CURRENT_ROLE_ID,
 	"current_role_name":              CURRENT_ROLE_NAME,

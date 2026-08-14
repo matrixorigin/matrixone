@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +54,16 @@ func TestViewMetadataStatusFailsClosedBeforeDisabledBarrierTick(t *testing.T) {
 		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, true))
 		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, false))
 	}
+}
+
+func TestViewMetadataCatalogReadinessFallbackIsTyped(t *testing.T) {
+	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+	missingDatabase := moerr.NewBadDBNoCtx(catalog.MO_CATALOG)
+	retryable := moerr.NewTxnNeedRetryNoCtx()
+	require.True(t, ignoreViewMetadataCatalogReadinessError(missingTable, false))
+	require.True(t, ignoreViewMetadataCatalogReadinessError(missingDatabase, false))
+	require.False(t, ignoreViewMetadataCatalogReadinessError(missingTable, true))
+	require.False(t, ignoreViewMetadataCatalogReadinessError(retryable, false))
 }
 
 func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {

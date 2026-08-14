@@ -51,6 +51,10 @@ type readyViewMetadataCluster struct {
 	clusterservice.MOCluster
 }
 
+type unavailableViewMetadataCluster struct {
+	clusterservice.MOCluster
+}
+
 func (readyViewMetadataCluster) GetCNService(
 	_ clusterservice.Selector,
 	apply func(metadata.CNService) bool,
@@ -58,6 +62,16 @@ func (readyViewMetadataCluster) GetCNService(
 	apply(metadata.CNService{
 		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
 		ViewMetadataRefreshSupported: true,
+	})
+}
+
+func (unavailableViewMetadataCluster) GetCNService(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	apply(metadata.CNService{
+		ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+		ViewMetadataRefreshSupported: false,
 	})
 }
 
@@ -95,13 +109,15 @@ type deadlineCheckingSQLExecutor struct {
 
 func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	exec := &viewMetadataCleanupRecordingExecutor{}
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		{AffectedRows: viewMetadataClosureWritePageSize}, {AffectedRows: 1},
+	}}
 	installViewMetadataTestExecutor(t, proc, exec)
 	c := &Compile{proc: proc, pn: &planpb.Plan{}}
 	root := viewRefreshIdentityKey{accountID: 1, databaseID: 2, logicalID: 999}
 	require.NoError(t, c.enqueueDependentViewClosure("root predicate", 77, root))
-	require.Len(t, exec.sqls, 1)
-	require.Equal(t, []bool{true}, exec.systemCTELimits)
+	require.Len(t, exec.sqls, 2)
+	require.Equal(t, []bool{true, true}, exec.systemCTELimits)
 	enqueueSQL := exec.sqls[0]
 	require.Contains(t, enqueueSQL, "with recursive affected")
 	require.Contains(t, enqueueSQL, "root predicate")
@@ -112,7 +128,8 @@ func TestRelationRemovalUsesOneAtomicRecursiveClosureInvalidation(t *testing.T) 
 	require.Contains(t, enqueueSQL,
 		"not ((a.account_id=1 and a.target_database_id=2 and "+
 			"coalesce(nullif(a.target_logical_id,0),a.target_relation_id)=999))")
-	require.NotContains(t, enqueueSQL, " limit ")
+	require.Contains(t, enqueueSQL, "limit 16 offset 0")
+	require.Contains(t, exec.sqls[1], "limit 16 offset 16")
 }
 
 func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
@@ -209,10 +226,11 @@ func TestViewBindingNameEqualHonorsLowerCaseTableNames(t *testing.T) {
 }
 
 func TestSynchronousViewRefreshCountNeverExceedsBudget(t *testing.T) {
-	require.Equal(t, 32, synchronousViewRefreshCount(33, 32))
+	require.Zero(t, viewMetadataSynchronousRefreshBudget)
+	require.Equal(t, 8, synchronousViewRefreshCount(9, 8))
 	require.Zero(t, synchronousViewRefreshCount(1, 0))
 	require.Zero(t, synchronousViewRefreshCount(1, -1))
-	require.Equal(t, 3, synchronousViewRefreshCount(3, 32))
+	require.Equal(t, 3, synchronousViewRefreshCount(3, 8))
 }
 
 func TestViewMetadataLifecycleSkipsRestoreCatalogDDL(t *testing.T) {
@@ -282,15 +300,44 @@ func TestBindingLifecycleInvalidationSQLUsesPersistedIdentity(t *testing.T) {
 	}
 }
 
-func TestViewMetadataLifecycleSkipsCatalogDDLBeforeCapabilityActivation(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	c := &Compile{proc: proc}
-	require.NoError(t, c.persistViewDependencies(nil, "db", nil))
-	require.NoError(t, c.refreshViewsAfterRelationMutation("db", "t", 0, 0))
-	require.NoError(t, c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0))
-	require.NoError(t, c.deleteDroppedViewMetadata(1))
-	require.NoError(t, c.deleteDroppedDatabaseViewMetadata(0, 1, "db"))
-	require.NoError(t, c.enqueueViewsAfterDatabaseRemoval(0, 1, 1))
+func TestViewMetadataLifecycleBeforeCapabilityActivation(t *testing.T) {
+	t.Run("catalog not upgraded", func(t *testing.T) {
+		for _, run := range []func(*Compile) error{
+			func(c *Compile) error { return c.persistViewDependencies(nil, "db", nil) },
+			func(c *Compile) error { return c.refreshViewsAfterRelationMutation("db", "t", 0, 0) },
+			func(c *Compile) error { return c.enqueueViewsAfterRelationRemoval("db", "t", 0, 0, 0) },
+			func(c *Compile) error { return c.deleteDroppedViewMetadata(1) },
+			func(c *Compile) error { return c.deleteDroppedDatabaseViewMetadata(0, 1, "db") },
+			func(c *Compile) error { return c.enqueueViewsAfterDatabaseRemoval(0, 1, 1) },
+		} {
+			proc := testutil.NewProcess(t)
+			exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{
+				1: moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_DEPENDENCIES),
+			}}
+			installUnavailableViewMetadataTestExecutor(t, proc, exec)
+			require.NoError(t, run(&Compile{proc: proc, pn: &planpb.Plan{}}))
+			require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, exec.sqls)
+		}
+	})
+
+	t.Run("catalog ready", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		exec := &viewMetadataCleanupRecordingExecutor{}
+		installUnavailableViewMetadataTestExecutor(t, proc, exec)
+		require.NoError(t, (&Compile{proc: proc, pn: &planpb.Plan{}}).
+			persistViewDependencies(nil, "db", nil))
+		require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
+		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
+	})
+
+	t.Run("catalog failure", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		testErr := moerr.NewTxnNeedRetryNoCtx()
+		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: testErr}}
+		installUnavailableViewMetadataTestExecutor(t, proc, exec)
+		err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencies(nil, "db", nil)
+		require.ErrorIs(t, err, testErr)
+	})
 }
 
 func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
@@ -560,6 +607,32 @@ func installViewMetadataTestExecutor(
 	oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
 	t.Cleanup(func() {
+		if hadOldExecutor {
+			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+}
+
+func installUnavailableViewMetadataTestExecutor(
+	t *testing.T,
+	proc *process.Process,
+	exec executor.SQLExecutor,
+) {
+	t.Helper()
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	oldExecutor, hadOldExecutor := runtime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	runtime.SetGlobalVariables(moruntime.ClusterService, unavailableViewMetadataCluster{})
+	runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(
+				moruntime.ClusterService, unavailableViewMetadataCluster{})
+		}
 		if hadOldExecutor {
 			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, oldExecutor)
 		} else {

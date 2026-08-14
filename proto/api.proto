@@ -345,6 +345,7 @@ message AlterTableReplaceDef {
     bool preserve_ownership = 4;
     uint32 preserved_creator = 5;
     uint32 preserved_owner = 6;
+    int64 preserved_created_time = 7;
 }
 
 message AlterTableDropColumn {

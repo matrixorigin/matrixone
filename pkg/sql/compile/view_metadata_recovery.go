@@ -43,6 +43,8 @@ const viewRefreshStatusInvalid = catalog.ViewRefreshStatusInvalid
 const viewRefreshStatusDiscovering = catalog.ViewRefreshStatusDiscovering
 
 const viewMetadataRecoveryPageSize = 32
+const viewMetadataSynchronousRefreshBudget = 0
+const viewMetadataClosureWritePageSize = 16
 const viewMetadataRecoveryCallTimeout = 30 * time.Second
 
 type viewMetadataRecoveryCommand struct {
@@ -51,31 +53,18 @@ type viewMetadataRecoveryCommand struct {
 	Revalidate bool   `json:"revalidate"`
 }
 
-// RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while the cluster capability barrier is closed.
-func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
-	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
-	defer cancel()
-	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
-		gate, err := txn.Exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		gate.Close()
-
-		inserted, err := txn.Exec(fmt.Sprintf(
+func viewMetadataRequireRevalidationSQL() []string {
+	return []string{
+		catalog.ViewMetadataLifecycleGateSQL,
+		fmt.Sprintf(
 			"insert into %s.%s (%s) select 0,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,1 "+
 				"where not exists (select 1 from %s.%s where account_id=0 and target_relation_id=0 "+
 				"and dependency_ordinal=0)",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
 			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
 			catalog.ViewRefreshStatusRevalidateRequired,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		inserted.Close()
-		markers, err := txn.Exec(fmt.Sprintf(
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
+		fmt.Sprintf(
 			"insert into %s.%s (%s) select a.account_id,0,0,0,'%s','%s',0,0,0,0,0,"+
 				"'','','','','%s','',0,null,0,1 from %s.%s a where a.account_id<>0 and not exists "+
 				"(select 1 from %s.%s d where d.account_id=a.account_id and d.target_relation_id=0 "+
@@ -84,23 +73,31 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 			catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
 			catalog.ViewRefreshStatusRevalidateRequired,
 			catalog.MO_CATALOG, catalog.MOAccountTable,
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES), executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		markers.Close()
-		result, err := txn.Exec(fmt.Sprintf(
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES),
+		fmt.Sprintf(
 			"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
 				"where target_relation_id=0 and dependency_ordinal=0 "+
 				"and source_relation_kind in ('%s','%s','%s')",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateRequired,
 			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan,
-			catalog.ViewRefreshStatusActivated), executor.StatementOption{})
-		if err != nil {
-			return err
+			catalog.ViewRefreshStatusActivated),
+	}
+}
+
+// RequireViewMetadataRevalidation durably records that lifecycle DDL may be
+// skipped while the cluster capability barrier is closed.
+func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
+	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+	defer cancel()
+	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
+		for _, statement := range viewMetadataRequireRevalidationSQL() {
+			result, err := txn.Exec(statement, executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			result.Close()
 		}
-		result.Close()
 		return nil
 	}, executor.Options{}.WithAccountID(catalog.System_Account))
 }
@@ -996,7 +993,7 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	if err = relation.AlterTable(targetContext, nil, []*api.AlterTableReq{
 		api.NewGuardedReplaceDefReq(
 			pending.databaseID, pending.relationID, currentDef.Version,
-			ownership.creator, ownership.owner, replacement),
+			ownership.creator, ownership.owner, int64(ownership.createdTime), replacement),
 	}); err != nil {
 		return true, err
 	}
@@ -1077,8 +1074,14 @@ func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 	databaseID uint64,
 	generation uint64,
 ) error {
-	if (c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) ||
-		!viewMetadataRefreshEnabled(c.proc.GetService()) {
+	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+		return nil
+	}
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	return c.enqueueDependentViewClosure(fmt.Sprintf(

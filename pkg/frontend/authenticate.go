@@ -10197,13 +10197,14 @@ func inheritViewMetadataRevalidation(
 	serviceID string,
 	accountID uint32,
 ) error {
-	if !compile.ViewMetadataRefreshEnabled(serviceID) {
-		return nil
-	}
 	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+			return nil
+		}
 		return err
 	}
-	return bh.Exec(ctx, fmt.Sprintf(
+	err := bh.Exec(ctx, fmt.Sprintf(
 		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,d.dependency_generation "+
 			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
 			"and d.source_relation_kind in ('%s','%s') and not exists (select 1 from %s.%s a "+
@@ -10214,6 +10215,11 @@ func inheritViewMetadataRevalidation(
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
+	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+		return nil
+	}
+	return err
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.

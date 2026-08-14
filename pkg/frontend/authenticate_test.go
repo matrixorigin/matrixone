@@ -11684,7 +11684,17 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
-		require.Empty(t, bh.executedSQLs)
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
+
+		missing := &backgroundExecTest{}
+		missing.init()
+		missing.sql2err[catalog.ViewMetadataLifecycleGateSQL] =
+			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+		require.NoError(t, inheritViewMetadataRevalidation(
+			context.Background(), missing, ses.GetService(), 43))
+		require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
 	})
 }
 

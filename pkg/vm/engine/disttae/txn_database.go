@@ -393,8 +393,9 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 }
 
 type tableCatalogOwnership struct {
-	creator uint32
-	owner   uint32
+	creator     uint32
+	owner       uint32
+	createdTime types.Timestamp
 }
 
 func (db *txnDatabase) createWithID(
@@ -546,6 +547,7 @@ func (db *txnDatabase) createWithID(
 		if preservedOwnership != nil {
 			arg.UserId = preservedOwnership.creator
 			arg.RoleId = preservedOwnership.owner
+			arg.CreatedTime = preservedOwnership.createdTime
 		}
 		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
 		if err != nil {

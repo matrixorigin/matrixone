@@ -215,6 +215,7 @@ func NewGuardedReplaceDefReq(
 	expectedVersion uint32,
 	preservedCreator uint32,
 	preservedOwner uint32,
+	preservedCreatedTime int64,
 	planDef *plan.TableDef,
 ) *AlterTableReq {
 	request := NewReplaceDefReq(did, tid, planDef)
@@ -223,6 +224,7 @@ func NewGuardedReplaceDefReq(
 	request.GetReplaceDef().PreserveOwnership = true
 	request.GetReplaceDef().PreservedCreator = preservedCreator
 	request.GetReplaceDef().PreservedOwner = preservedOwner
+	request.GetReplaceDef().PreservedCreatedTime = preservedCreatedTime
 	return request
 }
 

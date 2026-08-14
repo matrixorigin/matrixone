@@ -39,10 +39,11 @@ func TestGuardedReplaceDefIsTheOnlyOwnershipPreservingRequest(t *testing.T) {
 	require.False(t, ordinary.GetReplaceDef().GetCheckVersion())
 	require.False(t, ordinary.GetReplaceDef().GetPreserveOwnership())
 
-	guarded := api.NewGuardedReplaceDefReq(1, 2, 7, 17, 23, &planpb.TableDef{})
+	guarded := api.NewGuardedReplaceDefReq(1, 2, 7, 17, 23, 29, &planpb.TableDef{})
 	require.True(t, guarded.GetReplaceDef().GetCheckVersion())
 	require.Equal(t, uint32(7), guarded.GetReplaceDef().GetExpectedVersion())
 	require.True(t, guarded.GetReplaceDef().GetPreserveOwnership())
 	require.Equal(t, uint32(17), guarded.GetReplaceDef().GetPreservedCreator())
 	require.Equal(t, uint32(23), guarded.GetReplaceDef().GetPreservedOwner())
+	require.Equal(t, int64(29), guarded.GetReplaceDef().GetPreservedCreatedTime())
 }

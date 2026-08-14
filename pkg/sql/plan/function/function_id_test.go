@@ -740,10 +740,9 @@ var predefinedFunids = map[int]int{
 	PERCENTILE_CONT:               567,
 	PERCENTILE_DISC:               568,
 	LOAD_TEXT:                     569,
-	VIEW_METADATA_ENABLED:         570,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 571,
+	FUNCTION_END_NUMBER: 570,
 }
 
 func Test_funids(t *testing.T) {

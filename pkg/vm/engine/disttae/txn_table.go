@@ -1837,8 +1837,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	var preservedOwnership *tableCatalogOwnership
 	if replaceDefReq != nil && replaceDefReq.GetReplaceDef().GetPreserveOwnership() {
 		preservedOwnership = &tableCatalogOwnership{
-			creator: replaceDefReq.GetReplaceDef().GetPreservedCreator(),
-			owner:   replaceDefReq.GetReplaceDef().GetPreservedOwner(),
+			creator:     replaceDefReq.GetReplaceDef().GetPreservedCreator(),
+			owner:       replaceDefReq.GetReplaceDef().GetPreservedOwner(),
+			createdTime: types.Timestamp(replaceDefReq.GetReplaceDef().GetPreservedCreatedTime()),
 		}
 	}
 	// deleteTable(forAlter=true) deliberately leaves the logical-ID index row for

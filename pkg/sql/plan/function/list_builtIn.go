@@ -12817,28 +12817,6 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `mo_view_meta_enabled`
-	{
-		functionId: VIEW_METADATA_ENABLED,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
-
-		Overloads: []overload{
-			{
-				overloadId:      0,
-				args:            []types.T{},
-				realTimeRelated: true,
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_bool.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return builtInViewMetadataRefreshEnabled
-				},
-			},
-		},
-	},
-
 	// function `current_account_id`
 	{
 		functionId: CURRENT_ACCOUNT_ID,

@@ -137,18 +137,6 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	}
 }
 
-func TestBuiltInViewMetadataRefreshEnabledFailsClosedWithoutClusterSnapshot(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	tc := tcTemp{
-		info:   "select mo_view_meta_enabled()",
-		inputs: []FunctionTestInput{},
-		expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, nil),
-	}
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInViewMetadataRefreshEnabled)
-	succeed, info := tcc.Run()
-	require.True(t, succeed, tc.info, info)
-}
-
 func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typesToEncode := []types.Type{

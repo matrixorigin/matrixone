@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -33,6 +34,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,8 +63,9 @@ type viewRefreshTarget struct {
 }
 
 type viewCatalogOwnership struct {
-	creator uint32
-	owner   uint32
+	creator     uint32
+	owner       uint32
+	createdTime types.Timestamp
 }
 
 type persistedViewTarget struct {
@@ -89,6 +92,36 @@ func ViewMetadataRefreshEnabled(serviceID string) bool {
 	return viewMetadataRefreshEnabled(serviceID)
 }
 
+// viewMetadataRefreshAvailable closes the capability-disabled window before a
+// lifecycle DDL is allowed to skip incremental maintenance. The marker writes
+// use the caller's DDL transaction, so a fast false-to-true capability change
+// cannot make an untracked mutation visible without a durable revalidation.
+func (c *Compile) viewMetadataRefreshAvailable() (bool, error) {
+	if viewMetadataRefreshEnabled(c.proc.GetService()) {
+		return true, nil
+	}
+	if err := c.requireViewMetadataRevalidationInTxn(); err != nil {
+		// During an offset upgrade the SQL listener can become available before
+		// the lifecycle tables. Preserve the pre-feature behavior only for this
+		// typed catalog-readiness condition; every other failure aborts the DDL.
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			return false, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (c *Compile) requireViewMetadataRevalidationInTxn() error {
+	for _, statement := range viewMetadataRequireRevalidationSQL() {
+		if err := c.runSqlWithSystemTenant(statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func restoreInvalidatesViewMetadata(ctx context.Context) bool {
 	level, ok := ctx.Value(tree.CloneLevelCtxKey{}).(tree.CloneLevelType)
 	return ok && (level == tree.RestoreCloneLevelTable || level == tree.RestoreCloneLevelDatabase)
@@ -102,7 +135,11 @@ func (c *Compile) persistViewDependencies(
 	if c.proc.GetSessionInfo().IsRestore {
 		return nil
 	}
-	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	return c.persistViewDependenciesWithContext(
@@ -253,7 +290,11 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		// twice. Account/cluster restore rebuilds the lifecycle tables themselves.
 		return nil
 	}
-	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	if needSkipDbs[databaseName] {
@@ -288,10 +329,21 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 		mutation.logicalID = oldLogicalID
 	}
 
+	generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
+	if err = c.enqueueDependentViewClosure(
+		viewDependencyMutationPredicate(mutation, oldRelationID, oldLogicalID), generation); err != nil {
+		return err
+	}
+	if viewMetadataSynchronousRefreshBudget == 0 {
+		// Rebinding inside COPY/metadata DDL makes source success depend on View
+		// ordering and multiplies catalog replacement work in one transaction.
+		// The complete closure is already durable and fail-closed; recovery owns
+		// every authoritative regeneration after the source transaction commits.
+		return nil
+	}
 	queue := []viewRelationMutation{mutation}
 	processedGenerations := make(map[[2]uint64]uint64)
-	generation := uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-	remainingSynchronous := viewMetadataRecoveryPageSize
+	remainingSynchronous := viewMetadataSynchronousRefreshBudget
 	for len(queue) > 0 {
 		if err = c.proc.Ctx.Err(); err != nil {
 			return err
@@ -319,9 +371,6 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 				return moerr.NewInternalError(c.proc.Ctx, "View refresh generation overflow")
 			}
 			targets[index].generation = nextGeneration
-		}
-		if err = c.enqueueDependentViews(current, generation, oldRelationID, oldLogicalID); err != nil {
-			return err
 		}
 		oldRelationID, oldLogicalID = 0, 0
 		if remainingSynchronous == 0 {
@@ -352,7 +401,7 @@ func (c *Compile) refreshViewsAfterRelationMutation(
 						failure.code == viewRefreshFailureTxnConflict {
 						return err
 					}
-					// enqueueDependentViews already made the target durable PENDING.
+					// The reverse-closure invalidation already made the target durable PENDING.
 					// A failed rebind must not make source DDL success depend on
 					// target ordering or the synchronous budget.
 				default:
@@ -423,7 +472,11 @@ func (c *Compile) enqueueViewsAfterRelationRemoval(
 	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
-	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	if needSkipDbs[databaseName] {
@@ -451,7 +504,11 @@ func (c *Compile) deleteDroppedViewMetadata(relationID uint64) error {
 	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
-	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	// Recovery and catalog cleanup must acquire locks in the same order. In
@@ -482,7 +539,11 @@ func (c *Compile) deleteDroppedDatabaseViewMetadata(
 	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
 		return nil
 	}
-	if !viewMetadataRefreshEnabled(c.proc.GetService()) {
+	available, err := c.viewMetadataRefreshAvailable()
+	if err != nil {
+		return err
+	}
+	if !available {
 		return nil
 	}
 	if err := lockViewMetadataLifecycleGate(c.proc); err != nil {
@@ -516,7 +577,7 @@ func (c *Compile) loadDependentViews(
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
 		viewDependencyMutationPredicate(mutation, oldRelationID, oldLogicalID),
-		viewMetadataRecoveryPageSize+1,
+		viewMetadataSynchronousRefreshBudget+1,
 	)
 	result, err := c.runSqlWithResult(query, int32(catalog.System_Account))
 	if err != nil {
@@ -602,15 +663,38 @@ func (c *Compile) enqueueDependentViewClosure(
 		return err
 	}
 	oldCtx := c.proc.Ctx
-	c.proc.Ctx = process.WithSystemCTELimits(oldCtx)
+	c.proc.Ctx = process.WithSystemCTELimits(
+		context.WithValue(oldCtx, defines.TenantIDKey{}, uint32(catalog.System_Account)))
 	defer func() { c.proc.Ctx = oldCtx }()
-	return c.runSqlWithSystemTenant(
-		viewMetadataClosureInvalidationSQL(initialPredicate, generation, seed...))
+	for offset := 0; ; offset += viewMetadataClosureWritePageSize {
+		result, err := c.runSqlWithResultAndOptions(
+			viewMetadataClosureInvalidationPageSQL(
+				initialPredicate, generation, offset, viewMetadataClosureWritePageSize, seed...),
+			int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		affected := result.AffectedRows
+		result.Close()
+		if affected < viewMetadataClosureWritePageSize {
+			return nil
+		}
+	}
 }
 
 func viewMetadataClosureInvalidationSQL(
 	initialPredicate string,
 	generation uint64,
+	seed ...viewRefreshIdentityKey,
+) string {
+	return viewMetadataClosureInvalidationPageSQL(initialPredicate, generation, -1, 0, seed...)
+}
+
+func viewMetadataClosureInvalidationPageSQL(
+	initialPredicate string,
+	generation uint64,
+	offset int,
+	pageSize int,
 	seed ...viewRefreshIdentityKey,
 ) string {
 	exclusions := make([]string, 0, len(seed))
@@ -623,6 +707,11 @@ func viewMetadataClosureInvalidationSQL(
 	finalPredicate := "true"
 	if len(exclusions) > 0 {
 		finalPredicate = "not (" + strings.Join(exclusions, " or ") + ")"
+	}
+	pageClause := ""
+	if offset >= 0 && pageSize > 0 {
+		pageClause = fmt.Sprintf(
+			" order by a.account_id,a.target_relation_id limit %d offset %d", pageSize, offset)
 	}
 	return fmt.Sprintf(
 		"replace into %s.%s (%s) with recursive affected "+
@@ -646,12 +735,12 @@ func viewMetadataClosureInvalidationSQL(
 			"a.target_database_name,a.target_relation_name,coalesce(r.target_generation+1,%d),"+
 			"coalesce(r.completed_generation,0),'%s',0,null,'',coalesce(r.lease_epoch,0)+1,null,"+
 			"coalesce(r.attempts,0) from affected a left join %s.%s r on "+
-			"a.account_id=r.account_id and a.target_relation_id=r.target_relation_id where %s",
+			"a.account_id=r.account_id and a.target_relation_id=r.target_relation_id where %s%s",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, initialPredicate,
 		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 		generation, viewRefreshStatusPending, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
-		finalPredicate)
+		finalPredicate, pageClause)
 }
 
 // SnapshotViewMetadataInvalidationSQL returns one atomic reverse-closure
@@ -783,7 +872,7 @@ func (c *Compile) refreshOneView(
 	if err = relation.AlterTable(targetContext, nil, []*api.AlterTableReq{
 		api.NewGuardedReplaceDefReq(
 			target.databaseID, target.relationID, currentDef.Version,
-			ownership.creator, ownership.owner, replacement),
+			ownership.creator, ownership.owner, int64(ownership.createdTime), replacement),
 	}); err != nil {
 		return err
 	}
@@ -796,7 +885,7 @@ func (c *Compile) loadViewCatalogOwnership(
 	relationID uint64,
 ) (viewCatalogOwnership, error) {
 	result, err := c.runSqlWithResult(fmt.Sprintf(
-		"select creator,owner from %s.%s where account_id=%d and rel_id=%d and relkind='%s' limit 1",
+		"select creator,owner,created_time from %s.%s where account_id=%d and rel_id=%d and relkind='%s' limit 1",
 		catalog.MO_CATALOG, catalog.MO_TABLES, accountID, relationID, catalog.SystemViewRel,
 	), int32(catalog.System_Account))
 	if err != nil {
@@ -809,6 +898,7 @@ func (c *Compile) loadViewCatalogOwnership(
 		if rows > 0 {
 			ownership.creator = vector.MustFixedColNoTypeCheck[uint32](columns[0])[0]
 			ownership.owner = vector.MustFixedColNoTypeCheck[uint32](columns[1])[0]
+			ownership.createdTime = vector.MustFixedColNoTypeCheck[types.Timestamp](columns[2])[0]
 			found = true
 		}
 		return false

@@ -214,8 +214,7 @@ var (
 		"and vd.source_relation_kind<>'REVALIDATE_REQUIRED') and "+
 		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
 		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
-		"and (gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN') or "+
-		"(gd.source_relation_kind='ACTIVATED' and not mo_view_meta_enabled())))) or "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) or "+
 		"(exists (select 1 from mo_catalog.mo_view_refresh vr "+
 		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id "+
 		"and vr.status='CURRENT') and not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
@@ -223,8 +222,7 @@ var (
 		"and vd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')) and "+
 		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
 		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
-		"and (gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN') or "+
-		"(gd.source_relation_kind='ACTIVATED' and not mo_view_meta_enabled()))))) "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')))) "+
 		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
 		systemDatabaseListSQL, catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
 
