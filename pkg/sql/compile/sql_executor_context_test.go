@@ -16,20 +16,106 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
+
+func TestInternalExecutorCommittedLogWaitHonorsCallerCancellation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	commitTS := timestamp.Timestamp{PhysicalTime: 42}
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{CommitTS: commitTS})
+
+	waitStarted := make(chan struct{})
+	txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), commitTS).DoAndReturn(
+		func(ctx context.Context, _ timestamp.Timestamp) (timestamp.Timestamp, error) {
+			close(waitStarted)
+			<-ctx.Done()
+			return timestamp.Timestamp{}, ctx.Err()
+		},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	errC := make(chan error, 1)
+	go func() {
+		errC <- (&sqlExecutor{txnClient: txnClient}).maybeWaitCommittedLogApplied(
+			ctx,
+			executor.Options{}.
+				WithTxn(txnOperator).
+				WithWaitCommittedLogApplied(),
+		)
+	}()
+
+	select {
+	case <-waitStarted:
+	case <-time.After(time.Second):
+		t.Fatal("committed-log wait did not start")
+	}
+	cancel()
+	select {
+	case err := <-errC:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("caller cancellation did not release committed-log wait")
+	}
+}
+
+func TestInternalExecutorCommittedLogWaitContract(t *testing.T) {
+	waitErr := errors.New("logtail wait failed")
+	commitTS := timestamp.Timestamp{PhysicalTime: 42}
+
+	for _, tc := range []struct {
+		name      string
+		wait      bool
+		commitTS  timestamp.Timestamp
+		wantErr   error
+		wantCalls int
+	}{
+		{name: "disabled", commitTS: commitTS},
+		{name: "empty commit timestamp", wait: true},
+		{name: "success", wait: true, commitTS: commitTS, wantCalls: 1},
+		{name: "wait error", wait: true, commitTS: commitTS, wantErr: waitErr, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			txnClient := mock_frontend.NewMockTxnClient(ctrl)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			if tc.wait {
+				txnOperator.EXPECT().Txn().Return(txn.TxnMeta{CommitTS: tc.commitTS})
+			}
+			if tc.wantCalls == 1 {
+				txnClient.EXPECT().WaitLogTailAppliedAt(gomock.Any(), tc.commitTS).
+					Return(timestamp.Timestamp{}, tc.wantErr)
+			}
+			opts := executor.Options{}.WithTxn(txnOperator)
+			if tc.wait {
+				opts = opts.WithWaitCommittedLogApplied()
+			}
+
+			err := (&sqlExecutor{txnClient: txnClient}).maybeWaitCommittedLogApplied(
+				context.Background(), opts)
+			require.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
 
 func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T) {
 	root := resource.NewRoot(resource.ConnExternal)
