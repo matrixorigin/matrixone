@@ -672,6 +672,11 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 		if err != nil {
 			return err
 		}
+	} else if owner := upstreamUserSession(execCtx.ses); owner != nil {
+		owner.commitTempTableStatement(
+			tempTableTxnKey(th.txnOp),
+			tempTableStatementKey(execCtx.ses, th.shareTxn),
+		)
 	}
 	//do nothing
 	return nil
@@ -746,6 +751,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
+		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
@@ -780,6 +786,16 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			}
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			if err == nil || commitResultUnknown {
+				// An unknown commit result may have persisted the physical
+				// relation. Preserve its alias so connection cleanup can still
+				// remove it; only known discarded transactions are restored.
+				owner.commitTempTableTransaction(tempTxnKey)
+			} else {
+				owner.rollbackTempTableTransaction(tempTxnKey)
+			}
+		}
 		if commitResultUnknown {
 			// ErrTxnUnknown is terminal for this frontend handle. The operator
 			// has already finalized its workspace non-destructively; retaining it
@@ -855,6 +871,12 @@ func (th *TxnHandler) rollback(
 			if err != nil || hasRecovered {
 				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
+			}
+			if owner := upstreamUserSession(execCtx.ses); owner != nil {
+				owner.rollbackTempTableStatement(
+					tempTableTxnKey(th.txnOp),
+					tempTableStatementKey(execCtx.ses, th.shareTxn),
+				)
 			}
 		}
 	}
@@ -999,6 +1021,7 @@ func (th *TxnHandler) rollbackUnsafe(
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
@@ -1007,6 +1030,9 @@ func (th *TxnHandler) rollbackUnsafe(
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
+		}
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
 	}
 	th.invalidateTxnUnsafe()
