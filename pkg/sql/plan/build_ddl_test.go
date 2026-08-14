@@ -116,6 +116,80 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
 }
 
+func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
+	testCases := []struct {
+		name        string
+		sql         string
+		wantErrCode uint16
+	}{
+		{
+			name:        "rename table changes database and name",
+			sql:         "rename table tpch.nation to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table changes only database",
+			sql:         "rename table tpch.nation to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes database and name",
+			sql:         "alter table tpch.nation rename to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes only database",
+			sql:         "alter table tpch.nation rename to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table resolves source before rejecting target database",
+			sql:         "rename table tpch.missing_table to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name:        "alter table resolves source before rejecting target database",
+			sql:         "alter table tpch.missing_table rename to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name: "rename table keeps explicit database",
+			sql:  "rename table tpch.nation to tpch.renamed",
+		},
+		{
+			name: "rename table inherits source database",
+			sql:  "rename table tpch.nation to renamed",
+		},
+		{
+			name: "alter table keeps explicit database",
+			sql:  "alter table tpch.nation rename to tpch.renamed",
+		},
+		{
+			name: "alter table inherits source database",
+			sql:  "alter table tpch.nation rename to renamed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			if testCase.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, testCase.wantErrCode), err)
+				if testCase.wantErrCode == moerr.ErrNotSupported {
+					require.Contains(t, err.Error(), "cross-database table rename")
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, p)
+		})
+	}
+}
+
 func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -2146,6 +2220,15 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 					TableExist: true,
 					Visible:    false,
 				},
+				{
+					IndexName:  "idx_stale_marker",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    true,
+					Option: &plan.IndexOption{
+						Visibility: plan.IndexOption_VISIBILITY_VISIBLE,
+					},
+				},
 			}
 			ctx.tables[sourceName] = source
 			ctx.objects[sourceName] = &plan.ObjectRef{
@@ -2168,10 +2251,10 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 					result := executor.NewMemResult(
 						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
 					)
-					result.NewBatchWithRowCount(2)
+					result.NewBatchWithRowCount(3)
 					require.NoError(t, executor.AppendStringRows(result, 0,
-						[]string{"idx_legacy_visible", "idx_invisible"}))
-					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0}))
+						[]string{"idx_legacy_visible", "idx_invisible", "idx_stale_marker"}))
+					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0, 0}))
 					return result.GetResult(), nil
 				}),
 			)
@@ -2192,12 +2275,15 @@ func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T
 			visibility := make(map[string]bool, len(createTable.TableDef.Indexes))
 			for _, indexDef := range createTable.TableDef.Indexes {
 				visibility[indexDef.IndexName] = indexDef.Visible
+				_, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
 			}
 			require.True(t, visibility["idx_legacy_visible"])
 			require.False(t, visibility["idx_invisible"])
+			require.False(t, visibility["idx_stale_marker"])
 			persistedSQL := strings.ToUpper(tableDefCreateSQL(createTable.TableDef))
 			require.Contains(t, persistedSQL, "IDX_INVISIBLE")
-			require.Equal(t, 1, strings.Count(persistedSQL, " INVISIBLE"))
+			require.Equal(t, 2, strings.Count(persistedSQL, " INVISIBLE"))
 		})
 	}
 }
@@ -3049,6 +3135,56 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 			indexDef := createTable.GetTableDef().GetIndexes()[0]
 			prefixLengths := catalog.IndexPrefixLengthsFromParams(indexDef.IndexAlgoParams)
 			require.Equal(t, tt.length, prefixLengths[tt.column])
+		})
+	}
+}
+
+func TestBuildIndexPersistsVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name    string
+		sql     string
+		visible bool
+	}{
+		{
+			name:    "default regular index is visible",
+			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
+			visible: true,
+		},
+		{
+			name:    "explicit visible regular index",
+			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
+			visible: true,
+		},
+		{
+			name:    "invisible regular index",
+			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible unique index",
+			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible fulltext index",
+			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+			require.NotEmpty(t, indexes)
+			for _, indexDef := range indexes {
+				got, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
+				require.Equal(t, tc.visible, got)
+				require.Equal(t, tc.visible, indexDef.Visible)
+			}
 		})
 	}
 }
@@ -4068,6 +4204,23 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 		mock.ctxt.tables[child.Name] = child
 		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
 		mock.ctxt.id2name[child.TblId] = child.Name
+		proc := testutil.NewProc(t)
+		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t,
+					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
+				result := executor.NewMemResult(
+					[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+				)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx1"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+				return result.GetResult(), nil
+			}),
+		)
 
 		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
 		require.Error(t, err)
