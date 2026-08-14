@@ -115,8 +115,8 @@ EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 1.0E100  ¦  1.0E100  ¦  2.0
 SET @p='1e-40';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
-➤ COALESCE(?, common_peers.d)[3,65,30]  ¦  GREATEST(?, common_peers.d)[3,65,30]  ¦  LEAST(?, common_peers.d)[3,65,30]  𝄀
-0E-30  ¦  2.000000000000000000000000000000  ¦  0E-30
+➤ COALESCE(?, common_peers.d)[8,53,31]  ¦  GREATEST(?, common_peers.d)[8,53,31]  ¦  LEAST(?, common_peers.d)[8,53,31]  𝄀
+1.0E-40  ¦  2.0  ¦  1.0E-40
 PREPARE p_exact_dynamic_domain FROM
 'SELECT COALESCE(?,CAST(2.0000000000 AS DECIMAL(46,10))),GREATEST(?,CAST(2.0000000000 AS DECIMAL(46,10))),LEAST(?,CAST(2.0000000000 AS DECIMAL(46,10)))';
 SET @p='999999999999999999999999999999999999.1234567890';

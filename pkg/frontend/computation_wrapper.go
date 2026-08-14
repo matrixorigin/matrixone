@@ -762,7 +762,7 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 	case vector.PrepareParamDecimal:
 		value = normalizePreparedDecimalPayload(value)
 		width, scale := preparedNativeDecimalDomain(value)
-		return preparedDecimalBindingType(width, scale, true, false)
+		return preparedNativeDecimalBindingType(width, scale)
 	case vector.PrepareParamBoolean:
 		// Binary-protocol BOOL is transported as TINYINT(1), but its prepared
 		// common-type contract with DECIMAL is the same DECIMAL(65,30) envelope.
@@ -771,6 +771,16 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 
 	width, scale, full, exponent := preparedNumericTextDomain(value)
 	return preparedDecimalBindingType(width, scale, full, exponent)
+}
+
+func preparedNativeDecimalBindingType(width, scale int32) types.Type {
+	// Native DECIMAL is already an exact source.  Values below the supported
+	// scale follow the target DECIMAL's rounding contract instead of being
+	// reclassified as DOUBLE merely because their spelling is wider than 76.
+	if width > 76 && max(width-scale, 0) <= 35 {
+		return preparedProtocolExactBindingType()
+	}
+	return preparedDecimalBindingType(width, scale, true, false)
 }
 
 func preparedProtocolExactBindingType() types.Type {
@@ -1104,6 +1114,31 @@ func clonePreparedParamBindingTypes(bindingTypes []types.Type) []types.Type {
 	return append([]types.Type(nil), bindingTypes...)
 }
 
+func preserveWiderPreparedParamBindings(
+	previous, current []types.Type, dependencies []bool, count int,
+) []types.Type {
+	if len(previous) == 0 {
+		return current
+	}
+	result := clonePreparedParamBindingTypes(current)
+	if len(result) < count {
+		result = append(result, make([]types.Type, count-len(result))...)
+	}
+	for i := 0; i < count; i++ {
+		if i >= len(dependencies) || !dependencies[i] || i >= len(previous) {
+			continue
+		}
+		previousType := previous[i]
+		currentType := result[i]
+		if previousType.Oid == types.T_float64 ||
+			previousType.Oid == types.T_text && previousType.Charset == preparedNumericTextBindingCharset &&
+				previousType.Size == preparedNumericTextFloat || currentType.Oid == 0 {
+			result[i] = previousType
+		}
+	}
+	return result
+}
+
 func preparedParamBindingTypesAtDependencies(bindingTypes []types.Type, dependencies []bool) []types.Type {
 	if len(bindingTypes) == 0 || len(dependencies) == 0 {
 		return nil
@@ -1178,6 +1213,13 @@ func initPreparedExecuteParams(
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind == vector.PrepareParamDecimal {
+				value := normalizePreparedDecimalPayload(prepareStmt.params.GetRawBytesAt(i))
+				width, scale := preparedNativeDecimalDomain(value)
+				if width-scale > 76 {
+					return nil, moerr.NewOutOfRangef(reqCtx, "DECIMAL", "value '%s'", value)
+				}
+			}
 			if kind != vector.PrepareParamNone {
 				if kinds == nil {
 					kinds = make([]vector.PrepareParamKind, paramCount)
@@ -1188,7 +1230,7 @@ func initPreparedExecuteParams(
 		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, dependencies, numParams)
 		return &preparedExecuteParamState{
 			params:       prepareStmt.params,
-			paramVals:    preparedParamValues(prepareStmt.params, nil),
+			paramVals:    preparedParamValues(prepareStmt.params, nil, kinds),
 			paramKinds:   kinds,
 			paramTypes:   prepareStmt.ParamTypes,
 			bindingTypes: bindingTypes,
@@ -1245,7 +1287,9 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, originSQL, false, err
 	}
 	defer paramState.release(cwft.proc)
-	paramBindingTypes := paramState.bindingTypes
+	paramBindingTypes := preserveWiderPreparedParamBindings(
+		prepareStmt.paramBindingTypes, paramState.bindingTypes,
+		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -1648,7 +1692,9 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(params *vector.Vector, paramIsBin []bool) []any {
+func preparedParamValues(
+	params *vector.Vector, paramIsBin []bool, paramKinds []vector.PrepareParamKind,
+) []any {
 	if params == nil || params.Length() == 0 {
 		return nil
 	}
@@ -1661,7 +1707,13 @@ func preparedParamValues(params *vector.Vector, paramIsBin []bool) []any {
 		if i < len(paramIsBin) {
 			isBin = paramIsBin[i]
 		}
-		values[i] = plan2.ParamValue{Value: string(params.GetRawBytesAt(i)), IsBin: isBin}
+		var kind vector.PrepareParamKind
+		if i < len(paramKinds) {
+			kind = paramKinds[i]
+		}
+		values[i] = plan2.ParamValue{
+			Value: string(params.GetRawBytesAt(i)), IsBin: isBin, PrepareParamKind: kind,
+		}
 	}
 	return values
 }

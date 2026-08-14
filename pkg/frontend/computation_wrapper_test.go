@@ -25,6 +25,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -375,6 +376,7 @@ func TestNativeDecimalPreparedParamBindingUsesStablePayloadCategory(t *testing.T
 		{value: "1E+35", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "1E-31", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{value: "1E-40", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
+		{value: "1E-77", wantMode: preparedNumericProtocolExact, wantWidth: 65, wantScale: 30},
 		{value: "  123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "\t123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "-12.3400", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
@@ -586,7 +588,20 @@ func TestPreparedExecuteParamStateOwnership(t *testing.T) {
 	require.Nil(t, transferred.GetData())
 }
 
-func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
+func TestPreparedParamValuesPreserveKindsForExplain(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 122)
+	defer prepareStmt.Close()
+	proc := cw.proc
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+	values := preparedParamValues(params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger})
+	require.Equal(t, []any{plan2.ParamValue{
+		Value: "1", PrepareParamKind: vector.PrepareParamInteger,
+	}}, values)
+}
+
+func TestInitExecuteStmtParamOnlyWidensRuntimeBindingCategory(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 110, "select coalesce(?, cast(2 as decimal(10,2)))")
 	defer func() {
@@ -595,9 +610,13 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 	}()
 
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
-	setParam := func(value string, mysqlType defines.MysqlType) {
+	setParam := func(value *string, mysqlType defines.MysqlType) {
 		prepareStmt.params.CleanOnlyData()
-		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+		if value == nil {
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
+		} else {
+			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(*value), false, cw.proc.Mp()))
+		}
 		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 	}
 	execute := func() (*plan.Plan, plan.Type) {
@@ -608,50 +627,37 @@ func TestInitExecuteStmtParamRebuildsForRuntimeBindingCategory(t *testing.T) {
 		return prepareStmt.PreparePlan, columns[0].Typ
 	}
 
-	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
+	setParam(nil, defines.MYSQL_TYPE_NULL)
+	nullPlan, _ := execute()
+	require.Empty(t, prepareStmt.paramBindingTypes)
+
+	stringValue := "1.25"
+	setParam(&stringValue, defines.MYSQL_TYPE_STRING)
+	decimalPlan, resultType := execute()
+	require.Same(t, nullPlan, decimalPlan,
+		"the initial stable DECIMAL category may reuse the NULL-prepared plan")
+	require.True(t, types.T(resultType.Id).IsDecimal())
+
+	floatValue := "1e100"
+	setParam(&floatValue, defines.MYSQL_TYPE_DOUBLE)
 	floatPlan, resultType := execute()
+	require.NotSame(t, decimalPlan, floatPlan)
 	require.Equal(t, int32(types.T_float64), resultType.Id)
 	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
 	_, found := ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
 	require.False(t, found, "temporary binding hints must not escape the rebuild generation")
 
-	setParam("1e-40", defines.MYSQL_TYPE_DOUBLE)
+	integerValue := "1"
+	setParam(&integerValue, defines.MYSQL_TYPE_LONGLONG)
 	sameFloatPlan, resultType := execute()
-	require.Same(t, floatPlan, sameFloatPlan, "the same runtime category must reuse its plan")
+	require.Same(t, floatPlan, sameFloatPlan, "a wider result category must not narrow for an integer")
 	require.Equal(t, int32(types.T_float64), resultType.Id)
 
-	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
-	decimalPlan, resultType := execute()
-	require.NotSame(t, floatPlan, decimalPlan)
-	require.True(t, types.T(resultType.Id).IsDecimal())
-	require.Len(t, prepareStmt.paramBindingTypes, 1)
-	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
-
-	setParam("1.234567", defines.MYSQL_TYPE_VAR_STRING)
-	exactDecimalPlan, resultType := execute()
-	require.Same(t, decimalPlan, exactDecimalPlan,
-		"exact DECIMAL width and scale changes must reuse the stable plan")
-	require.True(t, types.T(resultType.Id).IsDecimal())
-	require.Len(t, prepareStmt.paramBindingTypes, 1)
-	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[0].Size)
-	require.Equal(t, decimalPlan.GetDcl().GetPrepare().Plan, exactDecimalPlan.GetDcl().GetPrepare().Plan)
-
-	setParam("1e100", defines.MYSQL_TYPE_DOUBLE)
+	setParam(nil, defines.MYSQL_TYPE_NULL)
 	secondFloatPlan, resultType := execute()
-	require.NotSame(t, exactDecimalPlan, secondFloatPlan)
+	require.Same(t, floatPlan, secondFloatPlan, "NULL must not reset established result metadata")
 	require.Equal(t, int32(types.T_float64), resultType.Id)
-
-	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
-	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
-		return nil, errors.New("column metadata refresh failed")
-	}
-	setParam("2026-08-10 12:34:56", defines.MYSQL_TYPE_STRING)
-	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-	require.EqualError(t, err, "column metadata refresh failed")
-	require.Same(t, secondFloatPlan, prepareStmt.PreparePlan)
 	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.paramBindingTypes)
-	_, found = ses.GetTxnCompileCtx().ResolvePreparedParamBindingType(0)
-	require.False(t, found, "failed rebuild must clear temporary binding hints")
 }
 
 func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
@@ -673,6 +679,7 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 		{value: "1E+35", wantType: types.T_decimal128, wantWidth: 38, wantScale: 2},
 		{value: "1E-31", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
 		{value: "1E-40", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
+		{value: "1E-77", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
 		{value: "999999999999999999999999999999999999.1234567890", wantType: types.T_decimal256, wantWidth: 46, wantScale: 10},
 	}
 	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL} {
@@ -690,6 +697,32 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 				require.Equal(t, int32(test.wantType), columns[0].Typ.Id)
 				require.Equal(t, test.wantWidth, columns[0].Typ.Width)
 				require.Equal(t, test.wantScale, columns[0].Typ.Scale)
+			})
+		}
+	}
+}
+
+func TestInitExecuteStmtParamRejectsNativeDecimalBeyondDecimal256(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 121, "select coalesce(?, cast(2 as decimal(1,0)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL} {
+		for _, value := range []string{
+			strings.Repeat("9", 77), "1e76", "1e100",
+		} {
+			t.Run(fmt.Sprintf("type_%d/%s", mysqlType, value), func(t *testing.T) {
+				prepareStmt.params.CleanOnlyData()
+				require.NoError(t, vector.AppendBytes(
+					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+				_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 			})
 		}
 	}

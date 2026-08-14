@@ -958,12 +958,12 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 					}
 				}
 				lower, err := bindMixedInListComparison(
-					b.GetContext(), lowerOp, DeepCopyExpr(left), from, exact)
+					b.GetContext(), lowerOp, DeepCopyExpr(left), from, exact, false)
 				if err != nil {
 					return nil, err
 				}
 				upper, err := bindMixedInListComparison(
-					b.GetContext(), upperOp, left, to, exact)
+					b.GetContext(), upperOp, left, to, exact, false)
 				if err != nil {
 					return nil, err
 				}
@@ -3624,9 +3624,28 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 
 	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
+			preparedParamSource := false
+			preparedFloatSource := false
+			for _, arg := range args {
+				preparedParamSource = preparedParamSource || arg.ExactDecimalParam
+				preparedFloatSource = preparedFloatSource || containsPreparedFloatSource(arg)
+			}
+			// Keep runtime FLOAT arithmetic as a typed expression. Folding it to
+			// a bare literal loses the distinction from a direct parameter, whose
+			// single-comparison DECIMAL contract is intentionally different.
+			if preparedFloatSource {
+				floatType := types.T_float64.ToType()
+				retExpr, err = appendCastBeforeExpr(ctx, retExpr, makePlan2Type(&floatType))
+				if err != nil {
+					return nil, err
+				}
+				retExpr.ExactDecimalParam = true
+				break
+			}
 			tmpexpr, _ := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(retExpr), proc, false, true)
 			if tmpexpr != nil {
 				retExpr = tmpexpr
+				retExpr.ExactDecimalParam = preparedParamSource
 			}
 		}
 
@@ -3891,14 +3910,35 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	return nil
 }
 
+func containsPreparedFloatSource(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	if expr.ExactDecimalParam && (typ == types.T_float32 || typ == types.T_float64) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsPreparedFloatSource(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // bindMixedInListComparison applies MySQL's REAL comparison semantics for a
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
 // lose precision for numeric columns compared with string constants.
-func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr, exact bool) (*plan.Expr, error) {
+func bindMixedInListComparison(
+	ctx context.Context, operator string, left, right *Expr, exact, allowPreparedFloatReal bool,
+) (*plan.Expr, error) {
 	operands := []*Expr{left, right}
 	rightTypeID := types.T(right.Typ.Id)
-	if right.ExactDecimalParam && (rightTypeID == types.T_float32 || rightTypeID == types.T_float64) {
+	if allowPreparedFloatReal && right.ExactDecimalParam &&
+		(rightTypeID == types.T_float32 || rightTypeID == types.T_float64) {
 		// A binary-protocol FLOAT parameter contributes a REAL domain only to
 		// its own comparison.  Promoting the complete IN list would also round
 		// independent STRING/NEWDECIMAL parameters at the 2^53 boundary.
@@ -4364,7 +4404,9 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 			}
-			useStaticListReal := len(rightList.List) > 1
+			leftStaticRealType := types.T(args[0].Typ.Id)
+			useStaticListReal := len(rightList.List) > 1 &&
+				(leftStaticRealType.ToType().IsNumeric() || leftStaticRealType.IsMySQLString())
 			if useStaticListReal {
 				useStaticListReal = false
 				for _, item := range rightList.List {
@@ -4458,7 +4500,8 @@ func bindFuncExprImplByPlanExpr(
 			if name == "in" {
 				for _, expr := range orExprList {
 					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison)
+					tmpExpr, err := bindMixedInListComparison(
+						ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison, !exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4468,7 +4511,8 @@ func bindFuncExprImplByPlanExpr(
 			} else {
 				for _, expr := range orExprList {
 					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison)
+					tmpExpr, err := bindMixedInListComparison(
+						ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison, !exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -5490,6 +5534,19 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 
 	for paramPos, peerPos := range []int{1, 0} {
 		if args[paramPos].ExactDecimalParam && types.T(args[peerPos].Typ.Id).IsDecimal() {
+			paramType := types.T(args[paramPos].Typ.Id)
+			if args[paramPos].GetF() != nil &&
+				(paramType == types.T_float32 || paramType == types.T_float64) {
+				targetType := types.T_float64.ToType()
+				for i := range args {
+					var err error
+					args[i], err = appendCastBeforeExpr(ctx, args[i], makePlan2Type(&targetType))
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 			normalized, err := normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
 			if err != nil {
 				return err

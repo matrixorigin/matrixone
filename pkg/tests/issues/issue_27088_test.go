@@ -56,6 +56,47 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			(1,9007199254740992.0000000001),(2,9007199254740992.0000000002),
 			(3,9007199254740992.0000000003),(4,9007199254740994.0000000001),
 			(5,9007199254740995.0000000001),(6,9007199254740996.0000000001)`)
+		for _, query := range []string{
+			"select nth_value(id, ?) over (order by id) from t",
+			"explain select nth_value(id, ?) over (order by id) from t",
+		} {
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			rows, err := stmt.QueryContext(ctx, int64(1))
+			require.NoError(t, err, query)
+			for rows.Next() {
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			require.NoError(t, stmt.Close())
+		}
+		metadataStmt, err := conn.PrepareContext(ctx,
+			"select coalesce(?, cast(2 as decimal(10,2)))")
+		require.NoError(t, err)
+		defer metadataStmt.Close()
+		for _, arg := range []any{nil, "1.25"} {
+			rows, err := metadataStmt.QueryContext(ctx, arg)
+			require.NoError(t, err)
+			require.NoError(t, rows.Close())
+		}
+		floatRows, err := metadataStmt.QueryContext(ctx, float64(1.5))
+		require.NoError(t, err)
+		floatColumns, err := floatRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, floatColumns, 1)
+		widenedDatabaseType := floatColumns[0].DatabaseTypeName()
+		widenedScanType := floatColumns[0].ScanType()
+		require.NoError(t, floatRows.Close())
+		for _, arg := range []any{int64(1), nil} {
+			rows, err := metadataStmt.QueryContext(ctx, arg)
+			require.NoError(t, err)
+			columns, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, columns, 1)
+			require.Equal(t, widenedDatabaseType, columns[0].DatabaseTypeName())
+			require.Equal(t, widenedScanType, columns[0].ScanType())
+			require.NoError(t, rows.Close())
+		}
 
 		inStmt, err := conn.PrepareContext(ctx, "select id from t where d in (?,?) order by id")
 		require.NoError(t, err)
@@ -70,6 +111,51 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			queryIssue27088IDs(t, ctx, notInStmt, exact, float64(0)))
 		require.Equal(t, []int{1, 2, 3},
 			queryIssue27088IDs(t, ctx, inStmt, float64(9007199254740992), "0"))
+
+		for _, query := range []string{
+			"select id from t where d = ?+0 order by id",
+			"select id from t where d = ?-0 order by id",
+			"select id from t where d = ?*1 order by id",
+			"select id from t where d = ?/1 order by id",
+			"select id from t where d in (?+0) order by id",
+		} {
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			require.Equal(t, []int{1, 2, 3},
+				queryIssue27088IDs(t, ctx, stmt, float64(9007199254740992)), query)
+			require.NoError(t, stmt.Close())
+		}
+		mustExec(t, ctx, conn, "create table arithmetic_update as select * from t")
+		arithmeticUpdateStmt, err := conn.PrepareContext(ctx,
+			"update arithmetic_update set id=id+10 where d in (?+0)")
+		require.NoError(t, err)
+		arithmeticResult, err := arithmeticUpdateStmt.ExecContext(ctx, float64(9007199254740992))
+		require.NoError(t, err)
+		arithmeticAffected, err := arithmeticResult.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(3), arithmeticAffected)
+		require.NoError(t, arithmeticUpdateStmt.Close())
+
+		singleInStmt, err := conn.PrepareContext(ctx, "select id from t where d in (?) order by id")
+		require.NoError(t, err)
+		require.Empty(t, queryIssue27088IDs(t, ctx, singleInStmt, float64(9007199254740992)))
+		require.NoError(t, singleInStmt.Close())
+		singleUpdateStmt, err := conn.PrepareContext(ctx, "update t set id=id+100 where d in (?)")
+		require.NoError(t, err)
+		singleUpdateResult, err := singleUpdateStmt.ExecContext(ctx, float64(9007199254740992))
+		require.NoError(t, err)
+		singleAffected, err := singleUpdateResult.RowsAffected()
+		require.NoError(t, err)
+		require.Zero(t, singleAffected)
+		require.NoError(t, singleUpdateStmt.Close())
+		singleCTASStmt, err := conn.PrepareContext(ctx,
+			"create table single_selected as select id from t where d in (?)")
+		require.NoError(t, err)
+		_, err = singleCTASStmt.ExecContext(ctx, float64(9007199254740992))
+		require.NoError(t, err)
+		require.NoError(t, singleCTASStmt.Close())
+		require.Empty(t, queryIssue27088QueryIDs(t, ctx, conn,
+			"select id from single_selected order by id"))
 
 		ctasStmt, err := conn.PrepareContext(ctx,
 			"create table selected as select id from t where d in (?,?)")

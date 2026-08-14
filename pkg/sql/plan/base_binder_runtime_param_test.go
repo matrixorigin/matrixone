@@ -424,6 +424,34 @@ func TestStaticFloatINUsesOneRealListDomain(t *testing.T) {
 	}
 }
 
+func TestStaticFloatINPreservesNonNumericComparisonErrors(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_bool,
+	} {
+		for _, name := range []string{"in", "not_in"} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				columnType := oid.ToType()
+				column := &planpb.Expr{
+					Typ:  MakePlan2Type(&columnType),
+					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+				}
+				list := &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_tuple)},
+					Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+						makePlan2Float64ConstExprWithType(1),
+						makePlan2Float64ConstExprWithType(2),
+					}}},
+				}
+				_, err := BindFuncExprImplByPlanExpr(context.Background(), name,
+					[]*planpb.Expr{column, list})
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "operator ")
+				require.NotContains(t, err.Error(), "operator cast")
+			})
+		}
+	}
+}
+
 func TestPreparedRangeWithRowBoundExpandsToComparisons(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	constant := makeDecimal128ConstExpr("2.0000", 20, 4)
