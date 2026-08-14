@@ -249,7 +249,7 @@ func withDataBranchCloneSourceLock(
 	return lockSource()
 }
 
-func withDataBranchCloneLockContext(
+func withCloneLockContext(
 	proc *process.Process,
 	ctx context.Context,
 	lockRows func() error,
@@ -288,7 +288,7 @@ func lockDataBranchCloneSource(
 	if err != nil {
 		return err
 	}
-	lockBat, err := dataBranchCloneCatalogLockBatch(
+	lockBat, err := cloneCatalogLockBatch(
 		lockProc, fromAccountID, databaseName, tableName,
 	)
 	if err != nil {
@@ -298,7 +298,7 @@ func lockDataBranchCloneSource(
 	// ALTER locks this exact mo_tables composite key exclusively. A shared
 	// catalog-row lock serializes source-ID/snapshot selection with ALTER while
 	// allowing source-table DML and sibling branch clones to continue.
-	return withDataBranchCloneLockContext(lockProc, sourceCtx, func() error {
+	return withCloneLockContext(lockProc, sourceCtx, func() error {
 		return lockop.LockRows(
 			eng,
 			lockProc,
@@ -314,17 +314,131 @@ func lockDataBranchCloneSource(
 	})
 }
 
+var lockCloneDatabaseTarget = func(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+) error {
+	lockProc, err := newCloneDatabaseTargetLockProcess(ctx, ses, bh)
+	if err != nil {
+		return err
+	}
+	defer lockProc.Free()
+
+	targetCtx := defines.AttachAccountId(ctx, accountID)
+	eng := lockProc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(targetCtx, catalog.MO_CATALOG, lockProc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(targetCtx, catalog.MO_DATABASE, nil)
+	if err != nil {
+		return err
+	}
+	lockBat, err := cloneCatalogLockBatch(lockProc, accountID, databaseName)
+	if err != nil {
+		return err
+	}
+	defer lockBat.Vecs[0].Free(lockProc.Mp())
+
+	// The background transaction owns this exact mo_database key through the
+	// destination CREATE. Its deferred commit or rollback releases the lock.
+	return withCloneLockContext(lockProc, targetCtx, func() error {
+		return lockop.LockRows(
+			eng,
+			lockProc,
+			rel,
+			rel.GetTableID(targetCtx),
+			lockBat,
+			0,
+			*lockBat.Vecs[0].GetType(),
+			lock.LockMode_Exclusive,
+			lock.Sharding_None,
+			accountID,
+		)
+	})
+}
+
+func checkCloneDatabaseTarget(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+) (bool, error) {
+	targetCtx := defines.AttachAccountId(ctx, accountID)
+	for attempts := 0; ; attempts++ {
+		if err := lockCloneDatabaseTarget(targetCtx, ses, bh, accountID, databaseName); err != nil {
+			if attempts == 0 && isCloneDatabaseTargetLockRetry(err) {
+				retried, retryErr := restartCloneDatabaseTargetLockTxn(targetCtx, bh)
+				if retryErr != nil {
+					return false, retryErr
+				}
+				if retried {
+					continue
+				}
+			}
+			return false, err
+		}
+		return checkDatabaseExists(targetCtx, bh, databaseName)
+	}
+}
+
+func isCloneDatabaseTargetLockRetry(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+}
+
+func restartCloneDatabaseTargetLockTxn(ctx context.Context, bh BackgroundExec) (bool, error) {
+	back, ok := bh.(*backExec)
+	if !ok || back.backSes.GetTxnHandler().IsShareTxn() {
+		return false, nil
+	}
+	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); locked {
+		return false, nil
+	}
+	if err := bh.Exec(ctx, "rollback;"); err != nil {
+		return false, err
+	}
+	if err := bh.Exec(ctx, "begin;"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func newDataBranchCloneLockProcess(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+) *process.Process {
+	return newCloneLockProcess(ctx, ses, cloneSnapshotTxnOperator(ses, bh))
+}
+
+func newCloneDatabaseTargetLockProcess(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) (*process.Process, error) {
+	back, ok := bh.(*backExec)
+	if !ok {
+		return nil, moerr.NewInternalError(ctx, "database clone target lock requires a background executor")
+	}
+	return newCloneLockProcess(ctx, ses, back.backSes.GetTxnHandler().GetTxn()), nil
+}
+
+func newCloneLockProcess(
+	ctx context.Context,
+	ses *Session,
+	txnOp TxnOperator,
 ) *process.Process {
 	outer := ses.proc
 	lockProc := process.NewTopProcess(
 		ctx,
 		outer.Mp(),
 		outer.Base.TxnClient,
-		cloneSnapshotTxnOperator(ses, bh),
+		txnOp,
 		outer.Base.FileService,
 		outer.Base.LockService,
 		outer.Base.QueryClient,
@@ -337,12 +451,12 @@ func newDataBranchCloneLockProcess(
 	return lockProc
 }
 
-func dataBranchCloneCatalogLockBatch(
+func cloneCatalogLockBatch(
 	proc *process.Process,
 	accountID uint32,
-	databaseName, tableName string,
+	names ...string,
 ) (*batch.Batch, error) {
-	inputs := make([]*vector.Vector, 3)
+	inputs := make([]*vector.Vector, len(names)+1)
 	defer func() {
 		for _, input := range inputs {
 			if input != nil {
@@ -354,7 +468,7 @@ func dataBranchCloneCatalogLockBatch(
 	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
 		return nil, err
 	}
-	for i, name := range []string{databaseName, tableName} {
+	for i, name := range names {
 		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
 		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
 			return nil, err
@@ -573,19 +687,28 @@ func getOpAndToAccountId(
 		return 0, 0, nil, err
 	}
 
-	if opAccountId, err = defines.GetAccountId(reqCtx); err != nil {
-		return 0, 0, nil, err
-	}
-
-	if toAccountOpt == nil {
-		return opAccountId, opAccountId, snapshot, nil
-	}
-
-	if toAccountId, err = getAccountId(reqCtx, bh, toAccountOpt.AccountName.String()); err != nil {
+	if opAccountId, toAccountId, err = getCloneTargetAccountIds(reqCtx, bh, toAccountOpt); err != nil {
 		return 0, 0, nil, err
 	}
 
 	return opAccountId, toAccountId, snapshot, nil
+}
+
+func getCloneTargetAccountIds(
+	ctx context.Context,
+	bh BackgroundExec,
+	toAccountOpt *tree.ToAccountOpt,
+) (opAccountId, toAccountId uint32, err error) {
+	if opAccountId, err = defines.GetAccountId(ctx); err != nil {
+		return 0, 0, err
+	}
+	if toAccountOpt == nil {
+		return opAccountId, opAccountId, nil
+	}
+	if toAccountId, err = getAccountId(ctx, bh, toAccountOpt.AccountName.String()); err != nil {
+		return 0, 0, err
+	}
+	return opAccountId, toAccountId, nil
 }
 
 type cloneAccountResolution struct {
@@ -892,6 +1015,7 @@ func handleCloneDatabaseWithSource(
 
 		snapshotTS int64
 		source     cloneDatabaseSource
+		accounts   cloneDatabaseAccountResolution
 	)
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -904,7 +1028,15 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if bh == nil {
-		if bh, deferred, err = getBackExecutor(reqCtx, ses); err != nil {
+		var options []*BackgroundExecOption
+		if stmt.IfNotExists {
+			// The target lock must observe the holder's committed CREATE before
+			// deciding whether this statement is a no-op. A private pessimistic
+			// RC transaction refreshes after a lock wait; the retry below then
+			// re-checks the target with that fresh snapshot.
+			options = append(options, &BackgroundExecOption{forcePessimisticRC: true})
+		}
+		if bh, deferred, err = getBackExecutor(reqCtx, ses, options...); err != nil {
 			return
 		}
 
@@ -914,11 +1046,35 @@ func handleCloneDatabaseWithSource(
 			}
 		}()
 	}
+	if resolvedSource != nil {
+		accounts = cloneDatabaseAccountResolution{
+			opAccountId: resolvedSource.opAccountId,
+			toAccountId: resolvedSource.toAccountId,
+			snapshot:    resolvedSource.snapshot,
+		}
+	} else if accounts, err = resolveCloneDatabaseAccounts(reqCtx, ses, bh, stmt); err != nil {
+		return
+	}
+	if err = validateCloneDatabaseAccounts(reqCtx, accounts); err != nil {
+		return
+	}
+
+	if stmt.IfNotExists {
+		var exists bool
+		if exists, err = checkCloneDatabaseTarget(
+			reqCtx, ses, bh, accounts.toAccountId, stmt.DstDatabase.String(),
+		); err != nil {
+			return
+		}
+		if exists {
+			return
+		}
+	}
 
 	if resolvedSource != nil {
 		source = *resolvedSource
 	} else {
-		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
+		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt, &accounts); err != nil {
 			return
 		}
 	}
