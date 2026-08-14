@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
@@ -3932,6 +3933,43 @@ func TestMongoScanPipelineRoundTripContainsNoCredential(t *testing.T) {
 	restored := restoredOperator.(*mongoscan.MongoScan)
 	defer restored.Release()
 	require.Equal(t, spec, restored.Scan)
+}
+
+func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:    0,
+		plan:  &planpb.Plan{},
+		scope: &Scope{},
+		root:  &scopeContext{},
+		regs:  make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+	limit := plan.MakePlan2Uint64ConstExprWithType(7)
+	original := partition.NewArgument()
+	original.OrderBySpecs = []*planpb.OrderBySpec{
+		{Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		{Expr: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}, Flag: planpb.OrderBySpec_DESC},
+	}
+	original.Limit = limit
+	original.PartitionByCount = 1
+	original.PreReduce = true
+	defer original.Release()
+
+	_, instruction, err := convertToPipelineInstruction(original, nil, ctx, 0)
+	require.NoError(t, err)
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	decoded := new(pipeline.Instruction)
+	require.NoError(t, decoded.Unmarshal(wire))
+	restoredOperator, err := convertToVmOperator(decoded, ctx, nil)
+	require.NoError(t, err)
+	restored := restoredOperator.(*partition.Partition)
+	defer restored.Release()
+	require.Equal(t, int32(1), restored.PartitionByCount)
+	require.True(t, restored.PreReduce)
+	require.Len(t, restored.OrderBySpecs, 2)
+	require.Equal(t, uint64(7), restored.Limit.GetLit().GetU64Val())
+	require.Equal(t, planpb.OrderBySpec_DESC, restored.OrderBySpecs[1].Flag)
 }
 
 // newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:
