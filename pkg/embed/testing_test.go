@@ -15,15 +15,101 @@
 package embed
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type delayedTaskServiceGetter struct {
+	mu      sync.RWMutex
+	service taskservice.TaskService
+	called  chan struct{}
+	once    sync.Once
+}
+
+func newDelayedTaskServiceGetter() *delayedTaskServiceGetter {
+	return &delayedTaskServiceGetter{called: make(chan struct{})}
+}
+
+func (g *delayedTaskServiceGetter) GetTaskService() (taskservice.TaskService, bool) {
+	g.once.Do(func() { close(g.called) })
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.service, g.service != nil
+}
+
+func (g *delayedTaskServiceGetter) set(service taskservice.TaskService) {
+	g.mu.Lock()
+	g.service = service
+	g.mu.Unlock()
+}
+
+func (g *delayedTaskServiceGetter) Start() error { return nil }
+func (g *delayedTaskServiceGetter) Close() error { return nil }
+
+func TestWaitTaskServiceReadyObservesOwnedService(t *testing.T) {
+	getter := newDelayedTaskServiceGetter()
+	service := taskservice.NewTaskService(
+		mruntime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	defer func() { require.NoError(t, service.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- waitTaskServiceReady(ctx, getter, time.Millisecond)
+	}()
+	<-getter.called
+	getter.set(service)
+	require.NoError(t, <-done)
+}
+
+func TestWaitTaskServiceReadyHonorsCancellation(t *testing.T) {
+	getter := newDelayedTaskServiceGetter()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- waitTaskServiceReady(ctx, getter, time.Hour)
+	}()
+	<-getter.called
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
+	err := waitBasicClusterTaskServices(context.Background(), &cluster{})
+	require.ErrorContains(t, err, "service not found")
+}
+
+func TestWaitBasicClusterTaskServicesRejectsUnsupportedService(t *testing.T) {
+	cn := &operator{sid: "cn-0", serviceType: metadata.ServiceType_CN}
+	cn.reset.svc = &closeTrackingService{}
+	c := &cluster{services: []*operator{cn}}
+
+	err := waitBasicClusterTaskServices(context.Background(), c)
+	require.ErrorContains(t, err, "does not expose its task service")
+}
+
+func TestWaitBasicClusterTaskServicesReportsReadinessCancellation(t *testing.T) {
+	getter := newDelayedTaskServiceGetter()
+	cn := &operator{sid: "cn-0", serviceType: metadata.ServiceType_CN}
+	cn.reset.svc = getter
+	c := &cluster{services: []*operator{cn}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := waitBasicClusterTaskServices(ctx, c)
+	require.ErrorContains(t, err, "task service did not become ready")
+}
 
 func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
 	services := []*operator{

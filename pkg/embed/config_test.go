@@ -106,6 +106,20 @@ func TestFileServiceFactory(t *testing.T) {
 	assert.NotNil(t, fs)
 }
 
+func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
+	c := newServiceConfig()
+	c.DataDir = t.TempDir()
+	assert.NoError(t, c.setDefaultValue())
+
+	for _, fs := range c.FileServices {
+		if fs.Name == defines.TmpFileServiceName {
+			assert.Equal(t, c.defaultFileServiceDataDir(defines.TmpFileServiceName), fs.DataDir)
+			return
+		}
+	}
+	t.Fatal("default TMP file service was not configured")
+}
+
 func TestResolveGossipSeedAddresses(t *testing.T) {
 	tests := []struct {
 		addrs   []string

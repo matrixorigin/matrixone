@@ -17,6 +17,7 @@ package fileservice
 import (
 	"encoding/csv"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -120,6 +121,23 @@ func ParsePathAtService(s string, serviceStr string) (path Path, err error) {
 		!strings.EqualFold(path.ServiceString(), serviceStr) {
 		err = moerr.NewWrongServiceNoCtx(serviceStr, path.Service)
 		return
+	}
+	return
+}
+
+// parseFilePathAtService parses a path used by an operation that targets a
+// file. Directory operations deliberately accept root paths; file operations
+// must not reinterpret an empty or dot-only path as the root object.
+func parseFilePathAtService(s string, serviceStr string) (path Path, err error) {
+	path, err = ParsePathAtService(s, serviceStr)
+	if err != nil {
+		return
+	}
+	// path.Join and filepath.Join both collapse dot-only relative paths to the
+	// current directory. Treat those spellings as the root too, otherwise
+	// Delete(".") can remove an empty service or wrapper root.
+	if path.File == "" || pathpkg.Clean(path.File) == "." {
+		err = moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return
 }

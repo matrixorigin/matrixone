@@ -419,6 +419,39 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := NewMockCompilerContext2(ctrl)
+	snapshot := &Snapshot{ExtraInfo: &plan.SnapshotExtraInfo{
+		Name: "snapshot", Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: 1,
+	}}
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1))
+	ctx.EXPECT().GetSnapshot().Return(nil)
+	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
+	ctx.EXPECT().DatabaseExists("db", snapshot).Return(true)
+	ctx.EXPECT().GetSubscriptionMeta("db", snapshot).Return(nil, nil)
+	ctx.EXPECT().Resolve("db", "other_table", snapshot).Return(
+		&plan.ObjectRef{SchemaName: "db", ObjName: "other_table"},
+		&plan.TableDef{DbId: 1, TblId: 2},
+		nil,
+	)
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = snapshot
+	table := &tree.TableName{}
+	table.SchemaName = "db"
+	table.ObjectName = "other_table"
+	table.AtTsExpr = &tree.AtTimeStamp{
+		Type: tree.ATTIMESTAMPSNAPSHOT,
+		Expr: tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}
+	_, err := builder.buildTable(table, bindCtx, nil)
+	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) does not belong to the table(db-other_table)")
+}
+
 func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
 	sqlMode := "PIPES_AS_CONCAT"
 	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
@@ -2759,6 +2792,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 		colName       string
 		expectError   bool
 		expectCast    bool
+		expectWEnd    types.T
 		errorContains string
 	}{
 		// Temporal types - should work without casting
@@ -2768,6 +2802,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "DATE type should work",
@@ -2775,6 +2810,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TIMESTAMP type should work",
@@ -2782,6 +2818,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_timestamp,
 		},
 		{
 			name:        "TIME type should work",
@@ -2789,6 +2826,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  false,
+			expectWEnd:  types.T_time,
 		},
 		// String types - should be automatically cast to DATETIME
 		{
@@ -2797,6 +2835,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "CHAR type should be cast to DATETIME",
@@ -2804,6 +2843,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		{
 			name:        "TEXT type should be cast to DATETIME",
@@ -2811,6 +2851,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			colName:     "ts",
 			expectError: false,
 			expectCast:  true,
+			expectWEnd:  types.T_datetime,
 		},
 		// Non-temporal types - should return error
 		{
@@ -2918,7 +2959,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 				// Verify wEnd is set when sliding is nil
 				if astTimeWindow.Sliding == nil {
 					require.NotNil(t, wEnd)
-					require.Equal(t, ts.Typ.Id, wEnd.Typ.Id)
+					require.Equal(t, int32(tt.expectWEnd), wEnd.Typ.Id)
 				} else {
 					require.NotNil(t, sliding)
 				}

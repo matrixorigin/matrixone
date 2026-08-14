@@ -90,6 +90,22 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
 
+func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
+	source := &planpb.PreInsertCtx{
+		HasTargetSelector:  true,
+		TargetRowNumberCol: 7,
+		TargetActiveCol:    8,
+		TargetRowIdCol:     9,
+	}
+
+	cloned := DeepCopyPreInsertCtx(source)
+	require.NotSame(t, source, cloned)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIdCol)
+}
+
 func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	source := &planpb.RuntimeFilterSpec{
 		Tag:                 7,

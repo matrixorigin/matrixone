@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -366,11 +367,24 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 
 func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	innerOp := multi_update.NewArgument()
-	op := multi_update.NewPartitionMultiUpdate(innerOp, 1)
+	op := multi_update.NewPartitionMultiUpdate(innerOp)
 	result := dupOperator(op, 0, 1)
 	if result == nil {
 		t.Fatal("dupOperator returned nil for PartitionMultiUpdate")
 	}
+}
+
+func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
+	contexts := []*plan.UpdateCtx{
+		{TableDef: &plan.TableDef{TblId: 1}},
+		{TableDef: &plan.TableDef{TblId: 2, FeatureFlag: features.Partitioned}},
+		{TableDef: &plan.TableDef{TblId: 3, FeatureFlag: features.IndexTable}},
+	}
+	require.True(t, hasPartitionedUpdateTarget(contexts))
+
+	contexts[1].TableDef.FeatureFlag = 0
+	contexts[2].TableDef.FeatureFlag = features.Partitioned | features.IndexTable
+	require.False(t, hasPartitionedUpdateTarget(contexts))
 }
 
 func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
@@ -399,12 +413,21 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 	}
 }
 
-func TestDupOperatorPreInsertRejectZeroTemporal(t *testing.T) {
+func TestDupOperatorPreInsertState(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.HasTargetSelector = true
+	op.TargetRowNumberCol = 7
+	op.TargetActiveCol = 8
+	op.TargetRowIDCol = 9
 	result := dupOperator(op, 0, 1)
 	require.NotNil(t, result)
-	require.True(t, result.(*preinsert.PreInsert).RejectZeroTemporal)
+	cloned := result.(*preinsert.PreInsert)
+	require.True(t, cloned.RejectZeroTemporal)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIDCol)
 }
 
 func TestRefreshZeroTemporalWritePolicy(t *testing.T) {
@@ -659,6 +682,62 @@ func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
 	require.True(t, arg.GapFill)
 	require.Equal(t, arg.Interval, arg.Sliding)
 	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
+	arg.Release()
+}
+
+func TestConstructTimeWindowPromotesDateBoundaryRuntimeType(t *testing.T) {
+	dateTs := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_date)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	datetimeGroup := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{datetimeGroup},
+		Timestamp:   dateTs,
+		WEnd:        datetimeGroup,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.AggSumOverloadID,
+						ObjName: "sum",
+					},
+					Args: []*plan.Expr{{
+						Typ: plan.Type{Id: int32(types.T_int64)},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+						},
+					}},
+				}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowStart}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowEnd}},
+			},
+		},
+	}
+
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.Equal(t, int32(types.T_datetime), arg.TsType.Id)
+	require.True(t, arg.TsType.NotNullable)
+	require.True(t, arg.WStart)
+	require.True(t, arg.WEnd)
 	arg.Release()
 }
 

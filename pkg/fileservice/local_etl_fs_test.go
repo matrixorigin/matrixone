@@ -23,7 +23,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestLocalETLFSCanonicalizesEmptyRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	t.Chdir(root)
+
+	fs, err := NewLocalETLFS("etl", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+	require.Equal(t, canonicalRoot, fs.rootPath)
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "nested/file",
+		Entries:  []IOEntry{{Size: 1, Data: []byte{1}}},
+	}))
+	_, err = os.Stat(filepath.Join(root, "nested", "file"))
+	require.NoError(t, err)
+	requireDirFilesClosed(t, fs.dirFiles, func() { fs.Close(ctx) })
+}
 
 func TestLocalETLFS(t *testing.T) {
 

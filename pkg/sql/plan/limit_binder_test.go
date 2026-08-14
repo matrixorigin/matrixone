@@ -88,6 +88,38 @@ func TestLimitBinder_Offset0(t *testing.T) {
 	require.Equal(t, uint64(0), uval.U64Val)
 }
 
+func TestLimitBinder_OffsetWithoutLimit(t *testing.T) {
+	astLimit := parseLimit(t, "SELECT 1 OFFSET 5")
+	require.Nil(t, astLimit.Count)
+	require.NotNil(t, astLimit.Offset)
+
+	expr, err := bindLimitExpr(t, astLimit.Offset, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+
+	lit, ok := expr.Expr.(*plan.Expr_Lit)
+	require.True(t, ok)
+	uval, ok := lit.Lit.Value.(*plan.Literal_U64Val)
+	require.True(t, ok)
+	require.Equal(t, uint64(5), uval.U64Val)
+}
+
+func TestLimitBinder_OffsetWithoutLimitParameter(t *testing.T) {
+	astLimit := parseLimit(t, "SELECT 1 OFFSET ?")
+	require.Nil(t, astLimit.Count)
+	require.NotNil(t, astLimit.Offset)
+
+	builder, bindCtx := genBuilderAndCtx()
+	builder.isPrepareStatement = true
+	expr, err := NewLimitBinder(builder, bindCtx, true).BindExpr(astLimit.Offset, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+	require.Len(t, expr.GetF().Args, 2)
+	require.NotNil(t, expr.GetF().Args[0].GetP())
+}
+
 func TestLimitBinder_LimitNegative(t *testing.T) {
 	astLimit := parseLimit(t, "SELECT 1 LIMIT -1")
 	require.NotNil(t, astLimit.Count)
