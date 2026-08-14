@@ -373,7 +373,7 @@ select * from information_schema.views where table_name='sys_v1';
 ➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]  𝄀
 def  ¦  sys_db1  ¦  sys_v1  ¦  create view `sys_db1`.`sys_v1` as select `sys_t1`.`c1` from `sys_db1`.`sys_t1`  ¦  NONE  ¦  YES  ¦  dump@localhost  ¦  DEFINER  ¦  utf8mb4  ¦  utf8mb4_0900_ai_ci
 select * from information_schema.views where table_name='ac_v1';
-➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  view_definition[12,0,0]  ¦  check_option[12,-1,0]  ¦  is_updatable[12,-1,0]  ¦  definer[12,-1,0]  ¦  security_type[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]
+➤ TABLE_CATALOG[12,2,0]  ¦  TABLE_SCHEMA[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  ¦  VIEW_DEFINITION[12,0,0]  ¦  CHECK_OPTION[12,3,0]  ¦  IS_UPDATABLE[12,2,0]  ¦  DEFINER[12,49151,0]  ¦  SECURITY_TYPE[12,5,0]  ¦  CHARACTER_SET_CLIENT[12,5,0]  ¦  COLLATION_CONNECTION[12,13,0]
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
 ➤ count(*)[-5,64,0]  ¦  table_name[12,-1,0]
 select count(*) from information_schema.partitions where table_schema='sys_db1' and table_name='test01';
