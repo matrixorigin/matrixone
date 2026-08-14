@@ -275,7 +275,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 func (l *Lexer) GetDbOrTblName(origin string) string {
 	if l.lower == 1 {
-		return strings.ToLower(origin)
+		return tree.NewCStr(origin, l.lower).Compare()
 	}
 	return origin
 }
