@@ -128,7 +128,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 create account 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
 create account 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+internal error: the name "非常" is invalid
 create account "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
 create account 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';

@@ -675,6 +675,8 @@ message UpdateCtx {
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
   bool ignore_affected_rows = 13;
+  bool dedup_by_target_row_id = 14;
+  int32 target_update_ctx_idx = 15;
 }
 
 message InsertCtx {
@@ -1228,6 +1230,10 @@ message PreInsertCtx {
   Expr cluster_by_expr = 6;
   bool is_old_update = 7;
   bool is_new_update = 8;
+  bool has_target_selector = 9;
+  int32 target_row_number_col = 10;
+  int32 target_active_col = 11;
+  int32 target_row_id_col = 12;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

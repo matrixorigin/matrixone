@@ -269,6 +269,8 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -293,6 +295,51 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name: "latin1 column",
+			sql: "create table t(v varchar(8) character set latin1 " +
+				"collate latin1_swedish_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "ascii column case insensitive spelling",
+			sql: "create table t(v varchar(8) character set ASCII " +
+				"collate ASCII_GENERAL_CI)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "latin1 table default",
+			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "ascii table default",
+			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
 		})
 	}
 }
@@ -3106,6 +3153,40 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
 			require.NoError(t, err)
 			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
+	tests := []struct {
+		name     string
+		castType string
+		oid      types.T
+		scale    int32
+	}{
+		{name: "date", castType: "date", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale zero", castType: "datetime", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale six", castType: "datetime(6)", oid: types.T_datetime, scale: 6},
+		{name: "timestamp scale three", castType: "timestamp(3)", oid: types.T_timestamp, scale: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table tw_rollup as " +
+				"select _wstart as ws, _wend as we, count(*) as c " +
+				"from (select 1 as k, cast('2026-01-01 00:00:01.123456' as " + test.castType + ") as event_ts) src " +
+				"group by k interval(event_ts, 1, minute)"
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			cols := plan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 3)
+			for _, idx := range []int{0, 1} {
+				require.Equal(t, int32(test.oid), cols[idx].Typ.Id, cols[idx].Name)
+				require.Equal(t, test.scale, cols[idx].Typ.Scale, cols[idx].Name)
+				require.False(t, cols[idx].Default.NullAbility, cols[idx].Name)
+			}
 		})
 	}
 }

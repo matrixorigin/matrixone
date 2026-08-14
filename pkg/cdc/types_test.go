@@ -723,6 +723,17 @@ func TestDecoderOutput_Close(t *testing.T) {
 		assert.NotPanics(t, func() { d.Close() })
 	})
 
+	t.Run("ReleasesSnapshotPermitOnce", func(t *testing.T) {
+		releases := 0
+		d := &DecoderOutput{snapshotPermit: &snapshotPermit{
+			release: func() { releases++ },
+		}}
+		d.Close()
+		d.Close()
+		assert.Equal(t, 1, releases)
+		assert.Nil(t, d.snapshotPermit)
+	})
+
 	t.Run("WithCheckpointBat", func(t *testing.T) {
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = testutil.NewInt32Vector(3, types.T_int32.ToType(), mp, false, nil, []int32{1, 2, 3})
