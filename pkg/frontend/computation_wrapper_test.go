@@ -32,6 +32,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -369,12 +370,12 @@ func TestNativeDecimalPreparedParamBindingUsesStablePayloadCategory(t *testing.T
 		wantWidth int32
 		wantScale int32
 	}{
-		{value: "123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
-		{value: "1E+35", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
+		{value: "123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
+		{value: "1E+35", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "1E-31", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{value: "1E-40", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
-		{value: "  123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
-		{value: "\t123456789012345678901234567890123456", wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
+		{value: "  123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
+		{value: "\t123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "-12.3400", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{value: "0.001", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{value: "000123", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
@@ -450,7 +451,8 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		{name: "ordinary", width: 13, scale: 2, full: true, wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{name: "wide 67 plus 9", width: 76, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 76, wantScale: 9},
 		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericPrefixMax, wantWidth: 74, wantScale: 9},
-		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericWide, wantWidth: 76, wantScale: 9},
+		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericExact, wantWidth: 65},
+		{name: "76 integral digits remain exact", width: 76, full: true, wantMode: preparedNumericExact, wantWidth: 76},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericTextFloat},
@@ -510,8 +512,9 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "000000000000000000000000000000000000000000000000000000000000000000000000000001", wantWidth: 1, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\v1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
 		{value: "\f1.25", wantWidth: 3, wantScale: 2, wantFull: true, wantBindingMode: preparedNumericTextPrefix},
-		{value: "123456789012345678901234567890123456", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericWide},
-		{value: "10000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 68, wantFull: true, wantBindingMode: preparedNumericApprox},
+		{value: "123456789012345678901234567890123456", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericExact},
+		{value: "999999999999999999999999999999999999.0000000000", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericExact},
+		{value: "10000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 68, wantFull: true, wantBindingMode: preparedNumericExact},
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericWide},
 		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericPrefixMax},
@@ -657,8 +660,8 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 		wantWidth int32
 		wantScale int32
 	}{
-		{value: "123456789012345678901234567890123456", wantType: types.T_decimal256, wantWidth: 76, wantScale: 9},
-		{value: "1E+35", wantType: types.T_decimal256, wantWidth: 76, wantScale: 9},
+		{value: "123456789012345678901234567890123456", wantType: types.T_decimal128, wantWidth: 38, wantScale: 2},
+		{value: "1E+35", wantType: types.T_decimal128, wantWidth: 38, wantScale: 2},
 		{value: "1E-31", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
 		{value: "1E-40", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
 		{value: "999999999999999999999999999999999999.1234567890", wantType: types.T_decimal256, wantWidth: 46, wantScale: 10},
@@ -680,6 +683,75 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 				require.Equal(t, test.wantScale, columns[0].Typ.Scale)
 			})
 		}
+	}
+}
+
+func TestInitExecuteStmtParamKeepsWideIntegerTextInExactCommonDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 119, "select coalesce(?, cast(2.0000000000 as decimal(46,10)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+	for _, value := range []string{
+		"999999999999999999999999999999999999",
+		"999999999999999999999999999999999999.0000000000",
+	} {
+		t.Run(value, func(t *testing.T) {
+			prepareStmt.params.CleanOnlyData()
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+			require.Equal(t, int32(46), columns[0].Typ.Width)
+			require.Equal(t, int32(10), columns[0].Typ.Scale)
+		})
+	}
+}
+
+func TestInitExecuteStmtParamReusesBinaryIntegerSemanticCategory(t *testing.T) {
+	for i, test := range []struct {
+		name     string
+		unsigned bool
+	}{
+		{name: "signed"},
+		{name: "unsigned", unsigned: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(120+i), "select coalesce(?, cast(2 as decimal(10,2)))")
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
+			flags := byte(0)
+			if test.unsigned {
+				flags = 0x80
+			}
+			prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), flags}
+			execute := func() *plan.Plan {
+				_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				return prepareStmt.PreparePlan
+			}
+
+			firstPlan := execute()
+			require.Len(t, prepareStmt.paramBindingTypes, 1)
+			require.Equal(t, preparedNumericProtocolExact, prepareStmt.paramBindingTypes[0].Size)
+			require.Same(t, firstPlan, execute(),
+				"an unchanged binary integer semantic category must reuse its prepared plan")
+		})
 	}
 }
 
@@ -1496,7 +1568,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -1509,7 +1581,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
 
 	for _, tc := range []struct {
 		name      string
@@ -1533,7 +1605,7 @@ func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 				}
 			}()
-			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
 			prepareStmt.params = vector.NewVec(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
 			prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0}
@@ -1627,6 +1699,85 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamBypassesCachedTopologyForPreparedSiriusExecution(t *testing.T) {
+	for _, protocol := range []struct {
+		name     string
+		execPlan func(string) *plan.Execute
+		stmtName func(string) string
+	}{
+		{
+			name:     "binary",
+			execPlan: func(string) *plan.Execute { return nil },
+			stmtName: func(name string) string { return name },
+		},
+		{
+			name:     "text",
+			execPlan: func(name string) *plan.Execute { return &plan.Execute{Name: name} },
+			stmtName: func(string) string { return "" },
+		},
+	} {
+		t.Run(protocol.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, 110, "/*+ SIDECAR */ select 1")
+			defer prepareStmt.Close()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+
+			for range 2 {
+				retComp, retPlan, retStmt, originSQL, _, err := initExecuteStmtParam(
+					execCtx,
+					ses,
+					cw,
+					protocol.execPlan(prepareStmt.Name),
+					protocol.stmtName(prepareStmt.Name),
+				)
+				require.NoError(t, err)
+				require.Nil(t, retComp)
+				require.Same(t, sentinel, prepareStmt.compile)
+				require.NotNil(t, retPlan)
+				require.NotNil(t, retStmt)
+				require.True(t, siriusStatementSelected(originSQL, retStmt))
+			}
+		})
+	}
+}
+
+func TestCompileStatementContextsPreserveCounterWithoutLeakingSelection(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sql           string
+		separateChild bool
+	}{
+		{name: "selected", sql: "/*+ SIDECAR */ select 1", separateChild: true},
+		{name: "unselected", sql: "select 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			counter := new(perfcounter.CounterSet)
+			requestCtx, compileCtx := compileStatementContexts(
+				context.Background(), test.sql, &tree.Select{}, counter)
+
+			attached, ok := compileCtx.Value(perfcounter.CompilePlanMarkKey{}).(*perfcounter.CounterSet)
+			require.True(t, ok)
+			require.Same(t, counter, attached)
+			require.Equal(t, test.separateChild, requestCtx != compileCtx)
+			perfcounter.Update(compileCtx, func(set *perfcounter.CounterSet) {
+				set.FileService.S3.Get.Add(1)
+			})
+			require.Equal(t, int64(1), counter.FileService.S3.Get.Load())
+		})
+	}
+
+	requestCtx, _ := compileStatementContexts(
+		context.Background(), "/*+ SIDECAR */ select 1", &tree.Select{}, new(perfcounter.CounterSet))
+	requestCtx, unselectedCompileCtx := compileStatementContexts(
+		requestCtx, "select 2", &tree.Select{}, new(perfcounter.CounterSet))
+	require.True(t, requestCtx == unselectedCompileCtx,
+		"the selected statement's Sirius marker must not enter its sibling's request context")
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {

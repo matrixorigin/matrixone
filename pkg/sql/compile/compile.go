@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -72,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -174,6 +176,12 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
+			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
+		}
+		c.siriusRead = nil
+	}
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
@@ -210,6 +218,12 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil {
+			return err
+		}
+		c.siriusRead = nil
+	}
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -783,18 +797,45 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillDisk(size)
+			reservation, err := budget.ReserveSpillDisk(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return &materializedSpillDiskReservation{
+				GrowingReservation: reservation,
+				ctx:                proc.Ctx,
+			}, nil
 		},
 		ReserveFD: func(size uint64) (materialized.Reservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillFD(size)
+			reservation, err := budget.ReserveSpillFD(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return reservation, nil
 		},
 	}
+}
+
+// materializedSpillDiskReservation converts a terminal capacity rejection on
+// every growth attempt before the materialized source publishes it to readers.
+// The source cannot recover from a rejected spill write, so the raw admission
+// error must not escape through either the producer or a dependent consumer.
+type materializedSpillDiskReservation struct {
+	materialized.GrowingReservation
+	ctx context.Context
+}
+
+func (r *materializedSpillDiskReservation) Grow(size uint64) error {
+	if err := r.GrowingReservation.Grow(size); err != nil {
+		return hashbuild.TerminalBudgetError(r.ctx, err)
+	}
+	return nil
 }
 
 // run once
@@ -3584,6 +3625,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		op.CanOpt = canOpt
 		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: node}
@@ -4945,10 +4987,32 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
+	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			op := constructPartition(node)
+			op.PreReduce = true
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
+
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.PreReduce = true
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
 		op := constructOrder(node)
+		if node.PartitionByCount > 0 {
+			op.OrderBySpec = node.OrderBy[:node.PartitionByCount]
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -4958,6 +5022,11 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionByCount > 0 {
+		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
+		arg.Limit = nil
+		arg.PartitionByCount = 0
+	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -5090,10 +5159,20 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
+	partitionTopN := len(ss) == 1
+	if partitionTopN {
+		upstreamOp := ss[0].RootOp
+		for upstreamOp.OpType() == vm.Projection && upstreamOp.GetOperatorBase().NumChildren() == 1 {
+			upstreamOp = upstreamOp.GetOperatorBase().GetChildren(0)
+		}
+		upstream, ok := upstreamOp.(*partition.Partition)
+		partitionTopN = ok && upstream.Limit != nil && upstream.PreReduce
+	}
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
 	arg := constructWindow(c.proc.Ctx, node, c.proc)
+	arg.PartitionTopN = partitionTopN
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -5392,6 +5471,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func (c *Compile) supportsRemotePartitionTopN() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion19
 }
 
 func supportsRemoteTextCollationAggregates(service string) bool {

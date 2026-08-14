@@ -1846,9 +1846,12 @@ func writeExplainResult(
 
 	//2. fill the result set
 	//column
+	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(explainColName)
+	setMysqlColumnTypeMetadata(col1, types.New(types.T_varchar, 0, 0))
+	setCharacter(col1)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -5264,34 +5267,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
-		// before normal processing. If sidecar is not configured, silently
-		// fall through to normal MO execution.
-		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
-			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				query = stripSidecarHint(query)
-			} else {
-				err = handleSidecarOffload(ses, execCtx, query, useGPU)
-				if err == nil {
-					ses.resetDiagnostics()
-					setRowCount(ses, ses.GetProc(), -1)
-					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-					return resp, nil
-				}
-				if err != errSidecarNotConfigured {
-					ses.resetDiagnostics()
-					markRowCountFailed(ses, ses.GetProc())
-					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-					return resp, nil
-				}
-				// errSidecarNotConfigured: strip hint and fall through to normal execution
-				query = stripSidecarHint(query)
-			}
-		} else {
-			ses.addSqlCount(1)
-		}
+		// SIDECAR is an explicit statement selector. Keep the raw request intact
+		// so doComQuery can bind each hint to its own computation wrapper; a
+		// request-scoped marker would leak into unhinted sibling statements.
+		ses.addSqlCount(1)
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)

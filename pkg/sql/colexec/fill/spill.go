@@ -54,6 +54,7 @@ type fillSpill struct {
 	hasSuffix        bool
 	linearLeft       []*vector.Vector
 	linearLeftValid  []bool
+	linearLeftSteps  []uint64
 	forwardPart      spillPartitionSnapshot
 }
 
@@ -92,6 +93,52 @@ func addOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error
 	return nil
 }
 
+// addLinearDistanceMarkers inserts one uint64 marker per fill column before
+// the original-NULL markers. The reverse spill pass stores how many missing
+// positions separate a row from its right endpoint; originalNullAt can keep
+// addressing the final bool marker block unchanged.
+func addLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
+	if colLen == 0 {
+		return nil
+	}
+	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp)
+	if err != nil {
+		return err
+	}
+	originalStart := len(bat.Vecs) - colLen
+	bat.Vecs = append(bat.Vecs, make([]*vector.Vector, colLen)...)
+	copy(bat.Vecs[originalStart+colLen:], bat.Vecs[originalStart:originalStart+colLen])
+	copy(bat.Vecs[originalStart:], markers)
+	bat.Attrs = append(bat.Attrs, make([]string, colLen)...)
+	return nil
+}
+
+func appendLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) error {
+	markers, err := makeLinearDistanceMarkers(bat.RowCount(), colLen, mp)
+	if err != nil {
+		return err
+	}
+	bat.Vecs = append(bat.Vecs, markers...)
+	bat.Attrs = append(bat.Attrs, make([]string, colLen)...)
+	return nil
+}
+
+func makeLinearDistanceMarkers(rows, colLen int, mp *mpool.MPool) ([]*vector.Vector, error) {
+	markers := make([]*vector.Vector, colLen)
+	for col := range markers {
+		marker := vector.NewVec(types.T_uint64.ToType())
+		if err := vector.AppendMultiFixed(marker, uint64(0), false, rows, mp); err != nil {
+			marker.Free(mp)
+			for _, allocated := range markers[:col] {
+				allocated.Free(mp)
+			}
+			return nil, err
+		}
+		markers[col] = marker
+	}
+	return markers, nil
+}
+
 func stripOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
 	if bat == nil || colLen == 0 || len(bat.Vecs) < colLen {
 		return
@@ -108,9 +155,23 @@ func stripOriginalNullMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
 	}
 }
 
+func stripLinearDistanceMarkers(bat *batch.Batch, colLen int, mp *mpool.MPool) {
+	stripOriginalNullMarkers(bat, colLen, mp)
+}
+
 func originalNullAt(bat *batch.Batch, colLen, col, row int) bool {
 	marker := bat.Vecs[len(bat.Vecs)-colLen+col]
 	return vector.GetFixedAtNoTypeCheck[bool](marker, row)
+}
+
+func linearRightDistanceAt(bat *batch.Batch, colLen, col, row int) uint64 {
+	marker := bat.Vecs[len(bat.Vecs)-2*colLen+col]
+	return vector.GetFixedAtNoTypeCheck[uint64](marker, row)
+}
+
+func setLinearRightDistance(bat *batch.Batch, colLen, col, row int, distance uint64) error {
+	marker := bat.Vecs[len(bat.Vecs)-2*colLen+col]
+	return vector.SetFixedAtNoTypeCheck(marker, row, distance)
 }
 
 func newFillSpill(proc *process.Process) (*fillSpill, error) {
@@ -249,6 +310,7 @@ func (s *fillSpill) close(proc *process.Process) {
 	}
 	s.linearLeft = nil
 	s.linearLeftValid = nil
+	s.linearLeftSteps = nil
 }
 
 func (ctr *container) cleanupSpill(proc *process.Process) {
@@ -325,6 +387,7 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 	var reuse *batch.Batch
 	next := make([]*vector.Vector, ap.ColLen)
 	valid := make([]bool, ap.ColLen)
+	rightSteps := make([]uint64, ap.ColLen)
 	defer func() {
 		if reuse != nil {
 			reuse.Clean(proc.Mp())
@@ -348,17 +411,34 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 		for row := bat.RowCount() - 1; row >= 0; row-- {
 			if len(ap.PartitionColIdx) > 0 && !part.sameAndSet(ap.PartitionColIdx, bat, row) {
 				clearEndpoints(valid)
+				if ap.FillType == plan.Node_LINEAR {
+					clear(rightSteps)
+				}
 			}
 			for col := 0; col < ap.ColLen; col++ {
 				if originalNullAt(bat, ap.ColLen, col, row) {
 					if valid[col] {
+						if ap.FillType == plan.Node_LINEAR {
+							rightSteps[col]++
+							if err = setLinearRightDistance(bat, ap.ColLen, col, row, rightSteps[col]); err != nil {
+								return err
+							}
+						}
 						if err = setValue(bat.Vecs[col], next[col], row, 0, proc); err != nil {
 							return err
 						}
 					} else {
+						if ap.FillType == plan.Node_LINEAR {
+							if err = setLinearRightDistance(bat, ap.ColLen, col, row, 0); err != nil {
+								return err
+							}
+						}
 						bat.Vecs[col].GetNulls().Add(uint64(row))
 					}
 					continue
+				}
+				if ap.FillType == plan.Node_LINEAR {
+					rightSteps[col] = 0
 				}
 				if err = setEndpoint(&next[col], bat.Vecs[col], row, proc); err != nil {
 					return err
@@ -381,6 +461,9 @@ func (s *fillSpill) transformReverse(ap *Fill, proc *process.Process) error {
 		}
 		if len(s.linearLeftValid) < ap.ColLen {
 			s.linearLeftValid = make([]bool, ap.ColLen)
+		}
+		if len(s.linearLeftSteps) < ap.ColLen {
+			s.linearLeftSteps = make([]uint64, ap.ColLen)
 		}
 	}
 	s.ready = true
@@ -496,6 +579,12 @@ func (ctr *container) beginSpill(ap *Fill, proc *process.Process) error {
 		ctr.linEntryPart = spillPartitionSnapshot{}
 	}
 	for i, bat := range ctr.bats {
+		if ap.FillType == plan.Node_LINEAR {
+			if err = addLinearDistanceMarkers(bat, ap.ColLen, proc.Mp()); err != nil {
+				spill.close(proc)
+				return err
+			}
+		}
 		if err = spill.writeRecord(spill.input, bat); err != nil {
 			spill.close(proc)
 			return err
@@ -538,6 +627,14 @@ func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer pro
 		dup, err := result.Batch.Dup(proc.Mp())
 		if err != nil {
 			return err
+		}
+		if ap.FillType == plan.Node_LINEAR {
+			// Distance markers precede the original-NULL marker block so the
+			// latter remains the final ColLen vectors in every spilled record.
+			if err = appendLinearDistanceMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
+				dup.Clean(proc.Mp())
+				return err
+			}
 		}
 		if err = addOriginalNullMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
 			dup.Clean(proc.Mp())
@@ -596,6 +693,9 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 				}
 			}
 			stripOriginalNullMarkers(bat, ap.ColLen, proc.Mp())
+			if ap.FillType == plan.Node_LINEAR {
+				stripLinearDistanceMarkers(bat, ap.ColLen, proc.Mp())
+			}
 			return bat, nil
 		}
 
@@ -626,6 +726,9 @@ func (s *fillSpill) replayNext(ctr *container, ap *Fill, proc *process.Process) 
 			}
 		}
 		stripOriginalNullMarkers(prefix, ap.ColLen, proc.Mp())
+		if ap.FillType == plan.Node_LINEAR {
+			stripLinearDistanceMarkers(prefix, ap.ColLen, proc.Mp())
+		}
 		return prefix, nil
 	}
 }
@@ -705,6 +808,7 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 			wasSet := s.forwardPart.set
 			if !s.forwardPart.sameAndSet(ap.PartitionColIdx, bat, row) && wasSet {
 				clearEndpoints(s.linearLeftValid)
+				clear(s.linearLeftSteps)
 			}
 		}
 		for col := 0; col < ap.ColLen; col++ {
@@ -713,30 +817,44 @@ func (s *fillSpill) finishLinearBatch(ctr *container, ap *Fill, proc *process.Pr
 					return err
 				}
 				s.linearLeftValid[col] = true
+				s.linearLeftSteps[col] = 0
 				continue
 			}
-			if bat.Vecs[col].IsNull(uint64(row)) || !s.linearLeftValid[col] {
+			rightSteps := linearRightDistanceAt(bat, ap.ColLen, col, row)
+			if bat.Vecs[col].IsNull(uint64(row)) || !s.linearLeftValid[col] || rightSteps == 0 {
 				bat.Vecs[col].GetNulls().Add(uint64(row))
 				continue
 			}
-			leftBatch := batch.NewWithSize(col + 1)
-			leftBatch.SetVector(int32(col), s.linearLeft[col])
-			leftBatch.SetRowCount(1)
-			rightBatch := batch.NewWithSize(col + 1)
-			rightBatch.SetVector(int32(col), bat.Vecs[col])
-			rightBatch.SetRowCount(bat.RowCount())
-			value, owned, err := linearFillValue(ctr, proc, col, leftBatch, 0, rightBatch, row)
-			if err != nil {
-				return err
-			}
-			if err = setValue(bat.Vecs[col], value, row, 0, proc); err != nil {
+			s.linearLeftSteps[col]++
+			total := s.linearLeftSteps[col] + rightSteps
+			if total == 2 {
+				leftBatch := batch.NewWithSize(col + 1)
+				leftBatch.SetVector(int32(col), s.linearLeft[col])
+				leftBatch.SetRowCount(1)
+				rightBatch := batch.NewWithSize(col + 1)
+				rightBatch.SetVector(int32(col), bat.Vecs[col])
+				rightBatch.SetRowCount(bat.RowCount())
+				value, owned, err := linearFillValue(ctr, proc, col, leftBatch, 0, rightBatch, row)
+				if err != nil {
+					return err
+				}
+				if err = setValue(bat.Vecs[col], value, row, 0, proc); err != nil {
+					if owned {
+						value.Free(proc.Mp())
+					}
+					return err
+				}
 				if owned {
 					value.Free(proc.Mp())
 				}
-				return err
+				continue
 			}
-			if owned {
-				value.Free(proc.Mp())
+			if err := setLinearInterpolatedValue(
+				bat.Vecs[col], row,
+				s.linearLeft[col], 0, bat.Vecs[col], row,
+				s.linearLeftSteps[col], total,
+			); err != nil {
+				return err
 			}
 		}
 	}

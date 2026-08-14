@@ -801,6 +801,13 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 		// one scale digit, even though DECIMAL(46,10) represents both values.
 		binding.Size = preparedNumericExact
 		binding.Width, binding.Scale = max(width, 1), scale
+	case full && !exponent && scale == 0 && integral > 35 && integral <= 76:
+		// A complete integer payload already has an exact Decimal256 domain.
+		// Do not invent nine fractional digits: doing so can make an otherwise
+		// representable common DECIMAL domain appear wider than 76 digits and
+		// force the binder to fall back to FLOAT64.
+		binding.Size = preparedNumericExact
+		binding.Width = max(width, 1)
 	case integral <= 67 && scale <= 9:
 		binding.Size = preparedNumericWide
 		binding.Width, binding.Scale = 76, 9
@@ -1201,16 +1208,6 @@ func initPreparedExecuteParams(
 			}
 		}
 		bindingTypes := preparedParamBindingTypes(prepareStmt.params, kinds, dependencies, numParams)
-		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
-			if i >= len(kinds) || kinds[i] != vector.PrepareParamInteger || bindingTypes == nil {
-				continue
-			}
-			if prepareStmt.ParamTypes[i*2+1]&0x80 != 0 {
-				bindingTypes[i] = types.T_uint64.ToType()
-			} else {
-				bindingTypes[i] = types.T_int64.ToType()
-			}
-		}
 		return &preparedExecuteParamState{
 			params:       prepareStmt.params,
 			paramVals:    preparedParamValues(prepareStmt.params, nil),
@@ -1539,11 +1536,11 @@ func initExecuteStmtParamWithResolverInSession(
 		cwft.runtimeDecimalParamPositions = slices.Clone(prepareStmt.exactDecimalParamPositions)
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
-	// Explicit scheduling intent must be evaluated for this execution, so it
-	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
-	// default cached topology dormant, though: prepared compiles already coexist
-	// with other statement compiles on the session process, and it may become
-	// reusable if a session-level scheduling override is later cleared.
+	// Explicit scheduling or Sirius intent must be evaluated for this execution,
+	// so neither can reuse a native topology compiled under prepare-time defaults.
+	// Keep that cached topology dormant: prepared compiles already coexist with
+	// other statement compiles on the session process, and the ordinary scheduling
+	// cache may become reusable if a session-level override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
@@ -1556,9 +1553,12 @@ func initExecuteStmtParamWithResolverInSession(
 		// PREPARE time. A procedure executes with a distinct background process.
 		retComp = nil
 	}
-	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
-		owner, originSQL, prepareStmt.schedulingSQLMode).Explicit {
-		retComp = nil
+	if retComp != nil {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if executionIntent.Explicit || siriusStatementSelected(originSQL, prepareStmt.PrepareStmt) {
+			retComp = nil
+		}
 	}
 	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
 	if err != nil {
@@ -1808,7 +1808,14 @@ func createCompile(
 
 	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
-	proc.ReplaceTopCtx(execCtx.reqCtx)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	crs := new(perfcounter.CounterSet)
+	var compileCtx context.Context
+	execCtx.reqCtx, compileCtx = compileStatementContexts(
+		execCtx.reqCtx, schedulingSQL, stmt, crs)
+	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
 	var tenant string
@@ -1823,8 +1830,6 @@ func createCompile(
 	if stats != nil {
 		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
 	}
-	crs := new(perfcounter.CounterSet)
-	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
 		if stats != nil {
 			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
@@ -1862,9 +1867,6 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	if schedulingSQL == "" {
-		schedulingSQL = originSQL
-	}
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
@@ -1883,12 +1885,30 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare, retryRuntimePositions, retryBindingTypes)
 	})
 
-	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func compileStatementContexts(
+	ctx context.Context,
+	sql string,
+	stmt tree.Statement,
+	crs *perfcounter.CounterSet,
+) (requestCtx, compileCtx context.Context) {
+	requestCtx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
+	if siriusStatementSelected(sql, stmt) {
+		return requestCtx, compile.WithSiriusOffload(requestCtx)
+	}
+	return requestCtx, requestCtx
+}
+
+func siriusStatementSelected(sql string, stmt tree.Statement) bool {
+	selected, _ := isSidecarQuery(sql)
+	return selected && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect
