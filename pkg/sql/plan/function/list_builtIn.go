@@ -248,21 +248,19 @@ func convertReturnType(parameters []types.Type) types.Type {
 		}
 		result := types.T_varbinary.ToType()
 		result.Width = parameters[0].Width
+		if (parameters[0].Oid == types.T_char || parameters[0].Oid == types.T_varchar) &&
+			parameters[0].Charset != types.CharsetBinary {
+			result.Width *= 4
+		}
 		result.Charset = types.CharsetBinary
 		return result
 	}
-	return derivedStringReturnType(parameters, 1, types.T_varchar)
-}
-
-func charReturnType(parameters []types.Type) types.Type {
-	width := int32(len(parameters) * 4)
-	if width > types.MaxVarBinaryLen {
-		return types.T_blob.ToType()
+	if len(parameters) > 0 && (parameters[0].Oid == types.T_blob || parameters[0].Oid == types.T_text) {
+		result := types.T_text.ToType()
+		result.Charset = parameters[1].Charset
+		return result
 	}
-	result := types.T_varbinary.ToType()
-	result.Width = width
-	result.Charset = types.CharsetBinary
-	return result
+	return derivedStringReturnType(parameters, 1, types.T_varchar)
 }
 
 // wkbConstructor builds a typed WKB geometry constructor function definition
@@ -521,7 +519,9 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType:    charReturnType,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
 				newOp: func() executeLogicOfOverload {
 					return builtInChar
 				},
@@ -585,6 +585,14 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId:      3,
 				args:            []types.T{types.T_text, types.T_varchar},
+				volatile:        true,
+				realTimeRelated: true,
+				retType:         convertReturnType,
+				newOp:           func() executeLogicOfOverload { return builtInConvertUsingCharset },
+			},
+			{
+				overloadId:      4,
+				args:            []types.T{types.T_binary, types.T_varchar},
 				volatile:        true,
 				realTimeRelated: true,
 				retType:         convertReturnType,

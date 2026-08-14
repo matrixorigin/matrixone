@@ -466,14 +466,6 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 		}
 		return ctasBinaryStringType(ctx, fn.Args[0])
 	}
-	if name == "char" {
-		width := int64(len(fn.Args)) * utf8.UTFMax
-		if width > int64(types.MaxVarBinaryLen) {
-			return types.T_blob.ToType(), true
-		}
-		return types.New(types.T_varbinary, int32(width), 0), true
-	}
-
 	var resultType types.Type
 	found := false
 	for idx, arg := range fn.Args {

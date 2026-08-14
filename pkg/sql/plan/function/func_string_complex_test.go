@@ -445,7 +445,7 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 	require.NoError(t, charResult.PreExtendAndReset(1))
 	require.NoError(t, builtInChar(
 		[]*vector.Vector{charInput}, charResult, proc, 1, nil))
-	require.True(t, charResult.GetResultVector().GetIsBinaryString())
+	require.False(t, charResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, charResult.GetResultVector().GetBytesAt(0))
 
 	charset := testutil.MakeScalarVarchar("utf8mb4", 1, mp)
@@ -457,6 +457,20 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 		[]*vector.Vector{charResult.GetResultVector(), charset}, convertResult, proc, 1, nil))
 	require.False(t, convertResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, convertResult.GetResultVector().GetBytesAt(0))
+}
+
+func TestConvertReturnTypePreservesLargeStringDomain(t *testing.T) {
+	binaryCharset := types.T_varchar.ToType()
+	binaryCharset.Charset = types.CharsetBinary
+	utf8Charset := types.T_varchar.ToType()
+	utf8Charset.Charset = types.CharsetUTF8
+
+	largeText := types.T_text.ToType()
+	require.Equal(t, types.T_blob, convertReturnType([]types.Type{largeText, binaryCharset}).Oid)
+	largeBlob := types.T_blob.ToType()
+	result := convertReturnType([]types.Type{largeBlob, utf8Charset})
+	require.Equal(t, types.T_text, result.Oid)
+	require.Equal(t, types.CharsetUTF8, result.Charset)
 }
 
 func TestBinaryAuxiliaryArgumentsDoNotChangeSubjectSemantics(t *testing.T) {

@@ -395,13 +395,18 @@ func (ses *Session) setUserDefinedVarWithKind(
 	kind vector.PrepareParamKind,
 	binaryString ...bool,
 ) error {
+	binaryValue := len(binaryString) > 0 && binaryString[0]
+	if binaryValue {
+		isBin = false
+		kind = vector.PrepareParamBinaryUserVariable
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
-		BinaryString:     len(binaryString) > 0 && binaryString[0],
+		BinaryString:     binaryValue,
 		PrepareParamKind: kind,
 	}
 	return nil

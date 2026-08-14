@@ -1753,10 +1753,11 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 	require.Equal(t, int32(5), cols[0].Typ.Width)
 	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
 	require.Equal(t, int32(2), cols[1].Typ.Width)
-	for idx, width := range []int32{5, 5, 4} {
+	for idx, width := range []int32{5, 5} {
 		require.Equal(t, int32(types.T_varbinary), cols[idx+2].Typ.Id, "column %d", idx+2)
 		require.Equal(t, width, cols[idx+2].Typ.Width, "column %d", idx+2)
 	}
+	require.Equal(t, int32(types.T_varchar), cols[4].Typ.Id)
 	require.Equal(t, int32(types.T_varbinary), cols[5].Typ.Id)
 	require.Equal(t, int32(1), cols[5].Typ.Width)
 	require.Equal(t, int32(types.T_varchar), cols[6].Typ.Id)
@@ -1765,6 +1766,29 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		p.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
 	require.NoError(t, err)
+}
+
+func TestBuildCTASConvertUsingBinaryDerivesByteWidth(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		`create table copied as select
+			convert('你' using binary) literal_value,
+			convert(n_name using binary) varchar_value,
+			convert(cast('a' as binary(4)) using binary) binary_value,
+			convert(123 using binary) numeric_value
+		from tpch.nation`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["nation"].Cols[1].Typ.Width = 32
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 4)
+	for idx, width := range []int32{4, 128, 4, 4} {
+		require.Equal(t, int32(types.T_varbinary), cols[idx].Typ.Id, "column %d", idx)
+		require.Equal(t, width, cols[idx].Typ.Width, "column %d", idx)
+	}
 }
 
 func TestBuildCTASEmptyBinaryLiteralCanBeReparsed(t *testing.T) {

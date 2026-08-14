@@ -267,7 +267,7 @@ func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {
 	_, err = PrepareParamMetadataForRemote("", 2, []bool{false, false, true})
 	require.Error(t, err, "partial extended metadata must not be silently interpreted")
 
-	invalidKind := []bool{false, true, false, true} // integer + boolean = 5
+	invalidKind := []bool{false, false, true, true} // float + boolean = 6
 	_, err = PrepareParamMetadataForRemote("", 1, invalidKind)
 	require.Error(t, err, "invalid packed kind bits must be rejected")
 }

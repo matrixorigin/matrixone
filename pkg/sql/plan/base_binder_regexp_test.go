@@ -80,11 +80,23 @@ func TestBindRegexpAllowsParamsAndPlainNull(t *testing.T) {
 	_, err = BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{plainNull, text})
 	require.NoError(t, err)
 	blobColumn := &Expr{
-		Typ:  planpb.Type{Id: int32(types.T_blob)},
+		Typ:  planpb.Type{Id: int32(types.T_blob), Charset: uint32(types.CharsetBinary)},
 		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
 	}
 	_, err = BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{blobColumn, text})
 	require.NoError(t, err)
+	binaryColumn := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_binary), Charset: uint32(types.CharsetBinary)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{binaryColumn, text})
+	require.NoError(t, err)
+	varbinaryColumn := &Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(context.Background(), "regexp_like", []*Expr{varbinaryColumn, text})
+	require.Error(t, err)
 }
 
 func TestBindRegexpUsesMySQLBinaryCompatibilityPairs(t *testing.T) {

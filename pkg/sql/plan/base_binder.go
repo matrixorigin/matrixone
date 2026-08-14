@@ -4314,6 +4314,16 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 	default:
 		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
 	}
+	if charset == uint32(types.CharsetBinary) && !types.T(args[0].Typ.Id).IsMySQLString() {
+		target := types.T_varchar.ToType()
+		target.Width = 4
+		target.Charset = types.CharsetBinary
+		casted, err := appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
+		if err != nil {
+			return err
+		}
+		args[0] = casted
+	}
 
 	// The parser lowers the USING name to a synthetic string literal. Record the
 	// selected charset on that argument so the overload's return-type callback
@@ -4405,14 +4415,14 @@ func regexpOperandIsBinaryString(expr *Expr) bool {
 	if _, ok := binaryLiteralStringType(expr); ok {
 		return true
 	}
+	// MySQL's static regexp check uses the expression item category. A stored
+	// BLOB/BINARY column is accepted with a text pattern, while VARBINARY and a
+	// typed binary expression such as CAST(NULL AS BINARY) still participate.
+	if expr.GetCol() != nil {
+		return types.T(expr.Typ.Id) == types.T_varbinary
+	}
 	if expr.Typ.Charset == uint32(types.CharsetBinary) {
 		return true
-	}
-	// MySQL's static regexp check uses the expression item category. A stored
-	// BLOB/VARBINARY column is accepted with a text pattern, while a typed
-	// binary expression such as CAST(NULL AS BINARY) still participates.
-	if expr.GetCol() != nil {
-		return false
 	}
 	switch types.T(expr.Typ.Id) {
 	case types.T_binary, types.T_varbinary, types.T_blob:

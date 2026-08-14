@@ -359,6 +359,7 @@ type FunctionExpressionExecutor struct {
 	selectedParameterVectors []*vector.Vector
 	selectedResult           vector.FunctionResultWrapper
 	selectedNullResult       *vector.Vector
+	selectedBinaryStrings    []bool
 
 	resultVector vector.FunctionResultWrapper
 	// parameters related
@@ -547,16 +548,16 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
-	// User variables carry values, not protocol parameter markers. A value with
-	// binary-string provenance must retain raw-byte REGEXP semantics even when
-	// its original literal IsBin bit was lost while assigning the variable.
-	isBin = isBin || binaryString
 	prepareParamKind := vector.PrepareParamNone
 	if resolveKind := proc.GetResolveVariablePrepareParamKindFunc(); resolveKind != nil {
 		prepareParamKind, err = resolveKind(expr.name, expr.system, expr.global)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if binaryString {
+		isBin = false
+		prepareParamKind = vector.PrepareParamBinaryUserVariable
 	}
 
 	if val == nil {
@@ -1196,8 +1197,28 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		}
 	} else {
 		// A selected function result may already carry exact row provenance
-		// from a type-preserving materialization. Keep that sidecar; the scalar
-		// summary is only the compatibility fallback for uniform results.
+		// from a type-preserving materialization. UnionOne cannot represent an
+		// all-text override on a static binary destination, so restore the exact
+		// selected rows after rebuilding the full result.
+		if selectedResult.HasBinaryStringRows() {
+			if cap(expr.selectedBinaryStrings) < rowCount {
+				expr.selectedBinaryStrings = make([]bool, rowCount)
+			} else {
+				expr.selectedBinaryStrings = expr.selectedBinaryStrings[:rowCount]
+				clear(expr.selectedBinaryStrings)
+			}
+			selectedRow := 0
+			for row := 0; row < rowCount; row++ {
+				if selectList[row] {
+					expr.selectedBinaryStrings[row] = selectedResult.GetIsBinaryStringAt(selectedRow)
+					selectedRow++
+				}
+			}
+			if err := result.SetSelectedValueBinaryStringRowsWithMP(expr.selectedBinaryStrings, proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+		// The scalar summary is only the compatibility fallback for uniform results.
 		if len(result.GetPrepareParamKinds()) == 0 {
 			result.SetPrepareParamKind(runtimePrepareParamKind)
 		}

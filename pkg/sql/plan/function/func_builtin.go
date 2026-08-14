@@ -1169,7 +1169,6 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	defer result.GetResultVector().SetIsBinaryString(true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// After builtInCharCheck, parameters are either integer or string types.
@@ -4435,6 +4434,24 @@ func propagateBinaryStringResultRows(
 		}
 	}
 	return nil
+}
+
+func propagateSelectedBinaryStringResultRows(
+	parameter *vector.Vector,
+	result *vector.Vector,
+	length int,
+	proc *process.Process,
+) error {
+	rows := make([]bool, result.Length())
+	for row := 0; row < length && row < result.Length(); row++ {
+		if !result.IsNull(uint64(row)) {
+			rows[row] = parameter.GetIsBinaryStringAt(row)
+		}
+	}
+	if proc == nil {
+		return result.SetSelectedValueBinaryStringRowsWithMP(rows, nil)
+	}
+	return result.SetSelectedValueBinaryStringRowsWithMP(rows, proc.Mp())
 }
 
 func setBinaryStringResultAt(

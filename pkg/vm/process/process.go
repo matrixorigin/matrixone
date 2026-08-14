@@ -290,7 +290,7 @@ func PrepareParamMetadataForRemote(
 			kind |= vector.PrepareParamBoolean
 		}
 		if kind != vector.PrepareParamNone {
-			if kind > vector.PrepareParamBoolean {
+			if kind > vector.PrepareParamBinaryUserVariable {
 				return nil, moerr.NewInvalidInputNoCtxf(
 					"invalid prepare parameter kind %d at parameter %d", kind, i)
 			}

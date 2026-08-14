@@ -904,7 +904,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	if err != nil || !parameters[1].GetType().Oid.IsMySQLString() {
 		return err
 	}
-	return propagateBinaryStringResultRows(parameters[:1], result.GetResultVector(), length, proc)
+	return propagateSelectedBinaryStringResultRows(parameters[0], result.GetResultVector(), length, proc)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

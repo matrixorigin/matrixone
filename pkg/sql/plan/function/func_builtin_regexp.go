@@ -58,7 +58,8 @@ func isBinaryRegexpVector(vec *vector.Vector) bool {
 
 func regexpBytesForExecution(vec *vector.Vector, row int, value []byte) ([]byte, bool) {
 	staticBinary := isBinaryRegexpVector(vec)
-	if !staticBinary && vec.GetIsBin() && vec.GetIsBinaryStringAt(row) {
+	if !staticBinary && vec.GetIsBinaryStringAt(row) &&
+		(vec.GetIsBin() || vec.GetPrepareParamKindAt(row) == vector.PrepareParamBinaryUserVariable) {
 		return value, true
 	}
 	if !staticBinary && vec.GetIsBinaryStringAt(row) {

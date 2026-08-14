@@ -76,3 +76,12 @@ binary-string provenance 必须由所有合法来源产生，经参数/变量/�
 2. 逐文件解析冲突；若涉及 parser 生成物，以 `mysql_sql.y` 为源并强制重新生成 `mysql_sql.go`，禁止手工拼接生成代码。
 3. 检查 `MERGE_HEAD`、未解决索引、冲突标记和完整 merge diff，确保 binary provenance、REGEXP、CTAS 契约与主线改动同时保留。
 4. 运行冲突相关 focused tests、受影响 owning package 全量测试和 `git diff --check`；完成 self-review 后提交 merge commit并普通 push。
+
+## PR review comments（第四轮：cast 前来源语义）
+
+1. implicit cast 必须传播源值的 row provenance；COALESCE 等 flow-control 在真实 binder cast 后仍按实际选中分支解释，覆盖 MIN 与真实公共 binary 类型。
+2. REGEXP 静态检查按真实列 item 分类：BLOB/BINARY 列允许 text pattern，VARBINARY 列保持 3995；binary charset expression 仍参与不兼容检查。
+3. 新增独立的 binary user-variable 来源类别，禁止复用 `Literal.IsBin`；数值/CHAR 继续普通字符串转换，REGEXP implicit cast 后仍保持直接变量的原始字节语义。
+4. 重写 CONVERT 返回类型：区分显示宽度和 utf8mb4 最大字节宽度，补 T_binary overload，大对象转 utf8 返回 TEXT/LONGTEXT 域，CTAS 声明与实际上界一致。
+5. 恢复普通 CHAR() 的既有文本返回与字符解释，仅由外层 `CONVERT(... USING binary)` 产生 binary 类型；补现有 BVT 反例。
+6. 跑真实 binder/executor focused tests、aggregate/CTAS/REGEXP/CHAR 回归、owning package 全量测试、SCA 与 self-review 后提交并普通 push。
