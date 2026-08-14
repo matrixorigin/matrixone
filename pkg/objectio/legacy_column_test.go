@@ -266,6 +266,29 @@ func TestLegacyColumnDecoderMatchAndFailurePaths(t *testing.T) {
 	))
 }
 
+func TestLegacyColumnDecoderBoundaryCases(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		payload  []byte
+		expected int64
+		wantErr  string
+	}{
+		{name: "negative size", payload: nil, expected: -1, wantErr: "invalid legacy object column size"},
+		{name: "zero size with trailing input", payload: []byte{0}, expected: 0, wantErr: "trailing bytes"},
+		{name: "zero offset", payload: []byte{0x00, 0x00, 0x00}, expected: 4, wantErr: "invalid legacy LZ4 match offset"},
+		{name: "truncated literal", payload: []byte{0x10}, expected: 1, wantErr: "EOF"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := decodeLegacyLZ4Block(context.Background(), bufioReader(tc.payload), &output, tc.expected)
+			require.Error(t, err)
+			if tc.wantErr != "" {
+				require.Contains(t, err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(
