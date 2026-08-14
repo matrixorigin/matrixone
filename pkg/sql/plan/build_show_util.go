@@ -330,6 +330,9 @@ func constructCreateTableSQL(
 						}
 					}
 				}
+				if useDbName && !indexdef.Visible {
+					indexStr += " INVISIBLE"
+				}
 
 			} else {
 				rewriteIndexStr := ""
@@ -396,6 +399,10 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
+				if useDbName && !indexdef.Visible {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string

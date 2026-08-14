@@ -56,6 +56,7 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 						IndexAlgoParams:    algoParams,
 						IndexTableName:     "__mo_index_entries_idx_vec",
 						TableExist:         true,
+						Visible:            true,
 						IncludedColumns:    []string{"title", "category"},
 					},
 				},
@@ -71,4 +72,29 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	require.Contains(t, sql, sqlquote.String(algoParams))
 	require.Contains(t, sql, sqlquote.String(algoParams)+", 1, 0, ")
 	require.Contains(t, sql, "'__mo_index_entries_idx_vec')")
+}
+
+func TestGenInsertMOIndexesSqlPersistsInvisibleIndex(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272511), nil)
+
+	proc := testutil.NewProc(t)
+	tableDef := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"a": 0},
+		Cols:          []*plan.ColDef{{Name: "a", OriginName: "a"}},
+	}
+	ct := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.IndexDef{
+		Indexes: []*plan.IndexDef{{
+			IndexName: "idx_a",
+			Parts:     []string{"a"},
+			Visible:   false,
+		}},
+	}}}
+
+	sql, err := genInsertMOIndexesSql(mockEngine, proc, "123456", 272464, ct, tableDef)
+	require.NoError(t, err)
+	require.Contains(t, sql, "'', '', '', 0, 0, ''")
 }

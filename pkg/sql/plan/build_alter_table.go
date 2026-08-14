@@ -27,11 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
@@ -145,6 +147,61 @@ func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
 	return false
 }
 
+func reconcileAlterCopyIndexVisibility(ctx CompilerContext, tableID uint64, tableDef *TableDef) error {
+	if len(tableDef.Indexes) == 0 {
+		return nil
+	}
+	result, err := runSql(ctx, fmt.Sprintf(
+		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
+		tableID,
+	))
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+
+	visibility := make(map[string]bool)
+	var readErr error
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if len(cols) != 2 {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected 2 columns, got %d", len(cols))
+			return false
+		}
+		names := executor.GetStringRows(cols[0])
+		visible := executor.GetFixedRows[int8](cols[1])
+		if len(names) != rows || len(visible) != rows {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected %d rows", rows)
+			return false
+		}
+		for i, name := range names {
+			value := visible[i] != 0
+			key := strings.ToLower(name)
+			if previous, ok := visibility[key]; ok && previous != value {
+				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+					"inconsistent visibility metadata for index '%s'", name)
+				return false
+			}
+			visibility[key] = value
+		}
+		return true
+	})
+	if readErr != nil {
+		return readErr
+	}
+
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
+		}
+		if visible, ok := visibility[strings.ToLower(indexDef.IndexName)]; ok {
+			indexDef.Visible = visible
+		}
+	}
+	return nil
+}
+
 func autoIncrementValueToOffset(value uint64) uint64 {
 	if value > 0 {
 		return value - 1
@@ -181,6 +238,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// 2. split alter_option list
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
+		return nil, err
+	}
+	// IndexDef.visible historically used the proto3 false zero value for both
+	// default-visible and explicitly invisible indexes. mo_indexes is the
+	// authoritative source, so normalize the copied definition before applying
+	// the ALTER actions and serializing the temporary CREATE TABLE statement.
+	if err := reconcileAlterCopyIndexVisibility(cctx, tableDef.TblId, copyTableDef); err != nil {
 		return nil, err
 	}
 	// The copied definition contains the source allocator's cached offset. It

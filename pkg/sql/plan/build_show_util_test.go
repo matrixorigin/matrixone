@@ -229,6 +229,33 @@ func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	require.Contains(t, got, "KEY `idx_mix` (`name`,`t`(30))")
 }
 
+func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE visibility_src (
+		id INT PRIMARY KEY,
+		a INT,
+		b INT,
+		KEY idx_default(a),
+		KEY idx_visible(a) VISIBLE,
+		UNIQUE KEY uq_invisible(b) INVISIBLE
+	)`)
+	require.NoError(t, err)
+
+	visibility := make(map[string]bool, len(tableDef.Indexes))
+	for _, indexDef := range tableDef.Indexes {
+		visibility[indexDef.IndexName] = indexDef.Visible
+	}
+	require.True(t, visibility["idx_default"])
+	require.True(t, visibility["idx_visible"])
+	require.False(t, visibility["uq_invisible"])
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
+	require.NotContains(t, got, "KEY `idx_default` (`a`) INVISIBLE")
+	require.NotContains(t, got, "KEY `idx_visible` (`a`) INVISIBLE")
+}
+
 func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE comment_src (
