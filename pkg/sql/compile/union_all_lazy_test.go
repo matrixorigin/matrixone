@@ -353,6 +353,60 @@ func TestScalarUnionAllInsideJoinKeepsConcurrentTopology(t *testing.T) {
 	require.True(t, orderedScalarUnionAllResult(0, 4, query))
 }
 
+func TestOrderedScalarUnionAllRejectsMalformedPlans(t *testing.T) {
+	tests := []struct {
+		name    string
+		nodeIdx int32
+		nodes   []*planpb.Node
+	}{
+		{name: "negative node index", nodeIdx: -1},
+		{name: "node index past end", nodeIdx: 1, nodes: []*planpb.Node{{}}},
+		{name: "nil node", nodes: []*planpb.Node{nil}},
+		{name: "unsupported node type", nodes: []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}}},
+		{name: "union without two children", nodes: []*planpb.Node{{NodeType: planpb.Node_UNION_ALL}}},
+		{name: "project without one child", nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT}}},
+		{
+			name:  "project with invalid child",
+			nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT, Children: []int32{1}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.False(t, orderedScalarUnionAll(test.nodeIdx, test.nodes))
+		})
+	}
+}
+
+func TestOrderedScalarUnionAllResultRejectsMalformedPlans(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    int32
+		nodeIdx int32
+		query   *planpb.Query
+	}{
+		{name: "nil query"},
+		{name: "negative step", step: -1, query: &planpb.Query{}},
+		{name: "step past end", step: 1, query: &planpb.Query{Steps: []int32{0}}},
+		{name: "negative node index", nodeIdx: -1, query: &planpb.Query{Steps: []int32{0}}},
+		{
+			name:    "node index past end",
+			nodeIdx: 1,
+			query:   &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{{}}},
+		},
+		{
+			name:  "invalid result root",
+			query: &planpb.Query{Steps: []int32{1}, Nodes: []*planpb.Node{{}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.False(t, orderedScalarUnionAllResult(test.step, test.nodeIdx, test.query))
+		})
+	}
+}
+
 func compileNestedLazyUnionAllTestScope(
 	c *Compile,
 	first *Scope,
