@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"iter"
 	"path"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -342,7 +343,11 @@ func viewSelectHasStar(stmt *tree.Select) bool {
 	if stmt == nil {
 		return false
 	}
-	return selectStatementHasStar(stmt.Select)
+	return selectWithHasStar(stmt.With) ||
+		selectStatementHasStar(stmt.Select) ||
+		orderByHasStar(stmt.OrderBy) ||
+		limitHasStar(stmt.Limit) ||
+		timeWindowHasStar(stmt.TimeWindow)
 }
 
 func selectStatementHasStar(stmt tree.SelectStatement) bool {
@@ -384,6 +389,157 @@ func selectClauseHasStar(selectClause *tree.SelectClause) bool {
 			return true
 		}
 	}
+	if fromHasStar(selectClause.From) {
+		return true
+	}
+	if whereHasStar(selectClause.Where) || whereHasStar(selectClause.Having) {
+		return true
+	}
+	return groupByHasStar(selectClause.GroupBy)
+}
+
+func fromHasStar(from *tree.From) bool {
+	if from == nil {
+		return false
+	}
+	for _, table := range from.Tables {
+		if tableExprHasStar(table) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasStar(table tree.TableExpr) bool {
+	switch tableExpr := table.(type) {
+	case *tree.Select:
+		return viewSelectHasStar(tableExpr)
+	case *tree.Subquery:
+		return selectStatementHasStar(tableExpr.Select)
+	case *tree.AliasedTableExpr:
+		return tableExprHasStar(tableExpr.Expr)
+	case *tree.ParenTableExpr:
+		return tableExprHasStar(tableExpr.Expr)
+	case *tree.JoinTableExpr:
+		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right)
+	case *tree.ApplyTableExpr:
+		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right)
+	case *tree.StatementSource:
+		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
+			return viewSelectHasStar(selectStmt)
+		}
+	}
+	return false
+}
+
+func whereHasStar(where *tree.Where) bool {
+	return where != nil && exprHasStar(where.Expr)
+}
+
+func groupByHasStar(groupBy *tree.GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHasStar(exprs) {
+			return true
+		}
+	}
+	return exprsHasStar(groupBy.GroupingSet)
+}
+
+func exprsHasStar(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasStar(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderByHasStar(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasStar(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasStar(limit *tree.Limit) bool {
+	return limit != nil && (exprHasStar(limit.Offset) || exprHasStar(limit.Count))
+}
+
+func timeWindowHasStar(timeWindow *tree.TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasStar(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasStar(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasStar(timeWindow.Fill.Val)
+}
+
+func exprHasStar(expr tree.Expr) bool {
+	return exprValueHasStar(reflect.ValueOf(expr), make(map[treeClonePointer]struct{}))
+}
+
+func exprValueHasStar(value reflect.Value, visited map[treeClonePointer]struct{}) bool {
+	if !value.IsValid() {
+		return false
+	}
+	for value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: value.Pointer()}
+		if _, ok := visited[key]; ok {
+			return false
+		}
+		visited[key] = struct{}{}
+		if expr, ok := value.Interface().(tree.Expr); ok && directExprHasStar(expr) {
+			return true
+		}
+		if subquery, ok := value.Interface().(*tree.Subquery); ok {
+			return selectStatementHasStar(subquery.Select)
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Struct {
+		if value.CanInterface() {
+			if expr, ok := value.Interface().(tree.Expr); ok && directExprHasStar(expr) {
+				return true
+			}
+		}
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			if selectStmt, ok := field.Interface().(tree.SelectStatement); ok && selectStatementHasStar(selectStmt) {
+				return true
+			}
+			if exprValueHasStar(field, visited) {
+				return true
+			}
+		}
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		for i := 0; i < value.Len(); i++ {
+			if exprValueHasStar(value.Index(i), visited) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -391,7 +547,11 @@ func viewSelectHasSampleStar(stmt *tree.Select) bool {
 	if stmt == nil {
 		return false
 	}
-	return selectStatementHasSampleStar(stmt.Select)
+	return selectWithSampleStar(stmt.With) ||
+		selectStatementHasSampleStar(stmt.Select) ||
+		orderByHasSampleStar(stmt.OrderBy) ||
+		limitHasSampleStar(stmt.Limit) ||
+		timeWindowHasSampleStar(stmt.TimeWindow)
 }
 
 func selectStatementHasSampleStar(stmt tree.SelectStatement) bool {
@@ -402,8 +562,14 @@ func selectStatementHasSampleStar(stmt tree.SelectStatement) bool {
 				return true
 			}
 		}
+		if fromHasSampleStar(selectStmt.From) ||
+			whereHasSampleStar(selectStmt.Where) ||
+			whereHasSampleStar(selectStmt.Having) ||
+			groupByHasSampleStar(selectStmt.GroupBy) {
+			return true
+		}
 	case *tree.Select:
-		return selectWithSampleStar(selectStmt.With) || selectStatementHasSampleStar(selectStmt.Select)
+		return viewSelectHasSampleStar(selectStmt)
 	case *tree.ParenSelect:
 		return selectStatementHasSampleStar(selectStmt.Select)
 	case *tree.UnionClause:
@@ -429,7 +595,23 @@ func selectWithSampleStar(with *tree.With) bool {
 }
 
 func selectExprHasStar(selectExpr tree.SelectExpr) bool {
-	switch expr := selectExpr.Expr.(type) {
+	return exprHasStar(selectExpr.Expr)
+}
+
+func selectClauseOutputHasStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if directExprHasStar(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func directExprHasStar(expr tree.Expr) bool {
+	switch expr := expr.(type) {
 	case tree.UnqualifiedStar:
 		return true
 	case *tree.UnresolvedName:
@@ -444,11 +626,160 @@ func selectExprHasStar(selectExpr tree.SelectExpr) bool {
 }
 
 func selectExprHasSampleStar(selectExpr tree.SelectExpr) bool {
-	expr, ok := selectExpr.Expr.(*tree.SampleExpr)
+	return exprHasSampleStar(selectExpr.Expr)
+}
+
+func fromHasSampleStar(from *tree.From) bool {
+	if from == nil {
+		return false
+	}
+	for _, table := range from.Tables {
+		if tableExprHasSampleStar(table) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasSampleStar(table tree.TableExpr) bool {
+	switch tableExpr := table.(type) {
+	case *tree.Select:
+		return viewSelectHasSampleStar(tableExpr)
+	case *tree.Subquery:
+		return selectStatementHasSampleStar(tableExpr.Select)
+	case *tree.AliasedTableExpr:
+		return tableExprHasSampleStar(tableExpr.Expr)
+	case *tree.ParenTableExpr:
+		return tableExprHasSampleStar(tableExpr.Expr)
+	case *tree.JoinTableExpr:
+		return tableExprHasSampleStar(tableExpr.Left) || tableExprHasSampleStar(tableExpr.Right)
+	case *tree.ApplyTableExpr:
+		return tableExprHasSampleStar(tableExpr.Left) || tableExprHasSampleStar(tableExpr.Right)
+	case *tree.StatementSource:
+		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
+			return viewSelectHasSampleStar(selectStmt)
+		}
+	}
+	return false
+}
+
+func whereHasSampleStar(where *tree.Where) bool {
+	return where != nil && exprHasSampleStar(where.Expr)
+}
+
+func groupByHasSampleStar(groupBy *tree.GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHasSampleStar(exprs) {
+			return true
+		}
+	}
+	return exprsHasSampleStar(groupBy.GroupingSet)
+}
+
+func exprsHasSampleStar(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasSampleStar(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderByHasSampleStar(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasSampleStar(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasSampleStar(limit *tree.Limit) bool {
+	return limit != nil && (exprHasSampleStar(limit.Offset) || exprHasSampleStar(limit.Count))
+}
+
+func timeWindowHasSampleStar(timeWindow *tree.TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasSampleStar(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasSampleStar(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasSampleStar(timeWindow.Fill.Val)
+}
+
+func exprHasSampleStar(expr tree.Expr) bool {
+	return exprValueHasSampleStar(reflect.ValueOf(expr), make(map[treeClonePointer]struct{}))
+}
+
+func exprValueHasSampleStar(value reflect.Value, visited map[treeClonePointer]struct{}) bool {
+	if !value.IsValid() {
+		return false
+	}
+	for value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false
+		}
+		key := treeClonePointer{typ: value.Type(), ptr: value.Pointer()}
+		if _, ok := visited[key]; ok {
+			return false
+		}
+		visited[key] = struct{}{}
+		if expr, ok := value.Interface().(tree.Expr); ok && directExprHasSampleStar(expr) {
+			return true
+		}
+		if subquery, ok := value.Interface().(*tree.Subquery); ok {
+			return selectStatementHasSampleStar(subquery.Select)
+		}
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.Struct {
+		if value.CanInterface() {
+			if expr, ok := value.Interface().(tree.Expr); ok && directExprHasSampleStar(expr) {
+				return true
+			}
+		}
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			if !field.CanInterface() {
+				continue
+			}
+			if selectStmt, ok := field.Interface().(tree.SelectStatement); ok && selectStatementHasSampleStar(selectStmt) {
+				return true
+			}
+			if exprValueHasSampleStar(field, visited) {
+				return true
+			}
+		}
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		for i := 0; i < value.Len(); i++ {
+			if exprValueHasSampleStar(value.Index(i), visited) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func directExprHasSampleStar(expr tree.Expr) bool {
+	sampleExpr, ok := expr.(*tree.SampleExpr)
 	if !ok {
 		return false
 	}
-	_, isStar := expr.GetColumns()
+	_, isStar := sampleExpr.GetColumns()
 	return isStar
 }
 
@@ -485,7 +816,32 @@ func viewSelectStatementWithExpandedStars(
 		}
 		expandedSelectList, ok := expandedSelectLists[selectStmt]
 		if ok {
-			stableClause.Exprs = cloneTreeSelectExprs(expandedSelectList)
+			if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
+				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(expandedSelectList, expandedSelectLists)
+				stableClause.Exprs = stableExprs
+				rewritten = true
+				rewritten = rewritten || exprsRewritten
+			} else {
+				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStableHeadings(selectStmt.Exprs, expandedSelectList, expandedSelectLists)
+				stableClause.Exprs = stableExprs
+				rewritten = true
+				rewritten = rewritten || exprsRewritten
+			}
+		} else {
+			stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
+			stableClause.Exprs = stableExprs
+			rewritten = rewritten || exprsRewritten
+		}
+		if stableWhere, whereRewritten := viewWhereWithExpandedStars(selectStmt.Where, expandedSelectLists); whereRewritten {
+			stableClause.Where = stableWhere
+			rewritten = true
+		}
+		if stableHaving, havingRewritten := viewWhereWithExpandedStars(selectStmt.Having, expandedSelectLists); havingRewritten {
+			stableClause.Having = stableHaving
+			rewritten = true
+		}
+		if stableGroupBy, groupByRewritten := viewGroupByWithExpandedStars(selectStmt.GroupBy, expandedSelectLists); groupByRewritten {
+			stableClause.GroupBy = stableGroupBy
 			rewritten = true
 		}
 		return &stableClause, rewritten
@@ -495,7 +851,13 @@ func viewSelectStatementWithExpandedStars(
 		stableSelect.With = stableWith
 		stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
 		stableSelect.Select = stableStatement
-		return &stableSelect, withRewritten || statementRewritten
+		stableOrderBy, orderByRewritten := viewOrderByWithExpandedStars(selectStmt.OrderBy, expandedSelectLists)
+		stableSelect.OrderBy = stableOrderBy
+		stableLimit, limitRewritten := viewLimitWithExpandedStars(selectStmt.Limit, expandedSelectLists)
+		stableSelect.Limit = stableLimit
+		stableTimeWindow, timeWindowRewritten := viewTimeWindowWithExpandedStars(selectStmt.TimeWindow, expandedSelectLists)
+		stableSelect.TimeWindow = stableTimeWindow
+		return &stableSelect, withRewritten || statementRewritten || orderByRewritten || limitRewritten || timeWindowRewritten
 	case *tree.ParenSelect:
 		stableParen := *selectStmt
 		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
@@ -551,6 +913,283 @@ func viewWithWithExpandedStars(
 		rewritten = rewritten || cteRewritten
 	}
 	return &stableWith, rewritten
+}
+
+func viewSelectExprsWithExpandedStars(
+	exprs tree.SelectExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectExprs, bool) {
+	if len(exprs) == 0 {
+		return exprs, false
+	}
+	stableExprs := make(tree.SelectExprs, len(exprs))
+	rewritten := false
+	for i, expr := range exprs {
+		stableExprs[i] = expr
+		stableExpr, exprRewritten := viewExprWithExpandedStars(expr.Expr, expandedSelectLists)
+		if exprRewritten {
+			stableExprs[i].Expr = stableExpr
+			rewritten = true
+		} else {
+			stableExprs[i].Expr = cloneTreeExpr(expr.Expr)
+		}
+		if expr.As != nil {
+			stableExprs[i].As = tree.NewCStr(expr.As.Origin(), 1)
+		}
+	}
+	return stableExprs, rewritten
+}
+
+func viewSelectExprsWithExpandedStableHeadings(
+	originalExprs tree.SelectExprs,
+	expandedExprs tree.SelectExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.SelectExprs, bool) {
+	stableExprs := make(tree.SelectExprs, len(expandedExprs))
+	rewritten := false
+	for i, expandedExpr := range expandedExprs {
+		stableExprs[i] = expandedExpr
+		stableExprs[i].Expr = cloneTreeExpr(expandedExpr.Expr)
+		if expandedExpr.As != nil {
+			stableExprs[i].As = tree.NewCStr(expandedExpr.As.Origin(), 1)
+		}
+		if i >= len(originalExprs) {
+			continue
+		}
+		if rewriteClonedExprSubqueriesWithExpandedStars(
+			reflect.ValueOf(originalExprs[i].Expr),
+			reflect.ValueOf(stableExprs[i].Expr),
+			expandedSelectLists,
+			make(map[treeClonePointer]struct{}),
+		) {
+			rewritten = true
+		}
+	}
+	return stableExprs, rewritten
+}
+
+func viewWhereWithExpandedStars(
+	where *tree.Where,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Where, bool) {
+	if where == nil {
+		return nil, false
+	}
+	stableWhere := *where
+	stableExpr, rewritten := viewExprWithExpandedStars(where.Expr, expandedSelectLists)
+	stableWhere.Expr = stableExpr
+	return &stableWhere, rewritten
+}
+
+func viewGroupByWithExpandedStars(
+	groupBy *tree.GroupByClause,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.GroupByClause, bool) {
+	if groupBy == nil {
+		return nil, false
+	}
+	stableGroupBy := *groupBy
+	rewritten := false
+	if len(groupBy.GroupByExprsList) > 0 {
+		stableGroupBy.GroupByExprsList = make([]tree.Exprs, len(groupBy.GroupByExprsList))
+		for i, exprs := range groupBy.GroupByExprsList {
+			stableExprs, exprsRewritten := viewExprsWithExpandedStars(exprs, expandedSelectLists)
+			stableGroupBy.GroupByExprsList[i] = stableExprs
+			rewritten = rewritten || exprsRewritten
+		}
+	}
+	if stableGroupingSet, groupingSetRewritten := viewExprsWithExpandedStars(groupBy.GroupingSet, expandedSelectLists); groupingSetRewritten {
+		stableGroupBy.GroupingSet = stableGroupingSet
+		rewritten = true
+	}
+	return &stableGroupBy, rewritten
+}
+
+func viewExprsWithExpandedStars(
+	exprs tree.Exprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.Exprs, bool) {
+	if len(exprs) == 0 {
+		return exprs, false
+	}
+	stableExprs := make(tree.Exprs, len(exprs))
+	rewritten := false
+	for i, expr := range exprs {
+		stableExpr, exprRewritten := viewExprWithExpandedStars(expr, expandedSelectLists)
+		stableExprs[i] = stableExpr
+		rewritten = rewritten || exprRewritten
+	}
+	return stableExprs, rewritten
+}
+
+func viewOrderByWithExpandedStars(
+	orderBy tree.OrderBy,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.OrderBy, bool) {
+	if len(orderBy) == 0 {
+		return orderBy, false
+	}
+	stableOrderBy := make(tree.OrderBy, len(orderBy))
+	rewritten := false
+	for i, order := range orderBy {
+		if order == nil {
+			continue
+		}
+		stableOrder := *order
+		stableExpr, exprRewritten := viewExprWithExpandedStars(order.Expr, expandedSelectLists)
+		stableOrder.Expr = stableExpr
+		stableOrderBy[i] = &stableOrder
+		rewritten = rewritten || exprRewritten
+	}
+	return stableOrderBy, rewritten
+}
+
+func viewLimitWithExpandedStars(
+	limit *tree.Limit,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.Limit, bool) {
+	if limit == nil {
+		return nil, false
+	}
+	stableLimit := *limit
+	offset, offsetRewritten := viewExprWithExpandedStars(limit.Offset, expandedSelectLists)
+	count, countRewritten := viewExprWithExpandedStars(limit.Count, expandedSelectLists)
+	stableLimit.Offset = offset
+	stableLimit.Count = count
+	return &stableLimit, offsetRewritten || countRewritten
+}
+
+func viewTimeWindowWithExpandedStars(
+	timeWindow *tree.TimeWindow,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.TimeWindow, bool) {
+	if timeWindow == nil {
+		return nil, false
+	}
+	stableTimeWindow := *timeWindow
+	rewritten := false
+	if timeWindow.Interval != nil {
+		stableInterval := *timeWindow.Interval
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Interval.Val, expandedSelectLists)
+		stableInterval.Val = stableVal
+		stableTimeWindow.Interval = &stableInterval
+		rewritten = rewritten || valRewritten
+	}
+	if timeWindow.Sliding != nil {
+		stableSliding := *timeWindow.Sliding
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Sliding.Val, expandedSelectLists)
+		stableSliding.Val = stableVal
+		stableTimeWindow.Sliding = &stableSliding
+		rewritten = rewritten || valRewritten
+	}
+	if timeWindow.Fill != nil {
+		stableFill := *timeWindow.Fill
+		stableVal, valRewritten := viewExprWithExpandedStars(timeWindow.Fill.Val, expandedSelectLists)
+		stableFill.Val = stableVal
+		stableTimeWindow.Fill = &stableFill
+		rewritten = rewritten || valRewritten
+	}
+	return &stableTimeWindow, rewritten
+}
+
+func viewExprWithExpandedStars(
+	expr tree.Expr,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.Expr, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	stableExpr := cloneTreeExpr(expr)
+	rewritten := rewriteClonedExprSubqueriesWithExpandedStars(
+		reflect.ValueOf(expr),
+		reflect.ValueOf(stableExpr),
+		expandedSelectLists,
+		make(map[treeClonePointer]struct{}),
+	)
+	return stableExpr, rewritten
+}
+
+func rewriteClonedExprSubqueriesWithExpandedStars(
+	original reflect.Value,
+	cloned reflect.Value,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+	visited map[treeClonePointer]struct{},
+) bool {
+	if !original.IsValid() || !cloned.IsValid() {
+		return false
+	}
+	for original.Kind() == reflect.Interface {
+		if original.IsNil() {
+			return false
+		}
+		original = original.Elem()
+	}
+	for cloned.Kind() == reflect.Interface {
+		if cloned.IsNil() {
+			return false
+		}
+		cloned = cloned.Elem()
+	}
+	if original.Kind() == reflect.Pointer {
+		if original.IsNil() {
+			return false
+		}
+		key := treeClonePointer{typ: original.Type(), ptr: original.Pointer()}
+		if _, ok := visited[key]; ok {
+			return false
+		}
+		visited[key] = struct{}{}
+		if subquery, ok := original.Interface().(*tree.Subquery); ok {
+			stableStatement, rewritten := viewSelectStatementWithExpandedStars(subquery.Select, expandedSelectLists)
+			if rewritten && stableStatement != nil && cloned.Kind() == reflect.Pointer && !cloned.IsNil() {
+				if clonedSubquery, ok := cloned.Interface().(*tree.Subquery); ok {
+					clonedSubquery.Select = stableStatement
+				}
+			}
+			return rewritten
+		}
+		original = original.Elem()
+		if cloned.Kind() == reflect.Pointer {
+			if cloned.IsNil() {
+				return false
+			}
+			cloned = cloned.Elem()
+		}
+	}
+	rewritten := false
+	switch original.Kind() {
+	case reflect.Struct:
+		if cloned.Kind() != reflect.Struct {
+			return false
+		}
+		for i := 0; i < original.NumField() && i < cloned.NumField(); i++ {
+			originalField := original.Field(i)
+			clonedField := cloned.Field(i)
+			if !originalField.CanInterface() {
+				continue
+			}
+			if selectStmt, ok := originalField.Interface().(tree.SelectStatement); ok {
+				stableStatement, fieldRewritten := viewSelectStatementWithExpandedStars(selectStmt, expandedSelectLists)
+				if fieldRewritten && stableStatement != nil && clonedField.CanSet() {
+					stableValue := reflect.ValueOf(stableStatement)
+					if stableValue.Type().AssignableTo(clonedField.Type()) {
+						clonedField.Set(stableValue)
+					}
+				}
+				rewritten = rewritten || fieldRewritten
+				continue
+			}
+			rewritten = rewriteClonedExprSubqueriesWithExpandedStars(originalField, clonedField, expandedSelectLists, visited) || rewritten
+		}
+	case reflect.Slice, reflect.Array:
+		if cloned.Kind() != reflect.Slice && cloned.Kind() != reflect.Array {
+			return false
+		}
+		for i := 0; i < original.Len() && i < cloned.Len(); i++ {
+			rewritten = rewriteClonedExprSubqueriesWithExpandedStars(original.Index(i), cloned.Index(i), expandedSelectLists, visited) || rewritten
+		}
+	}
+	return rewritten
 }
 
 func viewFromWithExpandedStars(

@@ -5,6 +5,10 @@ create table t(a int primary key, b varchar(5));
 insert into t values (1,'x'),(2,'yy');
 create view v_star as select * from t;
 create view v_named(x,y) as select * from t;
+create table one_col(id int primary key);
+insert into one_col values (1),(2);
+create view v_expr_scalar as select (select * from one_col where id = 1) as x;
+create view v_expr_in as select a from t where a in (select * from one_col);
 select rel_createsql not like '%*%' as no_star, rel_createsql like '%`t`.`a`%' as has_a, rel_createsql like '%`t`.`b`%' as has_b from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname = 'v_star';
 ➤ no_star[-7,1,0]  ¦  has_a[-7,1,0]  ¦  has_b[-7,1,0]  𝄀
 1  ¦  1  ¦  1
@@ -12,6 +16,22 @@ select column_name, ordinal_position from information_schema.columns where table
 ➤ column_name[12,192,0]  ¦  ordinal_position[4,32,0]  𝄀
 a  ¦  1  𝄀
 b  ¦  2
+select relname, rel_createsql not like '%*%' as no_star, rel_createsql like '%`one_col`.`id`%' as has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname in ('v_expr_scalar','v_expr_in') order by relname;
+➤ relname[12,256,0]  ¦  no_star[-7,1,0]  ¦  has_id[-7,1,0]  𝄀
+v_expr_in  ¦  1  ¦  1  𝄀
+v_expr_scalar  ¦  1  ¦  1
+alter view v_expr_scalar as select (select * from one_col where id = 1) as x;
+select rel_createsql not like '%*%' as alter_no_star, rel_createsql like '%`one_col`.`id`%' as alter_has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname = 'v_expr_scalar';
+➤ alter_no_star[-7,1,0]  ¦  alter_has_id[-7,1,0]  𝄀
+1  ¦  1
+alter table one_col add column extra int default 9;
+select * from v_expr_scalar;
+➤ x[4,32,0]  𝄀
+1
+select * from v_expr_in order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2
 alter table t add column z int default 9 first;
 alter table t add column c int default 7 after a;
 select * from v_star order by a;
@@ -52,9 +72,12 @@ select * from v_star order by a;
 1  ¦  x  𝄀
 2  ¦  yy
 drop view v_nested;
+drop view v_expr_in;
+drop view v_expr_scalar;
 drop view v_named;
 drop view v_star;
 drop table copied;
 drop table target2;
+drop table one_col;
 drop table t;
 drop database view_star_static_columns;
