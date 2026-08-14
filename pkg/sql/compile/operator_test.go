@@ -685,6 +685,62 @@ func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
 	arg.Release()
 }
 
+func TestConstructTimeWindowPromotesDateBoundaryRuntimeType(t *testing.T) {
+	dateTs := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_date)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+	datetimeGroup := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+		},
+	}
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{datetimeGroup},
+		Timestamp:   dateTs,
+		WEnd:        datetimeGroup,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList: []*plan.Expr{
+			{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.AggSumOverloadID,
+						ObjName: "sum",
+					},
+					Args: []*plan.Expr{{
+						Typ: plan.Type{Id: int32(types.T_int64)},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: 0, ColPos: 1},
+						},
+					}},
+				}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowStart}},
+			},
+			{
+				Typ:  plan.Type{Id: int32(types.T_datetime), NotNullable: true},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: plan2.TimeWindowEnd}},
+			},
+		},
+	}
+
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.Equal(t, int32(types.T_datetime), arg.TsType.Id)
+	require.True(t, arg.TsType.NotNullable)
+	require.True(t, arg.WStart)
+	require.True(t, arg.WEnd)
+	arg.Release()
+}
+
 func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
 	columns := []sqlmongodb.ColumnMapping{
 		{Name: "id", Path: "_id"},

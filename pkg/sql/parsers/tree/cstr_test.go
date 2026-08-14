@@ -27,4 +27,9 @@ func Test_CStr(t *testing.T) {
 	assert.Equal(t, false, c1.Empty())
 	c2 := NewCStr("Hello", 0)
 	assert.Equal(t, "Hello", c2.Compare())
+	c3 := NewCStr("1\xe9A", 1)
+	assert.Equal(t, "1\xe9a", c3.Compare())
+	assert.Equal(t, "1\xe9A", c3.Origin())
+	c4 := NewCStr("Ä", 1)
+	assert.Equal(t, "ä", c4.Compare())
 }
