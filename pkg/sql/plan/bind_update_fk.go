@@ -323,6 +323,45 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetChildForeignKeyChecks(
 	return lastNodeID, validatedTag, selectNode, nil
 }
 
+// appendMergedPhysicalTargetParentRestrictChecks drops an UPDATE IGNORE alias
+// candidate that changes a referenced parent key while matching child rows
+// still exist. Mutating actions remain attached to the final accepted image so
+// CASCADE and SET NULL execute once per physical row.
+func (builder *QueryBuilder) appendMergedPhysicalTargetParentRestrictChecks(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	alias string,
+	lastNodeID int32,
+	selectNodeTag int32,
+	selectNode *plan.Node,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (int32, int32, *plan.Node, error) {
+	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil || !enabled || tableDef == nil || len(tableDef.RefChildTbls) == 0 {
+		return lastNodeID, selectNodeTag, selectNode, err
+	}
+
+	affected, err := builder.collectUpdateParentForeignKeys(bindCtx, tableDef, alias, newColName2Idx)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	for _, affectedFK := range affected {
+		switch affectedFK.fk.OnUpdate {
+		case plan.ForeignKeyDef_RESTRICT, plan.ForeignKeyDef_NO_ACTION,
+			plan.ForeignKeyDef_SET_DEFAULT:
+			lastNodeID, selectNodeTag, err = builder.appendUpdateParentRestrictCheck(
+				bindCtx, tableDef, alias, affectedFK, lastNodeID, selectNodeTag,
+				oldColName2Idx, newColName2Idx, nil, true)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+			selectNode = builder.updateInputProjectNode(lastNodeID)
+		}
+	}
+	return lastNodeID, selectNodeTag, selectNode, nil
+}
+
 // appendMergedPhysicalTargetParentForeignKeyChecks emits one parent action for
 // each repeated physical target after UPDATE IGNORE has selected its final
 // constraint-safe candidate. Emitting actions on alias-local rows would either
@@ -611,61 +650,10 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		return lastNodeID, selectNodeTag, nil
 	}
 
-	parentColIDToName := make(map[uint64]string, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
-		parentColIDToName[col.ColId] = col.Name
+	affected, err := builder.collectUpdateParentForeignKeys(bindCtx, tableDef, alias, newColName2Idx)
+	if err != nil {
+		return 0, 0, err
 	}
-
-	affected := make([]updateParentForeignKey, 0)
-	visited := make(map[uint64]struct{}, len(tableDef.RefChildTbls))
-	for _, childTableID := range tableDef.RefChildTbls {
-		if childTableID == 0 {
-			childTableID = tableDef.TblId
-		}
-		if _, ok := visited[childTableID]; ok {
-			continue
-		}
-		visited[childTableID] = struct{}{}
-
-		childObjRef, childTableDef, err := builder.compCtx.ResolveById(childTableID, bindCtx.snapshot)
-		if err != nil {
-			return 0, 0, err
-		}
-		if childTableDef == nil {
-			return 0, 0, moerr.NewInternalErrorf(
-				builder.GetContext(),
-				"foreign-key child table %d not found",
-				childTableID,
-			)
-		}
-		if err := validateTableIndexDefinitions(childTableDef); err != nil {
-			return 0, 0, err
-		}
-
-		for _, fk := range childTableDef.Fkeys {
-			referencesCurrentTable := fk.ForeignTbl == tableDef.TblId ||
-				(fk.ForeignTbl == 0 && childTableDef.TblId == tableDef.TblId)
-			if !referencesCurrentTable {
-				continue
-			}
-			for _, parentColID := range fk.ForeignCols {
-				if _, ok := newColName2Idx[alias+"."+parentColIDToName[parentColID]]; ok {
-					affected = append(affected, updateParentForeignKey{
-						childObjRef:   childObjRef,
-						childTableDef: childTableDef,
-						fk:            fk,
-					})
-					break
-				}
-			}
-		}
-	}
-	sort.SliceStable(affected, func(i, j int) bool {
-		if affected[i].childTableDef.TblId != affected[j].childTableDef.TblId {
-			return affected[i].childTableDef.TblId < affected[j].childTableDef.TblId
-		}
-		return affected[i].fk.Name < affected[j].fk.Name
-	})
 	if len(affected) == 0 {
 		return lastNodeID, selectNodeTag, nil
 	}
@@ -686,7 +674,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 		}
 	}
 
-	lastNodeID, selectNodeTag, err := builder.appendUpdateParentKeyLocks(
+	lastNodeID, selectNodeTag, err = builder.appendUpdateParentKeyLocks(
 		bindCtx,
 		tableDef,
 		alias,
@@ -731,6 +719,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				oldColName2Idx,
 				newColName2Idx,
 				targetSelected,
+				false,
 			)
 			if err != nil {
 				return 0, 0, err
@@ -792,6 +781,70 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	}
 	lastNodeID = builder.appendTaggedSinkScan(bindCtx, sourceStep, selectNodeTag)
 	return lastNodeID, selectNodeTag, nil
+}
+
+func (builder *QueryBuilder) collectUpdateParentForeignKeys(
+	bindCtx *BindContext,
+	tableDef *plan.TableDef,
+	alias string,
+	newColName2Idx map[string]int32,
+) ([]updateParentForeignKey, error) {
+	parentColIDToName := make(map[uint64]string, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		parentColIDToName[col.ColId] = col.Name
+	}
+
+	affected := make([]updateParentForeignKey, 0)
+	visited := make(map[uint64]struct{}, len(tableDef.RefChildTbls))
+	for _, childTableID := range tableDef.RefChildTbls {
+		if childTableID == 0 {
+			childTableID = tableDef.TblId
+		}
+		if _, ok := visited[childTableID]; ok {
+			continue
+		}
+		visited[childTableID] = struct{}{}
+
+		childObjRef, childTableDef, err := builder.compCtx.ResolveById(childTableID, bindCtx.snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if childTableDef == nil {
+			return nil, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"foreign-key child table %d not found",
+				childTableID,
+			)
+		}
+		if err := validateTableIndexDefinitions(childTableDef); err != nil {
+			return nil, err
+		}
+
+		for _, fk := range childTableDef.Fkeys {
+			referencesCurrentTable := fk.ForeignTbl == tableDef.TblId ||
+				(fk.ForeignTbl == 0 && childTableDef.TblId == tableDef.TblId)
+			if !referencesCurrentTable {
+				continue
+			}
+			for _, parentColID := range fk.ForeignCols {
+				if _, ok := newColName2Idx[alias+"."+parentColIDToName[parentColID]]; ok {
+					affected = append(affected, updateParentForeignKey{
+						childObjRef:   childObjRef,
+						childTableDef: childTableDef,
+						fk:            fk,
+					})
+					break
+				}
+			}
+		}
+	}
+	sort.SliceStable(affected, func(i, j int) bool {
+		if affected[i].childTableDef.TblId != affected[j].childTableDef.TblId {
+			return affected[i].childTableDef.TblId < affected[j].childTableDef.TblId
+		}
+		return affected[i].fk.Name < affected[j].fk.Name
+	})
+	return affected, nil
 }
 
 func (builder *QueryBuilder) appendUpdateParentKeyLocks(
@@ -1791,6 +1844,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
+	filterInvalid bool,
 ) (int32, int32, error) {
 	sourceNode := builder.updateInputProjectNode(lastNodeID)
 	sourceTypes := make([]plan.Type, len(sourceNode.ProjectList))
@@ -1946,24 +2000,27 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 			return 0, 0, buildErr
 		}
 	}
-	assertExpr, err := BindFuncExprImplByPlanExpr(
-		builder.GetContext(),
-		"assert",
-		[]*plan.Expr{
-			ok,
-			makePlan2StringConstExprWithType(
-				"Cannot delete or update a parent row: a foreign key constraint fails",
-			),
-			makePlan2StringConstExprWithType(foreignKeyRowIsReferencedAssert),
-		},
-	)
-	if err != nil {
-		return 0, 0, err
+	filterExpr := ok
+	if !filterInvalid {
+		filterExpr, err = BindFuncExprImplByPlanExpr(
+			builder.GetContext(),
+			"assert",
+			[]*plan.Expr{
+				ok,
+				makePlan2StringConstExprWithType(
+					"Cannot delete or update a parent row: a foreign key constraint fails",
+				),
+				makePlan2StringConstExprWithType(foreignKeyRowIsReferencedAssert),
+			},
+		)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{markNodeID},
-		FilterList: []*plan.Expr{assertExpr},
+		FilterList: []*plan.Expr{filterExpr},
 	}, bindCtx)
 
 	validatedTag := builder.genNewBindTag()

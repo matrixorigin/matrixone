@@ -29,9 +29,9 @@ type DMLContext struct {
 	isClusterTable []bool
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
-	// updateTargetOrder records the first appearance of each qualified target in
-	// the SET list. Table binding order follows the join tree and can differ from
-	// MySQL's per-target UPDATE IGNORE evaluation order.
+	// updateTargetOrder records writable targets in the table-list binding order.
+	// MySQL evaluates repeated physical targets in this order, independently of
+	// the order in which their assignments appear in the SET list.
 	updateTargetOrder []int
 	updatePartCol     []bool //If update cols contains col that Partition expr used
 	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
@@ -66,14 +66,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		}
 	}
 
-	seenUpdateTarget := make(map[string]struct{})
 	appendToTbl := func(table, column string, expr tree.Expr) {
 		if _, exists := usedTbl[table]; !exists {
 			usedTbl[table] = make(map[string]tree.Expr)
-		}
-		if _, exists := seenUpdateTarget[table]; !exists {
-			seenUpdateTarget[table] = struct{}{}
-			dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, dmlCtx.aliasMap[table])
 		}
 		usedTbl[table][column] = expr
 	}
@@ -128,6 +123,11 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
+	}
+	for idx, columnMap := range dmlCtx.updateCol2Expr {
+		if len(columnMap) > 0 {
+			dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+		}
 	}
 
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
