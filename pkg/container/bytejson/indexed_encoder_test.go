@@ -15,10 +15,30 @@
 package bytejson
 
 import (
+	"errors"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+type mutableIndexedArray struct {
+	values []ByteJson
+	errAt  int
+}
+
+func (s *mutableIndexedArray) Len() int { return len(s.values) }
+func (s *mutableIndexedArray) Value(index int) (ByteJson, error) {
+	if index == s.errAt {
+		return ByteJson{}, errors.New("indexed value failed")
+	}
+	return s.values[index], nil
+}
+
+type oversizedIndexedArray struct{}
+
+func (oversizedIndexedArray) Len() int                    { return math.MaxUint32 + 1 }
+func (oversizedIndexedArray) Value(int) (ByteJson, error) { return Null, nil }
 
 type testIndexedArray []ByteJson
 
@@ -75,4 +95,35 @@ func TestIndexedContainerEncoders(t *testing.T) {
 	validator := invalid.(ByteJsonDataValidator)
 	err = validator.ValidateData()
 	require.Error(t, err)
+}
+
+func TestIndexedContainerEncoderFailureBoundaries(t *testing.T) {
+	one, err := CreateByteJSONWithCheck(int64(1))
+	require.NoError(t, err)
+
+	nilArray := NewIndexedArrayEncoder(nil).(*indexedContainerEncoder)
+	require.Error(t, nilArray.ValidateData())
+	require.Zero(t, nilArray.DataSize())
+	require.Error(t, NewIndexedArrayEncoder(oversizedIndexedArray{}).(ByteJsonDataValidator).ValidateData())
+
+	invalidLiteral := &mutableIndexedArray{
+		values: []ByteJson{{Type: TpCodeLiteral, Data: nil}},
+		errAt:  -1,
+	}
+	require.Error(t, NewIndexedArrayEncoder(invalidLiteral).(ByteJsonDataValidator).ValidateData())
+	tooLongKey := make([]byte, math.MaxUint16+1)
+	require.Error(t, NewIndexedObjectEncoder(testIndexedObject{
+		keys: [][]byte{tooLongKey}, values: []ByteJson{one},
+	}).(ByteJsonDataValidator).ValidateData())
+
+	failing := &mutableIndexedArray{values: []ByteJson{one}, errAt: 0}
+	require.Error(t, NewIndexedArrayEncoder(failing).(ByteJsonDataValidator).ValidateData())
+	failing.errAt = -1
+	encoder := NewIndexedArrayEncoder(failing).(*indexedContainerEncoder)
+	require.NoError(t, encoder.ValidateData())
+	require.NoError(t, encoder.ValidateData())
+	require.Error(t, func() error {
+		_, err := encoder.EncodeDataInto(make([]byte, encoder.DataSize()-1))
+		return err
+	}())
 }

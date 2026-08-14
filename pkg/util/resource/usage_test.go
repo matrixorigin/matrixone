@@ -369,3 +369,102 @@ func TestAllocationAccountTotalsBoundedSize(t *testing.T) {
 		t.Fatalf("AllocationAccountTotals is %d bytes, limit is 64", got)
 	}
 }
+
+func TestAllocationOwnerTotalsInvalidShapeAndJSONBoundaries(t *testing.T) {
+	var nilTotals *AllocationAccountTotals
+	if quality := nilTotals.AddOwnerGeneration(1, 1, 0); quality&QualityInvariantFailure == 0 {
+		t.Fatalf("nil totals quality = %v", quality)
+	}
+	if _, ok := nilTotals.Owner(1); ok || nilTotals.OwnerCount() != 0 ||
+		nilTotals.Validate()&QualityInvariantFailure == 0 {
+		t.Fatal("nil totals accepted owner state")
+	}
+
+	invalid := AllocationAccountTotals{
+		owners: &allocationOwnerSet{mask: 1, values: []AllocationOwnerTotals{{}}},
+	}
+	if quality := invalid.AddOwnerGeneration(1, 1, 0); quality&QualityInvariantFailure == 0 {
+		t.Fatalf("invalid add quality = %v", quality)
+	}
+	if _, ok := invalid.Owner(1); ok || invalid.OwnerCount() != 0 ||
+		invalid.Validate()&QualityInvariantFailure == 0 {
+		t.Fatal("invalid sparse owner shape was observable")
+	}
+	if _, err := json.Marshal(invalid); err == nil {
+		t.Fatal("invalid sparse owner shape was serialized")
+	}
+	if quality := mergeAllocationOwnerTotals(&invalid, &AllocationAccountTotals{}); quality&QualityInvariantFailure == 0 {
+		t.Fatalf("invalid merge quality = %v", quality)
+	}
+	if quality := mergeAllocationOwnerTotals(nil, &AllocationAccountTotals{}); quality&QualityInvariantFailure == 0 {
+		t.Fatalf("nil merge quality = %v", quality)
+	}
+	if nilTotals.OwnerAttributionCoversTotals() {
+		t.Fatal("nil totals covered aggregate peaks")
+	}
+	if clone := (AllocationAccountTotals{}).Clone(); clone.owners != nil {
+		t.Fatal("empty clone gained owner storage")
+	}
+	var liveMismatch AllocationAccountTotals
+	liveMismatch.GenerationCount = 1
+	liveMismatch.ValidGenerationCount = 1
+	liveMismatch.MaxGenerationPeak = 2
+	liveMismatch.SumGenerationPeak = 2
+	_ = liveMismatch.AddOwnerGeneration(1, 2, 1)
+	liveMismatch.LiveBytesAtTerminal = 0
+	if quality := liveMismatch.Validate(); quality&QualityInvariantFailure == 0 {
+		t.Fatalf("owner live mismatch quality = %v", quality)
+	}
+
+	var source AllocationAccountTotals
+	if quality := source.AddOwnerGeneration(63, math.MaxUint64, 0); quality != 0 {
+		t.Fatalf("owner 63 quality = %v", quality)
+	}
+	if quality := source.AddOwnerGeneration(1, 1, 0); quality != 0 {
+		t.Fatalf("owner 1 quality = %v", quality)
+	}
+	source.GenerationCount = 1
+	source.ValidGenerationCount = 1
+	source.MaxGenerationPeak = math.MaxUint64
+	source.SumGenerationPeak = math.MaxUint64
+	if !source.OwnerAttributionCoversTotals() {
+		t.Fatal("saturating owner coverage did not cover aggregate peak")
+	}
+	clone := source.Clone()
+	if clone.owners == source.owners || clone.OwnerCount() != 2 {
+		t.Fatal("clone did not detach sparse owner storage")
+	}
+	if _, ok := clone.Owner(0); ok {
+		t.Fatal("owner zero unexpectedly present")
+	}
+	if _, ok := clone.Owner(AllocationOwnerMaxID + 1); ok {
+		t.Fatal("out-of-range owner unexpectedly present")
+	}
+
+	for _, payload := range []string{
+		`{"Owners":{}}`,
+		`{"Owners":[`,
+	} {
+		var decoded AllocationAccountTotals
+		if err := json.Unmarshal([]byte(payload), &decoded); err == nil {
+			t.Fatalf("accepted malformed owner JSON: %s", payload)
+		}
+	}
+	for _, payload := range []string{"", `[{"Owner":`} {
+		var list allocationOwnerTotalsJSONList
+		if err := list.UnmarshalJSON([]byte(payload)); err == nil {
+			t.Fatalf("accepted malformed owner list: %s", payload)
+		}
+	}
+	var nullOwners AllocationAccountTotals
+	if err := json.Unmarshal([]byte(`{"GenerationCount":0,"Owners":null}`), &nullOwners); err != nil {
+		t.Fatal(err)
+	}
+	var sorted AllocationAccountTotals
+	if err := json.Unmarshal([]byte(`{"GenerationCount":1,"ValidGenerationCount":1,"MaxGenerationPeak":3,"SumGenerationPeak":3,"Owners":[{"Owner":3,"MaxGenerationPeak":2,"SumGenerationPeak":2},{"Owner":1,"MaxGenerationPeak":1,"SumGenerationPeak":1}]}`), &sorted); err != nil {
+		t.Fatal(err)
+	}
+	if first, ok := sorted.Owner(1); !ok || first.SumGenerationPeak != 1 {
+		t.Fatalf("owner sort result = %+v, present=%v", first, ok)
+	}
+}

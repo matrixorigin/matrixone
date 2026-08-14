@@ -886,6 +886,32 @@ func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	plainStatic.Clean(mp)
 }
 
+func TestPrepareParamKindMarshalInvalidBoundaryMatrix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	var wire bytes.Buffer
+	_, err := nilBatch.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.ErrorIs(t, nilBatch.MarshalBinaryWithPrepareParamKindsTo(&wire), io.ErrClosedPipe)
+
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, mp))
+	bat.SetRowCount(1)
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamKind(255))
+	_, err = bat.PrepareParamKindMetadataSize()
+	require.Error(t, err)
+	_, err = bat.MarshalBinaryWithPrepareParamKindsSize()
+	require.Error(t, err)
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
+	require.ErrorIs(t, bat.AppendPrepareParamKindMetadataTo(nil), io.ErrClosedPipe)
+	bat.Clean(mp)
+
+	_, err = NewWithSize(0).MarshalBinaryWithPrepareParamKinds(nil, true)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := NewWithSize(1)

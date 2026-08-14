@@ -422,6 +422,40 @@ func TestAccountedMergeOrderOptionalTailFallsBackToCommittedRun(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestMergeOrderAllocationBindingBoundaryMatrix(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
+	require.NoError(t, err)
+	first, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	second, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	var nilOp *MergeOrder
+	require.ErrorIs(t, nilOp.SetAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, nilOp.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	var nilCtr *container
+	require.ErrorIs(t, nilCtr.setAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, nilCtr.clearAllocationAccount(first))
+
+	op := newAccountedMergeOrder()
+	op.ctr.batchList = []*batch.Batch{batch.NewWithSize(0)}
+	require.ErrorIs(t, op.SetAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	op.ctr.batchList = nil
+	require.ErrorIs(t, op.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, op.SetAllocationAccount(first))
+	require.NoError(t, op.SetAllocationAccount(first))
+	require.ErrorIs(t, op.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, op.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	op.ctr.orderCols = [][]*vector.Vector{{}}
+	require.ErrorIs(t, op.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	op.ctr.orderCols = nil
+	require.NoError(t, op.ClearAllocationAccount(first))
+	_, _, err = registry.CompleteTerminal(first)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(second)
+	require.NoError(t, err)
+}
+
 func BenchmarkMergeOrderAccountedResident(b *testing.B) {
 	benchmarkMergeOrderResident(b, true)
 }

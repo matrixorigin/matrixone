@@ -94,6 +94,13 @@ func newBatchAllocationTestSource(
 func TestBatchAccountedExtraBufferMoveAndClean(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 8)
 	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	require.ErrorIs(t, nilBatch.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	nilBatch.MoveExtraBufferFrom(nil)
+	empty := NewWithSize(0)
+	require.ErrorIs(t, empty.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	empty.MoveExtraBufferFrom(empty)
+	empty.Clean(mp)
 	buffer, err := mpool.NewAccountedBuffer(mp, state.account, 1, 5)
 	require.NoError(t, err)
 	_, err = buffer.Write(bytes.Repeat([]byte("x"), 4096))

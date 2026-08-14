@@ -451,6 +451,13 @@ func TestAccountedTopSetClearContract(t *testing.T) {
 	second, err := registry.OpenWithController(64<<20, generation)
 	require.NoError(t, err)
 	op := newAccountedTop(1)
+	var nilOp *Top
+	require.ErrorIs(t, nilOp.SetAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, nilOp.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	var nilCtr *container
+	require.ErrorIs(t, nilCtr.setAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, nilCtr.clearAllocationAccount(first))
+	require.ErrorIs(t, op.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, op.SetAllocationAccount(first))
 	require.NoError(t, op.SetAllocationAccount(first))
 	require.ErrorIs(t, op.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)

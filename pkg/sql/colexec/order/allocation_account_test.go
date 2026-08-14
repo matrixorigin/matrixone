@@ -16,6 +16,7 @@ package order
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 
@@ -547,6 +548,7 @@ func TestOrderAllocationBindingAndTerminalErrorContracts(t *testing.T) {
 
 	var nilOp *Order
 	require.ErrorIs(t, nilOp.SetAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, nilOp.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
 	require.ErrorIs(t, op.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, op.SetAllocationAccount(first))
 	require.NoError(t, op.SetAllocationAccount(first))
@@ -568,6 +570,73 @@ func TestOrderAllocationBindingAndTerminalErrorContracts(t *testing.T) {
 	controlled := orderTerminalCapacityError(
 		context.Background(), mpool.ErrAllocationAccountCapacity)
 	require.True(t, moerr.IsMoErrCode(controlled, moerr.ErrOOM), controlled)
+}
+
+func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	var nilCtr *container
+	require.ErrorIs(t, nilCtr.setAllocationAccount(account), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, nilCtr.clearAllocationAccount(account))
+	ctr := &container{sortExprExecutor: []colexec.ExpressionExecutor{nil}}
+	require.ErrorIs(t, ctr.setAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	ctr.sortExprExecutor = nil
+	require.NoError(t, ctr.setAllocationAccount(account))
+	require.NoError(t, ctr.setAllocationAccount(account))
+
+	_, _, err = growOrderSlice[int](nil, nil, -1, proc, account, ordersites.OrderSelections)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	_, _, err = growOrderSlice[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	plain, owner, err := growOrderSlice[int](nil, nil, 3, proc, nil, ordersites.OrderSelections)
+	require.NoError(t, err)
+	require.Len(t, plain, 3)
+	require.Nil(t, owner)
+
+	accounted, accountedOwner, err := growOrderSlice[int](
+		nil, nil, 3, proc, account, ordersites.OrderSelections)
+	require.NoError(t, err)
+	require.Len(t, accounted, 3)
+	accounted, accountedOwner, err = growOrderSlice(
+		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections)
+	require.NoError(t, err)
+	require.Len(t, accounted, 2)
+	accounted, accountedOwner, err = growOrderSlice(
+		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections)
+	require.NoError(t, err)
+	require.Len(t, accounted, 100)
+	mpool.FreeSlice(accountedOwner, accounted)
+	_, _, err = growOrderSlice[uint64](
+		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+	rejectRegistry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	rejectController := &orderTestCapacityController{limit: 1 << 20, rejectNext: true}
+	rejectAccount, err := rejectRegistry.OpenWithController(1<<20, rejectController)
+	require.NoError(t, err)
+	_, _, err = growOrderSlice[int](
+		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	_, _, err = rejectRegistry.CompleteTerminal(rejectAccount)
+	require.NoError(t, err)
+
+	_, err = ctr.appendCheckpoints(0, proc)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	checkpoints, err := ctr.appendCheckpoints(2, proc)
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 2)
+	require.ErrorIs(t, ctr.clearAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	ctr.releaseAttempt()
+	require.NoError(t, ctr.clearAllocationAccount(account))
+	snapshot, _, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.Zero(t, snapshot.Used)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestAccountedOrderPrepareFailureRollsBackExecutors(t *testing.T) {

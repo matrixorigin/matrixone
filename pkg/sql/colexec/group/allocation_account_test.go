@@ -261,6 +261,53 @@ func installGroupTestAllocation(
 	}
 }
 
+func TestGroupAllocationBindingAndRecoveryBoundaryMatrix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.Base.Lim.Size = 64 << 20
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(2, 64)
+	require.NoError(t, err)
+	first, err := registry.OpenWithController(64<<20, generation)
+	require.NoError(t, err)
+	second, err := registry.OpenWithController(64<<20, generation)
+	require.NoError(t, err)
+
+	var nilCtr *container
+	require.ErrorIs(t, nilCtr.setAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, nilCtr.clearAllocationAccount(first))
+	require.NoError(t, nilCtr.releaseRecoveryCapacity(first))
+	require.NoError(t, nilCtr.clearRecoveryCapacity(first))
+	require.NoError(t, nilCtr.releaseFinalRecoveryCapacity())
+
+	ctr := &container{mp: proc.Mp()}
+	require.ErrorIs(t, ctr.setAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	ctr.mp = nil
+	require.NoError(t, ctr.setAllocationAccount(first))
+	require.NoError(t, ctr.setAllocationAccount(first))
+	require.ErrorIs(t, ctr.setAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, ctr.installRecoveryCapacity(), mpool.ErrAllocationAccountInvalid)
+	ctr.budget = generation
+	require.NoError(t, ctr.installRecoveryCapacity())
+	require.NoError(t, ctr.installRecoveryCapacity())
+	require.ErrorIs(t, ctr.releaseRecoveryCapacity(second), mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, ctr.clearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	ctr.mp = proc.Mp()
+	require.ErrorIs(t, ctr.clearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
+	ctr.mp = nil
+	require.NoError(t, ctr.releaseRecoveryCapacity(first))
+	require.NoError(t, ctr.releaseRecoveryCapacity(first))
+	require.NoError(t, ctr.clearAllocationAccount(first))
+
+	_, _, err = registry.CompleteTerminal(first)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(second)
+	require.NoError(t, err)
+	require.Zero(t, generation.Snapshot().Used)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func finalizeGroupTestAllocation(
 	t testing.TB,
 	op any,
@@ -377,6 +424,31 @@ func TestDiscardableGroupScratchRetriesAtExactFinalCapacity(t *testing.T) {
 }
 
 func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
+	require.Equal(t, uint64(7), mustGroupRecoveryAdd(t, 3, 4))
+	_, err := groupRecoveryAdd(math.MaxUint64, 1)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	require.Equal(t, uint64(12), mustGroupRecoveryMul(t, 3, 4))
+	_, err = groupRecoveryMul(math.MaxUint64, 2)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+
+	var nilCtr *container
+	require.NoError(t, nilCtr.ensureRecoveryCapacity(1, nil))
+	require.True(t, nilCtr.recoveryCapacityCovers(1))
+	withoutSlot := &container{}
+	require.NoError(t, withoutSlot.ensureRecoveryCapacity(1, nil))
+	require.True(t, withoutSlot.recoveryCapacityCovers(1))
+	inactive := &container{recoveryCapacity: process.NewExecutionRecoveryCapacitySlot()}
+	require.ErrorIs(t, inactive.ensureRecoveryCapacity(-1, nil),
+		process.ErrExecutionResourceInvalid)
+	require.Error(t, inactive.ensureRecoveryCapacity(1, nil))
+	require.False(t, inactive.recoveryCapacityCovers(1))
+	_, err = inactive.recoveryCapacityTarget(-1)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	_, err = inactive.recoveryCapacityTarget(math.MaxInt)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	require.ErrorIs(t, inactive.ensureRecoveryCapacity(math.MaxInt, nil),
+		process.ErrExecutionResourceInvalid)
+
 	tests := []struct {
 		name     string
 		current  uint64
@@ -424,6 +496,20 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 	require.False(t, ctr.recoveryCapacityCovers(1))
 	hash.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+func mustGroupRecoveryAdd(t *testing.T, left, right uint64) uint64 {
+	t.Helper()
+	value, err := groupRecoveryAdd(left, right)
+	require.NoError(t, err)
+	return value
+}
+
+func mustGroupRecoveryMul(t *testing.T, left, right uint64) uint64 {
+	t.Helper()
+	value, err := groupRecoveryMul(left, right)
+	require.NoError(t, err)
+	return value
 }
 
 func TestOptionalSpillBufferDoesNotBorrowRecoveryFloor(t *testing.T) {

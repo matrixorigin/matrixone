@@ -101,6 +101,16 @@ func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {
 	mp := mpool.MustNewZero()
 	destination := NewOffHeapVecWithType(types.T_int64.ToType())
 	defer destination.Free(mp)
+	var nilVector *Vector
+	require.Error(t, nilVector.MarshalSelectedRowsTo(io.Discard, nil))
+	require.Error(t, destination.marshalSelectedRowsTo(nil, 0, func(int) int { return 0 }))
+	require.Error(t, destination.marshalSelectedRowsTo(
+		io.Discard, -1, func(int) int { return 0 }))
+	require.Error(t, destination.MarshalSelectedRowsTo(io.Discard, []int32{0}))
+	require.Error(t, nilVector.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), 0, mp))
+	require.Error(t, destination.UnmarshalSelectedRowsFrom(nil, 0, mp))
+	require.Error(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), 0, nil))
+	require.Error(t, destination.UnmarshalSelectedRowsFrom(bytes.NewReader(nil), -1, mp))
 	constant := NewOffHeapVecWithType(types.T_int64.ToType())
 	constant.ToConst()
 	defer constant.Free(mp)
@@ -188,4 +198,47 @@ func TestSelectedRowsCodecRejectsInvalidMetadataBeforePublishingRows(t *testing.
 			require.Zero(t, destination.Length())
 		})
 	}
+}
+
+func TestSelectedRowsCodecEveryWireBoundaryIsAtomic(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("x"), 80), false, mp))
+	source.GetGrouping().Add(0)
+	require.NoError(t, source.SetPrepareParamKindsWithMP(
+		[]PrepareParamKind{PrepareParamDecimal}, mp))
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0}))
+	payload := encoded.Bytes()
+	for cut := 0; cut < len(payload); cut++ {
+		destination := NewOffHeapVecWithType(types.T_varchar.ToType())
+		require.Error(t, destination.UnmarshalSelectedRowsFrom(
+			bytes.NewReader(payload[:cut]), 1, mp), "cut=%d", cut)
+		require.Zero(t, destination.Length(), "cut=%d", cut)
+		destination.Free(mp)
+	}
+	for cut := 0; cut < len(payload); cut++ {
+		require.Error(t, source.MarshalSelectedRowsTo(
+			&failSelectedRowsWriter{remaining: cut}, []int32{0}), "cut=%d", cut)
+	}
+	source.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+type failSelectedRowsWriter struct {
+	remaining int
+}
+
+func (w *failSelectedRowsWriter) Write(value []byte) (int, error) {
+	if len(value) <= w.remaining {
+		w.remaining -= len(value)
+		return len(value), nil
+	}
+	if w.remaining == 0 {
+		return 0, io.ErrClosedPipe
+	}
+	n := w.remaining
+	w.remaining = 0
+	return n, io.ErrClosedPipe
 }

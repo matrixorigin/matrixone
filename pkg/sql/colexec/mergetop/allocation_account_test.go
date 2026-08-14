@@ -16,6 +16,7 @@ package mergetop
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 
@@ -427,6 +428,7 @@ func TestMergeTopAllocationBindingContract(t *testing.T) {
 
 	var nilOp *MergeTop
 	require.ErrorIs(t, nilOp.SetAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t, nilOp.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvalid)
 	require.ErrorIs(t, op.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, op.SetAllocationAccount(first))
 	require.NoError(t, op.SetAllocationAccount(first))
@@ -436,6 +438,51 @@ func TestMergeTopAllocationBindingContract(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = registry.CompleteTerminal(second)
 	require.NoError(t, err)
+}
+
+func TestMergeTopAllocationHelperBoundaryMatrix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	var nilCtr *container
+	require.ErrorIs(t, nilCtr.setAllocationAccount(account), mpool.ErrAllocationAccountInvalid)
+	require.NoError(t, nilCtr.clearAllocationAccount(account))
+	ctr := &container{executorsForOrderList: []colexec.ExpressionExecutor{nil}}
+	require.ErrorIs(t, ctr.setAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	ctr.executorsForOrderList = nil
+	require.NoError(t, ctr.setAllocationAccount(account))
+	require.NoError(t, ctr.setAllocationAccount(account))
+
+	_, err = growMergeTopSelections(nil, -1, proc, account)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	plain, err := growMergeTopSelections(nil, 3, proc, nil)
+	require.NoError(t, err)
+	require.Len(t, plain, 3)
+	accounted, err := growMergeTopSelections(nil, 3, proc, account)
+	require.NoError(t, err)
+	accounted, err = growMergeTopSelections(accounted, 2, proc, account)
+	require.NoError(t, err)
+	require.Len(t, accounted, 2)
+	_, err = growMergeTopSelections(nil, math.MaxInt, proc, account)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+	ctr.sels = accounted
+
+	_, err = ctr.appendCheckpoints(0, proc)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	checkpoints, err := ctr.appendCheckpoints(2, proc)
+	require.NoError(t, err)
+	require.Len(t, checkpoints, 2)
+	require.ErrorIs(t, ctr.clearAllocationAccount(account), mpool.ErrAllocationAccountInvariant)
+	ctr.free(proc)
+	require.NoError(t, ctr.clearAllocationAccount(account))
+	snapshot, _, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.Zero(t, snapshot.Used)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestMergeTopTerminalCapacityErrorPreservesNonCapacityFailures(t *testing.T) {
