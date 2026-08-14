@@ -66,6 +66,7 @@ select count(*) from (select c from pad_char_set8 union select c from pad_char_s
 select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
 select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
+select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;
 
 set sql_mode = '';

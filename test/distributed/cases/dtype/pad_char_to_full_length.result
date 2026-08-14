@@ -106,6 +106,9 @@ select count(*) from (select c from pad_char_set8 minus select c from pad_char_s
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 ➤ length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  𝄀
 8  ¦  4D4F202020202020
+select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  𝄀
+8  ¦  4D4F202020202020
 execute pad_char_stmt;
 ➤ c[1,6,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
 MO        ¦  8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  MO        ¦  8  ¦  4D4F202020202020
