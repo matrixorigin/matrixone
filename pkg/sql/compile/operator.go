@@ -1676,7 +1676,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
 	}
-	arg.TsType = node.Timestamp.Typ
+	arg.TsType = plan2.TimeWindowBoundaryType(node.Timestamp.Typ)
 	return arg
 }
 

@@ -7660,9 +7660,6 @@ func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.Ti
 	if boundaryType.Id == 0 && fallback != nil {
 		boundaryType = *DeepCopyType(fallback)
 	}
-	if fallback != nil && boundaryType.Scale < fallback.Scale {
-		boundaryType.Scale = fallback.Scale
-	}
 	return normalizeTimeWindowBoundaryType(boundaryType, astTimeWindow)
 }
 
@@ -7687,27 +7684,52 @@ func updateTimeWindowBoundaryTypes(ctx *BindContext, boundaryType plan.Type) {
 	}
 	ctx.timeBoundaryType = &boundaryType
 	for _, expr := range ctx.times {
-		if isTimeWindowBoundaryColRef(expr, ctx.timeTag) {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
 			expr.Typ = boundaryType
 		}
 	}
 	for _, expr := range ctx.projects {
-		updateDirectTimeWindowBoundaryType(expr, ctx.timeTag, boundaryType)
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
+	}
+	for _, expr := range ctx.results {
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
 	}
 }
 
-func isTimeWindowBoundaryColRef(expr *plan.Expr, timeTag int32) bool {
-	if expr == nil {
+func updateTimeWindowBoundaryType(ctx *BindContext, expr *plan.Expr, boundaryType plan.Type) {
+	if isTimeWindowBoundaryExpr(ctx, expr) {
+		expr.Typ = boundaryType
+	}
+}
+
+func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
+	if ctx == nil || expr == nil {
 		return false
 	}
 	col := expr.GetCol()
-	return col != nil && col.RelPos == timeTag && (col.Name == TimeWindowStart || col.Name == TimeWindowEnd)
-}
-
-func updateDirectTimeWindowBoundaryType(expr *plan.Expr, timeTag int32, boundaryType plan.Type) {
-	if isTimeWindowBoundaryColRef(expr, timeTag) {
-		expr.Typ = boundaryType
+	if col == nil {
+		return false
 	}
+	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
+		return true
+	}
+	if col.RelPos != ctx.timeTag {
+		return false
+	}
+
+	// Repeated references to a time-window boundary are resolved through
+	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
+	// the time-tag/column position, not the boundary name. Resolve the carrier
+	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
+	// the same type as their first occurrence. Other time-window aggregates are
+	// function expressions in ctx.times and therefore remain unaffected.
+	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
+		return false
+	}
+	carrier := ctx.times[col.ColPos]
+	carrierCol := carrier.GetCol()
+	return carrierCol != nil &&
+		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
 }
 
 func (builder *QueryBuilder) bindTimeWindow(

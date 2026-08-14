@@ -136,6 +136,33 @@ func makeIntervalExpr(valueExpr *plan.Expr, unit string) *plan.Expr {
 	}
 }
 
+func makeFloat64ColumnExpr(relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_float64),
+			NotNullable: true,
+		},
+	}
+}
+
+func makeFunctionExprForResetDate(name string, typ plan.Type, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: args,
+			},
+		},
+		Typ: typ,
+	}
+}
+
 // Helper to extract int64 value from a constant expression
 // Handles both literal expressions and cast function expressions
 func extractInt64Value(expr *plan.Expr) int64 {
@@ -332,4 +359,31 @@ func TestResetDateFunctionArgsDecimalIntervalWithCast(t *testing.T) {
 		intervalType := extractInt64Value(args[2])
 		require.Equal(t, int64(types.MicroSecond), intervalType, "Interval type should be MicroSecond")
 	})
+}
+
+func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.T) {
+	ctx := context.Background()
+
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	literalFirstDynamicExpr := makeFunctionExprForResetDate(
+		"+",
+		plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		makeFloat64Const(1000),
+		makeFloat64ColumnExpr(0, 0),
+	)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(literalFirstDynamicExpr, "SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, dateExpr, args[0])
+
+	castExpr := args[1].GetF()
+	require.NotNil(t, castExpr, "dynamic interval expression should be cast, not folded to a literal")
+	require.NotNil(t, castExpr.Func)
+	require.Equal(t, "cast", castExpr.Func.GetObjName())
+	require.Len(t, castExpr.Args, 2)
+	require.Equal(t, literalFirstDynamicExpr, castExpr.Args[0], "the complete row-dependent expression must be preserved")
+
+	intervalType := extractInt64Value(args[2])
+	require.Equal(t, int64(types.Second), intervalType, "non-constant dynamic SECOND interval must not be rewritten to constant MICROSECOND")
 }

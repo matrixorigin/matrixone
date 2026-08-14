@@ -837,6 +837,70 @@ func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding 
 	}
 }
 
+func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}))
+	require.Equal(t, int32(fill), ctr.status)
+	require.LessOrEqual(t, ctr.left, nextValue)
+	require.Greater(t, ctr.right, nextValue)
+}
+
+func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}))
+	require.Equal(t, int32(nextWindow), ctr.status)
+	require.Equal(t, base, ctr.left)
+	require.Equal(t, base+interval, ctr.right)
+}
+
 // The boundary window is already included in the flushed generation. The
 // replacement generation must start at the following window, including when a
 // second internal flush is required.

@@ -409,6 +409,9 @@ func (s *service) Start() (err error) {
 		s.lifecycle = serviceStarted
 	}()
 
+	if err = s.waitForClusterSelfReady(); err != nil {
+		return err
+	}
 	if err = s.bootstrap(); err != nil {
 		return err
 	}

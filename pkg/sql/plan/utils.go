@@ -1621,7 +1621,8 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	var lit *plan.Literal
 	if constExpr.GetLit() != nil {
 		lit = constExpr.GetLit()
-	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
+	} else if funcExpr := constExpr.GetF(); funcExpr != nil &&
+		funcExpr.Func != nil && funcExpr.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.Args) > 0 {
 			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {
