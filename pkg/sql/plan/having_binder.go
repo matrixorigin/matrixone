@@ -460,12 +460,19 @@ func needsTimeWindowResultAggRemap(expr *Expr) bool {
 }
 
 func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
+	name := ""
+	if colPos >= 0 && int(colPos) < len(bindCtx.times) {
+		if col := bindCtx.times[colPos].GetCol(); col != nil {
+			name = col.Name
+		}
+	}
 	expr := &plan.Expr{
 		Typ: bindCtx.times[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: bindCtx.timeTag,
 				ColPos: colPos,
+				Name:   name,
 			},
 		},
 	}
