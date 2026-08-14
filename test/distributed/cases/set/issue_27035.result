@@ -1,0 +1,37 @@
+use test;
+drop table if exists sql_select_limit_27035;
+create table sql_select_limit_27035 (id int primary key);
+insert into sql_select_limit_27035 values (1), (2), (3), (4), (5);
+set @@sql_select_limit = 3;
+select id from sql_select_limit_27035 order by id;
+id
+1
+2
+3
+select id from sql_select_limit_27035 order by id limit 5;
+id
+1
+2
+3
+4
+5
+set @@sql_select_limit = default;
+prepare sql_select_limit_stmt from 'select id from sql_select_limit_27035 order by id';
+set @@sql_select_limit = 2;
+execute sql_select_limit_stmt;
+id
+1
+2
+set @@sql_select_limit = 4;
+execute sql_select_limit_stmt;
+id
+1
+2
+3
+4
+deallocate prepare sql_select_limit_stmt;
+set @@sql_select_limit = 0;
+select id from sql_select_limit_27035 order by id;
+id
+set @@sql_select_limit = default;
+drop table sql_select_limit_27035;

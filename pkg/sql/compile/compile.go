@@ -1369,6 +1369,18 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+		// sql_select_limit belongs to a client session. Background and internal
+		// SQL use the default (unlimited) behavior even if they happen to carry a
+		// variable resolver from the calling session.
+		if qry.ApplySqlSelectLimit &&
+			c.proc.Base.SessionInfo.ApplySQLSelectLimit &&
+			c.proc.GetResolveVariableFunc() != nil {
+			limitExpr, err := plan2.MakeSQLSelectLimitExpr(c.proc.Ctx)
+			if err != nil {
+				return nil, err
+			}
+			rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+		}
 
 		isAdaptive := c.isAdaptiveVectorSearch(qry)
 

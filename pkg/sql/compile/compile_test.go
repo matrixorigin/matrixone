@@ -88,8 +88,12 @@ func TestHasOrderedGroupConcat(t *testing.T) {
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
 	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
 		return "STRICT_TRANS_TABLES", nil
 	})
 	compilerCtx := plan2.NewEmptyCompilerContext()
@@ -138,6 +142,60 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
 	require.Nil(t, params.GetArea())
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
+}
+
+func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.GetSessionInfo().Buf = buffer.New()
+	limitValue := uint64(1)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return limitValue, nil
+		}
+		return "STRICT_TRANS_TABLES", nil
+	})
+
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	const sql = "select 1 union all select 2"
+	stmts, err := mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	rows := 0
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat != nil {
+			rows += bat.RowCount()
+		}
+		return nil
+	}
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 1, rows)
+
+	limitValue = 0
+	rows = 0
+	require.NoError(t, c.Reset(proc, time.Now(), fill, sql))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Zero(t, rows)
+
 	c.Release()
 	proc.Free()
 	proc.GetSessionInfo().Buf.Free()
@@ -224,7 +282,10 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return ^uint64(0), nil
+		}
 		return "STRICT_TRANS_TABLES", nil
 	})
 	compilerCtx := plan2.NewEmptyCompilerContext()
