@@ -562,7 +562,7 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, nil); err != nil {
 		return
 	}
 
