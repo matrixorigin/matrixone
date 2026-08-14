@@ -20,12 +20,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
@@ -118,6 +120,27 @@ func cloneCreatePlan(dstDef *plan.TableDef) *plan.Plan {
 			CreateTable: &plan.CreateTable{TableDef: dstDef},
 		},
 	}}}
+}
+
+func TestConstructTableCloneUsesPhysicalTemporaryDestination(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.SessionId = uuid.MustParse("11111111-2222-3333-4444-555555555555")
+
+	createPlan := cloneCreatePlan(&plan.TableDef{Name: "temp_dst"})
+	createPlan.GetDdl().GetCreateTable().Temporary = true
+	tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+		SrcTableDef:     &plan.TableDef{},
+		SrcObjDef:       &plan.ObjectRef{},
+		DstDatabaseName: "clone_db",
+		DstTableName:    "temp_dst",
+		CreateTable:     createPlan,
+	})
+	require.NoError(t, err)
+	t.Cleanup(tc.Release)
+	require.Equal(t,
+		defines.GenTempTableName(proc.Base.SessionInfo.SessionId, "clone_db", "temp_dst"),
+		tc.Ctx.DstTblName,
+	)
 }
 
 func TestConstructTableCloneReadsAllocatorAndMaximumFromSnapshot(t *testing.T) {

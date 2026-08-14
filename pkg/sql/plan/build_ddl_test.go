@@ -3157,6 +3157,40 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
+	tests := []struct {
+		name     string
+		castType string
+		oid      types.T
+		scale    int32
+	}{
+		{name: "date", castType: "date", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale zero", castType: "datetime", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale six", castType: "datetime(6)", oid: types.T_datetime, scale: 6},
+		{name: "timestamp scale three", castType: "timestamp(3)", oid: types.T_timestamp, scale: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table tw_rollup as " +
+				"select _wstart as ws, _wend as we, count(*) as c " +
+				"from (select 1 as k, cast('2026-01-01 00:00:01.123456' as " + test.castType + ") as event_ts) src " +
+				"group by k interval(event_ts, 1, minute)"
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			cols := plan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 3)
+			for _, idx := range []int{0, 1} {
+				require.Equal(t, int32(test.oid), cols[idx].Typ.Id, cols[idx].Name)
+				require.Equal(t, test.scale, cols[idx].Typ.Scale, cols[idx].Name)
+				require.False(t, cols[idx].Default.NullAbility, cols[idx].Name)
+			}
+		})
+	}
+}
+
 func TestCreateTableAsSelectKeepsNonTemporalLiteralNotNull(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	plan, err := buildSingleStmt(mock, t, "create table ctas_literal as select 1 as n")
