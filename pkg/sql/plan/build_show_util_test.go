@@ -201,12 +201,49 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 		IndexName: "idx_g",
 		Parts:     []string{"g"},
 		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		Visible:   true,
 	})
 
 	var snapshot *plan.Snapshot
 	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
+}
+
+func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
+	got, err := buildTestShowCreateTable(`CREATE TABLE invisible_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		body TEXT,
+		KEY idx_name(name) INVISIBLE,
+		FULLTEXT KEY idx_body(body) INVISIBLE
+	)`)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_name` (`name`) INVISIBLE")
+	require.Contains(t, got, "FULLTEXT `idx_body`(`body`) INVISIBLE")
+}
+
+func TestShowCreateTableUsesVisibleSystemIndexWithoutCatalogRow(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_mo_tables (
+		id INT PRIMARY KEY,
+		rel_logical_id BIGINT,
+		UNIQUE KEY idx_rel_logical_id(rel_logical_id)
+	)`)
+	require.NoError(t, err)
+	tableDef.TblId = catalog.MO_TABLES_ID
+	tableDef.Indexes[0].Option = nil
+	tableDef.Indexes[0].Visible = false
+
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, tableDef.TblId, tableDef, nil))
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.True(t, visible)
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`)")
+	require.NotContains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`) INVISIBLE")
 }
 
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
@@ -251,7 +288,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.False(t, visibility["uq_invisible"])
 
 	got, _, err := constructCreateTableSQL(
-		&mock.ctxt, tableDef, nil, true, nil, true, true,
+		&mock.ctxt, tableDef, nil, true, nil, true,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
@@ -268,6 +305,10 @@ func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *tes
 	)`)
 	require.NoError(t, err)
 	require.NotEmpty(t, tableDef.Indexes)
+	// A formatter caller can have a table ID but still lack ownership of its
+	// source catalog (for example, a subscription or dump). It must not issue a
+	// local mo_indexes lookup merely because a compiler context was supplied.
+	tableDef.TblId = 272466
 
 	// A pre-upgrade default-visible IndexDef has the same false proto3 value as
 	// an explicitly invisible index. Public reconstruction callers cannot tell
