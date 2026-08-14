@@ -395,6 +395,7 @@ func TestLazyCacheFSReadsMagicPrefixedRemoteObjectsWithoutLocalChecksum(t *testi
 			Size:   -1,
 		}},
 	}
+	defer vec.Release()
 	require.NoError(t, fs.Read(ctx, vec))
 	require.Equal(t, payload, vec.Entries[0].Data)
 
