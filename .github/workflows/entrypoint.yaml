@@ -92,26 +92,32 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@main
     secrets: inherit
 
+  # The BVT consumers wait for the shared build but must still run when it
+  # fails for infrastructure reasons (artifact-service outage, timeout,
+  # runner eviction): always() + explicit gates instead of a plain hard
+  # dependency, with an empty build_artifact steering the consumers onto
+  # their own from-source path. A genuine compile failure therefore costs
+  # two duplicate failures instead of silently skipping both BVT suites.
   matrixone-compose-ci:
     name: Matrixone Compose CI
     needs: [check-pr-valid, bvt-group-plan, matrixone-shared-build]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    if: ${{ always() && needs.check-pr-valid.outputs.pr_valid == 'true' && needs.bvt-group-plan.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
     with:
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
-      build_artifact: ${{ needs.matrixone-shared-build.outputs.artifact_name }}
+      build_artifact: ${{ needs.matrixone-shared-build.result == 'success' && needs.matrixone-shared-build.outputs.artifact_name || '' }}
     secrets: inherit
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
     needs: [check-pr-valid, bvt-group-plan, matrixone-shared-build]
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    if: ${{ always() && needs.check-pr-valid.outputs.pr_valid == 'true' && needs.bvt-group-plan.result == 'success' && needs.matrixone-shared-build.result != 'cancelled' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
     with:
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
-      build_artifact: ${{ needs.matrixone-shared-build.outputs.artifact_name }}
+      build_artifact: ${{ needs.matrixone-shared-build.result == 'success' && needs.matrixone-shared-build.outputs.artifact_name || '' }}
     secrets: inherit
 
   matrixone-utils-ci:

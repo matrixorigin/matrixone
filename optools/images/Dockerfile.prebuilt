@@ -11,7 +11,7 @@
 # equivalent to the runtime stage of optools/images/Dockerfile.
 FROM matrixorigin/ubuntu:22.04
 
-COPY mo-service /mo-service
+COPY --chmod=0755 mo-service /mo-service
 COPY etc /etc
 COPY lib/*.so /usr/local/lib/
 COPY dict /usr/local/share/jieba
@@ -20,7 +20,7 @@ ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
 # ldconfig and run mo-service to check the shared libraries (and the host
 # glibc the binary was linked against) resolve inside this image. A
 # coverage-instrumented binary requires a writable GOCOVERDIR even for -h.
-RUN chmod +x /mo-service && mkdir -p /tmp/coverage && ldconfig && GOCOVERDIR=/tmp/coverage /mo-service -h
+RUN mkdir -p /tmp/coverage && ldconfig && GOCOVERDIR=/tmp/coverage /mo-service -h
 
 WORKDIR /
 

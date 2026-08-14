@@ -23,10 +23,17 @@ ENV GOFLAGS=-modcacherw
 # the warm cache for every cgo-dependent package.
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
+# ENV (not `go env -w`): the Makefile exports its own GOPROXY default via
+# `GOPROXY ?=`, which only an environment variable overrides.
 ARG GOPROXY="https://proxy.golang.org,direct"
-RUN go env -w GOPROXY=${GOPROXY}
+ENV GOPROXY=${GOPROXY}
 
 COPY . .
+
+# Warm-flavor health ledger: soft-failed warms below record their outcome
+# here so consumers (and the canary) can see when a flavor has been broken
+# instead of silently paying cold compiles.
+RUN mkdir -p /mo-prebuilt && touch /mo-prebuilt/warm-status
 
 # The two published architectures warm different flavors, matching what PR
 # CI compiles on each: amd64 runs the BVT build and both UT jobs, arm64
@@ -54,23 +61,31 @@ RUN if [ "${TARGETARCH}" = "arm64" ]; then \
 # Flavor 1 (amd64): race + matrixone_test, as optools/run_ut.sh compiles for
 # the UT job in ci.yaml.
 RUN if [ "${TARGETARCH}" != "arm64" ]; then \
-      CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
-      go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./... \
-      || echo "WARNING: race UT warm incomplete; PR CI will compile the misses"; \
+      if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+        CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+        go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./...; then \
+        echo "warm-race=ok" >> /mo-prebuilt/warm-status; \
+      else \
+        echo "warm-race=FAILED" >> /mo-prebuilt/warm-status; \
+        echo "WARNING: race UT warm incomplete; PR CI will compile the misses"; \
+      fi; \
     fi
 
 # Flavor 2 (amd64): covermode=set with the full coverpkg list, exactly as
 # coverage-ut.yaml compiles (the coverpkg value is part of the compile key,
 # so the package-list filter must match that workflow verbatim).
 RUN if [ "${TARGETARCH}" != "arm64" ]; then \
-      cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
-      cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
-      CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
-      go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
-        -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope} \
-      || echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
+      if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
+        cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
+        CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+        CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+        go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
+          -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope}; then \
+        echo "warm-coverage=ok" >> /mo-prebuilt/warm-status; \
+      else \
+        echo "warm-coverage=FAILED" >> /mo-prebuilt/warm-status; \
+        echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
+      fi; \
     fi
 
 # Flavor 3 (arm64): the full static-check pass the SCA job runs. This warms
@@ -81,8 +96,12 @@ RUN if [ "${TARGETARCH}" != "arm64" ]; then \
 # stage can COPY it unconditionally.
 RUN mkdir -p /root/.cache/golangci-lint && \
     if [ "${TARGETARCH}" = "arm64" ]; then \
-      { make install-static-check-tools && make static-check; } \
-      || echo "WARNING: static-check warm incomplete; PR CI will compile the misses"; \
+      if make install-static-check-tools && make static-check; then \
+        echo "warm-static-check=ok" >> /mo-prebuilt/warm-status; \
+      else \
+        echo "warm-static-check=FAILED" >> /mo-prebuilt/warm-status; \
+        echo "WARNING: static-check warm incomplete; PR CI will compile the misses"; \
+      fi; \
     fi
 
 # Fingerprint the native inputs the prebuilt thirdparties were produced
@@ -91,8 +110,7 @@ RUN mkdir -p /root/.cache/golangci-lint && \
 # whose native tree diverges from this image all rebuild from source
 # instead of silently testing stale native code. Bump schema= whenever the
 # native build contract (base image, compiler, layout) changes.
-RUN mkdir -p /mo-prebuilt && \
-    { \
+RUN { \
       echo "schema=1"; \
       echo "os=$(uname -s)"; \
       echo "arch=$(uname -m)"; \
@@ -120,3 +138,4 @@ COPY --from=warm /root/.cache/golangci-lint /root/.cache/golangci-lint
 # before restoring the install tree.
 COPY --from=warm /go/src/github.com/matrixorigin/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
 COPY --from=warm /mo-prebuilt/thirdparties.fingerprint /mo-prebuilt/thirdparties.fingerprint
+COPY --from=warm /mo-prebuilt/warm-status /mo-prebuilt/warm-status
