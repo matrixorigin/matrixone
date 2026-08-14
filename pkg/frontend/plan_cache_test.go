@@ -226,6 +226,22 @@ func TestSessionUserVariableAssignmentClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "v"}}}
+	pc.cache("select 1 into @v", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	input := &UserInput{sql: "select 1 into @v"}
+	input.genHash()
+
+	// A cached SELECT-INTO plan is stale by definition: its user-variable
+	// references were bound before the assignment executed.  The lookup must
+	// discard it so the next execution is rebound against the new type.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}
@@ -260,6 +276,23 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.False(t, ses.isCached("x"))
 	require.NotPanics(t, func() { ses.cleanCache() })
 	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
+
+func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {
+	ses := &Session{planCache: newPlanCache(2)}
+	first := &trackedStatement{}
+	second := &trackedStatement{}
+	ses.cachePlan("first", []tree.Statement{first}, []*plan.Plan{{}})
+	ses.cachePlan("second", []tree.Statement{second}, []*plan.Plan{{}})
+
+	ses.removeCachedPlan("first")
+	require.False(t, ses.isCached("first"))
+	require.True(t, ses.isCached("second"))
+	require.Equal(t, 1, first.freed)
+	require.Zero(t, second.freed)
+
+	require.NotPanics(t, func() { ses.removeCachedPlan("first") })
+	require.NotPanics(t, func() { ses.removeCachedPlan("") })
 }
 
 func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {

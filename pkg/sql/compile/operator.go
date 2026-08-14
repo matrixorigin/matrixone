@@ -327,6 +327,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
+	case vm.Partition:
+		t := sourceOp.(*partition.Partition)
+		op := partition.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.Limit = t.Limit
+		op.PartitionByCount = t.PartitionByCount
+		op.PreReduce = t.PreReduce
+		op.SetInfo(&info)
+		return op
+	case vm.Window:
+		t := sourceOp.(*window.Window)
+		op := window.NewArgument()
+		op.WinSpecList = t.WinSpecList
+		op.Fs = t.Fs
+		op.Aggs = t.Aggs
+		op.PartitionTopN = t.PartitionTopN
+		op.SetInfo(&info)
+		return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -1778,6 +1796,27 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			}
 			return args[:len(args)-1], config
 		}
+
+	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+		if len(args) != 2 {
+			panic(moerr.NewInvalidInputNoCtxf(
+				"%s requires a value and percentile argument", f.Func.ObjName))
+		}
+		configExpr := args[1]
+		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+			panic(err)
+		}
+		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		if err != nil {
+			panic(err)
+		}
+		defer free()
+		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
+		if err != nil {
+			panic(err)
+		}
+		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
 	}
 	return args, nil
 }
@@ -2007,6 +2046,8 @@ func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 func constructPartition(node *plan.Node) *partition.Partition {
 	arg := partition.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.Limit = node.Limit
+	arg.PartitionByCount = node.PartitionByCount
 	return arg
 }
 
@@ -2639,20 +2680,46 @@ func validateApproxPercentileExpr(expr *plan.Expr) error {
 	return nil
 }
 
-// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
+	if expr == nil || !rule.IsConstant(expr, false) {
+		return moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s must be a constant", name)
+	}
+	return nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for
+// approx_percentile. Keep this wrapper for existing callers while the named
+// helper gives ordered-set aggregates accurate diagnostics.
 func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	return getPercentileConfigNamed(vec, "approx_percentile")
+}
+
+func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
 	if vec == nil || !vec.IsConst() {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s must be a constant", functionName)
 	}
 	if vec.Length() == 0 || vec.IsConstNull() {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile cannot be NULL")
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of %s cannot be NULL", functionName)
 	}
 
 	var p float64
 	var config string
 	switch vec.GetType().Oid {
+	case types.T_bit:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(v, 10)
+	case types.T_int8:
+		v := vector.MustFixedColWithTypeCheck[int8](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
+	case types.T_int16:
+		v := vector.MustFixedColWithTypeCheck[int16](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
 	case types.T_float64:
 		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
 		config = strconv.FormatFloat(p, 'f', -1, 64)
@@ -2667,6 +2734,22 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
 		p = float64(v)
 		config = strconv.FormatInt(int64(v), 10)
+	case types.T_uint8:
+		v := vector.MustFixedColWithTypeCheck[uint8](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint16:
+		v := vector.MustFixedColWithTypeCheck[uint16](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint32:
+		v := vector.MustFixedColWithTypeCheck[uint32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(uint64(v), 10)
+	case types.T_uint64:
+		v := vector.MustFixedColWithTypeCheck[uint64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatUint(v, 10)
 	case types.T_decimal64:
 		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
 		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
@@ -2677,16 +2760,16 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 		config = d.Format(vec.GetType().Scale)
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
+			"unsupported percentile type %s for %s", vec.GetType().String(), functionName)
 	}
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+			"percentile argument of %s must be finite and in [0,1], got %v", functionName, p)
 	}
 	exact, ok := new(big.Rat).SetString(config)
 	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+			"percentile argument of %s must be in [0,1], got %s", functionName, config)
 	}
 	return []byte(config), nil
 }

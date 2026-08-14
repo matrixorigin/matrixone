@@ -519,7 +519,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	addInt(catalog.IndexAlgoParamMaxPostingsCapacity, opt.MaxPostingsCapacity)
 	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
+	// position_free is emitted as an explicit true/false when specified (tri-state:
+	// absence ⇒ "keep current"), so a fulltext2 REINDEX can turn it on OR off.
+	if opt.PositionFreeSet {
+		m[catalog.IndexAlgoParamPositionFree] = strconv.FormatBool(opt.PositionFree)
+	}
 	// quantization is normalized to lowercase here (matching the CREATE INDEX
 	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
 	// identically; the per-backend VALUE check (which names a given algorithm
@@ -927,8 +933,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for i, indexdef := range oTableDef.Indexes {
 				if indexdef.IndexName == constraintName {
 					alterIndex = indexdef
-					catalog.SetIndexVisibility(alterIndex, tableAlterIndex.Visible)
-					catalog.SetIndexVisibility(oTableDef.Indexes[i], tableAlterIndex.Visible)
+					alterIndex.Visible = tableAlterIndex.Visible
+					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1045,7 +1051,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !indexplugin.IsVectorIndexAlgo(indexAlgo) {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
@@ -1067,6 +1073,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
 							Params: reindexSpecifiedParams(c.stmt, constraintName),
+							Merge:  tableAlterIndex.Merge,
 						})
 					if err != nil {
 						return err
@@ -1118,7 +1125,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {
@@ -1211,7 +1218,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						catalog.SetIndexVisibility(t.Indexes[i], alterIndex.Visible)
+						t.Indexes[i].Visible = alterIndex.Visible
 						// NOTE: algo param is same for all the indexDefs of the same indexName.
 						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
 						// so we don't need multiple `alterIndex`.
@@ -1334,6 +1341,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
+	return s.createTable(c, nil)
+}
+
+// createTable invokes tableCreated immediately after it creates the main table.
+// This lets callers that have follow-up work distinguish IF NOT EXISTS's no-op
+// success from a physical table creation without repeating the existence check.
+func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -1500,6 +1514,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
+	}
+	if tableCreated != nil {
+		tableCreated()
 	}
 
 	rollbackTempAlias := false
@@ -4032,15 +4049,19 @@ func (s *Scope) AlterSequence(c *Compile) error {
 
 func (s *Scope) TableClone(c *Compile) error {
 	var (
-		err error
+		err     error
+		created bool
 	)
 
 	clonePlan := s.Plan.GetDdl().GetCloneTable()
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
-		if err = s.CreateTable(c); err != nil {
+		if err = s.createTable(c, func() { created = true }); err != nil {
 			return err
+		}
+		if !created {
+			return nil
 		}
 	}
 

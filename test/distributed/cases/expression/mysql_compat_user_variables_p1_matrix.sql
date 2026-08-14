@@ -130,4 +130,11 @@ set @uv_p1_bad_mixed = 0;
 select 1 into @uv_p1_bad_mixed into outfile '/tmp/mo_uv_p1_bad_mixed';
 select @uv_p1_bad_mixed;
 
+-- Matrix H: SELECT ... INTO must not re-cache the plan it just invalidated.
+-- Repeating this type-changing assignment exercises the stale-plan boundary.
+set @uv_p1_cache = 1;
+select cast(@uv_p1_cache as decimal(10,1)) into @uv_p1_cache;
+select cast(@uv_p1_cache as decimal(10,1)) into @uv_p1_cache;
+select cast(@uv_p1_cache as char) as cache_value;
+
 drop database mysql_compat_user_variables_p1_matrix;

@@ -162,4 +162,10 @@ Misplaced INTO clause
 select @uv_p1_bad_mixed;
 ➤ @uv_p1_bad_mixed[-5,64,0]  𝄀
 0
+set @uv_p1_cache = 1;
+select cast(@uv_p1_cache as decimal(10,1)) into @uv_p1_cache;
+select cast(@uv_p1_cache as decimal(10,1)) into @uv_p1_cache;
+select cast(@uv_p1_cache as char) as cache_value;
+➤ cache_value[12,65535,0]  𝄀
+1.0
 drop database mysql_compat_user_variables_p1_matrix;

@@ -260,6 +260,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -479,6 +484,7 @@ type BindContext struct {
 	isCorrelated              bool
 	hasSingleRow              bool
 	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -574,6 +580,24 @@ type BindContext struct {
 	groupingFlag []bool
 
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {

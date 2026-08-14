@@ -362,12 +362,13 @@ type FunctionExpressionExecutor struct {
 
 	resultVector vector.FunctionResultWrapper
 	// parameters related
-	parameterResults    []*vector.Vector
-	parameterExecutor   []ExpressionExecutor
-	flowControlKind     vector.PrepareParamKind
-	flowControlKindSeen bool
-	flowControlKinds    []vector.PrepareParamKind
-	iffNullResults      [2]*vector.Vector
+	parameterResults         []*vector.Vector
+	parameterExecutor        []ExpressionExecutor
+	flowControlKind          vector.PrepareParamKind
+	flowControlKindSeen      bool
+	flowControlKinds         []vector.PrepareParamKind
+	flowControlBinaryStrings []bool
+	iffNullResults           [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -451,6 +452,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		expr.folded = true
 		expr.foldedNull = false
@@ -845,6 +847,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlKinds != nil {
 		expr.flowControlKinds = expr.flowControlKinds[:0]
 	}
+	if expr.flowControlBinaryStrings != nil {
+		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -858,6 +863,19 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows i
 		return
 	}
 	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows int) {
+	if rows <= len(expr.flowControlBinaryStrings) {
+		return
+	}
+	old := len(expr.flowControlBinaryStrings)
+	if rows <= cap(expr.flowControlBinaryStrings) {
+		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:rows]
+		clear(expr.flowControlBinaryStrings[old:])
+		return
+	}
+	expr.flowControlBinaryStrings = append(expr.flowControlBinaryStrings, make([]bool, rows-old)...)
 }
 
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
@@ -874,6 +892,11 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
+			binaryString := value.GetBinaryStringMetadataAt(row)
+			if binaryString || len(expr.flowControlBinaryStrings) != 0 {
+				expr.ensureFlowControlBinaryStringRows(len(selection))
+				expr.flowControlBinaryStrings[row] = binaryString
+			}
 			kind := value.GetPrepareParamKindAt(row)
 			if !expr.flowControlKindSeen {
 				expr.flowControlKind = kind
@@ -899,6 +922,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 ) error {
 	if result == nil || rows <= 0 {
 		return nil
+	}
+	if len(expr.flowControlBinaryStrings) != 0 {
+		expr.ensureFlowControlBinaryStringRows(rows)
+		if err := result.SetBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
+			return err
+		}
 	}
 	if len(expr.flowControlKinds) == 0 {
 		if expr.flowControlKindSeen {

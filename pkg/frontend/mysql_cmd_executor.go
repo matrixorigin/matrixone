@@ -1844,9 +1844,12 @@ func writeExplainResult(
 
 	//2. fill the result set
 	//column
+	explainColName := plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL)
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
-	col1.SetName(plan2.GetPlanTitle(explainQuery.QueryPlan, txnHaveDDL))
+	col1.SetName(explainColName)
+	setMysqlColumnTypeMetadata(col1, types.New(types.T_varchar, 0, 0))
+	setCharacter(col1)
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -3342,21 +3345,33 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 		return true, nil
 	}
 
-	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
-		if ref == nil || def == nil {
+	checkCatalogObject := func(
+		ref *plan.ObjectRef,
+		name string,
+		snapshot *plan2.Snapshot,
+		version int64,
+		tableID int64,
+	) (bool, error) {
+		if ref == nil {
 			return true, nil
 		}
-		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(plan2.DbNameOfObjRef(ref), name, snapshot)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if int64(tableDef.Version) != version || int64(tableDef.TblId) != tableID {
 			return true, nil
 		}
 		return false, nil
+	}
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		return checkCatalogObject(ref, def.Name, nil, int64(def.Version), int64(def.TblId))
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
@@ -3386,6 +3401,18 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				}
 			}
 		}
+		for _, dependency := range p.Query.GetCatalogDependencies() {
+			flag, err := checkCatalogObject(
+				dependency,
+				dependency.GetObjName(),
+				dependency.GetSnapshot(),
+				dependency.GetServer(),
+				dependency.GetObj(),
+			)
+			if err != nil || flag {
+				return true, err
+			}
+		}
 	default:
 	}
 	return false, nil
@@ -3395,7 +3422,26 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
-	return ses.getCachedPlan(input.getHash())
+	cached := ses.getCachedPlan(input.getHash())
+	// SELECT ... INTO @var changes the type of a session variable as part of
+	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
+	// may have been bound against the variable's pre-assignment type, and the
+	// assignment also invalidates the session cache.  Drop any stale entry so
+	// it cannot be selected again after this request.
+	if cached != nil && containsSelectInto(cached.stmts) {
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
+	return cached
+}
+
+func containsSelectInto(stmts []tree.Statement) bool {
+	for _, stmt := range stmts {
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -3444,6 +3490,10 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
+			// The cache owns its ASTs until eviction. Wrappers only borrow them;
+			// otherwise normal cleanup or stale-plan reset can return the same AST
+			// to the parser pool while the cache still owns or already freed it.
+			tcw.stmtBorrowed = true
 			tcw.plan = cached.plans[i]
 			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
@@ -4466,6 +4516,44 @@ func executeStmtWithIncrStmt(ses FeSession,
 	return
 }
 
+func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
+	// Evict this stale entry before rebuilding so a successful replan replaces
+	// it instead of paying the validation/rebuild cost forever.
+	if session, ok := ses.(*Session); ok {
+		session.removeCachedPlan(execCtx.input.getHash())
+	}
+
+	stmts, err := parseSql(execCtx, ses.GetMySQLParser())
+	defer freeStmts(stmts)
+	if err != nil {
+		return err
+	}
+	if len(stmts) != len(execCtx.cws) {
+		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
+	}
+	if execCtx.rewriteEnabled {
+		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+			return err
+		}
+		remaps := make([]map[string]string, len(execCtx.cws))
+		for i, cw := range execCtx.cws {
+			if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
+				remaps[i] = carrier.GetRemapDb()
+			}
+		}
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+			return err
+		}
+	}
+	for i, cw := range execCtx.cws {
+		cw.ResetPlanAndStmt(stmts[i])
+		// ResetPlanAndStmt now owns the replacement AST. Keep the deferred
+		// cleanup responsible only for statements that were not transferred.
+		stmts[i] = nil
+	}
+	return nil
+}
+
 func dispatchStmt(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx) (err error) {
@@ -4478,32 +4566,8 @@ func dispatchStmt(ses FeSession,
 			return err
 		}
 		if flag {
-			//plan changed
-			//clear all cached plan and parse sql again
-			var stmts []tree.Statement
-			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
-			if err != nil {
+			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
-			}
-			if len(stmts) != len(execCtx.cws) {
-				return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
-			}
-			if execCtx.rewriteEnabled {
-				if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
-					return err
-				}
-				remaps := make([]map[string]string, len(execCtx.cws))
-				for i, cw := range execCtx.cws {
-					if carrier, ok := cw.(interface{ GetRemapDb() map[string]string }); ok {
-						remaps[i] = carrier.GetRemapDb()
-					}
-				}
-				if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
-					return err
-				}
-			}
-			for i, cw := range execCtx.cws {
-				cw.ResetPlanAndStmt(stmts[i])
 			}
 		}
 	}
@@ -4910,6 +4974,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	for i := 0; i < len(cws); i++ {
 		cw := cws[i]
 		stmt := cw.GetAst()
+		// The assignment performed by SELECT ... INTO @var changes the
+		// variable's bind-time type.  Do not cache this statement after it has
+		// run; setUserDefinedVarWithTypeAndKind clears the existing cache, but
+		// the outer request must also avoid writing this just-executed plan back.
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			canCache = false
+		}
 		currentInput := input
 		currentSQLRecord := ""
 		sqlType := input.getSqlSourceType(i)
@@ -5209,34 +5280,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return resp, moerr.GetMysqlClientQuit()
 	case COM_QUERY:
 		var query = commonutil.UnsafeBytesToString(req.GetData().([]byte))
-		// Sidecar offload: intercept /*+ SIDECAR */ or /*+ SIDECAR GPU */ hint
-		// before normal processing. If sidecar is not configured, silently
-		// fall through to normal MO execution.
-		if isSidecar, useGPU := isSidecarQuery(query); isSidecar {
-			ses.addSqlCount(1)
-			if sidecarQueryMustRunLocally(execCtx.reqCtx, ses, query) {
-				query = stripSidecarHint(query)
-			} else {
-				err = handleSidecarOffload(ses, execCtx, query, useGPU)
-				if err == nil {
-					ses.resetDiagnostics()
-					setRowCount(ses, ses.GetProc(), -1)
-					mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
-					resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, true)
-					return resp, nil
-				}
-				if err != errSidecarNotConfigured {
-					ses.resetDiagnostics()
-					markRowCountFailed(ses, ses.GetProc())
-					resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)
-					return resp, nil
-				}
-				// errSidecarNotConfigured: strip hint and fall through to normal execution
-				query = stripSidecarHint(query)
-			}
-		} else {
-			ses.addSqlCount(1)
-		}
+		// SIDECAR is an explicit statement selector. Keep the raw request intact
+		// so doComQuery can bind each hint to its own computation wrapper; a
+		// request-scoped marker would leak into unhinted sibling statements.
+		ses.addSqlCount(1)
 		// Freeze the policy once, then let doComQuery materialize it under the
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
@@ -5556,9 +5603,9 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
 	case types.T_binary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varbinary:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:

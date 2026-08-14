@@ -1086,6 +1086,37 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		outcnt:       10,
 	}
 
+	constraintTestSchema["self_ref_multi_cascade"] = &Schema{
+		tblId: 99997,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"parent_a", types.T_int32, true, 32, 0},
+			{"parent_b", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_self_cascade_a",
+				Cols:        []uint64{1},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+			{
+				Name:        "fk_self_cascade_b",
+				Cols:        []uint64{2},
+				ForeignTbl:  0,
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		refChildTbls: []uint64{0},
+		outcnt:       10,
+	}
+
 	/*
 		Parent-side FK action fixtures for REPLACE (issue #24951).
 
@@ -1122,6 +1153,47 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				Cols:        []uint64{1}, // pid
 				ForeignTbl:  77001,
 				ForeignCols: []uint64{0}, // replace_fk_p.id
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 4,
+	}
+	/*
+		create table insert_fk_no_key_p(id int primary key);
+		create table insert_fk_no_key_c(
+			id int,
+			pid int,
+			foreign key(pid) references insert_fk_no_key_p(id)
+		);
+		-- The child has only MatrixOne's hidden fake PK and no UNIQUE key, so
+		-- ODKU takes the documented legacy plain-INSERT fallback.
+	*/
+	constraintTestSchema["insert_fk_no_key_p"] = &Schema{
+		tblId: 77020,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77021},
+		outcnt:       4,
+	}
+	constraintTestSchema["insert_fk_no_key_c"] = &Schema{
+		tblId: 77021,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{2},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_insert_no_key_c",
+				Cols:        []uint64{1},
+				ForeignTbl:  77020,
+				ForeignCols: []uint64{0},
 				OnDelete:    plan.ForeignKeyDef_RESTRICT,
 				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
 			},

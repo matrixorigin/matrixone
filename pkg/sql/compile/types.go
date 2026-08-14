@@ -191,6 +191,11 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
+	// LazyPreScopes makes a UNION ALL merge scope start its branch scopes in
+	// order. The union operator activates the next branch only after the current
+	// branch receiver is exhausted, so an outer LIMIT can leave later branches
+	// completely unstarted.
+	LazyPreScopes bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
@@ -265,6 +270,9 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
+	// siriusRead is the single terminal owner for a hinted offload. It remains
+	// nil for every native statement.
+	siriusRead *siriusReadOwner
 
 	pn *plan.Plan
 

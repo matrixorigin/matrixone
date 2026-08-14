@@ -60,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
@@ -72,8 +73,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -173,6 +176,12 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
+			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
+		}
+		c.siriusRead = nil
+	}
 	c.SetSchedulingTraceRecorder(nil)
 	if c.proc != nil {
 		c.proc.ResetQueryContext()
@@ -209,6 +218,12 @@ func (c *Compile) GetPlan() *plan.Plan {
 }
 
 func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
+	if c.siriusRead != nil {
+		if err := c.siriusRead.finish(context.Background(), false); err != nil {
+			return err
+		}
+		c.siriusRead = nil
+	}
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -519,30 +534,152 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 type scopeRunResult struct {
-	err error
-	ctx context.Context
+	err      error
+	ctx      context.Context
+	queryCtx context.Context
 }
 
 func newScopeRunResult(err error, scope *Scope) scopeRunResult {
-	result := scopeRunResult{err: err}
-	if scope != nil && scope.Proc != nil {
-		result.ctx = scope.Proc.Ctx
+	if scope == nil {
+		return scopeRunResult{err: err}
 	}
+	return newScopeRunResultForProcess(err, scope.Proc)
+}
+
+func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
+	result := scopeRunResult{err: err}
+	if proc == nil {
+		return result
+	}
+	result.ctx = proc.Ctx
+	result.queryCtx = scopeRunQueryContext(proc)
 	return result
 }
 
+func scopeRunQueryContext(proc *process.Process) context.Context {
+	if proc == nil || proc.Base == nil {
+		return nil
+	}
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx != nil {
+		return queryCtx
+	}
+	return proc.GetTopContext()
+}
+
+func isScopeCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.Join must not turn a substantive execution failure into
+	// cancellation fallout merely because one of its siblings is a context
+	// error. Every leaf has to be cancellation-shaped before it is safe to
+	// suppress or replace the result.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// isScopeCancellationFrom reports whether every leaf in err can be attributed
+// to the same canceled context. A joined error is attributable only as a whole;
+// one matching cancellation leaf must not hide an independent deadline leaf.
+func isScopeCancellationFrom(err error, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationFrom(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationFrom(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// normalizeScopeRunError distinguishes a substantive execution failure from
+// cancellation fallout.  A child pipeline canceled by a successfully finished
+// consumer is secondary and may be ignored, while a real error carried as the
+// pipeline cancel cause must survive.  Query-level cancellation remains owned
+// by the query context and is reported by Compile.Run.
+func normalizeScopeRunError(
+	err error,
+	pipelineCtx context.Context,
+	queryCtx context.Context,
+) (error, bool) {
+	if err == nil || !isScopeCancellationError(err) ||
+		pipelineCtx == nil || pipelineCtx.Err() == nil {
+		return err, false
+	}
+	// Query cancellation owns the terminal classification. In particular,
+	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
+	// carries diagnostic detail. Replacing the former with the latter would make
+	// callers misclassify a timeout as an ordinary execution failure; they can
+	// attach the cause after observing DeadlineExceeded.
+	if queryCtx != nil {
+		if queryErr := queryCtx.Err(); queryErr != nil {
+			if errors.Is(queryErr, context.DeadlineExceeded) {
+				return queryErr, true
+			}
+			if !isScopeCancellationFrom(err, queryErr) {
+				return err, false
+			}
+			if cause := context.Cause(queryCtx); cause != nil {
+				return cause, true
+			}
+			return queryErr, true
+		}
+	}
+
+	// A context-shaped error is secondary only when every leaf was derived from
+	// this pipeline's cancellation. Preserve an independent operator timeout
+	// that merely raced a different pipeline cancellation, including when the
+	// two errors were joined.
+	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return err, false
+	}
+
+	if cause := context.Cause(pipelineCtx); cause != nil {
+		err = cause
+	}
+	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
+		return nil, true
+	}
+	return err, true
+}
+
 func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
-	if r.err == nil || r.ctx == nil ||
-		(!errors.Is(r.err, context.Canceled) &&
-			!errors.Is(r.err, context.DeadlineExceeded) &&
-			!moerr.IsMoErrCode(r.err, moerr.ErrQueryInterrupted)) {
-		return r, false
-	}
-	if cause := context.Cause(r.ctx); cause != nil {
-		r.err = cause
-		return r, true
-	}
-	return r, false
+	var normalized bool
+	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
+	return r, normalized
 }
 
 // preferPrimaryScopeResult keeps cleanup fallout from masking the execution
@@ -552,7 +689,7 @@ func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
 // error, while an externally canceled query keeps its external cause.
 func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
 	current, _ = current.resolveCancelCause()
-	candidate, candidateHasCause := candidate.resolveCancelCause()
+	candidate, candidateNormalized := candidate.resolveCancelCause()
 
 	if current.err == nil {
 		return candidate
@@ -562,13 +699,11 @@ func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult 
 		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
 		return current
 	}
-	// Without a cancellation cause, a canceled sibling does not prove that the
-	// cleanup fallback was secondary. Process-backed production results always
-	// carry their pipeline context, but keep this conservative for synthetic
-	// and start-failure results that do not.
-	if !candidateHasCause &&
-		(errors.Is(candidate.err, context.Canceled) ||
-			moerr.IsMoErrCode(candidate.err, moerr.ErrQueryInterrupted)) {
+	// An unresolved pure cancellation does not prove that the cleanup fallback
+	// was secondary. A mixed error tree is substantive, however, and must not be
+	// rejected merely because one leaf is context.Canceled.
+	if !candidateNormalized &&
+		isScopeCancellationFrom(candidate.err, context.Canceled) {
 		return current
 	}
 	return candidate
@@ -662,18 +797,45 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillDisk(size)
+			reservation, err := budget.ReserveSpillDisk(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return &materializedSpillDiskReservation{
+				GrowingReservation: reservation,
+				ctx:                proc.Ctx,
+			}, nil
 		},
 		ReserveFD: func(size uint64) (materialized.Reservation, error) {
 			budget, err := proc.GetHashBuildBudget()
 			if err != nil {
-				return nil, err
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
-			return budget.ReserveSpillFD(size)
+			reservation, err := budget.ReserveSpillFD(size)
+			if err != nil {
+				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
+			}
+			return reservation, nil
 		},
 	}
+}
+
+// materializedSpillDiskReservation converts a terminal capacity rejection on
+// every growth attempt before the materialized source publishes it to readers.
+// The source cannot recover from a rejected spill write, so the raw admission
+// error must not escape through either the producer or a dependent consumer.
+type materializedSpillDiskReservation struct {
+	materialized.GrowingReservation
+	ctx context.Context
+}
+
+func (r *materializedSpillDiskReservation) Grow(size uint64) error {
+	if err := r.GrowingReservation.Grow(size); err != nil {
+		return hashbuild.TerminalBudgetError(r.ctx, err)
+	}
+	return nil
 }
 
 // run once
@@ -1220,7 +1382,33 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 }
 
+func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
+	if node == nil || len(node.OrderBy) > 0 || node.FilterIsBarrier ||
+		nodeHasUserLevelLockFunction(node) {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_UNION_ALL:
+	default:
+		return false
+	}
+	return outerDemand || node.Limit != nil
+}
+
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
+	return c.compilePlanScopeWithUnionAllDemand(step, curNodeIdx, nodes, false)
+}
+
+// compilePlanScopeWithUnionAllDemand carries an outer streaming LIMIT demand
+// down to UNION ALL before its physical scopes are built. This lets eligible
+// unions choose their lazy topology during construction while leaving ordinary
+// UNION ALL plans on their original concurrent topology.
+func (c *Compile) compilePlanScopeWithUnionAllDemand(
+	step int32,
+	curNodeIdx int32,
+	nodes []*plan.Node,
+	outerUnionAllDemand bool,
+) ([]*Scope, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementCompilePlanScopeHistogram.Observe(time.Since(start).Seconds())
@@ -1300,7 +1488,8 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_PROJECT:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		childDemand := streamingUnionAllDemand(node, outerUnionAllDemand)
+		ss, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, childDemand)
 		if err != nil {
 			return nil, err
 		}
@@ -1327,12 +1516,13 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		orderedGroupConcat := hasOrderedGroupConcat(node)
+		orderedSetPercentile := hasOrderedSetPercentile(node)
 		if c.canCompileShuffleGroup(node) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
 		}
-		if orderedGroupConcat {
-			ss = c.compileOrderedGroupConcat(node, ss, nodes)
+		if orderedGroupConcat || orderedSetPercentile {
+			ss = c.compileOrderedAggregateSingleStage(node, ss, nodes)
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 			return ss, nil
 		}
@@ -1402,7 +1592,12 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
-		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
+		ss, err = c.compilePlanScopeWithUnionAllDemand(
+			step,
+			node.Children[0],
+			nodes,
+			streamingUnionAllDemand(node, outerUnionAllDemand),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1454,18 +1649,19 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
-		left, err = c.compilePlanScope(step, node.Children[0], nodes)
+		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
+		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
 		if err != nil {
 			return nil, err
 		}
-		right, err = c.compilePlanScope(step, node.Children[1], nodes)
+		right, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[1], nodes, lazy)
 		if err != nil {
 			return nil, err
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileUnionAll(node, left, right)
+		ss = c.compileUnionAll(node, left, right, lazy)
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
@@ -3429,6 +3625,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		op.CanOpt = canOpt
 		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: node}
@@ -4085,16 +4282,103 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	return rs
 }
 
-func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scope) []*Scope {
-	rs := c.newMergeScope(append(ss, children...))
+func (c *Compile) compileUnionAll(
+	node *plan.Node,
+	leftScopes []*Scope,
+	rightScopes []*Scope,
+	lazy bool,
+) []*Scope {
+	var rs *Scope
+	if lazy {
+		// Preserve each logical branch's internal parallelism behind one local
+		// receiver so MergeRun can admit the branches in SQL order. Absorb a
+		// directly nested lazy UNION ALL into the same scheduler; leaving it
+		// behind a connector would let its producer advance before an outer LIMIT
+		// can stop consumption.
+		branches := c.lazyUnionAllBranches(leftScopes)
+		branches = append(branches, c.lazyUnionAllBranches(rightScopes)...)
+		rs = c.newMergeScope(branches)
+		rs.LazyPreScopes = true
+	} else {
+		// Keep the original concurrent UNION ALL topology when no streaming
+		// LIMIT can stop consumption. This avoids adding another connector,
+		// spool, channel, merge, and goroutine hop to every batch.
+		inputs := make([]*Scope, 0, len(leftScopes)+len(rightScopes))
+		inputs = append(inputs, leftScopes...)
+		inputs = append(inputs, rightScopes...)
+		rs = c.newMergeScope(inputs)
+	}
 
 	currentFirstFlag := c.anal.isFirst
 	op := constructUnionAll(node)
+	if lazy {
+		mergeOp, ok := rs.RootOp.(*merge.Merge)
+		if !ok {
+			panic("lazy UNION ALL scope has no merge input")
+		}
+		mergeOp.WithPartial(0, 1)
+		op.WithSequentialBranches(len(rs.PreScopes))
+	}
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(op)
 	c.anal.isFirst = false
 
 	return []*Scope{rs}
+}
+
+// lazyUnionAllBranches transfers a directly nested lazy UNION ALL's branch
+// scopes to its parent scheduler. Each transferred branch receives a
+// pass-through marker for the absorbed logical union node so ANALYZE still
+// attributes that node's rows only to its own descendants.
+func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
+	if len(scopes) != 1 || scopes[0] == nil || !scopes[0].LazyPreScopes {
+		return []*Scope{c.newMergeScope(scopes)}
+	}
+
+	nested := scopes[0]
+	nestedUnion, ok := nested.RootOp.(*unionall.UnionAll)
+	if !ok || nestedUnion.GetOperatorBase().NumChildren() != 1 {
+		return []*Scope{c.newMergeScope(scopes)}
+	}
+	nestedMerge, ok := nestedUnion.GetOperatorBase().GetChildren(0).(*merge.Merge)
+	if !ok || len(nested.PreScopes) < 2 {
+		return []*Scope{c.newMergeScope(scopes)}
+	}
+
+	connectors := make([]*connector.Connector, len(nested.PreScopes))
+	for i, branch := range nested.PreScopes {
+		if branch == nil || branch.RootOp == nil {
+			return []*Scope{c.newMergeScope(scopes)}
+		}
+		branchConnector, ok := branch.RootOp.(*connector.Connector)
+		if !ok || branchConnector.GetOperatorBase().NumChildren() != 1 {
+			return []*Scope{c.newMergeScope(scopes)}
+		}
+		connectors[i] = branchConnector
+	}
+
+	branches := nested.PreScopes
+	unionInfo := nestedUnion.GetOperatorBase().OperatorInfo
+	for i, branch := range branches {
+		branchConnector := connectors[i]
+		branch.RootOp = branchConnector.GetOperatorBase().GetChildren(0)
+		branchConnector.GetOperatorBase().SetChild(nil, 0)
+		branchConnector.GetOperatorBase().ResetChildren()
+		branchConnector.Release()
+
+		marker := unionall.NewArgument()
+		marker.SetInfo(&unionInfo)
+		branch.setRootOperator(marker)
+	}
+
+	nestedUnion.GetOperatorBase().SetChild(nil, 0)
+	nestedUnion.GetOperatorBase().ResetChildren()
+	nestedUnion.Release()
+	nestedMerge.Release()
+	nested.RootOp = nil
+	nested.PreScopes = nil
+	nested.release()
+	return branches
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
@@ -4703,10 +4987,32 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
+	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			op := constructPartition(node)
+			op.PreReduce = true
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
+
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.PreReduce = true
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
 		op := constructOrder(node)
+		if node.PartitionByCount > 0 {
+			op.OrderBySpec = node.OrderBy[:node.PartitionByCount]
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -4716,6 +5022,11 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionByCount > 0 {
+		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
+		arg.Limit = nil
+		arg.PartitionByCount = 0
+	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -4848,10 +5159,20 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
+	partitionTopN := len(ss) == 1
+	if partitionTopN {
+		upstreamOp := ss[0].RootOp
+		for upstreamOp.OpType() == vm.Projection && upstreamOp.GetOperatorBase().NumChildren() == 1 {
+			upstreamOp = upstreamOp.GetOperatorBase().GetChildren(0)
+		}
+		upstream, ok := upstreamOp.(*partition.Partition)
+		partitionTopN = ok && upstream.Limit != nil && upstream.PreReduce
+	}
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
 	arg := constructWindow(c.proc.Ctx, node, c.proc)
+	arg.PartitionTopN = partitionTopN
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -5083,7 +5404,7 @@ func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Nod
 	}
 }
 
-func (c *Compile) compileOrderedGroupConcat(
+func (c *Compile) compileOrderedAggregateSingleStage(
 	node *plan.Node,
 	ss []*Scope,
 	ns []*plan.Node,
@@ -5109,8 +5430,24 @@ func hasOrderedGroupConcat(node *plan.Node) bool {
 	return false
 }
 
+func hasOrderedSetPercentile(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch fn.Func.ObjName {
+			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteOrderedSetAggregates() bool {
+	return supportsRemoteOrderedSetAggregates(c.proc.GetService())
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
@@ -5126,6 +5463,26 @@ func supportsRemoteOrderedAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion6
 }
 
+func supportsRemoteOrderedSetAggregates(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func (c *Compile) supportsRemotePartitionTopN() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
 func supportsRemoteTextCollationAggregates(service string) bool {
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -5139,7 +5496,8 @@ func supportsRemoteTextCollationAggregates(service string) bool {
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 	return node.Stats.HashmapStats != nil &&
 		node.Stats.HashmapStats.Shuffle &&
-		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates())
+		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
+		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

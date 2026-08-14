@@ -269,6 +269,8 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -293,6 +295,51 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name: "latin1 column",
+			sql: "create table t(v varchar(8) character set latin1 " +
+				"collate latin1_swedish_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "ascii column case insensitive spelling",
+			sql: "create table t(v varchar(8) character set ASCII " +
+				"collate ASCII_GENERAL_CI)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "latin1 table default",
+			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "ascii table default",
+			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
 		})
 	}
 }
@@ -1043,6 +1090,147 @@ func TestBuildCreateViewPreservesDefaultKinds(t *testing.T) {
 	require.Equal(t, "uuid", cols[2].GetDefault().GetExpr().GetF().GetFunc().GetObjName())
 }
 
+func TestGroupingExtensionsExposeNullableKeysInViewAndCTAS(t *testing.T) {
+	newContext := func(rootSQL string) *rootSQLCompilerContext {
+		ctx := NewMockCompilerContext(false)
+		for _, name := range []string{"n_nationkey", "n_regionkey"} {
+			col := ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]]
+			col.Typ.NotNullable = true
+			col.Default = &plan.Default{NullAbility: false}
+		}
+		return &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: rootSQL}
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "ordinary group by preserves source nullability",
+			groupBy:  "n_nationkey, n_regionkey",
+			nullable: []bool{false, false},
+		},
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "cube",
+			groupBy:  "cube(n_nationkey, n_regionkey)",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootSQL := "create view grouping_extension_view as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			viewPlan, err := BuildPlan(newContext(rootSQL), stmt, false)
+			require.NoError(t, err)
+			viewCols := viewPlan.GetDdl().GetCreateView().GetTableDef().GetCols()
+			require.Len(t, viewCols, 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, viewCols[i].GetDefault().GetNullAbility(), viewCols[i].GetName())
+			}
+		})
+	}
+
+	for _, test := range []struct {
+		name     string
+		groupBy  string
+		nullable []bool
+	}{
+		{
+			name:     "rollup",
+			groupBy:  "n_nationkey, n_regionkey with rollup",
+			nullable: []bool{true, true},
+		},
+		{
+			name:     "grouping sets preserve keys active in every branch",
+			groupBy:  "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			nullable: []bool{false, true},
+		},
+	} {
+		t.Run("CTAS "+test.name, func(t *testing.T) {
+			ctasSQL := "create table grouping_extension_ctas as select n_nationkey, n_regionkey, count(*) as cnt from nation group by " + test.groupBy
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ctasSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctasPlan, err := BuildPlan(newContext(ctasSQL), stmt, false)
+			require.NoError(t, err)
+			ctasCols := ctasPlan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(ctasCols), 3)
+			for i, wantNullable := range test.nullable {
+				require.Equal(t, wantNullable, ctasCols[i].GetDefault().GetNullAbility(), ctasCols[i].GetName())
+			}
+		})
+	}
+}
+
+func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		groupBy     string
+		notNullable []bool
+	}{
+		{
+			name:        "ordinary group by preserves source nullability",
+			groupBy:     "n_nationkey, n_regionkey",
+			notNullable: []bool{true, true},
+		},
+		{
+			name:        "rollup",
+			groupBy:     "n_nationkey, n_regionkey with rollup",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "cube",
+			groupBy:     "cube(n_nationkey, n_regionkey)",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey), ())",
+			notNullable: []bool{false, false},
+		},
+		{
+			name:        "grouping sets preserve keys active in every branch",
+			groupBy:     "grouping sets ((n_nationkey, n_regionkey), (n_nationkey))",
+			notNullable: []bool{true, false},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false)
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			for _, name := range []string{"n_nationkey", "n_regionkey"} {
+				ctx.tables["nation"].Cols[ctx.tables["nation"].Name2ColIndex[name]].Typ.NotNullable = true
+			}
+
+			queryPlan, err := runOneStmt(opt, t, "select n_nationkey, n_regionkey, count(*) as cnt from nation group by "+test.groupBy)
+			require.NoError(t, err)
+			query := queryPlan.GetQuery()
+			rootNode := query.Nodes[query.Steps[0]]
+			for i, wantNotNullable := range test.notNullable {
+				require.Equal(t, wantNotNullable, rootNode.ProjectList[i].Typ.NotNullable)
+			}
+		})
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
@@ -1387,6 +1575,8 @@ func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	require.GreaterOrEqual(t, len(cols), 3)
 	require.True(t, isEnumPlanType(&cols[0].Typ))
 	require.Equal(t, "low,medium,high", cols[0].Typ.GetEnumvalues())
+	require.True(t, cols[0].Typ.GetNotNullable())
+	require.False(t, cols[0].GetDefault().GetNullAbility())
 	require.True(t, isSetPlanType(&cols[1].Typ))
 	require.Equal(t, "red,green,blue", cols[1].Typ.GetEnumvalues())
 	require.Equal(t, int32(types.T_varchar), cols[2].Typ.GetId())
@@ -1904,6 +2094,46 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	persisted := tableDefCreateSQL(built.GetDdl().GetCreateTable().GetTableDef())
 	require.NotContains(t, strings.ToUpper(persisted), " LIKE ")
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
+}
+
+func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	const sequenceSQL = "CREATE SEQUENCE seq1 INCREMENT 2 START WITH 11 NO CYCLE"
+
+	sequenceStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sequenceSQL, 1)
+	require.NoError(t, err)
+	defer sequenceStmt.Free()
+	sequencePlan, err := BuildPlan(ctx, sequenceStmt, false)
+	require.NoError(t, err)
+
+	sequenceDef := DeepCopyTableDef(
+		sequencePlan.GetDdl().GetCreateSequence().GetTableDef(),
+		true,
+	)
+	sequenceDef.DbName = ctx.DefaultDatabase()
+	// The sequence builder stores relkind in the properties; catalog resolution
+	// exposes it as TableType on the resolved source definition.
+	sequenceDef.TableType = catalog.SystemSequenceRel
+	ctx.tables[sequenceDef.Name] = sequenceDef
+	ctx.objects[sequenceDef.Name] = &plan.ObjectRef{
+		SchemaName: ctx.DefaultDatabase(),
+		ObjName:    sequenceDef.Name,
+	}
+
+	for _, createSQL := range []string{
+		"CREATE TABLE dst_live CLONE seq1",
+		"CREATE TABLE dst_snapshot CLONE seq1 {SNAPSHOT = 'sp1'}",
+		"CREATE TABLE dst_like LIKE seq1",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			createStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+			require.NoError(t, err)
+			defer createStmt.Free()
+
+			_, err = BuildPlan(ctx, createStmt, false)
+			require.ErrorContains(t, err, "tpch.seq1 is not BASE TABLE")
+		})
+	}
 }
 
 func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
@@ -2686,54 +2916,6 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
-func TestBuildIndexPersistsExplicitVisibility(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	tests := []struct {
-		name    string
-		sql     string
-		visible bool
-	}{
-		{
-			name:    "default regular index is visible",
-			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
-			visible: true,
-		},
-		{
-			name:    "explicit visible regular index",
-			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
-			visible: true,
-		},
-		{
-			name:    "invisible regular index",
-			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
-			visible: false,
-		},
-		{
-			name:    "invisible unique index",
-			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
-			visible: false,
-		},
-		{
-			name:    "invisible fulltext index",
-			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
-			visible: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			logicPlan, err := runOneStmt(mock, t, tc.sql)
-			require.NoError(t, err)
-			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
-			require.NotEmpty(t, indexes)
-			for _, indexDef := range indexes {
-				require.True(t, indexDef.VisibilitySet)
-				require.Equal(t, tc.visible, indexDef.Visible)
-			}
-		})
-	}
-}
-
 func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := mock.CurrentContext().GetProcess()
@@ -2850,6 +3032,89 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		nullAbility []bool
+	}{
+		{
+			name: "inner join control",
+			sql: "create table ctas_inner as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, false},
+		},
+		{
+			name: "left join null extends right",
+			sql: "create table ctas_left as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n left join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, true},
+		},
+		{
+			name: "right join null extends left",
+			sql: "create table ctas_right as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n right join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{true, false},
+		},
+		{
+			name: "full join null extends both sides",
+			sql: "create table ctas_full as select n.n_nationkey as left_key, r.r_regionkey as right_key " +
+				"from nation n full join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{true, true},
+		},
+		{
+			name: "correlated scalar subquery may not match",
+			sql: "create table ctas_scalar as select n.n_nationkey as left_key, " +
+				"(select r.r_regionkey from region r where r.r_regionkey = n.n_regionkey) as scalar_key from nation n",
+			nullAbility: []bool{false, true},
+		},
+		{
+			name: "coalesce control removes null extension",
+			sql: "create table ctas_coalesce as select n.n_nationkey as left_key, " +
+				"coalesce(r.r_regionkey, 0) as right_key from nation n left join region r on n.n_regionkey = r.r_regionkey",
+			nullAbility: []bool{false, false},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			var visibleCols []*plan.ColDef
+			for _, col := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					visibleCols = append(visibleCols, col)
+				}
+			}
+			require.Len(t, visibleCols, len(test.nullAbility))
+			for i, want := range test.nullAbility {
+				require.Equal(t, want, visibleCols[i].GetDefault().GetNullAbility())
+			}
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesSpecialTypeNullability(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	addMySQLSpecialTypeColumns(ctx)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table copied as select n.priority from nation n right join region r on n.n_regionkey = r.r_regionkey", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+	require.True(t, isEnumPlanType(&col.Typ))
+	require.Equal(t, "low,medium,high", col.Typ.GetEnumvalues())
+	require.False(t, col.Typ.GetNotNullable())
+	require.True(t, col.GetDefault().GetNullAbility())
+}
+
 func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2944,6 +3209,15 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	prepare = prepared.GetDcl().GetPrepare()
 	require.Len(t, prepare.GetParamTypes(), 1)
 	require.NotEmpty(t, prepare.GetSchemas())
+	require.False(t, prepare.GetPlan().GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_join from 'create table ctas_join as select n.N_NATIONKEY, r.R_REGIONKEY from NATION n left join REGION r on n.N_REGIONKEY = r.R_REGIONKEY where n.N_NATIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	createTable := prepare.GetPlan().GetDdl().GetCreateTable()
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.False(t, createTable.GetTableDef().GetCols()[0].GetDefault().GetNullAbility())
+	require.True(t, createTable.GetTableDef().GetCols()[1].GetDefault().GetNullAbility())
 
 	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")

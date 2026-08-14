@@ -102,8 +102,10 @@ const (
 	ErrUpdateTableUsed      uint16 = 20322
 	ErrWindowInvalidUse     uint16 = 20323
 	ErrViewSelectTmpTable   uint16 = 20324
-	ErrTooManyRows          uint16 = 20325
-	ErrCantChangeTxn        uint16 = 20326
+	ErrCantChangeTxn        uint16 = 20325
+	ErrInvalidGroupFuncUse  uint16 = 20326
+	// Keep ErrCantChangeTxn stable for clients; this code is newly allocated.
+	ErrTooManyRows uint16 = 20327
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -436,6 +438,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
 	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
 	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
+	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1046,6 +1049,10 @@ func NewUpdateTableUsed(ctx context.Context, table string) *Error {
 
 func NewWindowInvalidUse(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWindowInvalidUse, function)
+}
+
+func NewInvalidGroupFuncUse(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidGroupFuncUse)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {

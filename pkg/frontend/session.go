@@ -1138,6 +1138,17 @@ func (ses *Session) isCached(sql string) bool {
 	return ses.planCache.isCached(sql)
 }
 
+func (ses *Session) removeCachedPlan(sql string) {
+	if len(sql) == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.planCache != nil {
+		ses.planCache.remove(sql)
+	}
+}
+
 func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
