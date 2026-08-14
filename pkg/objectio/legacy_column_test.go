@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
