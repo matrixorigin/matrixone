@@ -154,8 +154,8 @@ type CDCTaskExecutor struct {
 	startTs, endTs   types.TS
 	noFull           bool
 	additionalConfig map[string]interface{}
-	// initialSnapshotLimiter prevents many tables from retaining large checkpoint
-	// batches at the same time during the first full-sync round.
+	// initialSnapshotLimiter bounds retained initial-snapshot batches while
+	// allowing tables to make progress independently.
 	initialSnapshotLimiter *semaphore.Weighted
 
 	activeRoutineMu sync.RWMutex
