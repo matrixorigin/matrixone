@@ -112,19 +112,18 @@ func (p *termPostings) blockLen(b int) int {
 	return n
 }
 
-// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
-// BlockSize) and returns the block length. Build-side copies the flat slices;
-// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
-// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
-// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
-// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
-func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
+// decodeBlockDocs decodes block b's docIDs into outDocs (cap >= BlockSize) and
+// returns the number decoded, the loaded-side byte offset where the raw tfs
+// begin, and whether every expected docID was present. Build-side copies the flat
+// docID slice and is always complete.
+// Keeping the docID decoder here lets callers that only need membership/DF avoid
+// copying tfs while fillBlock continues to use the exact same varint walk.
+func (p *termPostings) decodeBlockDocs(b int, outDocs []int64) (int, int, bool) {
 	blen := p.blockLen(b)
 	if p.docIDs != nil { // build-side: copy from the flat arrays
 		lo := b * BlockSize
 		copy(outDocs[:blen], p.docIDs[lo:lo+blen])
-		copy(outTfs[:blen], p.tfs[lo:lo+blen])
-		return blen
+		return blen, 0, true
 	}
 	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
 	var prev int64
@@ -138,16 +137,36 @@ func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 		// out of range and panic the query goroutine. Return the docs decoded so far —
 		// the sibling fillBlockPositions degrades the same way rather than crashing.
 		if off >= len(data) {
-			return i
+			return i, off, false
 		}
 		g, n := binary.Uvarint(data[off:])
 		if n <= 0 {
-			return i
+			return i, off, false
 		}
 		off += n
 		prev += int64(g)
 		outDocs[i] = prev
 	}
+	return blen, off, true
+}
+
+// fillBlock decodes block b's docIDs and tfs into outDocs/outTfs (each cap >=
+// BlockSize) and returns the block length. Build-side copies the flat slices;
+// loaded-side varint-decodes the block from blockData (the mmap view): docID gaps
+// accumulate from the previous block's last ord (resident blockLastDoc[b-1]), then
+// the raw tf bytes follow. The WAND cursor calls this once per block it lands on;
+// materializeDocIDs/Tfs call it per block to rebuild the flat arrays.
+func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
+	blen, off, complete := p.decodeBlockDocs(b, outDocs)
+	if p.docIDs != nil {
+		lo := b * BlockSize
+		copy(outTfs[:blen], p.tfs[lo:lo+blen])
+		return blen
+	}
+	if !complete {
+		return blen
+	}
+	data := p.blockData[p.blockOff[b]:p.blockOff[b+1]]
 	// tfs are blen raw bytes after the docID gaps; on corruption they may not all be
 	// present. Copy only what the block actually holds (never past len(data)).
 	if off+blen > len(data) {
