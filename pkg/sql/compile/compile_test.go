@@ -152,6 +152,10 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.ApplySQLSelectLimit = true
 	proc.GetSessionInfo().Buf = buffer.New()
+	t.Cleanup(func() {
+		proc.Free()
+		proc.GetSessionInfo().Buf.Free()
+	})
 	limitValue := uint64(1)
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		if name == plan2.SQLSelectLimitVariable {
@@ -184,6 +188,8 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 		return nil
 	}
 	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	t.Cleanup(c.Release)
+	c.SetIsPrepare(true)
 	require.NoError(t, c.Compile(ctx, pn, fill))
 	_, err = c.Run(0)
 	require.NoError(t, err)
@@ -195,10 +201,84 @@ func TestSQLSelectLimitIsResolvedForEachExecution(t *testing.T) {
 	_, err = c.Run(0)
 	require.NoError(t, err)
 	require.Zero(t, rows)
+}
 
-	c.Release()
-	proc.Free()
-	proc.GetSessionInfo().Buf.Free()
+func TestSQLSelectLimitOperatorSelection(t *testing.T) {
+	resolverErr := errors.New("sql_select_limit resolver failed")
+	tests := []struct {
+		name       string
+		limit      uint64
+		resolveErr error
+		isPrepare  bool
+		wantLimit  bool
+	}{
+		{name: "ordinary default is a no-op", limit: ^uint64(0), wantLimit: false},
+		{name: "ordinary finite value is enforced", limit: 1, wantLimit: true},
+		{name: "prepared default remains dynamic", limit: ^uint64(0), isPrepare: true, wantLimit: true},
+		{name: "resolver error fails compilation", resolveErr: resolverErr},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			proc.GetSessionInfo().Buf = buffer.New()
+			t.Cleanup(func() {
+				proc.Free()
+				proc.GetSessionInfo().Buf.Free()
+			})
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limit, tc.resolveErr
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+
+			compilerCtx := plan2.NewEmptyCompilerContext()
+			compilerCtx.SetContext(ctx)
+			const sql = "select 1 union all select 2"
+			stmts, err := mysql.Parse(ctx, sql, 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], false)
+			require.NoError(t, err)
+			pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+
+			ctrl := gomock.NewController(t)
+			txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+			proc.Base.TxnClient = txnCli
+			proc.Base.TxnOperator = txnOp
+			proc.Ctx = ctx
+			proc.ReplaceTopCtx(ctx)
+
+			c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+			t.Cleanup(c.Release)
+			c.SetIsPrepare(tc.isPrepare)
+			err = c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
+				return nil
+			})
+			if tc.resolveErr != nil {
+				require.ErrorIs(t, err, tc.resolveErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLimit, compiledScopesContainOperator(c.scopes, vm.Limit))
+		})
+	}
+}
+
+func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
+	for _, scope := range scopes {
+		found := false
+		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			found = found || op.OpType() == opType
+			return nil
+		})
+		if found || compiledScopesContainOperator(scope.PreScopes, opType) {
+			return true
+		}
+	}
+	return false
 }
 
 type retryRecordingResultSink struct {

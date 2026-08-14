@@ -1273,6 +1273,10 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 		}
 		scopes, err = c.compileSteps(qry, scopes, qry.Steps[i])
 		if err != nil {
+			// compilePlanScope transferred these scopes to this loop, but they
+			// have not joined steps yet and therefore are not covered by the
+			// deferred cleanup above.
+			ReleaseScopes(scopes)
 			return nil, err
 		}
 		steps = append(steps, scopes...)
@@ -1375,11 +1379,13 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		if qry.ApplySqlSelectLimit &&
 			c.proc.Base.SessionInfo.ApplySQLSelectLimit &&
 			c.proc.GetResolveVariableFunc() != nil {
-			limitExpr, err := plan2.MakeSQLSelectLimitExpr(c.proc.Ctx)
+			limitExpr, err := c.makeSQLSelectLimitExpr()
 			if err != nil {
 				return nil, err
 			}
-			rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+			if limitExpr != nil {
+				rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+			}
 		}
 
 		isAdaptive := c.isAdaptiveVectorSearch(qry)
@@ -1392,6 +1398,29 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		)
 		return []*Scope{rs}, nil
 	}
+}
+
+// makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are
+// reused across EXECUTEs. Ordinary statements are compiled for one execution,
+// so resolve their value once and omit the default unlimited no-op entirely.
+func (c *Compile) makeSQLSelectLimitExpr() (*plan.Expr, error) {
+	if c.isPrepare {
+		return plan2.MakeSQLSelectLimitExpr(c.proc.Ctx)
+	}
+
+	value, err := c.proc.GetResolveVariableFunc()(plan2.SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return nil, err
+	}
+	limit, ok := value.(uint64)
+	if !ok {
+		return nil, moerr.NewInternalErrorf(c.proc.Ctx,
+			"unexpected %s type %T", plan2.SQLSelectLimitVariable, value)
+	}
+	if limit == ^uint64(0) {
+		return nil, nil
+	}
+	return plan2.MakePlan2Uint64ConstExprWithType(limit), nil
 }
 
 func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
