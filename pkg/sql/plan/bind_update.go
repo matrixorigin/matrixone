@@ -1262,7 +1262,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		BindingTags: []int32{builder.genNewBindTag()},
 		LockTargets: lockTargets,
 	}, bindCtx)
-	reCheckifNeedLockWholeTable(builder)
+	applySharedLockTableFallback(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)

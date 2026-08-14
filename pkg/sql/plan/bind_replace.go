@@ -1104,7 +1104,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 	}
 
 	if len(replaceOldParentPos) > 0 {
@@ -1131,7 +1131,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
 		builder.preserveLockProjection[lockedSourceID] = struct{}{}
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 
 		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
 		builder.preserveSinkProjection[sharedSinkID] = struct{}{}

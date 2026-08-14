@@ -59,10 +59,14 @@ const (
 // being replaced by a retryable transport timeout.
 func newLockRPCContext(ctx context.Context, opts pb.LockOptions) (context.Context, context.CancelFunc) {
 	if opts.LockWaitDeadline > 0 {
-		return context.WithDeadline(ctx, time.Unix(0, opts.LockWaitDeadline).Add(lockRpcSlack))
+		return context.WithDeadlineCause(
+			ctx,
+			time.Unix(0, opts.LockWaitDeadline).Add(lockRpcSlack),
+			context.DeadlineExceeded,
+		)
 	}
 	if d := time.Duration(opts.LockWaitTimeout) * time.Second; d > 0 {
-		return context.WithTimeout(ctx, d+lockRpcSlack)
+		return context.WithTimeoutCause(ctx, d+lockRpcSlack, context.DeadlineExceeded)
 	}
 	return ctx, nil
 }
@@ -124,6 +128,13 @@ func (l *remoteLockTable) lock(
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
+	if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
+		// Coarsening is an owner-side physical representation decision. Send the
+		// logical request so the authoritative owner can re-plan from its current
+		// ledger and can retry it exactly if a wait invalidates eligibility.
+		req.Lock.Rows = opts.originalRows
+		req.Lock.Options = opts.originalOptions
+	}
 
 	if err := ctx.Err(); err != nil {
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
@@ -134,6 +145,7 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, ErrLockTimeout)
 		return
 	}
+	txnGeneration := txn.generation
 
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
@@ -156,7 +168,8 @@ func (l *remoteLockTable) lock(
 	txn.Lock()
 
 	// txn closed
-	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+	if txnGeneration != txn.generation ||
+		!bytes.Equal(req.Lock.TxnID, txn.txnID) {
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
@@ -171,7 +184,8 @@ func (l *remoteLockTable) lock(
 			txn.Unlock()
 			err = l.maybeHandleBindChanged(ctx, resp)
 			txn.Lock()
-			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+			if txnGeneration != txn.generation ||
+				!bytes.Equal(req.Lock.TxnID, txn.txnID) {
 				cb(pb.Result{}, ErrTxnNotFound)
 				return
 			}
@@ -184,16 +198,158 @@ func (l *remoteLockTable) lock(
 			return
 		}
 
-		err = txn.lockAdded(l.bind.Group, l.bind, rows, l.logger)
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		ownerLocalSnapshot := resp.Lock.TxnWaitingListOnLockTableSupported
+		recordRows := rows
+		recordOptions := opts.LockOptions
+		if opts.replaceTxnLocks && len(opts.originalRows) > 0 {
+			// A concurrent Shared/sharded acquisition can invalidate the same
+			// origin-side plan while the RPC is in flight. In that case the owner
+			// retries the logical request exactly, so those are also the keys whose
+			// deadlock probes must be retained.
+			recordRows = opts.originalRows
+			recordOptions = opts.originalOptions
+		}
+		if opts.requireOwnerLocalWaitSnapshot && !ownerLocalSnapshot {
+			// This request is the physical holder generation for a local Shared
+			// proxy. Without the v20 owner-local snapshot/table-scoped-unlock
+			// contract the proxy must not publish cache-only holders. The owner has
+			// already granted the lock, so retain a confirmed cleanup route before
+			// fencing the transaction.
+			trackingErr := txn.ensureRemoteLockTableTracked(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				true,
+				l.logger,
+			)
+			txn.markBindChangedLocked(l.logger)
+			if trackingErr != nil {
+				cb(pb.Result{}, errors.Join(ErrLockTableBindChanged, trackingErr))
+			} else {
+				cb(pb.Result{}, ErrLockTableBindChanged)
+			}
+			return
+		}
+		if !ownerLocalSnapshot &&
+			txn.hasOwnerLocalWaitSnapshotLocked(l.bind.Group, l.bind.Table) {
+			// The origin may already have compacted this table's probe ledger.
+			// Falling back to per-key traversal after a peer downgrade would miss
+			// edges, so fence the transaction and retain its table-level cleanup
+			// route instead of changing semantics in place.
+			txn.markBindChangedLocked(l.logger)
+			cb(pb.Result{}, ErrLockTableBindChanged)
+			return
+		}
+		if ownerLocalSnapshot {
+			txn.markOwnerLocalWaitSnapshotLocked(l.bind.Group, l.bind.Table)
+		}
+		if !ownerLocalSnapshot {
+			// A legacy owner has no authoritative transaction-level snapshot.
+			// Reconcile the complete exact probe ledger on every acknowledged
+			// success, including NewLockAdd=false after a lost successful response.
+			// Only missing keys are appended, keeping re-entry bounded.
+			err = txn.reconcileLegacyRemoteLocks(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				l.logger,
+			)
+		} else if !opts.requireOwnerLocalWaitSnapshot {
+			// With v20 the physical owner is authoritative for wait-for traversal,
+			// and remote Unlock releases the whole table by transaction ID. Record
+			// that bounded route directly instead of first trying to mirror an
+			// arbitrarily large owner ledger and turning physical success into a
+			// smaller origin's capacity error. A local Shared proxy is the one
+			// exception: it needs each cached key for local holder cleanup below.
+			err = txn.ensureRemoteLockTableTracked(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				true,
+				l.logger,
+			)
+		} else if resp.Lock.Result.NewLockAdd {
+			err = txn.remoteLockAdded(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				l.logger,
+			)
+		} else {
+			// The owner reused physical ownership already held by this transaction.
+			// The proxy must not publish that generation into its Shared cache: the
+			// existing owner lock may be Exclusive or a covering range. Only its
+			// bounded table-level cleanup route is needed here.
+			err = txn.ensureRemoteLockTableTracked(
+				l.bind.Group,
+				l.bind,
+				recordRows,
+				recordOptions,
+				true,
+				l.logger,
+			)
+		}
+		if err != nil {
+			// The owner has already committed. This origin may have a smaller
+			// fixed-slice pool during a rolling configuration change, so failure
+			// to retain the detailed probe ledger must still leave one bounded
+			// table route for the eventual transaction-ID unlock.
+			trackingErr := txn.ensureRemoteLockTableTracked(
+				l.bind.Group,
+				l.bind,
+				req.Lock.Rows,
+				req.Lock.Options,
+				true,
+				l.logger,
+			)
+			if trackingErr != nil {
+				err = errors.Join(err, trackingErr)
+			}
+			if !ownerLocalSnapshot {
+				// A legacy table cannot fall back to an owner snapshot. Once the
+				// acknowledged physical ownership exceeds this origin's exact probe
+				// capacity, fence the transaction and retain only its cleanup route.
+				txn.markBindChangedLocked(l.logger)
+			} else if opts.requireOwnerLocalWaitSnapshot && trackingErr == nil &&
+				moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+				// The physical owner and its authoritative wait snapshot succeeded,
+				// but this origin cannot retain another exact proxy-cache key. Tell
+				// the proxy to complete this transaction through the bounded cleanup
+				// route without publishing a local Shared representative. This
+				// sentinel is consumed inside localLockTableProxy and never reaches
+				// the Lock API.
+				err = errRetryUncachedProxyLock
+			}
+		}
 		logRemoteLockAdded(l.logger, txn, rows, opts, l.bind)
 		cb(resp.Lock.Result, err)
 		return
 	}
 
-	// The request may have reached the remote owner and acquired locks even if
-	// the response was lost or the client-side context timed out. Keep local
-	// bookkeeping so normal transaction close can send the remote unlock.
-	_ = txn.lockAddedForCleanup(l.bind.Group, l.bind, rows, l.logger)
+	// Transport failures are indeterminate. Keep one unconfirmed witness for
+	// cleanup; remote unlock releases the owner's complete table ownership by
+	// transaction ID. Unconfirmed rows are excluded from wait-for traversal, so
+	// an ambiguous failed Lock cannot invent holder edges.
+	// ErrNotSupported is an application response proving that the owner published
+	// no ownership.
+	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+		txn.markRemoteUnlockRequiredLocked(l.bind.Group, l.bind.Table)
+		if trackingErr := txn.ensureRemoteLockTableTracked(
+			l.bind.Group,
+			l.bind,
+			req.Lock.Rows,
+			req.Lock.Options,
+			false,
+			l.logger,
+		); trackingErr != nil {
+			err = errors.Join(err, trackingErr)
+		}
+	}
 	logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 	if moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout) {
 		cb(pb.Result{}, err)
@@ -206,7 +362,8 @@ func (l *remoteLockTable) lock(
 	txn.Unlock()
 	e := l.handleErrorWithContext(ctx, err, true)
 	txn.Lock()
-	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
+	if txnGeneration != txn.generation ||
+		!bytes.Equal(req.Lock.TxnID, txn.txnID) {
 		cb(pb.Result{}, ErrTxnNotFound)
 		return
 	}
@@ -263,7 +420,8 @@ func (l *remoteLockTable) unlockWithContext(
 		}
 
 		retryCount++
-		// Rate limit unlock error logs: log first 3, then every 100th
+		// Rate limit unlock error logs: log first 3, then every 100th.
+		// Deterministic owner rejections return after this first observation.
 		if retryCount <= 3 || retryCount%100 == 0 {
 			logUnlockTableOnRemoteFailedWithCount(
 				l.logger,
@@ -273,6 +431,28 @@ func (l *remoteLockTable) unlockWithContext(
 				retryCount,
 			)
 		}
+		if !retryRemoteUnlockError(err) {
+			if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+				// The owner has authoritatively rejected this old generation. Its
+				// physical table is already gone, so cleanup is complete.
+				return nil
+			}
+			if moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+				// A missing table can race allocator reassignment. Resolve that one
+				// ambiguity, but do not loop if the allocator still reports this bind.
+				if handledErr := l.handleErrorWithContext(ctx, err, false); handledErr == nil {
+					return nil
+				} else {
+					return handledErr
+				}
+			}
+			// The owner rejected the ownership transition itself (for example,
+			// replacement bookkeeping could not be prepared). Replaying the same
+			// request cannot repair that state and used to spin forever. Let the
+			// retained closing transaction surface the error and retry explicitly.
+			return err
+		}
+
 		// unlock cannot fail and must ensure that all locks have been
 		// released.
 		//
@@ -289,12 +469,24 @@ func (l *remoteLockTable) unlockWithContext(
 	}
 }
 
+func retryRemoteUnlockError(err error) bool {
+	return retryRemoteLockError(err) ||
+		errors.Is(err, morpc.ErrBackendCreateTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed)
+}
+
 func (l *remoteLockTable) getLock(
 	ctx context.Context,
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) error {
-	ctx, cancel := context.WithTimeout(ctx, remoteLockSnapshotTimeout)
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		remoteLockSnapshotTimeout,
+		context.DeadlineExceeded,
+	)
 	defer cancel()
 
 	if err := ctx.Err(); err != nil {
@@ -354,6 +546,44 @@ func (l *remoteLockTable) getLockHolder(ctx context.Context, key []byte) (pb.Wai
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
 			return pb.WaitTxn{}, false, err
+		}
+		backoff = nextRemoteRetryBackoff(backoff)
+	}
+}
+
+func (l *remoteLockTable) getTxnWaitingList(
+	ctx context.Context,
+	txnID []byte,
+) ([]pb.WaitTxn, error) {
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		remoteLockSnapshotTimeout,
+		context.DeadlineExceeded,
+	)
+	defer cancel()
+
+	backoff := remoteRetryInitialBackoff
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		values, err := l.doGetTxnWaitingList(ctx, txnID)
+		if err == nil {
+			return values, nil
+		}
+		// Capability was negotiated by a successful Lock response. A later
+		// protocol rejection or bind-generation error is terminal for this
+		// snapshot, not a transport failure that can become safe by retrying.
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) ||
+			moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) ||
+			moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
+			return nil, err
 		}
 		backoff = nextRemoteRetryBackoff(backoff)
 	}
@@ -449,6 +679,33 @@ func (l *remoteLockTable) doGetLock(parent context.Context, key []byte, txn pb.W
 		return lock, true, nil
 	}
 	return Lock{}, false, moerr.AttachCause(ctx, err)
+}
+
+func (l *remoteLockTable) doGetTxnWaitingList(
+	parent context.Context,
+	txnID []byte,
+) ([]pb.WaitTxn, error) {
+	ctx, cancel := context.WithTimeoutCause(
+		parent,
+		defaultRPCTimeout,
+		moerr.CauseDoGetLock,
+	)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+	req.Method = pb.Method_GetTxnWaitingListOnLockTable
+	req.GetWaitingList.Txn.TxnID = txnID
+	// Route the dedicated owner-local snapshot RPC to the physical lock owner.
+	// Its handler is forbidden from recursively issuing this method.
+	req.GetWaitingList.Txn.CreatedOn = l.bind.ServiceID
+
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		return nil, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	return resp.GetWaitingList.WaitingList, nil
 }
 
 func (l *remoteLockTable) doGetLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {

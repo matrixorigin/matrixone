@@ -55,7 +55,8 @@ const (
 	MORPCVersion17     int64 = 17 // ordered-set percentile aggregate IDs
 	MORPCVersion18     int64 = 18 // prepared-parameter binary-string metadata
 	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
-	MORPCLatestVersion       = MORPCVersion19
+	MORPCVersion20     int64 = 20 // owner-local lock snapshots and table-scoped remote unlock
+	MORPCLatestVersion       = MORPCVersion20
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

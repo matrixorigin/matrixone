@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -447,35 +446,13 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			LockTargets: lockTargets,
 		}, bindCtx)
 
-		reCheckifNeedLockWholeTable(builder)
+		applySharedLockTableFallback(builder)
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
 	return lastNodeID, err
-}
-
-func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
-	lockService := builder.compCtx.GetProcess().Base.LockService
-	if lockService == nil {
-		// MockCompilerContext
-		return
-	}
-	lockconfig := lockService.GetConfig()
-
-	node := builder.qry.Nodes[nodeID]
-	if node.NodeType != plan.Node_LOCK_OP {
-		for _, childID := range node.Children {
-			builder.updateLocksOnDemand(childID)
-		}
-	} else if !node.LockTargets[0].LockTable && node.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
-		logutil.Infof("Row lock upgraded to table lock for SQL : %s", builder.compCtx.GetRootSql())
-		logutil.Infof("the outcnt stats is %f", node.Stats.Outcnt)
-		for _, target := range node.LockTargets {
-			target.LockTable = true
-		}
-	}
 }
 
 func getPartitionColName(expr *plan.Expr) string {

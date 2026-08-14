@@ -26,12 +26,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLockProtocolV20CapabilityFollowsProtocolVersion(t *testing.T) {
+	moruntime.RunTest("", func(rt moruntime.Runtime) {
+		value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.True(t, ok)
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, value)
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+		require.False(t, supportsLockProtocolV20(""))
+		err := checkMethodVersion(context.Background(), "", &pb.Request{
+			Method: pb.Method_GetTxnWaitingListOnLockTable,
+		})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+		require.True(t, supportsLockProtocolV20(""))
+
+		s := &service{
+			serviceID: "",
+			cfg: Config{
+				EnableRemoteLocalProxy: true,
+			},
+			logger: getLogger(""),
+		}
+		bind := pb.LockTable{
+			Group:     0,
+			Table:     26711,
+			ServiceID: "remote-owner",
+			Valid:     true,
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+		legacy := s.createLockTableByBind(bind)
+		require.IsType(t, &remoteLockTable{}, legacy,
+			"mixed versions must not create table-scoped proxy handoffs")
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+		negotiated := s.createLockTableByBind(bind)
+		require.IsType(t, &localLockTableProxy{}, negotiated)
+	})
+}
+
+func TestOwnerLocalSnapshotRejectsTablesOwnedByAnotherService(t *testing.T) {
+	s := &service{serviceID: "snapshot-owner"}
+	s.tableGroups = &lockTableHolders{
+		service: s.serviceID,
+		logger:  getLogger(""),
+		holders: map[uint32]*lockTableHolder{},
+	}
+	remote := &remoteLockTable{bind: pb.LockTable{
+		Group:     1,
+		Table:     26710,
+		ServiceID: "other-owner",
+		Valid:     true,
+	}}
+	s.tableGroups.set(1, 26710, remote)
+
+	l, err := s.getOwnerLocalSnapshotLockTable(context.Background(), 1, 26710)
+	require.ErrorIs(t, err, ErrLockTableBindChanged)
+	require.Nil(t, l)
+
+	remote.bind.ServiceID = s.serviceID
+	l, err = s.getOwnerLocalSnapshotLockTable(context.Background(), 1, 26710)
+	require.Error(t, err)
+	require.Nil(t, l)
+}
 
 func TestLockBlockedOnRemote(t *testing.T) {
 	runLockServiceTests(
@@ -226,6 +293,92 @@ func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
 						return
 					}
 				}
+			}
+		},
+	)
+}
+
+func TestOwnerLocalSnapshotsDoNotCrossSaturateWaitingListWorkers(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"snapshot-origin-a", "snapshot-origin-b"},
+		func(_ *lockTableAllocator, services []*service) {
+			a := services[0]
+			b := services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			type remoteTxn struct {
+				origin *service
+				caller *service
+				id     []byte
+			}
+			txns := make([]remoteTxn, 0, 2*fetchWhoWaitingListTaskCount)
+			for idx := 0; idx < fetchWhoWaitingListTaskCount; idx++ {
+				tableOnA := uint64(26800 + idx)
+				seedA := []byte(fmt.Sprintf("seed-a-%d", idx))
+				rowA := []byte(fmt.Sprintf("row-a-%d", idx))
+				_, err := a.Lock(ctx, tableOnA, [][]byte{rowA}, seedA, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				require.NoError(t, a.Unlock(ctx, seedA, timestamp.Timestamp{}))
+				originBTxn := []byte(fmt.Sprintf("origin-b-%d", idx))
+				_, err = b.Lock(ctx, tableOnA, [][]byte{rowA}, originBTxn, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				txns = append(txns, remoteTxn{origin: b, caller: a, id: originBTxn})
+
+				tableOnB := uint64(26900 + idx)
+				seedB := []byte(fmt.Sprintf("seed-b-%d", idx))
+				rowB := []byte(fmt.Sprintf("row-b-%d", idx))
+				_, err = b.Lock(ctx, tableOnB, [][]byte{rowB}, seedB, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				require.NoError(t, b.Unlock(ctx, seedB, timestamp.Timestamp{}))
+				originATxn := []byte(fmt.Sprintf("origin-a-%d", idx))
+				_, err = a.Lock(ctx, tableOnB, [][]byte{rowB}, originATxn, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+				txns = append(txns, remoteTxn{origin: a, caller: b, id: originATxn})
+			}
+
+			for _, value := range txns {
+				txn := value.origin.activeTxnHolder.getActiveTxn(value.id, false, "")
+				require.NotNil(t, txn)
+				txn.RLock()
+				negotiated := false
+				for _, holder := range txn.lockHolders {
+					if len(holder.ownerLocalWaitSnapshots) > 0 {
+						negotiated = true
+						break
+					}
+				}
+				txn.RUnlock()
+				require.True(t, negotiated,
+					"test requires the v20 owner-local capability")
+			}
+
+			start := make(chan struct{})
+			results := make(chan error, len(txns))
+			for _, value := range txns {
+				go func() {
+					<-start
+					_, err := value.caller.getTxnWaitingListOnRemote(
+						ctx,
+						value.id,
+						value.origin.serviceID,
+					)
+					results <- err
+				}()
+			}
+			close(start)
+			for range txns {
+				select {
+				case err := <-results:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatalf("cross-owner snapshots saturated the waiting-list workers: %v", ctx.Err())
+				}
+			}
+
+			for _, value := range txns {
+				require.NoError(t, value.origin.Unlock(ctx, value.id, timestamp.Timestamp{}))
 			}
 		},
 	)
@@ -994,7 +1147,13 @@ func TestMapBasedTxnHolderFenceReleasesShardWhileTxnIsBusy(t *testing.T) {
 				txn.Unlock()
 			}
 		}()
-		require.NoError(t, txn.lockAdded(bind.Group, bind, [][]byte{{1}}, hold.logger))
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{{1}},
+			newTestRowExclusiveOptions(),
+			hold.logger,
+		))
 
 		fenceEntered := make(chan struct{}, 1)
 		hold.beforeFenceTxnLock = func(candidate *activeTxn) {
@@ -1034,6 +1193,70 @@ func TestMapBasedTxnHolderFenceReleasesShardWhileTxnIsBusy(t *testing.T) {
 		txn.RLock()
 		require.True(t, txn.bindChanged)
 		txn.RUnlock()
+	})
+}
+
+func TestMapBasedTxnHolderFenceSkipsClosingTransactionsOnly(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+				return pb.CannotCommitResponse{}, nil
+			},
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+		defer hold.close()
+
+		bind := pb.LockTable{
+			Group: 0, Table: 24767, ServiceID: "s1", Version: 1, Valid: true,
+		}
+		closingTxn := hold.getActiveTxn([]byte("closing-bind-refresh"), true, "")
+		otherTxn := hold.getActiveTxn([]byte("other-bind-holder"), true, "")
+		for _, txn := range []*activeTxn{closingTxn, otherTxn} {
+			txn.Lock()
+			require.NoError(t, txn.lockAdded(
+				bind.Group,
+				bind,
+				[][]byte{{1}},
+				newTestRowExclusiveOptions(),
+				hold.logger,
+			))
+			txn.Unlock()
+		}
+
+		closingTxn.Lock()
+		closingTxnLocked := true
+		defer func() {
+			if closingTxnLocked {
+				closingTxn.Unlock()
+			}
+		}()
+		closingTxn.closing.Store(true)
+
+		changedBind := bind
+		changedBind.Version++
+		fenceDone := make(chan int, 1)
+		go func() {
+			fenceDone <- hold.fenceByBindChanged(changedBind)
+		}()
+		select {
+		case count := <-fenceDone:
+			require.Equal(t, 1, count,
+				"every affected transaction except the cleanup initiator must be fenced")
+		case <-time.After(time.Second):
+			t.Fatal("bind refresh waited on its own closing transaction")
+		}
+
+		require.False(t, closingTxn.bindChanged)
+		closingTxn.Unlock()
+		closingTxnLocked = false
+
+		otherTxn.RLock()
+		require.True(t, otherTxn.bindChanged)
+		otherTxn.RUnlock()
 	})
 }
 
@@ -1455,7 +1678,9 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
+			require.NoError(t, l2.UnlockWithContext(ctx, txnID2, timestamp.Timestamp{}))
+			require.False(t, l1.activeTxnHolder.hasActiveTxn(txnID2),
+				"unlock must close the owner ledger recorded on the old bind generation")
 
 			bind := l2.tableGroups.get(0, table).getBind()
 			require.Equal(t, l1.serviceID, bind.ServiceID)
@@ -2085,6 +2310,22 @@ func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 
 			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
+			ownerTxn := owner.activeTxnHolder.getActiveTxn(txn2, false, "")
+			require.NotNil(t, ownerTxn)
+			ownerTxn.RLock()
+			require.True(t, ownerTxn.deadlockFound)
+			lockOpsCtx := ownerTxn.lockOpsCtx
+			ownerTxn.RUnlock()
+			require.ErrorIs(t, lockOpsCtx.Err(), context.Canceled,
+				"owner-local deadlock must cancel every admitted operation in the transaction generation")
+			ownerTable := owner.tableGroups.get(0, tableID)
+			require.NotNil(t, ownerTable)
+			ownerTxn.Lock()
+			err = owner.checkBindChangedBeforeLockSuccess(
+				ownerTxn, txn2, ownerTable.getBind())
+			ownerTxn.Unlock()
+			require.ErrorIs(t, err, ErrDeadLockDetected,
+				"a terminal deadlock must reject every later success publication")
 			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			require.NoError(t, <-errC)
@@ -2094,6 +2335,71 @@ func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
 			cfg.TxnIterFunc = func(fn func([]byte) bool) {
 				fn(txn1)
 				fn(txn2)
+			}
+		},
+	)
+}
+
+func TestRemoteOwnerLocalDeadlockNormalizesEveryPendingOperation(t *testing.T) {
+	txn1 := []byte("terminal-txn1")
+	txn2 := []byte("terminal-txn2")
+	txn3 := []byte("terminal-txn3")
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, s []*service) {
+			const tableID = uint64(26780)
+			owner, origin := s[0], s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Pin the table to owner and build txn1 -> txn2. txn2 also has an
+			// independent pending operation on txn3 when txn2 -> txn1 closes the
+			// cycle. Both txn2 operations must report the durable deadlock state,
+			// regardless of whether context cancellation or waiter notification wins.
+			mustAddTestLock(t, ctx, owner, tableID, []byte("pin"), [][]byte{{0}}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, []byte("pin"), timestamp.Timestamp{}))
+			opt := newTestRowExclusiveOptions()
+			for txnID, row := range map[string]byte{
+				string(txn1): 1,
+				string(txn2): 2,
+				string(txn3): 3,
+			} {
+				_, err := origin.Lock(ctx, tableID, [][]byte{{row}}, []byte(txnID), opt)
+				require.NoError(t, err)
+			}
+
+			lockAsync := func(txnID []byte, row byte) <-chan error {
+				done := make(chan error, 1)
+				go func() {
+					_, err := origin.Lock(ctx, tableID, [][]byte{{row}}, txnID, opt)
+					done <- err
+				}()
+				return done
+			}
+			txn2Pending := lockAsync(txn2, 3)
+			require.NoError(t, WaitWaiters(owner, 0, tableID, []byte{3}, 1))
+			txn1Pending := lockAsync(txn1, 2)
+			require.NoError(t, WaitWaiters(owner, 0, tableID, []byte{2}, 1))
+
+			_, err := origin.Lock(ctx, tableID, [][]byte{{1}}, txn2, opt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected),
+				"expected direct deadlock error, got %v", err)
+			pendingErr := <-txn2Pending
+			require.True(t, moerr.IsMoErrCode(pendingErr, moerr.ErrDeadLockDetected),
+				"terminal state must override a racing context cancellation, got %v", pendingErr)
+
+			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, <-txn1Pending)
+			require.NoError(t, origin.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			require.NoError(t, origin.Unlock(ctx, txn3, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				fn(txn1)
+				fn(txn2)
+				fn(txn3)
 			}
 		},
 	)

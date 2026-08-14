@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,6 +38,31 @@ import (
 type blockingUnlockClient struct {
 	unlockStarted chan struct{}
 }
+
+type deterministicUnlockErrorClient struct {
+	err   error
+	calls atomic.Int32
+}
+
+func (c *deterministicUnlockErrorClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_Unlock {
+		return nil, errors.New("unexpected request")
+	}
+	c.calls.Add(1)
+	return nil, c.err
+}
+
+func (c *deterministicUnlockErrorClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, errors.New("unexpected async request")
+}
+
+func (c *deterministicUnlockErrorClient) Close() error { return nil }
 
 func TestIsRetryErrorTreatsLocalBackendGenerationErrorsAsAmbiguous(t *testing.T) {
 	tests := []struct {
@@ -147,6 +173,172 @@ type retryingGetLockClient struct {
 	release chan struct{}
 }
 
+// lostCoarsenedLockClient models the one state a lock client cannot resolve
+// from the RPC result: the owner may have accepted the request just before the
+// response was lost, or may never have received it.
+type lostCoarsenedLockClient struct {
+	bind pb.LockTable
+}
+
+type loseNthLockResponseClient struct {
+	Client
+	dropAt atomic.Int32
+	locks  atomic.Int32
+}
+
+type ownerTxnSnapshotClient struct {
+	waiter        pb.WaitTxn
+	snapshotCalls int
+	target        string
+	err           error
+}
+
+type legacyLockOwnerClient struct {
+	bind               pb.LockTable
+	waiter             pb.WaitTxn
+	lockRows           [][]byte
+	lockOptions        pb.LockOptions
+	lockCalls          int
+	dropFirstLockReply bool
+	getTxnLockCalls    int
+	ownerSnapshotCalls int
+}
+
+type changingOwnerCapabilityClient struct {
+	lockCalls int
+}
+
+func (c *changingOwnerCapabilityClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_Lock {
+		return nil, io.ErrClosedPipe
+	}
+	c.lockCalls++
+	resp := acquireResponse()
+	resp.Lock.Result.NewLockAdd = true
+	resp.Lock.TxnWaitingListOnLockTableSupported = c.lockCalls == 1
+	return resp, nil
+}
+
+func (c *changingOwnerCapabilityClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *changingOwnerCapabilityClient) Close() error { return nil }
+
+func (c *legacyLockOwnerClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		c.lockCalls++
+		c.lockRows = make([][]byte, len(req.Lock.Rows))
+		for idx := range req.Lock.Rows {
+			c.lockRows[idx] = append([]byte(nil), req.Lock.Rows[idx]...)
+		}
+		c.lockOptions = req.Lock.Options
+		if c.dropFirstLockReply && c.lockCalls == 1 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		resp := acquireResponse()
+		resp.Lock.Result.NewLockAdd = c.lockCalls == 1
+		// A pre-v20 owner has no capability field on the wire, which decodes
+		// to false in the new client.
+		return resp, nil
+	case pb.Method_GetTxnLock:
+		c.getTxnLockCalls++
+		resp := acquireResponse()
+		resp.GetTxnLock.Value = int32(flagLockRow | flagLockExclusiveMode)
+		resp.GetTxnLock.WaitingList = append(resp.GetTxnLock.WaitingList, c.waiter)
+		return resp, nil
+	case pb.Method_GetTxnWaitingListOnLockTable:
+		c.ownerSnapshotCalls++
+		return nil, moerr.NewNotSupportedNoCtx("legacy lock owner")
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *legacyLockOwnerClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *legacyLockOwnerClient) Close() error { return nil }
+
+func (c *ownerTxnSnapshotClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_GetTxnWaitingListOnLockTable {
+		return nil, io.ErrClosedPipe
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	resp := acquireResponse()
+	c.snapshotCalls++
+	c.target = req.GetWaitingList.Txn.CreatedOn
+	resp.GetWaitingList.WaitingList = append(
+		resp.GetWaitingList.WaitingList,
+		c.waiter,
+	)
+	return resp, nil
+}
+
+func (c *ownerTxnSnapshotClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *ownerTxnSnapshotClient) Close() error { return nil }
+
+func (c *loseNthLockResponseClient) Send(
+	ctx context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	resp, err := c.Client.Send(ctx, req)
+	if err != nil || req.Method != pb.Method_Lock ||
+		c.locks.Add(1) != c.dropAt.Load() {
+		return resp, err
+	}
+	// The owner has completed the request. Drop only its response to exercise
+	// the transport state that the origin cannot distinguish from no delivery.
+	releaseResponse(resp)
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (c *lostCoarsenedLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Lock:
+		return nil, io.ErrUnexpectedEOF
+	case pb.Method_GetBind:
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		resp.GetBind.AllocatorID = c.bind.AllocatorID
+		resp.GetBind.AllocatorVersion = c.bind.Version
+		return resp, nil
+	default:
+		return nil, io.ErrClosedPipe
+	}
+}
+
+func (c *lostCoarsenedLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *lostCoarsenedLockClient) Close() error { return nil }
+
 func (c *retryingGetLockClient) Send(_ context.Context, req *pb.Request) (*pb.Response, error) {
 	switch req.Method {
 	case pb.Method_GetTxnLock:
@@ -176,6 +368,915 @@ func (c *retryingGetLockClient) AsyncSend(context.Context, *pb.Request) (*morpc.
 }
 
 func (c *retryingGetLockClient) Close() error { return nil }
+
+func TestRemoteCoarsenedLockTransportFailureKeepsBoundedRouting(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26646,
+			OriginTable: 26646,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-coarsened-range")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(6), "")
+		defer reuse.Free(txn, nil)
+
+		oldRows := newTestRows(1, 2, 5, 7)
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(bind.Group, bind, oldRows, pb.LockOptions{}, getLogger("")))
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1, 8),
+			LockOptions{
+				LockOptions: pb.LockOptions{
+					Granularity: pb.Granularity_Range,
+					Mode:        pb.LockMode_Exclusive,
+					Policy:      pb.WaitPolicy_Wait,
+				},
+				replaceTxnLocks: true,
+			},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// Remote unlock is by transaction ID, so the existing table entry is the
+		// complete cleanup route for either owner outcome. The indeterminate path
+		// must not consume capacity by appending speculative endpoints.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, oldRows, locks.all())
+		locks.unref()
+		txn.Unlock()
+	})
+}
+
+func TestRemoteRepeatedRangeLostReplacementResponseStillUnlocks(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26761)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			client := &loseNthLockResponseClient{Client: origin.remote.client}
+			client.dropAt.Store(3)
+			origin.remote.client = client
+
+			txnID := []byte("remote-repeat-range")
+			rangeOptions := newTestRangeExclusiveOptions()
+			for range 2 {
+				_, err = origin.Lock(
+					ctx, table, newTestRows(1, 2), txnID, rangeOptions)
+				require.NoError(t, err)
+			}
+
+			for idx, s := range []*service{owner, origin} {
+				txn := s.activeTxnHolder.getActiveTxn(txnID, false, "")
+				require.NotNil(t, txn)
+				txn.RLock()
+				keys := txn.lockHolders[0].tableKeys[table].slice()
+				txn.RUnlock()
+				expected := newTestRows(1, 2)
+				if idx == 1 {
+					// A v20 origin owns only the bounded route; the physical owner
+					// keeps the complete range representation and wait-for graph.
+					expected = expected[:1]
+				}
+				require.Equal(t, expected, keys.all())
+				keys.unref()
+			}
+
+			_, err = origin.Lock(
+				ctx, table, newTestRows(3), txnID, newTestRowExclusiveOptions())
+			require.Error(t, err, "the owner response must be lost after commit")
+
+			lt := owner.tableGroups.get(0, table).(*localLockTable)
+			lt.mu.RLock()
+			start, hasStart := lt.mu.store.Get(newTestRows(1)[0])
+			end, hasEnd := lt.mu.store.Get(newTestRows(3)[0])
+			lt.mu.RUnlock()
+			require.True(t, hasStart)
+			require.True(t, hasEnd)
+			require.True(t, start.isLockRangeStart())
+			require.True(t, end.isLockRangeEnd())
+
+			// The origin keeps its bounded table route. The owner-side ledger is the
+			// authoritative deadlock snapshot and unlock by txnID releases the owner's
+			// committed replacement even though the response never arrived.
+			originTxn := origin.activeTxnHolder.getActiveTxn(txnID, false, "")
+			require.NotNil(t, originTxn)
+			originTxn.RLock()
+			originKeys := originTxn.lockHolders[0].tableKeys[table].slice()
+			originTxn.RUnlock()
+			require.Equal(t, newTestRows(1), originKeys.all())
+			originKeys.unref()
+
+			waiterTxn := []byte("remote-repeat-range-waiter")
+			waiterDone := make(chan error, 1)
+			go func() {
+				_, lockErr := owner.Lock(
+					ctx, table, newTestRows(3), waiterTxn,
+					newTestRowExclusiveOptions())
+				waiterDone <- lockErr
+			}()
+			waitWaiters(t, owner, table, newTestRows(3)[0], 1)
+
+			seen := make(map[string]struct{})
+			ok, err := originTxn.fetchWhoWaitingMe(
+				ctx,
+				origin.serviceID,
+				txnID,
+				func(waiter pb.WaitTxn, _ string) bool {
+					seen[string(waiter.TxnID)] = struct{}{}
+					return true
+				},
+				origin.getLockTable,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Contains(t, seen, string(waiterTxn))
+
+			require.NoError(t, origin.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			require.NoError(t, <-waiterDone)
+			require.NoError(t, owner.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			probeTxn := []byte("remote-repeat-range-probe")
+			probe := newTestRangeExclusiveOptions()
+			probe.Policy = pb.WaitPolicy_FastFail
+			_, err = owner.Lock(ctx, table, newTestRows(1, 3), probeTxn, probe)
+			require.NoError(t, err, "the lost-response replacement leaked")
+			require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 2
+			c.MaxFixedSliceSize = 4
+		},
+	)
+}
+
+func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"owner", "origin"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26768)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			client := &loseNthLockResponseClient{Client: origin.remote.client}
+			client.dropAt.Store(1)
+			origin.remote.client = client
+
+			holderTxn := []byte("remote-exact-holder")
+			rows := newTestRows(1, 2, 3)
+			_, err = origin.Lock(
+				ctx, table, rows, holderTxn, newTestRowExclusiveOptions())
+			require.Error(t, err, "the owner response must be lost after commit")
+			_, err = origin.Lock(
+				ctx, table, rows, holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err, "the re-entrant retry must observe owner success")
+
+			originTxn := origin.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, originTxn)
+			originTxn.RLock()
+			route := originTxn.lockHolders[0].tableKeys[table].slice()
+			originTxn.RUnlock()
+			require.Equal(t, rows[:1], route.all())
+			route.unref()
+
+			waiterTxns := [][]byte{
+				[]byte("remote-exact-waiter-2"),
+				[]byte("remote-exact-waiter-3"),
+			}
+			waiterDone := make(chan error, len(waiterTxns))
+			for idx, txnID := range waiterTxns {
+				row := rows[idx+1]
+				go func() {
+					_, lockErr := owner.Lock(
+						ctx, table, [][]byte{row}, txnID,
+						newTestRowExclusiveOptions())
+					waiterDone <- lockErr
+				}()
+				waitWaiters(t, owner, table, row, 1)
+			}
+
+			seen := make(map[string]struct{})
+			ok, err := originTxn.fetchWhoWaitingMe(
+				ctx,
+				origin.serviceID,
+				holderTxn,
+				func(waiter pb.WaitTxn, _ string) bool {
+					seen[string(waiter.TxnID)] = struct{}{}
+					return true
+				},
+				origin.getLockTable,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			for _, txnID := range waiterTxns {
+				require.Contains(t, seen, string(txnID))
+			}
+
+			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			for _, txnID := range waiterTxns {
+				require.NoError(t, <-waiterDone)
+				require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			}
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 8
+			c.MaxFixedSliceSize = 8
+		},
+	)
+}
+
+func TestRemoteOwnerSnapshotCompactsOriginLedgerAcrossCapacitySkew(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"owner", "origin"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			// Model two independently valid rolling configurations. Shared locks
+			// stay exact at the owner, whose fixed slice can hold this request; the
+			// v20 origin needs only a bounded table route because owner-side state
+			// is authoritative for both wait-for traversal and transaction unlock.
+			origin.cfg.MaxFixedSliceSize = 4
+			origin.fsp = newFixedSlicePool(4)
+			origin.activeTxnHolder.(*mapBasedTxnHolder).fsp = origin.fsp
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26775)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			compatibleTxn := []byte("remote-capacity-compatible-holder")
+			_, err = owner.Lock(
+				ctx, table, newTestRows(3), compatibleTxn,
+				newTestRowSharedOptions())
+			require.NoError(t, err)
+
+			holderTxn := []byte("remote-capacity-holder")
+			rows := newTestRows(1, 2, 3, 4, 5)
+			_, err = origin.Lock(
+				ctx, table, rows, holderTxn, newTestRowSharedOptions())
+			require.NoError(t, err,
+				"a negotiated owner snapshot must not turn physical success into an origin capacity error")
+			ownerTxn := owner.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, ownerTxn)
+			ownerTxn.RLock()
+			ownerKeys := ownerTxn.lockHolders[0].tableKeys[table].slice()
+			ownerTxn.RUnlock()
+			require.Equal(t, rows, ownerKeys.all())
+			ownerKeys.unref()
+
+			originTxn := origin.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, originTxn)
+			originTxn.RLock()
+			holder := originTxn.lockHolders[0]
+			route := holder.tableKeys[table].slice()
+			_, negotiated := holder.ownerLocalWaitSnapshots[table]
+			originTxn.RUnlock()
+			require.True(t, negotiated)
+			require.Equal(t, rows[:1], route.all())
+			route.unref()
+
+			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			require.Nil(t, owner.activeTxnHolder.getActiveTxn(holderTxn, false, ""),
+				"table-scoped remote unlock must release every owner-side exact row")
+			require.NoError(t, owner.Unlock(ctx, compatibleTxn, timestamp.Timestamp{}))
+
+			probeTxn := []byte("remote-capacity-probe")
+			probeOptions := newTestRowExclusiveOptions()
+			probeOptions.Policy = pb.WaitPolicy_FastFail
+			_, err = owner.Lock(ctx, table, rows, probeTxn, probeOptions)
+			require.NoError(t, err)
+			require.NoError(t, owner.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 4
+			c.MaxFixedSliceSize = 8
+		},
+	)
+}
+
+func TestRemoteCoarseningUsesOwnerRepresentationForDeadlockProbes(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"owner", "origin"},
+		time.Second*10,
+		func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			// Model a rolling configuration boundary: the origin wants to
+			// coarsen sooner, while the authoritative owner can still retain the
+			// complete Exact request.
+			origin.cfg.MaxLockRowCount = 2
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			const table = uint64(26769)
+			_, err := owner.getLockTableWithCreate(
+				ctx, 0, table, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			holderTxn := []byte("remote-divergent-holder")
+			rows := newTestRows(1, 2, 3)
+			_, err = origin.Lock(
+				ctx, table, rows, holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			defer func() {
+				_ = origin.Unlock(context.Background(), holderTxn, timestamp.Timestamp{})
+			}()
+
+			waiterTxn := []byte("remote-divergent-interior-waiter")
+			waiterDone := make(chan error, 1)
+			go func() {
+				_, lockErr := owner.Lock(
+					ctx,
+					table,
+					newTestRows(2),
+					waiterTxn,
+					newTestRowExclusiveOptions(),
+				)
+				waiterDone <- lockErr
+			}()
+			waitWaiters(t, owner, table, newTestRows(2)[0], 1)
+
+			originTxn := origin.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, originTxn)
+			seen := make(map[string]struct{})
+			ok, err := originTxn.fetchWhoWaitingMe(
+				ctx,
+				origin.serviceID,
+				holderTxn,
+				func(waiter pb.WaitTxn, _ string) bool {
+					seen[string(waiter.TxnID)] = struct{}{}
+					return true
+				},
+				origin.getLockTable,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Contains(t, seen, string(waiterTxn))
+
+			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			require.NoError(t, <-waiterDone)
+			require.NoError(t, owner.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+		},
+		func(c *Config) {
+			c.MaxLockRowCount = 8
+			c.MaxFixedSliceSize = 8
+		},
+	)
+}
+
+func TestRemoteTxnSnapshotUsesNegotiatedOwnerLocalRPC(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26770,
+			OriginTable: 26770,
+			ServiceID:   "legacy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		row := newTestRows(7)[0]
+		waiter := pb.WaitTxn{
+			TxnID:     []byte("legacy-owner-waiter"),
+			CreatedOn: "waiter-origin",
+		}
+		client := &ownerTxnSnapshotClient{waiter: waiter}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+
+		holderTxnID := []byte("legacy-owner-holder")
+		txn := newActiveTxn(
+			holderTxnID,
+			string(holderTxnID),
+			newFixedSlicePool(8),
+			"",
+		)
+		defer reuse.Free(txn, nil)
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			[][]byte{row},
+			newTestRowExclusiveOptions(),
+			getLogger(""),
+		))
+		txn.markOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table)
+		txn.Unlock()
+
+		seen := make(map[string]struct{})
+		ok, err := txn.fetchWhoWaitingMe(
+			context.Background(),
+			"origin",
+			holderTxnID,
+			func(value pb.WaitTxn, _ string) bool {
+				seen[string(value.TxnID)] = struct{}{}
+				return true
+			},
+			func(context.Context, uint32, uint64) (lockTable, error) {
+				return remote, nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Contains(t, seen, string(waiter.TxnID))
+		require.Equal(t, 1, client.snapshotCalls)
+		require.Equal(t, bind.ServiceID, client.target)
+	})
+}
+
+func TestOwnerSnapshotCapabilityLossFencesTransaction(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26773,
+			OriginTable: 26773,
+			ServiceID:   "owner-after-downgrade",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &ownerTxnSnapshotClient{
+			err: moerr.NewNotSupportedNoCtx("owner-local snapshot disabled"),
+		}
+		remote := newRemoteLockTable(
+			"snapshot-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+
+		txnID := []byte("snapshot-capability-loss")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			newTestRows(1),
+			newTestRowExclusiveOptions(),
+			getLogger(""),
+		))
+		txn.markOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table)
+		txn.Unlock()
+
+		ok, err := txn.fetchWhoWaitingMe(
+			context.Background(),
+			"snapshot-origin",
+			txnID,
+			func(pb.WaitTxn, string) bool { return true },
+			func(context.Context, uint32, uint64) (lockTable, error) {
+				return remote, nil
+			},
+		)
+		require.False(t, ok)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		txn.RLock()
+		require.True(t, txn.bindChanged,
+			"a negotiated capability loss must fence future lock operations")
+		txn.RUnlock()
+	})
+}
+
+func TestNewOriginKeepsExactTraversalAgainstLegacyOwner(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26771,
+			OriginTable: 26771,
+			ServiceID:   "legacy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		logicalRows := newTestRows(1, 3, 5, 7)
+		waiter := pb.WaitTxn{TxnID: []byte("legacy-waiter"), CreatedOn: "legacy-origin"}
+		client := &legacyLockOwnerClient{bind: bind, waiter: waiter}
+		remote := newRemoteLockTable(
+			"new-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+
+		txnID := []byte("new-origin-txn")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+		txn.Lock()
+		rows, opts, replace := txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			logicalRows,
+			newTestRowExclusiveOptions(),
+			2,
+		)
+		require.True(t, replace)
+		require.Len(t, rows, 2)
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			rows,
+			LockOptions{
+				LockOptions:     opts,
+				replaceTxnLocks: true,
+				originalRows:    logicalRows,
+				originalOptions: newTestRowExclusiveOptions(),
+			},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.NoError(t, lockErr)
+		txn.Unlock()
+
+		// The new origin must not send its local compact plan to an owner whose
+		// capability is unknown. That keeps an old owner's physical locks and
+		// the origin's legacy GetTxnLock probes in the same exact representation.
+		require.Equal(t, logicalRows, client.lockRows)
+		require.Equal(t, pb.Granularity_Row, client.lockOptions.Granularity)
+		txn.RLock()
+		holder := txn.lockHolders[bind.Group]
+		_, negotiated := holder.ownerLocalWaitSnapshots[bind.Table]
+		recorded := holder.tableKeys[bind.Table].slice()
+		txn.RUnlock()
+		require.False(t, negotiated)
+		require.Equal(t, logicalRows, recorded.all())
+		recorded.unref()
+
+		seen := make(map[string]struct{})
+		ok, err := txn.fetchWhoWaitingMe(
+			context.Background(),
+			"new-origin",
+			txnID,
+			func(value pb.WaitTxn, _ string) bool {
+				seen[string(value.TxnID)] = struct{}{}
+				return true
+			},
+			func(context.Context, uint32, uint64) (lockTable, error) {
+				return remote, nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Contains(t, seen, string(waiter.TxnID))
+		require.Equal(t, len(logicalRows), client.getTxnLockCalls)
+		require.Zero(t, client.ownerSnapshotCalls)
+	})
+}
+
+func TestLegacyOwnerRetryRepairsExactProbeLedger(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26774,
+			OriginTable: 26774,
+			ServiceID:   "legacy-owner-after-lost-response",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		logicalRows := newTestRows(1, 3, 5, 7)
+		waiter := pb.WaitTxn{TxnID: []byte("legacy-retry-waiter"), CreatedOn: "waiter-origin"}
+		client := &legacyLockOwnerClient{
+			bind:               bind,
+			waiter:             waiter,
+			dropFirstLockReply: true,
+		}
+		remote := newRemoteLockTable(
+			"new-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+
+		txnID := []byte("legacy-lost-response-txn")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(4), "")
+		defer reuse.Free(txn, nil)
+		txn.Lock()
+		rows, opts, replace := txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			logicalRows,
+			newTestRowExclusiveOptions(),
+			2,
+		)
+		require.True(t, replace)
+		lockOpts := LockOptions{
+			LockOptions:     opts,
+			replaceTxnLocks: true,
+			originalRows:    logicalRows,
+			originalOptions: newTestRowExclusiveOptions(),
+		}
+		lockOnce := func() error {
+			var lockErr error
+			remote.lock(
+				context.Background(),
+				txn,
+				rows,
+				lockOpts,
+				func(_ pb.Result, err error) { lockErr = err },
+			)
+			return lockErr
+		}
+		require.Error(t, lockOnce(),
+			"the first owner success is intentionally ambiguous")
+		require.NoError(t, lockOnce(),
+			"the acknowledged re-entry must repair legacy probe coverage")
+		txn.Unlock()
+
+		txn.RLock()
+		holder := txn.lockHolders[bind.Group]
+		recorded := holder.tableKeys[bind.Table].slice()
+		uncertain := len(holder.uncertainLockKeys[bind.Table])
+		txn.RUnlock()
+		require.Equal(t, logicalRows, recorded.all())
+		recorded.unref()
+		require.Zero(t, uncertain)
+
+		seen := make(map[string]struct{})
+		ok, err := txn.fetchWhoWaitingMe(
+			context.Background(),
+			"new-origin",
+			txnID,
+			func(value pb.WaitTxn, _ string) bool {
+				seen[string(value.TxnID)] = struct{}{}
+				return true
+			},
+			func(context.Context, uint32, uint64) (lockTable, error) {
+				return remote, nil
+			},
+		)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Contains(t, seen, string(waiter.TxnID))
+		require.Equal(t, len(logicalRows), client.getTxnLockCalls)
+		require.Zero(t, client.ownerSnapshotCalls)
+	})
+}
+
+func TestLegacyOwnerProbeCapacityFailureFencesTransaction(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26775,
+			OriginTable: 26775,
+			ServiceID:   "larger-legacy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &legacyLockOwnerClient{bind: bind}
+		remote := newRemoteLockTable(
+			"smaller-new-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("legacy-capacity-fence")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(4), "")
+		defer reuse.Free(txn, nil)
+
+		txn.Lock()
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1, 2, 3, 4, 5),
+			LockOptions{LockOptions: newTestRowExclusiveOptions()},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		txn.Unlock()
+		require.Error(t, lockErr)
+
+		txn.RLock()
+		require.True(t, txn.bindChanged)
+		holder := txn.lockHolders[bind.Group]
+		route := holder.tableKeys[bind.Table].slice()
+		txn.RUnlock()
+		require.Len(t, route.all(), 1,
+			"an unsafe legacy probe overflow may retain only a bounded cleanup route")
+		route.unref()
+	})
+}
+
+func TestNegotiatedOwnerSnapshotCapabilityCannotDowngradeInTxn(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26772,
+			OriginTable: 26772,
+			ServiceID:   "changing-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &changingOwnerCapabilityClient{}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("capability-generation")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		lockOne := func(row byte) error {
+			var lockErr error
+			txn.Lock()
+			remote.lock(
+				context.Background(),
+				txn,
+				newTestRows(row),
+				LockOptions{LockOptions: newTestRowExclusiveOptions()},
+				func(_ pb.Result, err error) { lockErr = err },
+			)
+			txn.Unlock()
+			return lockErr
+		}
+
+		require.NoError(t, lockOne(1))
+		txn.RLock()
+		require.True(t, txn.hasOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table))
+		txn.RUnlock()
+
+		require.ErrorIs(t, lockOne(2), ErrLockTableBindChanged)
+		txn.RLock()
+		require.True(t, txn.bindChanged)
+		require.True(t, txn.hasOwnerLocalWaitSnapshotLocked(bind.Group, bind.Table))
+		recorded := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		txn.RUnlock()
+		require.Equal(t, newTestRows(1), recorded.all(),
+			"downgrade must not reinterpret the existing owner-snapshot ledger")
+		recorded.unref()
+	})
+}
+
+func TestProxyPhysicalHolderRequiresV20OwnerCapability(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26773,
+			OriginTable: 26773,
+			ServiceID:   "legacy-proxy-owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		client := &legacyLockOwnerClient{bind: bind}
+		remote := newRemoteLockTable(
+			"proxy-origin",
+			time.Second,
+			bind,
+			client,
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("proxy-capability-fence")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(4), "")
+		defer reuse.Free(txn, nil)
+
+		txn.Lock()
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			newTestRows(1),
+			LockOptions{
+				LockOptions:                   newTestRowSharedOptions(),
+				requireOwnerLocalWaitSnapshot: true,
+			},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		txn.Unlock()
+		require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+
+		txn.RLock()
+		require.True(t, txn.bindChanged)
+		require.True(t, txn.isRemoteUnlockRequiredLocked(bind.Group, bind.Table))
+		route := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		txn.RUnlock()
+		require.Equal(t, newTestRows(1), route.all(),
+			"a rejected proxy generation must retain its already-granted cleanup route")
+		route.unref()
+	})
+}
+
+func TestRemoteMixedModeTransportFailureKeepsExistingCleanupRoute(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		bind := pb.LockTable{
+			Group:       0,
+			Table:       26714,
+			OriginTable: 26714,
+			ServiceID:   "owner",
+			Version:     1,
+			Valid:       true,
+			AllocatorID: "allocator",
+		}
+		remote := newRemoteLockTable(
+			"origin",
+			time.Second,
+			bind,
+			&lostCoarsenedLockClient{bind: bind},
+			func(pb.LockTable) {},
+			getLogger(""),
+		)
+		txnID := []byte("lost-mixed-exact-rows")
+		txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+		defer reuse.Free(txn, nil)
+
+		shared := newTestRowSharedOptions()
+		oldRows := newTestRows(1, 2, 5, 7)
+		incomingRows := newTestRows(8, 9)
+		exclusive := newTestRowExclusiveOptions()
+		txn.Lock()
+		require.NoError(t, txn.lockAdded(
+			bind.Group,
+			bind,
+			oldRows,
+			shared,
+			getLogger(""),
+		))
+		rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
+			bind.Group,
+			bind.Table,
+			incomingRows,
+			exclusive,
+			3,
+		)
+		require.False(t, replaceTxnLocks)
+		require.Equal(t, incomingRows, rows)
+
+		var lockErr error
+		remote.lock(
+			context.Background(),
+			txn,
+			rows,
+			LockOptions{LockOptions: opts},
+			func(_ pb.Result, err error) { lockErr = err },
+		)
+		require.Error(t, lockErr)
+
+		// The existing table route is sufficient for cleanup. An indeterminate
+		// request must not grow the origin ledger speculatively or create a
+		// confirmed wait-for probe.
+		locks := txn.lockHolders[bind.Group].tableKeys[bind.Table].slice()
+		require.Equal(t, oldRows, locks.all())
+		locks.unref()
+		require.Empty(t, txn.lockHolders[bind.Group].uncertainLockKeys)
+		require.Contains(t,
+			txn.lockHolders[bind.Group].nonCoarsenableTables,
+			bind.Table,
+		)
+		txn.Unlock()
+	})
+}
 
 func TestRemoteGetLockWithContextStopsOnCancellation(t *testing.T) {
 	client := &blockingGetLockClient{started: make(chan struct{}, 1)}
@@ -390,6 +1491,28 @@ func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "remote unlock ignored cancellation")
 	}
+}
+
+func TestRemoteUnlockReturnsDeterministicOwnerErrorWithoutRetryLoop(t *testing.T) {
+	client := &deterministicUnlockErrorClient{err: ErrTxnNotFound}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1},
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	txnID := []byte("deterministic-owner-rejection")
+	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
+	defer reuse.Free(txn, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
+	require.ErrorIs(t, err, ErrTxnNotFound)
+	require.Equal(t, int32(1), client.calls.Load(),
+		"a deterministic owner rejection must be returned, not replayed forever")
 }
 
 func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
@@ -652,7 +1775,7 @@ func TestLockRemoteWithContextTimeoutTracksLockForUnlock(t *testing.T) {
 			require.Contains(t, holder.tableBinds, l.bind.Table)
 			require.Contains(t, holder.uncertainLockKeys[l.bind.Table], string([]byte{1}))
 
-			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return l, nil
 			}, l.logger))
 			closed = true
@@ -733,7 +1856,7 @@ func TestLockRemoteWithCanceledContextBeforeSendSkipsRemoteTracking(t *testing.T
 			require.NotContains(t, holder.tableKeys, l.bind.Table)
 			require.NotContains(t, holder.tableBinds, l.bind.Table)
 
-			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(uint32, uint64) (lockTable, error) {
+			require.NoError(t, txn.close(txnID, timestamp.Timestamp{}, func(pb.LockTable) (lockTable, error) {
 				return l, nil
 			}, l.logger))
 			closed = true
@@ -1023,6 +2146,9 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
+					// The owner must report that this request created ownership;
+					// otherwise the origin correctly has nothing new to record.
+					resp.Lock.Result.NewLockAdd = true
 					writeResponse(getLogger(""), cancel, resp, nil, cs)
 				},
 			)
@@ -1039,6 +2165,13 @@ func TestLockRemoteWithNeedUpgrade(t *testing.T) {
 				assert.Error(t, err)
 				assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade))
 			})
+			holder := txn.lockHolders[l.bind.Group]
+			require.NotNil(t, holder)
+			route := holder.tableKeys[l.bind.Table].slice()
+			require.Equal(t, rows[:1], route.all(),
+				"an acknowledged owner must remain reachable after probe-ledger overflow")
+			route.unref()
+			require.Contains(t, holder.remoteUnlockRequired, l.bind.Table)
 			reuse.Free(txn, nil)
 		},
 		func(lt pb.LockTable) {},

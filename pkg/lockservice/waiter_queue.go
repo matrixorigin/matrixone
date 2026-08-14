@@ -34,6 +34,7 @@ type waiterQueue interface {
 	remove(*waiter) (bool, bool)
 	notify(value notifyValue)
 	notifyAll(value notifyValue)
+	notifySharedHolderChange(value notifyValue)
 	first() *waiter
 	removeByTxnID(txnID []byte)
 	beginChange()
@@ -126,6 +127,42 @@ func (q *sliceBasedWaiterQueue) notifyAll(value notifyValue) {
 		w.close("sliceBasedWaiterQueue notifyAll", q.logger)
 	}
 	q.resetWaitersLocked()
+	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
+}
+
+// notifySharedHolderChange wakes only merge/promotion waiters that need to retry
+// after one of several compatible Shared holders leaves. Ordinary lock waiters
+// still wait for the normal admission condition, avoiding spurious wakeups.
+func (q *sliceBasedWaiterQueue) notifySharedHolderChange(value notifyValue) {
+	q.Lock()
+	defer q.Unlock()
+
+	// Keep retrying merge waiters on the same commit-timestamp frontier as
+	// ordinary lock waiters. A holder departure must not make a later retry
+	// observe an older timestamp than a prior queue notification.
+	if value.ts.Less(q.keyCommittedAt) {
+		value.ts = q.keyCommittedAt
+	} else {
+		q.keyCommittedAt = value.ts
+	}
+
+	if q.beginChangeIdx != -1 {
+		panic("BUG: cannot call notify in changing waiter queue")
+	}
+
+	newWaiters := q.waiters[:0]
+	for _, w := range q.waiters {
+		if !w.notifyOnSharedHolderChange {
+			newWaiters = append(newWaiters, w)
+			continue
+		}
+		if !w.notify(value, q.logger) {
+			w.close("sliceBasedWaiterQueue notifySharedHolderChange", q.logger)
+			continue
+		}
+		w.close("sliceBasedWaiterQueue notifySharedHolderChange", q.logger)
+	}
+	q.waiters = newWaiters
 	v2.TxnLockWaitersTotalHistogram.Observe(float64(len(q.waiters)))
 }
 
