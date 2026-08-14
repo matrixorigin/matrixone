@@ -854,6 +854,55 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	require.ErrorContains(t, err, "column n_extra does not exist")
 }
 
+func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) {
+	const rootSQL = "create view v_star_agg as select * from (select id,min(ti) from (select * from t1) t1 group by id) sub"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	ctx.tables["t1"] = &plan.TableDef{
+		Name:      "t1",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{Name: "id", OriginName: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+			{Name: "ti", OriginName: "ti", Typ: plan.Type{Id: int32(types.T_uint8)}, Default: &plan.Default{NullAbility: true}},
+		},
+	}
+	ctx.objects["t1"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "t1"}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+	require.Equal(t, []string{"id", "min(ti)"}, []string{tableDef.GetCols()[0].Name, tableDef.GetCols()[1].Name})
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "`sub`.`min(ti)`")
+	require.Contains(t, viewData.Stmt, "min(`t1`.`ti`) as `min(ti)`")
+	require.Contains(t, viewData.Stmt, "as `min(ti)`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_star_agg"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_star_agg"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_star_agg"}
+
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_star_agg", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "min(ti)"}, selectPlan.GetQuery().GetHeadings())
+}
+
 func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 	const rootSQL = "create view v_count as select count(*) from nation"
 	ctx := &rootSQLCompilerContext{

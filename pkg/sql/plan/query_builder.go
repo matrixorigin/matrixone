@@ -4841,11 +4841,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
-	if ctx.captureViewStarExpansion && selectClauseHasStar(expandedSelectClause) {
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil {
 		if ctx.expandedSelectLists == nil {
 			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
 		}
-		ctx.expandedSelectLists[expandedSelectClause] = cloneTreeSelectExprs(selectList)
+		headings := ctx.headings
+		if len(headings) > len(selectList) {
+			headings = headings[len(headings)-len(selectList):]
+		}
+		ctx.expandedSelectLists[expandedSelectClause] = cloneTreeSelectExprsWithStableHeadings(selectList, headings)
 	}
 
 	// bind SELECT clause (Projection List)
@@ -8023,6 +8027,19 @@ func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
 		cloned[i].Expr = cloneTreeExpr(exprs[i].Expr)
 		if exprs[i].As != nil {
 			cloned[i].As = tree.NewCStr(exprs[i].As.Origin(), 1)
+		}
+	}
+	return cloned
+}
+
+func cloneTreeSelectExprsWithStableHeadings(exprs tree.SelectExprs, headings []string) tree.SelectExprs {
+	cloned := cloneTreeSelectExprs(exprs)
+	for i := range cloned {
+		if cloned[i].As != nil && !cloned[i].As.Empty() {
+			continue
+		}
+		if i < len(headings) && headings[i] != "" {
+			cloned[i].As = tree.NewCStr(headings[i], 1)
 		}
 	}
 	return cloned

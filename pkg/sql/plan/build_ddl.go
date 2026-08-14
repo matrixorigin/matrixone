@@ -443,12 +443,18 @@ func viewSelectStatementWithExpandedStars(
 	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
 		stableClause := *selectStmt
-		expandedSelectList, ok := expandedSelectLists[selectStmt]
-		if !ok {
-			return &stableClause, false
+		rewritten := false
+		if selectStmt.From != nil {
+			stableFrom, fromRewritten := viewFromWithExpandedStars(selectStmt.From, expandedSelectLists)
+			stableClause.From = stableFrom
+			rewritten = fromRewritten
 		}
-		stableClause.Exprs = cloneTreeSelectExprs(expandedSelectList)
-		return &stableClause, true
+		expandedSelectList, ok := expandedSelectLists[selectStmt]
+		if ok {
+			stableClause.Exprs = cloneTreeSelectExprs(expandedSelectList)
+			rewritten = true
+		}
+		return &stableClause, rewritten
 	case *tree.Select:
 		stableSelect := *selectStmt
 		stableStatement, rewritten := viewSelectStatementWithExpandedStars(selectStmt.Select, expandedSelectLists)
@@ -478,6 +484,87 @@ func viewSelectStatementWithExpandedStars(
 		return &stableUnion, leftRewritten || rightRewritten
 	default:
 		return stmt, false
+	}
+}
+
+func viewFromWithExpandedStars(
+	from *tree.From,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (*tree.From, bool) {
+	if from == nil {
+		return nil, false
+	}
+	stableFrom := *from
+	tables, rewritten := viewTableExprsWithExpandedStars(from.Tables, expandedSelectLists)
+	stableFrom.Tables = tables
+	return &stableFrom, rewritten
+}
+
+func viewTableExprsWithExpandedStars(
+	tables tree.TableExprs,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.TableExprs, bool) {
+	if len(tables) == 0 {
+		return tables, false
+	}
+	stableTables := make(tree.TableExprs, len(tables))
+	rewritten := false
+	for i, table := range tables {
+		stableTable, tableRewritten := viewTableExprWithExpandedStars(table, expandedSelectLists)
+		stableTables[i] = stableTable
+		rewritten = rewritten || tableRewritten
+	}
+	return stableTables, rewritten
+}
+
+func viewTableExprWithExpandedStars(
+	table tree.TableExpr,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.TableExpr, bool) {
+	switch tableExpr := table.(type) {
+	case *tree.Select:
+		return viewSelectWithExpandedStars(tableExpr, expandedSelectLists)
+	case *tree.Subquery:
+		stableSubquery := *tableExpr
+		stableStatement, rewritten := viewSelectStatementWithExpandedStars(tableExpr.Select, expandedSelectLists)
+		stableSubquery.Select = stableStatement
+		return &stableSubquery, rewritten
+	case *tree.AliasedTableExpr:
+		stableAliased := *tableExpr
+		stableExpr, rewritten := viewTableExprWithExpandedStars(tableExpr.Expr, expandedSelectLists)
+		stableAliased.Expr = stableExpr
+		return &stableAliased, rewritten
+	case *tree.ParenTableExpr:
+		stableParen := *tableExpr
+		stableExpr, rewritten := viewTableExprWithExpandedStars(tableExpr.Expr, expandedSelectLists)
+		stableParen.Expr = stableExpr
+		return &stableParen, rewritten
+	case *tree.JoinTableExpr:
+		stableJoin := *tableExpr
+		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
+		right, rightRewritten := viewTableExprWithExpandedStars(tableExpr.Right, expandedSelectLists)
+		stableJoin.Left = left
+		stableJoin.Right = right
+		return &stableJoin, leftRewritten || rightRewritten
+	case *tree.ApplyTableExpr:
+		stableApply := *tableExpr
+		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
+		right, rightRewritten := viewTableExprWithExpandedStars(tableExpr.Right, expandedSelectLists)
+		stableApply.Left = left
+		stableApply.Right = right
+		return &stableApply, leftRewritten || rightRewritten
+	case *tree.StatementSource:
+		stableSource := *tableExpr
+		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
+			stableSelect, rewritten := viewSelectWithExpandedStars(selectStmt, expandedSelectLists)
+			if rewritten {
+				stableSource.Statement = stableSelect
+				return &stableSource, true
+			}
+		}
+		return &stableSource, false
+	default:
+		return table, false
 	}
 }
 
