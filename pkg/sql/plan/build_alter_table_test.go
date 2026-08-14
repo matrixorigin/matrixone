@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -444,6 +445,10 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 			require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, tc.finalName))
 		})
 	}
+
+	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT`)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError))
 }
 
 func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {

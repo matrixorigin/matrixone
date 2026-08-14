@@ -157,16 +157,16 @@ alter table t1 drop foreign key fk1, drop foreign key fk2, drop foreign key fk1;
 --error duplicate fk1
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 
---no error
+--error fk1 does not exist after the first drop
 alter table t1 drop foreign key fk1, drop foreign key fk1, drop foreign key fk1;
 
---error fk1 does not exist
+--error duplicate fk1; the preceding failed ALTER leaves fk1 unchanged
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 
 --error. fk1 duplicate in new add constraint
 alter table t1 add constraint fk1 foreign key (b) references t1(a), add constraint fk1 foreign key (b) references t1(a);
 
---no error
+--error duplicate fk1; failed ALTER statements above are atomic
 alter table t1 add constraint `fk1` foreign key (b) references t1(a);
 
 --no error
