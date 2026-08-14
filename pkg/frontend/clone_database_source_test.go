@@ -43,9 +43,35 @@ func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) 
 	return bt.backgroundExecTest.Exec(ctx, sql)
 }
 
+type erroringBackgroundExec struct {
+	*backgroundExecTest
+	err error
+}
+
+func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
+	if err := bt.backgroundExecTest.Exec(ctx, sql); err != nil {
+		return err
+	}
+	return bt.err
+}
+
 func newStoredProcedureMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	for _, name := range []string{"name", "args", "lang", "body", "sql_mode"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(column)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func newUserDefinedFunctionMetadataResultSet(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"name", "args", "retType", "body", "language", "sql_mode"} {
 		column := &MysqlColumn{}
 		column.SetName(name)
 		column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -95,18 +121,70 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 	})
 }
 
-func TestGetCloneStoredProcedureInfosRespectsSubscriptionBoundary(t *testing.T) {
-	t.Run("database source collects procedures", func(t *testing.T) {
-		const dbName = "source_db"
-		querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure where db = 'source_db' order by name"
+func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
+	const dbName = "source_db"
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+	querySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where db = 'source_db' order by name"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+		{"f_answer", "{}", "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+	})
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), bh.accountID)
+	require.Equal(t, []userDefinedFunctionDefinition{{
+		name:    "f_answer",
+		args:    "{}",
+		retType: "int",
+		body:    "select 42",
+		lang:    "sql",
+		sqlMode: "PIPES_AS_CONCAT",
+		dbName:  dbName,
+	}}, functions)
+
+	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		bh.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+		wantErr := errors.New("user defined function query failed")
+		bh.sql2err[querySQL] = wantErr
+
+		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Nil(t, functions)
+	})
+}
+
+func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) {
+	t.Run("database source collects functions and procedures", func(t *testing.T) {
+		const dbName = "source_db"
+		functionQuerySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function where db = 'source_db' order by name"
+		procedureQuerySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure where db = 'source_db' order by name"
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[functionQuerySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+			{"f_answer", "{}", "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		})
+		bh.sql2result[procedureQuerySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
 			{"p_answer", "[]", "sql", "begin select 42; end", ""},
 		})
 
-		procedures, err := getCloneStoredProcedureInfos(context.Background(), bh, nil, dbName, nil)
+		functions, procedures, err := getCloneDatabaseRoutineInfos(context.Background(), bh, nil, dbName, nil)
 		require.NoError(t, err)
+		require.Equal(t, []userDefinedFunctionDefinition{{
+			name:    "f_answer",
+			args:    "{}",
+			retType: "int",
+			body:    "select 42",
+			lang:    "sql",
+			sqlMode: "PIPES_AS_CONCAT",
+			dbName:  dbName,
+		}}, functions)
 		require.Equal(t, []storedProcedureDefinition{{
 			name:   "p_answer",
 			args:   "[]",
@@ -114,14 +192,14 @@ func TestGetCloneStoredProcedureInfosRespectsSubscriptionBoundary(t *testing.T) 
 			body:   "begin select 42; end",
 			dbName: dbName,
 		}}, procedures)
-		require.Equal(t, []string{querySQL}, bh.executedSQLs)
+		require.Equal(t, []string{functionQuerySQL, procedureQuerySQL}, bh.executedSQLs)
 	})
 
-	t.Run("subscription source skips publisher procedure catalog", func(t *testing.T) {
+	t.Run("subscription source skips publisher routine catalogs", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		procedures, err := getCloneStoredProcedureInfos(
+		functions, procedures, err := getCloneDatabaseRoutineInfos(
 			context.Background(),
 			bh,
 			nil,
@@ -129,9 +207,40 @@ func TestGetCloneStoredProcedureInfosRespectsSubscriptionBoundary(t *testing.T) 
 			&plan.SubscriptionMeta{DbName: "publisher_db", Tables: "t1"},
 		)
 		require.NoError(t, err)
+		require.Empty(t, functions)
 		require.Empty(t, procedures)
 		require.Empty(t, bh.executedSQLs)
 	})
+}
+
+func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
+	ctx := context.Background()
+	tenant := &TenantInfo{User: "root"}
+	function := userDefinedFunctionDefinition{
+		name:    "f_answer",
+		args:    "{}",
+		retType: "int",
+		body:    "select 42",
+		lang:    "sql",
+		sqlMode: "PIPES_AS_CONCAT",
+	}
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
+	require.Len(t, bh.executedSQLs, 1)
+	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[0], "\"f_answer\"")
+	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[0], "'PIPES_AS_CONCAT'")
+	require.NotContains(t, bh.executedSQLs, "begin;")
+
+	failingBase := &backgroundExecTest{}
+	failingBase.init()
+	wantErr := errors.New("function persistence failed")
+	failing := &erroringBackgroundExec{backgroundExecTest: failingBase, err: wantErr}
+	require.ErrorIs(t, restoreCloneDatabaseUserDefinedFunctions(ctx, failing, tenant, []userDefinedFunctionDefinition{function}, "target_db"), wantErr)
+	require.Len(t, failing.executedSQLs, 1)
 }
 
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
@@ -164,6 +273,26 @@ func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	bh.sql2err[checkSQL] = wantErr
 	require.ErrorIs(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"), wantErr)
 	require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+}
+
+func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_source_reference",
+		lang: "sql",
+		body: "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call source_db.p_inner(); end",
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Contains(t, rewritten[0].body, "from `other_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "'source_db'")
+	require.NotContains(t, rewritten[0].body, "source_db.control_t")
+	require.Equal(t, procedures[0].body, "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call source_db.p_inner(); end")
 }
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {

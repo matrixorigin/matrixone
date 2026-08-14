@@ -97,7 +97,7 @@ var (
 
 	MoCatalogMoUserDefinedFunctionDDL = `create table mo_catalog.mo_user_defined_function (
 				function_id int auto_increment,
-				name     varchar(100) unique key,
+				name     varchar(100),
 				owner  int unsigned,
 				args     json,
 				retType  varchar(20),

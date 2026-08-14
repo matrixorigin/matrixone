@@ -9,14 +9,23 @@ insert into s1 select * from generate_series(1,5)g;
 -- including arguments and the SQL mode used to parse their bodies on CALL.
 create procedure db0.p_answer() 'begin select 42 as answer; end';
 create procedure db0.p_double(in input_value int, out output_value int) 'begin set output_value = input_value * 2; end';
+create procedure db0.p_source_qualified() 'begin select count(*) as answer from db0.s1; end';
 set sql_mode = 'PIPES_AS_CONCAT';
 create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
+
+-- Functions are catalog metadata too. They must be restored before a view that
+-- binds them, and source-qualified procedure references must bind the clone.
+create function db0.f_clone_answer() returns int language sql as '42';
+create view db0.v_clone_answer as select f_clone_answer() as answer;
 
 create database db0_copy_0 clone db0;
 show tables from db0_copy_0;
 select * from db0_copy_0.s1;
 select name from mo_catalog.mo_stored_procedure
+where db = 'db0_copy_0'
+order by name;
+select name from mo_catalog.mo_user_defined_function
 where db = 'db0_copy_0'
 order by name;
 call db0_copy_0.p_answer();
@@ -28,6 +37,12 @@ create database db0_copy_1 clone db0 to account sys;
 show tables from db0_copy_1;
 select * from db0_copy_1.s1;
 call db0_copy_1.p_answer();
+
+drop database db0;
+use db0_copy_0;
+call p_source_qualified();
+select f_clone_answer();
+select * from v_clone_answer;
 
 drop database if exists db1;
 create database db1;
@@ -43,6 +58,7 @@ create table t1(a int, b int);
 create table t2(a int, b int, primary key (a));
 create table t3(a int, b int, primary key (a), index(a));
 create procedure db1.p_cross_account() 'begin select 42 as answer; end';
+create function db1.f_cross_account() returns int language sql as '42';
 
 insert into t1 select *,* from generate_series(1,5)g;
 insert into t2 select *,* from generate_series(1,5)g;
@@ -58,6 +74,8 @@ drop snapshot sp_temp;
 show tables from db1_copy;
 select * from db1_copy.t1;
 call db1_copy.p_cross_account();
+use db1_copy;
+select f_cross_account();
 -- @session
 
 drop snapshot if exists sp0;
@@ -68,6 +86,8 @@ create database db1_copy_copy clone db1_copy {snapshot = "sp0"} to account acc2;
 show tables from db1_copy_copy;
 select * from db1_copy_copy.t1;
 call db1_copy_copy.p_cross_account();
+use db1_copy_copy;
+select f_cross_account();
 -- @session
 
 drop database if exists db2;

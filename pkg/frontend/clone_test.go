@@ -54,6 +54,12 @@ func TestWithCloneLockContext(t *testing.T) {
 	require.Same(t, oldCtx, proc.Ctx)
 }
 
+func TestResolveUdfInCallerTxnContext(t *testing.T) {
+	ctx := context.Background()
+	require.False(t, resolvesUdfInCallerTxn(ctx))
+	require.True(t, resolvesUdfInCallerTxn(withResolveUdfInCallerTxn(ctx)))
+}
+
 func TestCloneCatalogLockBatch(t *testing.T) {
 	ses := newValidateSession(t)
 	mp := ses.proc.Mp()
@@ -776,12 +782,21 @@ func TestHandleCloneDatabaseWithSourceAuthorizesTargetBeforeIfNotExistsCheck(t *
 	require.False(t, lockCalled)
 }
 
-func TestHandleCloneDatabaseWithSourceRestoresStoredProcedures(t *testing.T) {
+func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 	newSource := func() *cloneDatabaseSource {
 		return &cloneDatabaseSource{
 			srcResolveDBName: "source",
 			opAccountId:      sysAccountID,
 			toAccountId:      sysAccountID,
+			userDefinedFuncs: []userDefinedFunctionDefinition{{
+				name:    "f_answer",
+				args:    "{}",
+				retType: "int",
+				body:    "select 42",
+				lang:    "sql",
+				sqlMode: "",
+				dbName:  "source",
+			}},
 			storedProcedures: []storedProcedureDefinition{{
 				name:    "p_answer",
 				args:    "[]",
@@ -800,7 +815,7 @@ func TestHandleCloneDatabaseWithSourceRestoresStoredProcedures(t *testing.T) {
 		}
 	}
 
-	t.Run("restores procedure after creating destination", func(t *testing.T) {
+	t.Run("restores functions before procedures after creating destination", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		t.Cleanup(ses.Close)
@@ -814,10 +829,11 @@ func TestHandleCloneDatabaseWithSourceRestoresStoredProcedures(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.NoError(t, err)
-		require.Len(t, bh.executedSQLs, 3)
+		require.Len(t, bh.executedSQLs, 4)
 		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
-		require.Equal(t, checkSQL, bh.executedSQLs[1])
-		require.Contains(t, bh.executedSQLs[2], "insert into mo_catalog.mo_stored_procedure")
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
+		require.Contains(t, bh.executedSQLs[3], "insert into mo_catalog.mo_stored_procedure")
 	})
 
 	t.Run("propagates procedure restoration failures", func(t *testing.T) {
@@ -835,7 +851,10 @@ func TestHandleCloneDatabaseWithSourceRestoresStoredProcedures(t *testing.T) {
 			ses, bh, newStatement(), newSource(),
 		)
 		require.ErrorIs(t, err, wantErr)
-		require.Equal(t, []string{"create database `destination`", checkSQL}, bh.executedSQLs)
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, "create database `destination`", bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+		require.Equal(t, checkSQL, bh.executedSQLs[2])
 	})
 }
 

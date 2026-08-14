@@ -10984,7 +10984,6 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 }
 
 func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
-	var initMoUdf string
 	var retTypeStr string
 	var dbName string
 	var dbExists bool
@@ -11119,36 +11118,27 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		// in storage and break json.Unmarshal when invoking python UDFs.
 		body = string(byt)
 	}
-	body = escapeSQLStringForDoubleQuotes(body)
-	parserSQLMode := plan2.EscapeFormat(sessionSQLModeForParser(ses))
-
+	definition := userDefinedFunctionDefinition{
+		name:    string(cf.Name.Name.ObjectName),
+		args:    string(argsJson),
+		retType: retTypeStr,
+		body:    body,
+		lang:    cf.Language,
+		sqlMode: sessionSQLModeForParser(ses),
+		dbName:  dbName,
+	}
 	if execResultArrayHasData(erArray) { // replace
-		var id int64
-		id, err = erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
+		id, err := erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
 		if err != nil {
 			return err
 		}
-		initMoUdf = fmt.Sprintf(updateMoUserDefinedFunctionFormat,
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode,
-			int32(id))
-	} else { // create
-		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
-			string(cf.Name.Name.ObjectName),
-			ses.GetTenantInfo().GetDefaultRoleID(),
-			string(argsJson),
-			retTypeStr, body, cf.Language, dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode)
+		return persistUserDefinedFunction(
+			execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, &id,
+		)
 	}
-
-	err = bh.Exec(execCtx.reqCtx, initMoUdf)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return persistUserDefinedFunction(
+		execCtx.reqCtx, bh, tenant, ses.GetTenantInfo().GetDefaultRoleID(), definition, nil,
+	)
 }
 
 func escapeSQLStringForDoubleQuotes(s string) string {
@@ -11178,6 +11168,46 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// userDefinedFunctionDefinition is the function metadata kept outside
+// mo_tables. Callers control the transaction that persists it.
+type userDefinedFunctionDefinition struct {
+	name    string
+	args    string
+	retType string
+	body    string
+	lang    string
+	sqlMode string
+	dbName  string
+}
+
+// persistUserDefinedFunction writes function metadata into the caller-owned
+// transaction. A non-nil functionID replaces that existing definition.
+func persistUserDefinedFunction(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	ownerRoleID uint32,
+	definition userDefinedFunctionDefinition,
+	functionID *int64,
+) error {
+	body := escapeSQLStringForDoubleQuotes(definition.body)
+	sqlMode := plan2.EscapeFormat(definition.sqlMode)
+	if functionID != nil {
+		return bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
+			ownerRoleID,
+			definition.args,
+			definition.retType, body, definition.lang,
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			int32(*functionID)))
+	}
+	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
+		definition.name,
+		ownerRoleID,
+		definition.args,
+		definition.retType, body, definition.lang, definition.dbName,
+		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
 }
 
 // storedProcedureDefinition is the procedure metadata kept outside mo_tables.

@@ -1097,6 +1097,15 @@ func handleCloneDatabaseWithSource(
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
 		return
 	}
+	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
+		reqCtx,
+		source.storedProcedures,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
 
 	if source.hasFkCycle {
 		oldForeignKeyChecksReplayable, hadForeignKeyChecksReplayability :=
@@ -1223,6 +1232,19 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
+	// Routines are catalog metadata rather than mo_tables. Restore functions
+	// before views so view binding can resolve function dependencies.
+	if err = restoreCloneDatabaseUserDefinedFunctions(
+		ctx1, bh, ses.GetTenantInfo(), source.userDefinedFuncs, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+	if err = restoreCloneDatabaseStoredProcedures(
+		ctx1, bh, ses.GetTenantInfo(), source.storedProcedures, stmt.DstDatabase.String(),
+	); err != nil {
+		return
+	}
+
 	// clone view table
 	if len(source.viewMap) != 0 {
 		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
@@ -1250,15 +1272,12 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 
-		if err = restoreViews(reqCtx, ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
+		// The function metadata above is intentionally still uncommitted: the
+		// clone must remain atomic. Mark view restoration so ResolveUdf uses the
+		// same clone transaction and can bind newly restored functions.
+		if err = restoreViews(withResolveUdfInCallerTxn(reqCtx), ses, bh, "", rewrittenViewMap, source.toAccountId, rewrittenViews, true); err != nil {
 			return
 		}
-	}
-
-	if err = restoreCloneDatabaseStoredProcedures(
-		ctx1, bh, ses.GetTenantInfo(), source.storedProcedures, stmt.DstDatabase.String(),
-	); err != nil {
-		return
 	}
 
 	return

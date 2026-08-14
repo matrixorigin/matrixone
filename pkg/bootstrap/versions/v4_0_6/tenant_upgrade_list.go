@@ -38,6 +38,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaCheckConstraints(),
 	upgradeInformationSchemaTableConstraints(),
 	upgradeInformationSchemaColumnsHideInternalColumns(),
+	dropUserDefinedFunctionNameIndex(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -86,6 +87,24 @@ func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
 		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
+		},
+	}
+}
+
+// User-defined function lookup is scoped by database and argument signature.
+// A global unique name index prevents a database clone from retaining the
+// source and destination function definitions in the same account.
+func dropUserDefinedFunctionNameIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.DROP_INDEX,
+		UpgSql:    "alter table mo_catalog.mo_user_defined_function drop index name",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			exists, err := versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name",
+			)
+			return !exists, err
 		},
 	}
 }

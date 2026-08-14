@@ -25,6 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -32,6 +35,7 @@ type cloneDatabaseSource struct {
 	srcResolveDBName   string
 	srcPrivilegeDBName string
 	srcTblInfos        []*tableInfo
+	userDefinedFuncs   []userDefinedFunctionDefinition
 	storedProcedures   []storedProcedureDefinition
 	viewMap            map[string]*tableInfo
 	sortedFkTbls       []string
@@ -115,7 +119,7 @@ func collectCloneDatabaseSource(
 	if err != nil {
 		return source, err
 	}
-	storedProcedures, err := getCloneStoredProcedureInfos(ctx, bh, snapshot, srcDBName, subMeta)
+	userDefinedFuncs, storedProcedures, err := getCloneDatabaseRoutineInfos(ctx, bh, snapshot, srcDBName, subMeta)
 	if err != nil {
 		return source, err
 	}
@@ -142,6 +146,7 @@ func collectCloneDatabaseSource(
 
 	source.srcResolveDBName = srcDBName
 	source.srcTblInfos = srcTblInfos
+	source.userDefinedFuncs = userDefinedFuncs
 	source.storedProcedures = storedProcedures
 	source.sortedFkTbls = sortedFkTbls
 	source.fkTableMap = fkTableMap
@@ -152,19 +157,59 @@ func collectCloneDatabaseSource(
 	return source, nil
 }
 
-func getCloneStoredProcedureInfos(
+// getCloneDatabaseRoutineInfos reads routine metadata that is not represented by
+// mo_tables. Publications scope tables only, so a subscription clone must not
+// query or copy publisher routine metadata.
+func getCloneDatabaseRoutineInfos(
 	ctx context.Context,
 	bh BackgroundExec,
 	snapshot *plan.Snapshot,
 	dbName string,
 	subMeta *plan.SubscriptionMeta,
-) ([]storedProcedureDefinition, error) {
-	// Publications scope tables only. Querying the publisher's procedure catalog
-	// for a subscription would bypass that boundary.
+) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
 	if subMeta != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return getStoredProcedureInfos(ctx, bh, snapshot, dbName)
+	userDefinedFuncs, err := getUserDefinedFunctionInfos(ctx, bh, snapshot, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+	storedProcedures, err := getStoredProcedureInfos(ctx, bh, snapshot, dbName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return userDefinedFuncs, storedProcedures, nil
+}
+
+func getUserDefinedFunctionInfos(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	dbName string,
+) ([]userDefinedFunctionDefinition, error) {
+	rows, err := getDatabaseRoutineMetadataRows(
+		ctx, bh, snapshot, dbName,
+		"mo_catalog.mo_user_defined_function",
+		"name, args, retType, body, language, sql_mode",
+		0, 1, 2, 3, 4, 5,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	functions := make([]userDefinedFunctionDefinition, len(rows))
+	for i, row := range rows {
+		functions[i] = userDefinedFunctionDefinition{
+			name:    row[0],
+			args:    row[1],
+			retType: row[2],
+			body:    row[3],
+			lang:    row[4],
+			sqlMode: row[5],
+			dbName:  dbName,
+		}
+	}
+	return functions, nil
 }
 
 func getStoredProcedureInfos(
@@ -173,19 +218,12 @@ func getStoredProcedureInfos(
 	snapshot *plan.Snapshot,
 	dbName string,
 ) ([]storedProcedureDefinition, error) {
-	queryCtx := ctx
-	sql := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure"
-	if snapshot != nil {
-		if snapshot.TS != nil {
-			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
-		}
-		if snapshot.Tenant != nil {
-			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
-		}
-	}
-	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
-
-	rows, err := getStringColsList(queryCtx, bh, sql, 0, 1, 2, 3, 4)
+	rows, err := getDatabaseRoutineMetadataRows(
+		ctx, bh, snapshot, dbName,
+		"mo_catalog.mo_stored_procedure",
+		"name, args, lang, body, sql_mode",
+		0, 1, 2, 3, 4,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +242,47 @@ func getStoredProcedureInfos(
 	return procedures, nil
 }
 
+func getDatabaseRoutineMetadataRows(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	dbName string,
+	catalogTable string,
+	columns string,
+	colIndices ...uint64,
+) ([][]string, error) {
+	queryCtx := ctx
+	sql := fmt.Sprintf("select %s from %s", columns, catalogTable)
+	if snapshot != nil {
+		if snapshot.TS != nil {
+			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		if snapshot.Tenant != nil {
+			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
+		}
+	}
+	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
+	return getStringColsList(queryCtx, bh, sql, colIndices...)
+}
+
+func restoreCloneDatabaseUserDefinedFunctions(
+	ctx context.Context,
+	bh BackgroundExec,
+	tenant *TenantInfo,
+	functions []userDefinedFunctionDefinition,
+	dbName string,
+) error {
+	for _, function := range functions {
+		function.dbName = dbName
+		if err := persistUserDefinedFunction(
+			ctx, bh, tenant, tenant.GetDefaultRoleID(), function, nil,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func restoreCloneDatabaseStoredProcedures(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -218,6 +297,77 @@ func restoreCloneDatabaseStoredProcedures(
 		}
 	}
 	return nil
+}
+
+func rewriteCloneStoredProcedureBodies(
+	ctx context.Context,
+	procedures []storedProcedureDefinition,
+	srcDBName string,
+	dstDBName string,
+	lowerCaseTableNames int64,
+) ([]storedProcedureDefinition, error) {
+	rewritten := slices.Clone(procedures)
+	for i := range rewritten {
+		if !strings.EqualFold(rewritten[i].lang, string(tree.SQL)) {
+			continue
+		}
+		body, err := rewriteCloneSQLRoutineBody(
+			ctx,
+			rewritten[i].body,
+			rewritten[i].sqlMode,
+			srcDBName,
+			dstDBName,
+			lowerCaseTableNames,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rewritten[i].body = body
+	}
+	return rewritten, nil
+}
+
+func rewriteCloneSQLRoutineBody(
+	ctx context.Context,
+	body string,
+	sqlMode string,
+	srcDBName string,
+	dstDBName string,
+	lowerCaseTableNames int64,
+) (string, error) {
+	if srcDBName == "" || srcDBName == dstDBName {
+		return body, nil
+	}
+
+	stmts, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, body, lowerCaseTableNames, sqlMode)
+	if err != nil {
+		return "", err
+	}
+	defer freeStatements(stmts)
+
+	options := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		options = append(options, tree.WithNoBackslashEscape())
+	}
+	original := formatCloneRoutineStatements(stmts, options...)
+	if err := applyRemapDb(ctx, stmts, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames); err != nil {
+		return "", err
+	}
+	rewritten := formatCloneRoutineStatements(stmts, options...)
+	if rewritten == original {
+		return body, nil
+	}
+	return rewritten, nil
+}
+
+func formatCloneRoutineStatements(stmts []tree.Statement, options ...tree.FmtCtxOption) string {
+	parts := make([]string, 0, len(stmts))
+	for _, stmt := range stmts {
+		if stmt != nil {
+			parts = append(parts, tree.StringWithOpts(stmt, dialect.MYSQL, options...))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // validateCloneDatabaseSourceAccess preserves the clone privilege contract

@@ -39,7 +39,8 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 // and would reject a remapped-away database before the planner sees it. It
 // covers SELECT and INSERT/UPDATE/DELETE (including their target tables, read
 // sources, expression containers, INSERT ... SELECT bodies and CTE bodies),
-// table-level DDL, ANALYZE TABLE, and prepared statement bodies.
+// SQL procedure compound/control-flow bodies, table-level DDL, ANALYZE TABLE,
+// and prepared statement bodies.
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
@@ -91,6 +92,50 @@ func applyRemapDbByStatement(
 
 func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 	switch s := stmt.(type) {
+	case *tree.CompoundStmt:
+		remapDbInStatements(s.Stmts, remap)
+	case *tree.IfStmt:
+		remapDbInExpr(s.Cond, remap)
+		remapDbInStatements(s.Body, remap)
+		for _, elif := range s.Elifs {
+			if elif == nil {
+				continue
+			}
+			remapDbInExpr(elif.Cond, remap)
+			remapDbInStatements(elif.Body, remap)
+		}
+		remapDbInStatements(s.Else, remap)
+	case *tree.CaseStmt:
+		remapDbInExpr(s.Expr, remap)
+		for _, when := range s.Whens {
+			if when == nil {
+				continue
+			}
+			remapDbInExpr(when.Cond, remap)
+			remapDbInStatements(when.Body, remap)
+		}
+		remapDbInStatements(s.Else, remap)
+	case *tree.WhileStmt:
+		remapDbInExpr(s.Cond, remap)
+		remapDbInStatements(s.Body, remap)
+	case *tree.RepeatStmt:
+		remapDbInStatements(s.Body, remap)
+		remapDbInExpr(s.Cond, remap)
+	case *tree.LoopStmt:
+		remapDbInStatements(s.Body, remap)
+	case *tree.Declare:
+		remapDbInExpr(s.DefaultVal, remap)
+	case *tree.SetVar:
+		for _, assignment := range s.Assignments {
+			if assignment == nil {
+				continue
+			}
+			remapDbInExpr(assignment.Value, remap)
+			remapDbInExpr(assignment.Reserved, remap)
+		}
+	case *tree.CallStmt:
+		remapProcedureName(s.Name, remap)
+		remapDbInExprs(s.Args, remap)
 	case *tree.Select:
 		remapDbInSelect(s, remap)
 	case *tree.ParenSelect:
@@ -196,6 +241,14 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 					remapObjectName(rn.Name, remap)
 				}
 			}
+		}
+	}
+}
+
+func remapDbInStatements(stmts []tree.Statement, remap remapDbContext) {
+	for _, stmt := range stmts {
+		if stmt != nil {
+			remapDbInStmt(stmt, remap)
 		}
 	}
 }
@@ -480,6 +533,15 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	}
 	if tn.AtTsExpr != nil {
 		remapDbInExpr(tn.AtTsExpr.Expr, remap)
+	}
+}
+
+func remapProcedureName(name *tree.ProcedureName, remap map[string]string) {
+	if name == nil || !name.Name.ExplicitSchema {
+		return
+	}
+	if target, ok := remap[string(name.Name.SchemaName)]; ok {
+		name.Name.SchemaName = tree.Identifier(target)
 	}
 }
 
