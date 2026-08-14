@@ -77,6 +77,26 @@ max-conversion-error-rate = 0.2
 	require.Equal(t, []string{"10.0.0.0/8"}, disabled.MongoDB.AllowedCIDRs)
 }
 
+func TestMongoDBParametersCaseInsensitiveEnablement(t *testing.T) {
+	for _, input := range []string{
+		"[mongodb]\\nEnable = false\\n",
+		"[mongodb]\\nENABLE = false\\n",
+		"[mongodb]\\neNaBlE = false\\n",
+	} {
+		var parameters FrontendParameters
+		_, err := toml.Decode(input, &parameters)
+		require.NoError(t, err)
+		parameters.SetDefaultValues()
+		require.False(t, parameters.MongoDB.Enable)
+	}
+}
+
+func TestMongoDBParametersRejectConflictingEnableKeys(t *testing.T) {
+	var parameters FrontendParameters
+	_, err := toml.Decode("[mongodb]\\nenable = false\\nEnable = true\\n", &parameters)
+	require.ErrorContains(t, err, "conflicting enable keys")
+}
+
 func TestMongoDBParametersRejectMalformedEndpointPolicy(t *testing.T) {
 	var parameters MongoDBParameters
 	parameters.SetDefaultValues()

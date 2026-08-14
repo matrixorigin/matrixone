@@ -281,31 +281,50 @@ type MongoDBParameters struct {
 	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
 	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
 
-	// enableConfigured distinguishes an omitted enable key from an explicit
-	// operator opt-out. It is deliberately private so config dumps continue to
-	// expose only the effective bool value.
+	// enableConfigured records a TOML-provided value. enableDefaulted makes
+	// defaulting idempotent so a later programmatic false remains an opt-out.
 	enableConfigured bool
+	enableDefaulted  bool
 }
 
-// UnmarshalTOML retains presence information for enable. MongoDB is enabled
-// when the key is omitted, but an explicit false must survive the post-decode
-// defaulting pass used by mo-service, embedded deployments, and tests.
-func (parameters *MongoDBParameters) UnmarshalTOML(value any) error {
-	table, _ := value.(map[string]any)
+// NewMongoDBParameters returns MongoDB parameters with defaults that must be
+// established before TOML decoding. Initializing Enable here lets an explicit
+// false from either TOML or programmatic configuration remain meaningful when
+// SetDefaultValues is called again later in the service lifecycle.
+func NewMongoDBParameters() *MongoDBParameters {
+	return &MongoDBParameters{Enable: true, enableDefaulted: true}
+}
 
-	// Decode through an alias to reuse BurntSushi's normal type conversions
-	// without recursively invoking this method.
+// UnmarshalTOML rejects ambiguous case variants while preserving defaults that
+// were initialized before decoding. The alias prevents recursive calls back
+// into this method when decoding the remaining MongoDB settings.
+func (parameters *MongoDBParameters) UnmarshalTOML(value any) error {
+	table, ok := value.(map[string]any)
+	if !ok {
+		return moerr.NewBadConfigNoCtx("mongodb configuration must be a TOML table")
+	}
+	enableConfigured := false
+	for key := range table {
+		if !strings.EqualFold(key, "enable") {
+			continue
+		}
+		if enableConfigured {
+			return moerr.NewBadConfigNoCtx("mongodb configuration contains conflicting enable keys")
+		}
+		enableConfigured = true
+	}
+
 	type plainMongoDBParameters MongoDBParameters
 	var encoded bytes.Buffer
-	if err := burnttoml.NewEncoder(&encoded).Encode(value); err != nil {
+	if err := burnttoml.NewEncoder(&encoded).Encode(table); err != nil {
 		return err
 	}
-	var decoded plainMongoDBParameters
+	decoded := plainMongoDBParameters(*parameters)
 	if _, err := burnttoml.Decode(encoded.String(), &decoded); err != nil {
 		return err
 	}
 	*parameters = MongoDBParameters(decoded)
-	_, parameters.enableConfigured = table["enable"]
+	parameters.enableConfigured = enableConfigured
 	return nil
 }
 
@@ -316,9 +335,10 @@ func DefaultMongoDBParameters() MongoDBParameters {
 }
 
 func (parameters *MongoDBParameters) SetDefaultValues() {
-	if !parameters.enableConfigured {
+	if !parameters.enableConfigured && !parameters.enableDefaulted {
 		parameters.Enable = true
 	}
+	parameters.enableDefaulted = true
 	if parameters.ConnectTimeout.Duration == 0 {
 		parameters.ConnectTimeout.Duration = 10 * time.Second
 	}
