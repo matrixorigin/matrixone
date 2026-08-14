@@ -344,7 +344,9 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_COMMA
 %nonassoc LOWER_THAN_WITH
 %nonassoc WITH
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT
+%nonassoc <str> OFFSET
+%token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC
@@ -694,7 +696,7 @@ func sqlTaskInt64(v any) int64 {
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt within_group_opt
-%type <limit> limit_opt limit_clause
+%type <limit> limit_opt limit_clause query_limit_opt offset_clause
 %type <rankOption> rank_opt
 %type <str> insert_column optype_opt
 %type <str> optype
@@ -5839,10 +5841,10 @@ replace_data:
 	}
 
 replace_table_source:
-    TABLE table_name order_by_opt limit_opt
+    TABLE table_name order_by_opt query_limit_opt
     {
-        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
-        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
+        // MySQL treats TABLE as a query source, so ORDER BY and pagination
+        // belong to the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
         $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
     }
 
@@ -6415,7 +6417,7 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
         if intoErr != "" {
@@ -6466,7 +6468,58 @@ select_no_parens:
             return 1
         }
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
+|   select_with_parens offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   select_with_parens time_window offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($1, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   select_with_parens time_window_opt order_by_clause offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
         if intoErr != "" {
@@ -6501,6 +6554,40 @@ select_no_parens:
         }
     }
 |   with_clause select_with_parens order_by_opt limit_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens offset_clause rank_opt select_into_param_opt
+    {
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($2, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+    }
+|   with_clause select_with_parens order_by_clause offset_clause rank_opt select_into_param_opt
     {
         intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
         if intoErr != "" {
@@ -6674,6 +6761,19 @@ limit_opt:
         $$ = $1
     }
 
+query_limit_opt:
+    {
+        $$ = nil
+    }
+|   limit_clause
+    {
+        $$ = $1
+    }
+|   offset_clause
+    {
+        $$ = $1
+    }
+
 limit_clause:
     LIMIT expression
     {
@@ -6686,6 +6786,12 @@ limit_clause:
 |   LIMIT expression OFFSET expression
     {
         $$ = &tree.Limit{Offset: $4, Count: $2}
+    }
+
+offset_clause:
+    OFFSET expression
+    {
+        $$ = &tree.Limit{Offset: $2}
     }
 
 rank_opt:
@@ -6897,7 +7003,7 @@ simple_select:
 // TABLE is a query term in MySQL. Keep it separate from replace_table_source,
 // and preserve top-level VALUES as the existing ValuesStatement AST.
 table_query_subquery:
-    '(' table_query_expr order_by_opt limit_opt ')'
+    '(' table_query_expr order_by_opt query_limit_opt ')'
     {
         $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
     }
@@ -6936,7 +7042,7 @@ table_query_term:
     }
 
 values_query_subquery:
-    '(' values_query_expr order_by_opt limit_opt ')'
+    '(' values_query_expr order_by_opt query_limit_opt ')'
     {
         $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
     }
@@ -7468,7 +7574,7 @@ dedup_join:
     }
 
 values_stmt:
-    VALUES row_constructor_list order_by_opt limit_opt
+    VALUES row_constructor_list order_by_opt query_limit_opt
     {
         $$ = &tree.ValuesStatement{
             Rows: $2,
@@ -7593,7 +7699,9 @@ table_factor:
 	}
 
 table_subquery:
-    select_with_parens %prec SUBQUERY_AS_EXPR
+    // The scanner returns ID when OFFSET is an implicit alias. A real OFFSET
+    // token must shift into select_no_parens' parenthesized-query clause.
+    select_with_parens %prec WITH
     {
     	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
@@ -14787,7 +14895,7 @@ perform_stmt:
     }
 
 perform_select:
-    simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: $6.UserVars, SelectLockInfo: $7}
         if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
@@ -14795,7 +14903,7 @@ perform_select:
             return 1
         }
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt select_into_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: $7.UserVars, SelectLockInfo: $8, With: $1}
         if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {

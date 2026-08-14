@@ -80,17 +80,17 @@ func waitIssue26114Bootstrap(ctx context.Context, db *sql.DB) error {
 	for {
 		rows, err := db.QueryContext(ctx, "show tables from mo_task")
 		if err == nil {
-			for rows.Next() {
-				var name string
-				if err = rows.Scan(&name); err != nil {
-					break
+			err = func() error {
+				defer rows.Close()
+				for rows.Next() {
+					var name string
+					if err := rows.Scan(&name); err != nil {
+						return err
+					}
+					delete(want, strings.ToLower(name))
 				}
-				delete(want, strings.ToLower(name))
-			}
-			if rowsErr := rows.Err(); err == nil {
-				err = rowsErr
-			}
-			rows.Close()
+				return rows.Err()
+			}()
 			if err == nil && len(want) == 0 {
 				return nil
 			}
