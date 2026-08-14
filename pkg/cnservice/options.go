@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -60,6 +61,17 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 func WithTxnTraceData(traceDataPath string) Option {
 	return func(s *service) {
 		s.options.traceDataPath = traceDataPath
+	}
+}
+
+// WithSiriusReadDependencies supplies the storage-owned, GC-protected lease
+// authority and its durable resolve auditor. CN startup still constructs and
+// owns both mTLS endpoints. Keeping these dependencies explicit prevents an
+// unsafe process-local GC protector from being created as a fallback.
+func WithSiriusReadDependencies(leases *substrait.LeaseManager, auditor substrait.ResolveAuditRecorder) Option {
+	return func(s *service) {
+		s.options.siriusLeases = leases
+		s.options.siriusAuditor = auditor
 	}
 }
 

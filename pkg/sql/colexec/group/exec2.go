@@ -67,6 +67,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
+	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -364,7 +365,17 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// note that in prepare we already called GroupGrow(1) for each agg.
 		// just fill the result.
 		for i, ag := range group.ctr.aggList {
-			if err = ag.BulkFill(0, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+			aggArgs := group.ctr.aggArgEvaluate[i].Vec
+			// BulkFill has no separate logical row-count argument and derives it
+			// from its vectors. Prepared parameters deliberately remain one-row
+			// broadcast constants, so align their logical length with the input
+			// batch without materializing additional values.
+			for _, vec := range aggArgs {
+				if vec != nil && vec.IsConst() && vec.Length() != bat.RowCount() {
+					vec.SetLength(bat.RowCount())
+				}
+			}
+			if err = ag.BulkFill(0, aggArgs); err != nil {
 				return false, err
 			}
 		}
@@ -640,7 +651,14 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	buf.Write(types.EncodeInt32(&nAggs))
 	prepareParamKinds := make([][]vector.PrepareParamKind, len(group.ctr.aggList))
 	prepareParamKindSummaries := make([]prepareParamKindSummary, len(group.ctr.aggList))
+	var binaryStringRows [][]bool
+	var binaryStringSummaries []bool
 	for i, ag := range group.ctr.aggList {
+		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok &&
+			accessor.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate binary-string metadata requires MORPCVersion18")
+		}
 		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
 			return vm.CancelResult, false, err
 		}
@@ -648,11 +666,21 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			prepareParamKinds[i] = accessor.PrepareParamKindsForChunk(curr)
 			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
 				accessor.PrepareParamKindSummaryForChunk(curr)
+			rows := accessor.BinaryStringRowsForChunk(curr)
+			summary := accessor.BinaryStringSummaryForChunk(curr)
+			if len(rows) != 0 || summary {
+				if binaryStringRows == nil {
+					binaryStringRows = make([][]bool, len(group.ctr.aggList))
+					binaryStringSummaries = make([]bool, len(group.ctr.aggList))
+				}
+				binaryStringRows[i], binaryStringSummaries[i] = rows, summary
+			}
 		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
 		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
-			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries,
+			binaryStringRows, binaryStringSummaries); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}

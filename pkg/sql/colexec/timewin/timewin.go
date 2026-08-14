@@ -80,7 +80,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			ctr.partSet[i] = getPartitionSetFunction(
-				types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale), proc.Mp())
+				types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				), proc.Mp())
 		}
 	}
 
@@ -173,8 +175,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				continue
 			}
 			timeWin.observePrepareParamKinds()
 
@@ -194,8 +200,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				continue
 			}
 			timeWin.observePrepareParamKinds()
 
@@ -274,8 +284,12 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			if err = ctr.evalVector(result.Batch, proc); err != nil {
+			var ok bool
+			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
 				return result, err
+			}
+			if !ok {
+				break
 			}
 
 			ctr.curVecIdx++
@@ -382,7 +396,9 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	for i, expression := range timeWin.Aggs {
 		params := make([]types.Type, len(expression.GetArgExpressions()))
 		for j, argument := range expression.GetArgExpressions() {
-			params[j] = types.New(types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale)
+			params[j] = types.NewWithCharset(
+				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale, uint8(argument.Typ.Charset),
+			)
 			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
 				// Older manually-constructed plans/tests keep the physical first
 				// argument type in TimeWin.Types rather than the expression.
@@ -420,8 +436,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 
 	typ.NotNullable = col.Typ.NotNullable
 	argsType := []types.Type{
-		types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale),
-		types.New(types.T(typ.Id), typ.Width, typ.Scale),
+		types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset)),
+		types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)),
 	}
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
@@ -875,18 +891,43 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 	return nil
 }
 
-func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) (bool, error) {
 	if err := ctr.evalTsVector(bat, proc); err != nil {
-		return err
+		return false, err
+	}
+	ok, err := ctr.filterNullTimeRows(bat)
+	if err != nil || !ok {
+		return ok, err
 	}
 	if err := ctr.evalAggVector(bat, proc); err != nil {
-		return err
+		return false, err
 	}
 	if err := ctr.evalPartVector(bat, proc); err != nil {
-		return err
+		return false, err
 	}
 	ctr.i++
-	return nil
+	return true, nil
+}
+
+func (ctr *container) filterNullTimeRows(bat *batch.Batch) (bool, error) {
+	ts := ctr.tsVec[ctr.i]
+	if !ts.HasNull() {
+		return true, nil
+	}
+	if ts.AllNull() {
+		ts.CleanOnlyData()
+		return false, nil
+	}
+
+	sels := make([]int64, 0, ts.Length()-ts.GetNulls().Count())
+	for i := 0; i < ts.Length(); i++ {
+		if !ts.IsNull(uint64(i)) {
+			sels = append(sels, int64(i))
+		}
+	}
+	ts.Shrink(sels, false)
+	bat.Shrink(sels, false)
+	return len(sels) > 0, nil
 }
 
 func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) error {

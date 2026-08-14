@@ -34,8 +34,8 @@ const (
 
 func (builder *QueryBuilder) updateInputProjectNode(nodeID int32) *plan.Node {
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_PRE_INSERT && len(node.ProjectList) == 0 && len(node.Children) == 1 {
-		return builder.qry.Nodes[node.Children[0]]
+	for node.NodeType == plan.Node_PRE_INSERT && len(node.ProjectList) == 0 && len(node.Children) == 1 {
+		node = builder.qry.Nodes[node.Children[0]]
 	}
 	return node
 }
@@ -312,6 +312,109 @@ type updateParentForeignKey struct {
 	fk            *plan.ForeignKeyDef
 }
 
+// validateDistinctUpdateForeignKeyMutationTargets protects the Stage-1
+// distinct-table planner invariant: one statement may have only one physical
+// write path for a table. Parent actions are separate MULTI_UPDATE steps, so a
+// child that is also an explicit target, or is reached from two parent targets,
+// cannot be safely planned until those paths share one final-row merger.
+func (builder *QueryBuilder) validateDistinctUpdateForeignKeyMutationTargets(
+	bindCtx *BindContext,
+	dmlCtx *DMLContext,
+) error {
+	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+	if err != nil || !enabled {
+		return err
+	}
+
+	writeOrigins := make(map[uint64]string)
+	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) == 0 {
+			continue
+		}
+		writeOrigins[dmlCtx.tableDefs[targetIdx].TblId] =
+			fmt.Sprintf("explicit target '%s'", dmlCtx.aliases[targetIdx])
+	}
+
+	for targetIdx, updateCols := range dmlCtx.updateCol2Expr {
+		if len(updateCols) == 0 {
+			continue
+		}
+		parentTableDef := dmlCtx.tableDefs[targetIdx]
+		if parentTableDef == nil || len(parentTableDef.RefChildTbls) == 0 {
+			continue
+		}
+
+		parentColIDToName := make(map[uint64]string, len(parentTableDef.Cols))
+		for _, col := range parentTableDef.Cols {
+			parentColIDToName[col.ColId] = col.Name
+		}
+		visitedChildren := make(map[uint64]struct{}, len(parentTableDef.RefChildTbls))
+		for _, childTableID := range parentTableDef.RefChildTbls {
+			if childTableID == 0 {
+				childTableID = parentTableDef.TblId
+			}
+			if _, visited := visitedChildren[childTableID]; visited {
+				continue
+			}
+			visitedChildren[childTableID] = struct{}{}
+
+			childObjRef, childTableDef, resolveErr := builder.compCtx.ResolveById(
+				childTableID, bindCtx.snapshot)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if childTableDef == nil {
+				return moerr.NewInternalErrorf(
+					builder.GetContext(), "foreign-key child table %d not found", childTableID)
+			}
+
+			hasMutation := false
+			for _, fk := range childTableDef.Fkeys {
+				referencesParent := fk.ForeignTbl == parentTableDef.TblId ||
+					(fk.ForeignTbl == 0 && childTableDef.TblId == parentTableDef.TblId)
+				if !referencesParent ||
+					(fk.OnUpdate != plan.ForeignKeyDef_CASCADE && fk.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+					continue
+				}
+				for _, parentColID := range fk.ForeignCols {
+					if _, updated := updateCols[parentColIDToName[parentColID]]; updated {
+						hasMutation = true
+						break
+					}
+				}
+				if hasMutation {
+					break
+				}
+			}
+			if !hasMutation || childTableID == parentTableDef.TblId {
+				// Self-referencing actions already take the established legacy route.
+				continue
+			}
+
+			origin := fmt.Sprintf("foreign key action from '%s'", dmlCtx.aliases[targetIdx])
+			if previousOrigin, exists := writeOrigins[childTableID]; exists {
+				childName := childTableDef.Name
+				if childObjRef != nil && childObjRef.ObjName != "" {
+					childName = childObjRef.ObjName
+				}
+				return newUpdatePlannerRouteError(
+					updatePlannerRejected,
+					updateRouteReasonForeignKey,
+					moerr.NewNotSupportedf(
+						builder.GetContext(),
+						"overlapping update paths for table '%s': %s and %s",
+						childName,
+						previousOrigin,
+						origin,
+					),
+				)
+			}
+			writeOrigins[childTableID] = origin
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
@@ -352,6 +455,9 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				"foreign-key child table %d not found",
 				childTableID,
 			)
+		}
+		if err := validateTableIndexDefinitions(childTableDef); err != nil {
+			return 0, 0, err
 		}
 
 		for _, fk := range childTableDef.Fkeys {

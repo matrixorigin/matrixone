@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -127,7 +128,9 @@ func NewExpressionExecutorWithAllocation(
 ) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
 			return nil, err
@@ -135,7 +138,9 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
 			return nil, err
@@ -143,7 +148,9 @@ func NewExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
 			mp:         proc.Mp(),
@@ -160,13 +167,17 @@ func NewExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
 			mp:         proc.Mp(),
@@ -190,7 +201,9 @@ func NewExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.New(types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale)
+		typ := types.NewWithCharset(
+			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
+		)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
 			return nil, err
@@ -224,7 +237,9 @@ func NewExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
+		typ := types.NewWithCharset(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		)
 
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
@@ -347,12 +362,13 @@ type FunctionExpressionExecutor struct {
 
 	resultVector vector.FunctionResultWrapper
 	// parameters related
-	parameterResults    []*vector.Vector
-	parameterExecutor   []ExpressionExecutor
-	flowControlKind     vector.PrepareParamKind
-	flowControlKindSeen bool
-	flowControlKinds    []vector.PrepareParamKind
-	iffNullResults      [2]*vector.Vector
+	parameterResults         []*vector.Vector
+	parameterExecutor        []ExpressionExecutor
+	flowControlKind          vector.PrepareParamKind
+	flowControlKindSeen      bool
+	flowControlKinds         []vector.PrepareParamKind
+	flowControlBinaryStrings []bool
+	iffNullResults           [2]*vector.Vector
 }
 
 type ColumnExpressionExecutor struct {
@@ -388,7 +404,8 @@ type ParamExpressionExecutor struct {
 	pos        int
 	typ        types.Type
 
-	folded bool
+	folded     bool
+	foldedNull bool
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -403,15 +420,12 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		return expr.maskedNull, nil
 	}
 	if expr.folded {
-		if expr.null != nil {
+		if expr.foldedNull {
 			return expr.null, nil
 		}
-		if expr.vec != nil {
-			return expr.vec, nil
-		}
+		return expr.vec, nil
 	}
 
-	expr.folded = true
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -424,6 +438,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 				return nil, err
 			}
 		}
+		expr.folded = true
+		expr.foldedNull = true
 		return expr.null, nil
 	}
 
@@ -436,7 +452,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
+		expr.folded = true
+		expr.foldedNull = false
 	}
 	return expr.vec, err
 }
@@ -448,9 +467,11 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 	}
 	if vec == expr.null {
 		expr.null = nil
-		return vec, nil
+	} else {
+		expr.vec = nil
 	}
-	expr.vec = nil
+	expr.folded = false
+	expr.foldedNull = false
 	return vec, nil
 }
 
@@ -815,6 +836,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlKinds != nil {
 		expr.flowControlKinds = expr.flowControlKinds[:0]
 	}
+	if expr.flowControlBinaryStrings != nil {
+		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -828,6 +852,19 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows i
 		return
 	}
 	expr.flowControlKinds = append(expr.flowControlKinds, make([]vector.PrepareParamKind, rows-old)...)
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows int) {
+	if rows <= len(expr.flowControlBinaryStrings) {
+		return
+	}
+	old := len(expr.flowControlBinaryStrings)
+	if rows <= cap(expr.flowControlBinaryStrings) {
+		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:rows]
+		clear(expr.flowControlBinaryStrings[old:])
+		return
+	}
+	expr.flowControlBinaryStrings = append(expr.flowControlBinaryStrings, make([]bool, rows-old)...)
 }
 
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
@@ -844,6 +881,11 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
+			binaryString := value.GetBinaryStringMetadataAt(row)
+			if binaryString || len(expr.flowControlBinaryStrings) != 0 {
+				expr.ensureFlowControlBinaryStringRows(len(selection))
+				expr.flowControlBinaryStrings[row] = binaryString
+			}
 			kind := value.GetPrepareParamKindAt(row)
 			if !expr.flowControlKindSeen {
 				expr.flowControlKind = kind
@@ -869,6 +911,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 ) error {
 	if result == nil || rows <= 0 {
 		return nil
+	}
+	if len(expr.flowControlBinaryStrings) != 0 {
+		expr.ensureFlowControlBinaryStringRows(rows)
+		if err := result.SetBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
+			return err
+		}
 	}
 	if len(expr.flowControlKinds) == 0 {
 		if expr.flowControlKindSeen {
@@ -1499,7 +1547,9 @@ func generateConstExpressionExecutor(
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.New(types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale), lenList, nil)
+	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
+		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
+	), lenList, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1957,6 +2007,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGT(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1969,6 +2022,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLT(zms[args[1].AuxId]); !ok {
@@ -1985,6 +2041,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, ">=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].AnyGE(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -1997,6 +2056,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "<=") {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyLE(zms[args[1].AuxId]); !ok {
@@ -2013,6 +2075,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2027,6 +2092,9 @@ func GetExprZoneMap(
 				if f() {
 					return zms[expr.AuxId]
 				}
+				if foldTemporalComparisonZoneMap(proc, args, zms, expr.AuxId, "!=") {
+					return zms[expr.AuxId]
+				}
 				if res, ok = anyNotEqualZoneMap(zms[args[0].AuxId], zms[args[1].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
@@ -2039,6 +2107,9 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if f() {
+					return zms[expr.AuxId]
+				}
+				if foldTemporalBetweenZoneMap(proc, args, zms, expr.AuxId) {
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
@@ -2114,7 +2185,9 @@ func GetExprZoneMap(
 					}
 				}
 				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+				typ := types.NewWithCharset(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
@@ -2266,6 +2339,204 @@ func anyNotEqualZoneMap(lhs, rhs objectio.ZoneMap) (bool, bool) {
 		return false, true
 	}
 	return true, true
+}
+
+// foldTemporalComparisonZoneMap evaluates a mixed DATETIME/TIMESTAMP
+// comparison against min/max metadata without changing the logical predicate.
+// DATETIME is interpreted in the session time zone, exactly like the execution
+// comparator.  If that conversion is not order-preserving over a zonemap range
+// (for example, the range intersects a DST fold or gap), the result is reset to
+// unknown so the block is conservatively retained for residual evaluation.
+func foldTemporalComparisonZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+	op string,
+) bool {
+	lhs := zms[args[0].AuxId]
+	rhs := zms[args[1].AuxId]
+	if !lhs.IsInited() || !rhs.IsInited() ||
+		!isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false
+	}
+
+	result, ok := temporalZoneMapComparison(lhs, rhs, proc.GetSessionInfo().TimeZone, op)
+	if !ok {
+		zms[auxID].Reset()
+		return true
+	}
+	zms[auxID] = index.SetBool(zms[auxID], result)
+	return true
+}
+
+func temporalZoneMapComparison(
+	lhs, rhs objectio.ZoneMap,
+	zone *time.Location,
+	op string,
+) (bool, bool) {
+	if !lhs.IsInited() || !rhs.IsInited() {
+		return false, false
+	}
+	if lhs.GetType() == rhs.GetType() {
+		switch op {
+		case ">":
+			return lhs.AnyGT(rhs)
+		case ">=":
+			return lhs.AnyGE(rhs)
+		case "<":
+			return lhs.AnyLT(rhs)
+		case "<=":
+			return lhs.AnyLE(rhs)
+		case "=":
+			return lhs.Intersect(rhs)
+		case "!=":
+			return anyNotEqualZoneMap(lhs, rhs)
+		default:
+			return false, false
+		}
+	}
+	if !isDatetimeTimestampZoneMapPair(lhs, rhs) {
+		return false, false
+	}
+
+	timestampScale := lhs.GetScale()
+	if rhs.GetType() == types.T_timestamp {
+		timestampScale = rhs.GetScale()
+	}
+	lhsTimestamp, lhsOK := temporalZoneMapAsTimestampRange(lhs, zone, timestampScale)
+	rhsTimestamp, rhsOK := temporalZoneMapAsTimestampRange(rhs, zone, timestampScale)
+	if !lhsOK || !rhsOK {
+		return false, false
+	}
+	switch op {
+	case ">":
+		return lhsTimestamp.max > rhsTimestamp.min, true
+	case ">=":
+		return lhsTimestamp.max >= rhsTimestamp.min, true
+	case "<":
+		return lhsTimestamp.min < rhsTimestamp.max, true
+	case "<=":
+		return lhsTimestamp.min <= rhsTimestamp.max, true
+	case "=":
+		return lhsTimestamp.max >= rhsTimestamp.min && lhsTimestamp.min <= rhsTimestamp.max, true
+	case "!=":
+		return lhsTimestamp.min != lhsTimestamp.max ||
+			rhsTimestamp.min != rhsTimestamp.max ||
+			lhsTimestamp.min != rhsTimestamp.min, true
+	default:
+		return false, false
+	}
+}
+
+func foldTemporalBetweenZoneMap(
+	proc *process.Process,
+	args []*plan.Expr,
+	zms []objectio.ZoneMap,
+	auxID int32,
+) bool {
+	if len(args) != 3 {
+		return false
+	}
+	hasDatetime, hasTimestamp := false, false
+	for _, arg := range args {
+		zm := zms[arg.AuxId]
+		if !zm.IsInited() {
+			return false
+		}
+		switch zm.GetType() {
+		case types.T_datetime:
+			hasDatetime = true
+		case types.T_timestamp:
+			hasTimestamp = true
+		default:
+			return false
+		}
+	}
+	if !hasDatetime || !hasTimestamp {
+		return false
+	}
+
+	zone := proc.GetSessionInfo().TimeZone
+	valueZM := zms[args[0].AuxId]
+	lowerZM := zms[args[1].AuxId]
+	upperZM := zms[args[2].AuxId]
+	if valueZM.GetType() == types.T_datetime &&
+		lowerZM.GetType() == types.T_timestamp &&
+		upperZM.GetType() == types.T_timestamp {
+		timestampScale := lowerZM.GetScale()
+		valueRange, valueOK := temporalZoneMapAsTimestampRange(valueZM, zone, timestampScale)
+		lowerRange, lowerOK := temporalZoneMapAsTimestampRange(lowerZM, zone, timestampScale)
+		upperRange, upperOK := temporalZoneMapAsTimestampRange(upperZM, zone, timestampScale)
+		if !valueOK || !lowerOK || !upperOK {
+			zms[auxID].Reset()
+		} else {
+			result := valueRange.max >= lowerRange.min && valueRange.min <= upperRange.max
+			zms[auxID] = index.SetBool(zms[auxID], result)
+		}
+		return true
+	}
+
+	lowerResult, lowerOK := temporalZoneMapComparison(
+		valueZM, lowerZM, zone, ">=",
+	)
+	upperResult, upperOK := temporalZoneMapComparison(
+		valueZM, upperZM, zone, "<=",
+	)
+	if lowerOK && !lowerResult || upperOK && !upperResult {
+		zms[auxID] = index.SetBool(zms[auxID], false)
+	} else if lowerOK && upperOK {
+		zms[auxID] = index.SetBool(zms[auxID], true)
+	} else {
+		zms[auxID].Reset()
+	}
+	return true
+}
+
+func isDatetimeTimestampZoneMapPair(lhs, rhs objectio.ZoneMap) bool {
+	return lhs.GetType() == types.T_datetime && rhs.GetType() == types.T_timestamp ||
+		lhs.GetType() == types.T_timestamp && rhs.GetType() == types.T_datetime
+}
+
+type temporalTimestampRange struct {
+	min types.Timestamp
+	max types.Timestamp
+}
+
+func temporalZoneMapAsTimestampRange(
+	zm objectio.ZoneMap,
+	zone *time.Location,
+	timestampScale int32,
+) (temporalTimestampRange, bool) {
+	if zm.GetType() == types.T_timestamp {
+		minValue, minOK := zm.GetMin().(types.Timestamp)
+		maxValue, maxOK := zm.GetMax().(types.Timestamp)
+		return temporalTimestampRange{min: minValue, max: maxValue}, minOK && maxOK
+	}
+	if zm.GetType() != types.T_datetime {
+		return temporalTimestampRange{}, false
+	}
+
+	minValue, minOK := zm.GetMin().(types.Datetime)
+	maxValue, maxOK := zm.GetMax().(types.Datetime)
+	if !minOK || !maxOK {
+		return temporalTimestampRange{}, false
+	}
+
+	var minTimestamp, maxTimestamp types.Timestamp
+	if isSingleValueZoneMap(zm) {
+		minTimestamp = minValue.ToTimestamp(zone).TruncateToScale(timestampScale)
+		maxTimestamp = minTimestamp
+	} else {
+		var ok bool
+		minTimestamp, maxTimestamp, ok = types.DatetimeRangeToTimestampRange(minValue, maxValue, zone)
+		if !ok {
+			return temporalTimestampRange{}, false
+		}
+		minTimestamp = minTimestamp.TruncateToScale(timestampScale)
+		maxTimestamp = maxTimestamp.TruncateToScale(timestampScale)
+	}
+	return temporalTimestampRange{min: minTimestamp, max: maxTimestamp}, true
 }
 
 func isSingleValueZoneMap(zm objectio.ZoneMap) bool {
@@ -2435,7 +2706,9 @@ func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEva
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		ev.Typ[i] = types.NewWithCharset(
+			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+		)
 	}
 	return
 }

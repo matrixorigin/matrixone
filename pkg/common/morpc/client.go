@@ -519,6 +519,9 @@ func (c *client) maybeInitBackends() error {
 				}
 			}
 		}
+		// Publish only the complete initial pool. Failed construction is closed by
+		// NewClient and must never contribute a partially initialized snapshot.
+		c.updatePoolSizeMetricsLocked()
 	}
 	return nil
 }
@@ -1114,8 +1117,10 @@ func (c *client) getBackendForOperation(
 	// after selection misses; doing a full slice rewrite before every Send/Ping
 	// would add avoidable work to the per-operation hot path.
 	b, err := c.getBackendLockedWithCreate(backend, lock, false)
+	poolChanged := false
 	if b == nil && (err == nil || isBackendClosedError(err)) {
 		if c.detachInactiveForCleanupLocked(backend) > 0 {
+			poolChanged = true
 			// Re-evaluate selection and capacity in the same client-state
 			// snapshot after terminal entries have been removed.
 			b, err = c.getBackendLockedWithCreate(backend, lock, false)
@@ -1128,9 +1133,15 @@ func (c *client) getBackendForOperation(
 			// progress, retire the oldest drain rather than make the remote
 			// permanently unavailable or grow generations without bound.
 			if c.detachOldestDrainingForCleanupLocked(backend) > 0 {
+				poolChanged = true
 				b, err = c.getBackendLockedWithCreate(backend, lock, false)
 			}
 		}
+	}
+	if poolChanged {
+		// Metric snapshots follow actual pool mutations. Keeping this off the
+		// healthy selection path avoids a full-pool scan and metric lock per RPC.
+		c.updatePoolSizeMetricsLocked()
 	}
 	// Cleanup ownership was transferred before each backend was detached. The
 	// foreground operation only releases the state snapshot here; it never waits
@@ -1216,10 +1227,6 @@ func (c *client) getBackendLockedWithCreate(
 	if c.mu.closed {
 		return nil, moerr.NewClientClosedNoCtx()
 	}
-	defer func() {
-		c.updatePoolSizeMetricsLocked()
-	}()
-
 	lockedCnt := 0
 	inactiveCnt := 0
 	if backends, ok := c.mu.backends[backend]; ok {
@@ -1382,14 +1389,20 @@ func (c *client) createBackendForClaimedState(
 	defer c.backendCreate.Done()
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
-	b, err := c.doCreate(backend)
+	b, err := c.doCreate(state.ctx, backend)
 	state.markCompleted(time.Now())
 
 	// Re-acquire lock to add to pool, validating limits again.
 	c.mu.Lock()
 	claimActive := c.hasBackendCreateLocked(backend, state)
 	if err != nil {
-		c.failBackendCreateLocked(backend, state, err)
+		if state.ctx.Err() != nil {
+			// A cancelled generation is local lifecycle evidence. Wake coalesced
+			// waiters without recording a factory or peer failure.
+			c.releaseBackendCreateLocked(backend, state)
+		} else {
+			c.failBackendCreateLocked(backend, state, err)
+		}
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -1458,6 +1471,8 @@ type backendGeneration struct {
 
 type backendCreateState struct {
 	generation *backendGeneration
+	ctx        context.Context
+	cancel     context.CancelFunc
 	queuedAt   time.Time
 	started    chan struct{}
 	startedAt  time.Time
@@ -1481,12 +1496,28 @@ type backendCreateState struct {
 	queueTimedOut bool
 }
 
-func newBackendCreateState(generation *backendGeneration) *backendCreateState {
+func newBackendCreateState(
+	generation *backendGeneration,
+	parents ...context.Context,
+) *backendCreateState {
+	parent := context.Background()
+	if len(parents) > 0 && parents[0] != nil {
+		parent = parents[0]
+	}
+	ctx, cancel := context.WithCancel(parent)
 	return &backendCreateState{
 		generation: generation,
+		ctx:        ctx,
+		cancel:     cancel,
 		queuedAt:   time.Now(),
 		started:    make(chan struct{}),
 		done:       make(chan struct{}),
+	}
+}
+
+func (s *backendCreateState) stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
 	}
 }
 
@@ -1542,6 +1573,7 @@ func (c *client) releaseBackendCreateLocked(
 		return
 	}
 	delete(c.mu.creating, backend)
+	state.stop()
 	close(state.done)
 }
 
@@ -1555,6 +1587,7 @@ func (c *client) failBackendCreateLocked(
 	}
 	state.factoryErr = err
 	delete(c.mu.creating, backend)
+	state.stop()
 	close(state.done)
 }
 
@@ -1588,6 +1621,7 @@ func (c *client) invalidateQueuedBackendCreateLocked(
 	}
 	state.queueTimedOut = queueTimedOut
 	delete(c.mu.creating, backend)
+	state.stop()
 	close(state.done)
 	return true
 }
@@ -1616,6 +1650,7 @@ func (c *client) invalidateBackendCreateLocked(backend string) {
 		return
 	}
 	delete(c.mu.creating, backend)
+	state.stop()
 	close(state.done)
 }
 
@@ -1847,7 +1882,7 @@ func (c *client) createBackendLocked(backend string) (Backend, error) {
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
 
-	b, err := c.doCreate(backend)
+	b, err := c.doCreate(context.Background(), backend)
 	if err != nil {
 		return nil, err
 	}
@@ -1858,12 +1893,26 @@ func (c *client) createBackendLocked(backend string) (Backend, error) {
 	return b, nil
 }
 
-func (c *client) doCreate(backend string) (Backend, error) {
-	b, err := c.factory.Create(backend, WithBackendMetrics(c.metrics))
+func (c *client) doCreate(ctx context.Context, backend string) (Backend, error) {
+	var b Backend
+	var err error
+	if factory, ok := c.factory.(ContextBackendFactory); ok {
+		b, err = factory.CreateWithContext(
+			ctx,
+			backend,
+			WithBackendMetrics(c.metrics),
+		)
+	} else {
+		b, err = c.factory.Create(backend, WithBackendMetrics(c.metrics))
+	}
 	if err != nil {
-		c.logger.Error("create backend failed",
-			zap.String("backend", backend),
-			zap.Error(err))
+		// Generation and lifecycle cancellation is local scheduler evidence, not
+		// a remote failure. Avoid both error-log storms and breaker poisoning.
+		if ctx.Err() == nil {
+			c.logger.Error("create backend failed",
+				zap.String("backend", backend),
+				zap.Error(err))
+		}
 		return nil, err
 	}
 	return b, nil
@@ -1898,7 +1947,7 @@ func (c *client) updatePoolSizeMetricsLocked() {
 	for _, backends := range c.mu.backends {
 		n += len(backends)
 	}
-	c.metrics.poolSizeGauge.Set(float64(n))
+	c.metrics.setBackendPoolSize(n)
 }
 
 func isErrBackendCreating(err error) bool {

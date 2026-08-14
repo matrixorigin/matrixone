@@ -1215,6 +1215,16 @@ func (e *Engine) GetTNServices() []DNStore {
 	return cluster.GetAllTNServices()
 }
 
+// GetPrimaryTNShardID returns the shard selected by a transaction workspace.
+// A zero result makes durable cleanup ownership fail closed.
+func (e *Engine) GetPrimaryTNShardID(workspace client.Workspace) uint64 {
+	txn, ok := workspace.(*Transaction)
+	if !ok || len(txn.tnStores) == 0 || len(txn.tnStores[0].Shards) == 0 {
+		return 0
+	}
+	return txn.tnStores[0].Shards[0].ShardID
+}
+
 func (e *Engine) setPushClientStatus(ready bool) {
 	e.Lock()
 	defer e.Unlock()

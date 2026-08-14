@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -44,7 +45,7 @@ func (b *stubWindowBinder) bindFuncExprImplByAstExpr(name string, args []tree.Ex
 	return b.bindFuncExprFunc(name, args, depth)
 }
 
-func (b *stubWindowBinder) bindPreparedNumericAggregateFuncExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
+func (b *stubWindowBinder) bindPreparedNumericFuncExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
 	return b.bindFuncExprImplByAstExpr(name, args, depth)
 }
 
@@ -219,6 +220,70 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 			require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
 		})
 	}
+}
+
+func TestPreparedNthValueAcceptsPositionalOffset(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(
+		context.Background(),
+		dialect.MYSQL,
+		"select nth_value(a, ?) over (order by a) from select_test.bind_select",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(ctx, stmt, true)
+	require.NoError(t, err)
+
+	offset := firstWindowSpec(t, queryPlan).WindowFunc.GetF().Args[1]
+	require.Equal(t, int32(types.T_text), offset.Typ.Id)
+	require.Equal(t, int32(1), offset.GetP().Pos)
+
+	require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+	filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{int64(2)})
+	require.NoError(t, err)
+	filledOffset := firstWindowSpec(t, filled).WindowFunc.GetF().Args[1]
+	require.Equal(t, int32(types.T_text), filledOffset.Typ.Id)
+	require.Equal(t, "2", filledOffset.GetLit().GetSval())
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "zero", value: int64(0)},
+		{name: "negative", value: int64(-1)},
+		{name: "null", value: nil},
+		{name: "float", value: float64(2.5)},
+		{name: "string", value: "2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{test.value})
+			require.Error(t, err)
+			require.Equal(t, moerr.ER_WRONG_ARGUMENTS, err.(*moerr.Error).MySQLCode())
+		})
+	}
+
+	binaryFilled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+		ParamValue{
+			Value:            "2",
+			PrepareParamKind: vector.PrepareParamInteger,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "2", firstWindowSpec(t, binaryFilled).WindowFunc.GetF().Args[1].GetLit().GetSval())
+
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"prepare nth_param from 'select nth_value(a, ?) over (order by a) from select_test.bind_select'",
+	)
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []int32{int32(types.T_any)}, prepare.ParamTypes)
+	preparedOffset := firstWindowSpec(t, prepare.Plan).WindowFunc.GetF().Args[1]
+	require.Equal(t, int32(types.T_text), preparedOffset.Typ.Id)
+	require.NotNil(t, preparedOffset.GetP())
 }
 
 func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {

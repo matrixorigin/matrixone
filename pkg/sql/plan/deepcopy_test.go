@@ -57,26 +57,18 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Same(t, pkey, withoutCols.Pkey)
 }
 
-func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
-	source := &planpb.PreInsertCtx{
-		Ref:                &planpb.ObjectRef{ObjName: "t"},
-		TableDef:           &planpb.TableDef{Name: "t"},
-		HasAutoCol:         true,
-		IsNewUpdate:        true,
-		HasTargetSelector:  true,
-		TargetRowNumberCol: 31,
-		TargetActiveCol:    32,
-		TargetRowIdCol:     33,
+func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
+	source := &planpb.ColDef{
+		Name:          "display_name",
+		OriginName:    "source_name",
+		TblName:       "table_alias",
+		OriginTblName: "source_table",
+		DbName:        "source_db",
 	}
 
-	cloned := DeepCopyPreInsertCtx(source)
+	cloned := DeepCopyColDef(source)
 	require.NotSame(t, source, cloned)
-	require.NotSame(t, source.Ref, cloned.Ref)
-	require.NotSame(t, source.TableDef, cloned.TableDef)
-	require.True(t, cloned.HasTargetSelector)
-	require.Equal(t, int32(31), cloned.TargetRowNumberCol)
-	require.Equal(t, int32(32), cloned.TargetActiveCol)
-	require.Equal(t, int32(33), cloned.TargetRowIdCol)
+	require.Equal(t, source, cloned)
 }
 
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
@@ -96,6 +88,22 @@ func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {
 
 	cloned.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}
+
+func TestDeepCopyPreInsertCtxPreservesTargetSelector(t *testing.T) {
+	source := &planpb.PreInsertCtx{
+		HasTargetSelector:  true,
+		TargetRowNumberCol: 7,
+		TargetActiveCol:    8,
+		TargetRowIdCol:     9,
+	}
+
+	cloned := DeepCopyPreInsertCtx(source)
+	require.NotSame(t, source, cloned)
+	require.True(t, cloned.HasTargetSelector)
+	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
+	require.Equal(t, int32(8), cloned.TargetActiveCol)
+	require.Equal(t, int32(9), cloned.TargetRowIdCol)
 }
 
 func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
@@ -211,6 +219,22 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 		cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale,
 		source.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale)
 	require.Equal(t, "uk", source.Fuzzymessage.ParentUniqueCols[0].Name)
+}
+
+func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
+	source := &planpb.Node{
+		NodeType:        planpb.Node_FILTER,
+		FilterIsBarrier: true,
+	}
+
+	cloned := DeepCopyNode(source)
+	require.True(t, cloned.FilterIsBarrier)
+
+	payload, err := source.Marshal()
+	require.NoError(t, err)
+	roundTrip := new(planpb.Node)
+	require.NoError(t, roundTrip.Unmarshal(payload))
+	require.True(t, roundTrip.FilterIsBarrier)
 }
 
 var clonedTableDef *planpb.TableDef

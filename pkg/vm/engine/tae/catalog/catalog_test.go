@@ -478,6 +478,18 @@ func TestAlterSchema(t *testing.T) {
 	require.Equal(t, uint16(5), schema.GetSingleSortKey().SeqNum)
 	require.Equal(t, 5, schema.GetSingleSortKeyIdx())
 
+	schema.Extra.Checks = []*planpb.CheckDef{{OriginSql: "CHECK (`mock_0` > 0)"}}
+	req = api.NewRenameColumnReqWithChecks(
+		0,
+		0,
+		"mock_0",
+		"renamed_0",
+		uint32(schema.GetSeqnum("mock_0")),
+		[]*planpb.CheckDef{{OriginSql: "CHECK (`renamed_0` > 0)"}},
+	)
+	require.NoError(t, schema.ApplyAlterTable(req))
+	require.Equal(t, "renamed_0", schema.ColDefs[schema.GetColIdx("renamed_0")].Name)
+	require.Equal(t, "CHECK (`renamed_0` > 0)", schema.Extra.Checks[0].OriginSql)
 }
 
 func randomTxnID(t *testing.T) []byte {

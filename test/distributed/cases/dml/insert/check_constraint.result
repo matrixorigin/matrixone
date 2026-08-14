@@ -67,4 +67,109 @@ select * from replace_check order by id;
 id    v
 1    20
 2    NULL
+create table update_check(
+id int primary key,
+v int,
+constraint positive_update_v check(v > 0)
+);
+insert into update_check values (1, 10), (2, 20);
+update update_check set v = -1 where id = 1;
+constraint violation: Check constraint 'positive_update_v' is violated
+select * from update_check order by id;
+id    v
+1    10
+2    20
+update update_check set v = v + 1 where id = 1;
+select * from update_check order by id;
+id    v
+1    11
+2    20
+update update_check
+set v = case id when 1 then 15 else -1 end;
+constraint violation: Check constraint 'positive_update_v' is violated
+select * from update_check order by id;
+id    v
+1    11
+2    20
+update update_check as u set u.v = u.v + 1 where u.id = 1;
+select * from update_check order by id;
+id    v
+1    12
+2    20
+update ignore update_check set v = -1 where id in (1, 2);
+select * from update_check order by id;
+id    v
+1    12
+2    20
+create table update_ignore_generated(
+id int primary key,
+x int,
+g int generated always as (x * 2) stored,
+constraint generated_value_limit check(g < 4)
+);
+insert into update_ignore_generated(id, x) values (1, 1);
+update ignore update_ignore_generated set x = 2 where id = 1;
+select id, x, g from update_ignore_generated order by id;
+id    x    g
+1    1    2
+insert into update_check values (1, -5)
+on duplicate key update v = values(v);
+constraint violation: Check constraint 'positive_update_v' is violated
+select * from update_check order by id;
+id    v
+1    12
+2    20
+insert into update_check values (1, -5)
+on duplicate key update v = 30;
+select * from update_check order by id;
+id    v
+1    30
+2    20
+create table update_source(id int primary key);
+insert into update_source values (1), (99);
+update update_check u join update_source s on u.id = s.id
+set u.v = -1;
+constraint violation: Check constraint 'positive_update_v' is violated
+select * from update_check order by id;
+id    v
+1    30
+2    20
+create table absent_update_target(
+id int primary key,
+v int,
+constraint never_valid check(false)
+);
+update update_source s left join absent_update_target a on s.id = a.id
+set a.v = 1;
+select count(*) from absent_update_target;
+count(*)
+0
+create table eligible_update_target(id int primary key, v int);
+insert into eligible_update_target values (1, 0), (99, 0);
+update ignore update_source s
+left join absent_update_target a on s.id = a.id
+join eligible_update_target e on s.id = e.id
+set a.v = 1, e.v = 9;
+select * from eligible_update_target order by id;
+id    v
+1    9
+99    9
+create table ignore_check_target(
+id int primary key,
+v int,
+constraint small_v check(v < 2)
+);
+create table ignore_check_sibling(id int primary key, v int);
+insert into ignore_check_target values (1, 1);
+insert into ignore_check_sibling values (1, 0);
+update ignore update_source s
+join ignore_check_target a on s.id = a.id
+join ignore_check_sibling b on s.id = b.id
+set a.v = 2, b.v = 9;
+select * from ignore_check_target order by id;
+id    v
+1    1
+select * from ignore_check_sibling order by id;
+id    v
+1    9
 drop database check_constraint_test;

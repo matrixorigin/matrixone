@@ -248,25 +248,36 @@ func TestFilterTargetRowsDedupsAliasesAcrossBatchesWithAccountedHashMap(t *testi
 	require.Positive(t, seen.Size())
 }
 
-func TestUpdateCtxKeySeparatesCrossDatabaseSameNameTables(t *testing.T) {
-	left := &MultiUpdateCtx{
-		ObjRef:   &plan.ObjectRef{Db: 1, Obj: 10, SchemaName: "db_a", ObjName: "t"},
-		TableDef: &plan.TableDef{TblId: 100, DbName: "db_a", Name: "t"},
-	}
-	right := &MultiUpdateCtx{
-		ObjRef:   &plan.ObjectRef{Db: 2, Obj: 20, SchemaName: "db_b", ObjName: "t"},
-		TableDef: &plan.TableDef{TblId: 200, DbName: "db_b", Name: "t"},
-	}
-	require.NotEqual(t, updateCtxKey(left), updateCtxKey(right))
+func TestFilterTargetRowsDedupsRepeatedRowIDsWithinOneChunk(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	rowIDA := types.BuildTestRowid(1, 1)
+	rowIDB := types.BuildTestRowid(1, 2)
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = testutil.MakeRowIdVector(
+		[]types.Rowid{rowIDA, rowIDA, rowIDB, rowIDA}, nil, mp)
+	bat.Vecs[1] = testutil.NewInt64Vector(
+		4, types.T_int64.ToType(), mp, false, nil, []int64{1, 1, 1, 1})
+	bat.Vecs[2] = testutil.NewInt32Vector(
+		4, types.T_int32.ToType(), mp, false, nil, []int32{10, 11, 20, 12})
+	bat.Vecs[3] = testutil.NewBoolVector(
+		4, types.T_bool.ToType(), mp, false, nil, []bool{true, true, true, true})
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
 
-	leftInfo := &updateCtxInfo{}
-	rightInfo := &updateCtxInfo{}
-	infos := map[string]*updateCtxInfo{
-		updateCtxKey(left):  leftInfo,
-		updateCtxKey(right): rightInfo,
-	}
-	require.Same(t, leftInfo, lookupUpdateCtxInfo(infos, left))
-	require.Same(t, rightInfo, lookupUpdateCtxInfo(infos, right))
+	seen, err := hashmap.NewStrHashMap(false, mp)
+	require.NoError(t, err)
+	defer seen.Free()
+	filtered, owned, duplicateRows, err := filterTargetRows(proc, &MultiUpdateCtx{
+		TableDef:           &plan.TableDef{TblId: 42},
+		DedupByTargetRowID: true,
+		DeleteCols:         []int{0, 2, 1, 3},
+	}, bat, seen)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer filtered.Clean(mp)
+	require.Equal(t, uint64(2), duplicateRows)
+	require.Equal(t, []int32{10, 20}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[2]))
 }
 
 func TestFilterTargetRowsCountsActiveAliasesWithoutRepeatingPhysicalWrites(t *testing.T) {
@@ -310,6 +321,50 @@ func TestFilterTargetRowsCountsActiveAliasesWithoutRepeatingPhysicalWrites(t *te
 	defer filtered.Clean(mp)
 	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[4]))
 	require.Equal(t, uint64(1), additionalAffectedRows)
+}
+
+func TestS3WriterRefreshSelectorState(t *testing.T) {
+	update := &MultiUpdate{
+		ctr: container{seenTargetRows: map[uint64]*hashmap.StrHashMap{}},
+	}
+	oldSeen, err := hashmap.NewStrHashMap(false, mpool.MustNewZero())
+	require.NoError(t, err)
+	defer oldSeen.Free()
+	writer := &s3WriterDelegate{seenTargetRows: map[uint64]*hashmap.StrHashMap{1: oldSeen}}
+	update.ctr.s3Writer = writer
+
+	newSeen, err := hashmap.NewStrHashMap(false, mpool.MustNewZero())
+	require.NoError(t, err)
+	defer newSeen.Free()
+	update.ctr.seenTargetRows = map[uint64]*hashmap.StrHashMap{1: newSeen}
+	update.addAffectedRowsFunc = update.doAddAffectedRows
+	writer.refreshSelectorState(update)
+
+	require.Same(t, newSeen, writer.seenTargetRows[1])
+	require.NotSame(t, oldSeen, writer.seenTargetRows[1])
+	require.NotNil(t, writer.admitSeenGrowth)
+	require.NotNil(t, writer.addAffectedRows)
+}
+
+func TestUpdateCtxKeySeparatesCrossDatabaseSameNameTables(t *testing.T) {
+	left := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Db: 1, Obj: 10, SchemaName: "db_a", ObjName: "t"},
+		TableDef: &plan.TableDef{TblId: 100, DbName: "db_a", Name: "t"},
+	}
+	right := &MultiUpdateCtx{
+		ObjRef:   &plan.ObjectRef{Db: 2, Obj: 20, SchemaName: "db_b", ObjName: "t"},
+		TableDef: &plan.TableDef{TblId: 200, DbName: "db_b", Name: "t"},
+	}
+	require.NotEqual(t, updateCtxKey(left), updateCtxKey(right))
+
+	leftInfo := &updateCtxInfo{}
+	rightInfo := &updateCtxInfo{}
+	infos := map[string]*updateCtxInfo{
+		updateCtxKey(left):  leftInfo,
+		updateCtxKey(right): rightInfo,
+	}
+	require.Same(t, leftInfo, lookupUpdateCtxInfo(infos, left))
+	require.Same(t, rightInfo, lookupUpdateCtxInfo(infos, right))
 }
 
 type testSeenRowsThrottler struct {

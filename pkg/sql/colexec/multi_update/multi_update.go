@@ -130,6 +130,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 			writer.segmentMap = colexec.MustGetServer(proc.GetService()).GetCnSegmentMap()
 			update.ctr.s3Writer = writer
+		} else {
+			update.ctr.s3Writer.refreshSelectorState(update)
 		}
 
 	case UpdateFlushS3Info:
@@ -543,8 +545,10 @@ func filterTargetRows(
 			filtered.Clean(proc.Mp())
 			return nil, false, 0, err
 		}
+		nextGroup := oldGroupCount
 		for i, value := range values {
-			if zValues[i] != 0 && value > oldGroupCount {
+			if zValues[i] != 0 && value > nextGroup {
+				nextGroup++
 				physicalSelections = append(physicalSelections, int64(offset+i))
 			}
 		}

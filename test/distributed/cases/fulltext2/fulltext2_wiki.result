@@ -1,0 +1,63 @@
+drop database if exists ft2_wiki;
+create database ft2_wiki;
+use ft2_wiki;
+set experimental_fulltext2_index = 1;
+create table en(id bigint primary key, body text);
+load data infile '$resources/fulltext2/wiki_en_1k.csv' into table en fields terminated by ',' enclosed by '"' lines terminated by '\n';
+select count(*) docs from en;
+➤ docs[-5,64,0]  𝄀
+1000
+create fulltext2 index ft on en(body) with parser gojieba;
+select count(*) from en where match(body) against('anarchism');
+➤ count(*)[-5,64,0]  𝄀
+7
+select count(*) from en where match(body) against('philosophy');
+➤ count(*)[-5,64,0]  𝄀
+35
+select count(*) from en where match(body) against('government');
+➤ count(*)[-5,64,0]  𝄀
+56
+select count(*) from en where match(body) against('zzznotawordzzz');
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from en where match(body) against('+state +government' in boolean mode);
+➤ count(*)[-5,64,0]  𝄀
+18
+select count(*) from en where match(body) against('+anarchism -philosophy' in boolean mode);
+➤ count(*)[-5,64,0]  𝄀
+5
+create table zh(id bigint primary key, body text);
+load data infile '$resources/fulltext2/wiki_zh_1k.csv' into table zh fields terminated by ',' enclosed by '"' lines terminated by '\n';
+select count(*) docs from zh;
+➤ docs[-5,64,0]  𝄀
+1000
+create fulltext2 index ft on zh(body) with parser ngram;
+select count(*) from zh where match(body) against('数学');
+➤ count(*)[-5,64,0]  𝄀
+43
+select count(*) from zh where match(body) against('中国');
+➤ count(*)[-5,64,0]  𝄀
+264
+select count(*) from zh where match(body) against('历史');
+➤ count(*)[-5,64,0]  𝄀
+103
+create table en_cap(id bigint primary key, body text);
+insert into en_cap select * from en;
+create fulltext2 index ft on en_cap(body) with parser gojieba max_postings_capacity 20000;
+select count(*) from en_cap where match(body) against('anarchism');
+➤ count(*)[-5,64,0]  𝄀
+7
+select count(*) from en_cap where match(body) against('philosophy');
+➤ count(*)[-5,64,0]  𝄀
+35
+select count(*) from en_cap where match(body) against('+state +government' in boolean mode);
+➤ count(*)[-5,64,0]  𝄀
+18
+alter table en_cap alter reindex ft fulltext2;
+select count(*) from en_cap where match(body) against('anarchism');
+➤ count(*)[-5,64,0]  𝄀
+7
+select count(*) from en_cap where match(body) against('+state +government' in boolean mode);
+➤ count(*)[-5,64,0]  𝄀
+18
+drop database ft2_wiki;

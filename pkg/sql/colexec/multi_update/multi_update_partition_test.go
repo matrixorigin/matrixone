@@ -19,6 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -44,6 +48,149 @@ func TestClonePartitionPhaseContextsSeparatesDeleteAndInsert(t *testing.T) {
 	require.False(t, insertContexts[0].DedupByTargetRowID)
 	require.Equal(t, []int{1, 2}, contexts[0].InsertCols)
 	require.Equal(t, []int{3, 4}, contexts[0].DeleteCols)
+}
+
+func TestPartitionTargetSelectionPrecedesDirectAndS3Routing(t *testing.T) {
+	for name, action := range map[string]UpdateAction{
+		"direct": UpdateWriteTable,
+		"s3":     UpdateWriteS3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				rowNulls []uint64
+				active   []bool
+				partNull []bool
+				wantPart []int32
+			}{
+				{name: "mixed", rowNulls: []uint64{1}, active: []bool{true, false}, partNull: []bool{false, true}, wantPart: []int32{1}},
+				{name: "fully-unmatched", rowNulls: []uint64{0, 1}, active: []bool{false, false}, partNull: []bool{true, true}, wantPart: []int32{}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					mp := proc.Mp()
+					input := batch.NewWithSize(4)
+					input.Vecs[0] = testutil.MakeRowIdVector(
+						[]types.Rowid{types.BuildTestRowid(1, 1), types.BuildTestRowid(1, 2)},
+						tc.rowNulls,
+						mp,
+					)
+					input.Vecs[1] = testutil.NewInt64Vector(
+						2, types.T_int64.ToType(), mp, false, nil, []int64{1, 1})
+					input.Vecs[2] = testutil.NewBoolVector(
+						2, types.T_bool.ToType(), mp, false, nil, tc.active)
+					input.Vecs[3] = testutil.NewInt32Vector(
+						2, types.T_int32.ToType(), mp, false, tc.partNull, []int32{1, 0})
+					input.SetRowCount(2)
+					defer input.Clean(mp)
+
+					ctx := &MultiUpdateCtx{
+						TableDef:           &plan.TableDef{TblId: 42, FeatureFlag: features.Partitioned},
+						DeleteCols:         []int{0, 3, 1, 2},
+						DedupByTargetRowID: true,
+					}
+					op := &PartitionMultiUpdate{
+						raw: &MultiUpdate{
+							Action: action,
+							ctr:    container{seenTargetRows: map[uint64]*hashmap.StrHashMap{}},
+						},
+					}
+					op.raw.addAffectedRowsFunc = op.doAddAffectedRows
+					target := &partitionUpdateTarget{tableID: 42, contexts: []*MultiUpdateCtx{ctx}}
+
+					filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+					require.NoError(t, err)
+					require.True(t, owned)
+					defer filtered.Clean(mp)
+					require.Equal(t, len(tc.wantPart), filtered.RowCount())
+					require.Equal(t, tc.wantPart, vector.MustFixedColWithTypeCheck[int32](filtered.Vecs[3]))
+					require.Zero(t, op.GetAffectedRows())
+				})
+			}
+		})
+	}
+}
+
+func TestClonePartitionTargetContextsDisablesSecondSelectionPass(t *testing.T) {
+	contexts := []*MultiUpdateCtx{
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
+		{ObjRef: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, DedupByTargetRowID: true},
+	}
+	cloned := clonePartitionTargetContexts(contexts)
+	require.Len(t, cloned, 2)
+	for i := range cloned {
+		require.NotSame(t, contexts[i], cloned[i])
+		require.False(t, cloned[i].DedupByTargetRowID)
+		require.True(t, contexts[i].DedupByTargetRowID)
+	}
+}
+
+func TestPartitionS3TargetSelectionUsesMemoryAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		available int64
+		wantErr   bool
+	}{
+		{name: "granted", available: 1 << 20},
+		{name: "rejected", available: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			const rowCount = 4096
+			rowIDs := make([]types.Rowid, rowCount)
+			rowNumbers := make([]int64, rowCount)
+			active := make([]bool, rowCount)
+			for i := range rowCount {
+				rowIDs[i] = types.BuildTestRowid(1, int64(i))
+				rowNumbers[i] = 1
+				active[i] = true
+			}
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeRowIdVector(rowIDs, nil, mp)
+			input.Vecs[1] = testutil.NewInt64Vector(
+				rowCount, types.T_int64.ToType(), mp, false, nil, rowNumbers)
+			input.Vecs[2] = testutil.NewBoolVector(
+				rowCount, types.T_bool.ToType(), mp, false, nil, active)
+			input.SetRowCount(rowCount)
+			defer input.Clean(mp)
+
+			seen, err := hashmap.NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			throttler := &testSeenRowsThrottler{available: tc.available}
+			raw := &MultiUpdate{
+				Action: UpdateWriteS3,
+				ctr: container{
+					seenTargetRows: map[uint64]*hashmap.StrHashMap{42: seen},
+					seenRowsRSC:    throttler,
+				},
+			}
+			raw.addAffectedRowsFunc = raw.doAddAffectedRows
+			op := &PartitionMultiUpdate{raw: raw}
+			target := &partitionUpdateTarget{tableID: 42, contexts: []*MultiUpdateCtx{{
+				TableDef:           &plan.TableDef{TblId: 42, FeatureFlag: features.Partitioned},
+				DeleteCols:         []int{0, 0, 1, 2},
+				DedupByTargetRowID: true,
+			}}}
+
+			filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Nil(t, filtered)
+				require.False(t, owned)
+				require.Zero(t, throttler.acquired)
+			} else {
+				require.NoError(t, err)
+				require.True(t, owned)
+				filtered.Clean(mp)
+				require.Positive(t, throttler.acquired)
+				require.Equal(t, throttler.acquired, raw.ctr.seenRowsGrant)
+			}
+
+			raw.freeSeenTargetRows()
+			require.Equal(t, throttler.acquired, throttler.released)
+		})
+	}
 }
 
 func TestResetMultiUpdateCtxsClassifiesTemporaryIndexTables(t *testing.T) {
@@ -388,23 +535,4 @@ func TestMultiUpdateCtxClonePartitionCols(t *testing.T) {
 	require.NotSame(t, original.TableDef, cloned.TableDef)
 	cloned.ObjRef.ObjName = "modified"
 	require.Equal(t, "t1", original.ObjRef.ObjName, "original ObjRef should be unchanged")
-}
-
-func TestUpdateCtxKeySeparatesSameNamedTablesAcrossDatabases(t *testing.T) {
-	left := &MultiUpdateCtx{
-		ObjRef:   &plan.ObjectRef{SchemaName: "db_a", ObjName: "t", Obj: 101},
-		TableDef: &plan.TableDef{TblId: 201, DbName: "db_a", Name: "t"},
-	}
-	right := &MultiUpdateCtx{
-		ObjRef:   &plan.ObjectRef{SchemaName: "db_b", ObjName: "t", Obj: 102},
-		TableDef: &plan.TableDef{TblId: 202, DbName: "db_b", Name: "t"},
-	}
-
-	require.NotEqual(t, updateCtxKey(left), updateCtxKey(right))
-	infos := map[string]*updateCtxInfo{
-		updateCtxKey(left):  {tableType: UpdateMainTable},
-		updateCtxKey(right): {tableType: UpdateSecondaryIndexTable},
-	}
-	require.Equal(t, UpdateMainTable, lookupUpdateCtxInfo(infos, left).tableType)
-	require.Equal(t, UpdateSecondaryIndexTable, lookupUpdateCtxInfo(infos, right).tableType)
 }

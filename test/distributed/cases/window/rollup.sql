@@ -221,7 +221,6 @@ order by
     cat.category_name;
 -- @bvt:issue
 
--- @bvt:issue#19993
 select
     year(o.order_date) as order_year,
     month(o.order_date) as order_month,
@@ -257,7 +256,6 @@ order by
     order_month,
     c.city,
     cat.category_name;
--- @bvt:issue
 
 drop table if exists orders;
 drop table if exists order_items;
@@ -785,6 +783,41 @@ order by ga, gb, a, b;
 
 drop table grouping_not_null;
 
+-- GROUPING arguments must each identify one complete GROUP BY item. A miss
+-- must be rejected in SELECT, HAVING, and ORDER BY before recursive binding.
+drop table if exists grouping_argument_validation;
+create table grouping_argument_validation (a int, b int);
+insert into grouping_argument_validation values (1, 10), (2, 20);
+
+select grouping(a + b), count(*)
+from grouping_argument_validation
+group by a, b with rollup;
+
+select grouping(a + 1, b + 1), count(*)
+from grouping_argument_validation
+group by a + 1, b with rollup;
+
+select grouping(sum(a)), count(*)
+from grouping_argument_validation
+group by a with rollup;
+
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+having grouping(a + b) = 0;
+
+select count(*)
+from grouping_argument_validation
+group by a, b with rollup
+order by grouping(a + b);
+
+select a + 1 as a1, b, grouping(a + 1, b) as grouping_bits, count(*) as cnt
+from grouping_argument_validation
+group by a + 1, b with rollup
+order by grouping_bits, a1, b;
+
+drop table grouping_argument_validation;
+
 -- Wrapped grouping columns remain available as hidden source sort keys.
 select
     coalesce(region, '<null>') as display_region,
@@ -859,5 +892,42 @@ group by
 having qty > 0
 order by row_num;
 drop table rollup_window_sales;
+
+-- Grouping extensions synthesize NULL keys, so their view and CTAS schemas
+-- must not preserve a NOT NULL source-key contract (#26826).
+drop table if exists grouping_extension_metadata_src;
+create table grouping_extension_metadata_src (a int not null, b int not null, v int not null);
+insert into grouping_extension_metadata_src values (1, 10, 5), (1, 20, 7), (2, 10, 9);
+create view grouping_extension_plain_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_plain_v' and column_name in ('a', 'b') order by ordinal_position;
+create view grouping_extension_rollup_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_v' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_rollup_v where a is null or b is null;
+create view grouping_extension_cube_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by cube(a, b);
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_cube_v' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_cube_v where a is null or b is null;
+create view grouping_extension_sets_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a), ());
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_sets_v' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_sets_v where a is null or b is null;
+create view grouping_extension_partial_sets_v as select a, b, sum(v) as s from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_v' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_partial_sets_v where a is null;
+select count(*) from grouping_extension_partial_sets_v where b is null;
+create table grouping_extension_rollup_ctas as select a, b, sum(v) as s from grouping_extension_metadata_src group by a, b with rollup;
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_rollup_ctas' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_rollup_ctas;
+select count(*) from grouping_extension_rollup_ctas where a is null or b is null;
+create table grouping_extension_partial_sets_ctas as select a, b, count(*) as c from grouping_extension_metadata_src group by grouping sets ((a, b), (a));
+select column_name, is_nullable from information_schema.columns where table_schema = database() and table_name = 'grouping_extension_partial_sets_ctas' and column_name in ('a', 'b') order by ordinal_position;
+select count(*) from grouping_extension_partial_sets_ctas where a is null;
+select count(*) from grouping_extension_partial_sets_ctas where b is null;
+drop view grouping_extension_plain_v;
+drop view grouping_extension_rollup_v;
+drop view grouping_extension_cube_v;
+drop view grouping_extension_sets_v;
+drop view grouping_extension_partial_sets_v;
+drop table grouping_extension_rollup_ctas;
+drop table grouping_extension_partial_sets_ctas;
+drop table grouping_extension_metadata_src;
 
 drop database rollup_test;

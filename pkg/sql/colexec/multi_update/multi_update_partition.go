@@ -244,15 +244,26 @@ func (op *PartitionMultiUpdate) writeTarget(
 	if !features.IsPartitioned(target.contexts[0].TableDef.FeatureFlag) {
 		return op.callRawTarget(proc, target, target.contexts, target.tableID, input)
 	}
+	filtered, owned, err := op.selectPartitionTargetRows(proc, target, input)
+	if err != nil {
+		return err
+	}
+	if owned {
+		defer filtered.Clean(proc.Mp())
+	}
+	if filtered.RowCount() == 0 {
+		return nil
+	}
 	if len(target.contexts[0].PartitionCols) > 1 {
-		return op.writePartitionKeyUpdate(proc, target, input)
+		return op.writePartitionKeyUpdate(proc, target, filtered)
 	}
 
+	contexts := clonePartitionTargetContexts(target.contexts)
 	pos := int32(-1)
-	if len(target.contexts[0].PartitionCols) > 0 {
-		pos = int32(target.contexts[0].PartitionCols[0])
+	if len(contexts[0].PartitionCols) > 0 {
+		pos = int32(contexts[0].PartitionCols[0])
 	}
-	res, err := partitionprune.Prune(proc, input, target.meta, pos)
+	res, err := partitionprune.Prune(proc, filtered, target.meta, pos)
 	if err != nil {
 		return err
 	}
@@ -262,15 +273,46 @@ func (op *PartitionMultiUpdate) writeTarget(
 	}
 
 	res.Iter(func(p partition.Partition, bat *batch.Batch) bool {
-		contexts, resolveErr := op.resolvePartitionContexts(proc, target, target.contexts, p)
+		partitionContexts, resolveErr := op.resolvePartitionContexts(proc, target, contexts, p)
 		if resolveErr != nil {
 			err = resolveErr
 			return false
 		}
-		err = op.callRawTarget(proc, target, contexts, p.PartitionID, bat)
+		err = op.callRawTarget(proc, target, partitionContexts, p.PartitionID, bat)
 		return err == nil
 	})
 	return err
+}
+
+func (op *PartitionMultiUpdate) selectPartitionTargetRows(
+	proc *process.Process,
+	target *partitionUpdateTarget,
+	input *batch.Batch,
+) (*batch.Batch, bool, error) {
+	var seenSizeBefore int64
+	if op.raw.Action == UpdateWriteS3 {
+		seenSizeBefore = op.raw.seenTargetRowsSize()
+	}
+	filtered, owned, duplicateRows, err := filterTargetRows(
+		proc,
+		target.contexts[0],
+		input,
+		op.raw.ctr.seenTargetRows[target.tableID],
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if op.raw.Action == UpdateWriteS3 {
+		seenIncrement := op.raw.seenTargetRowsSize() - seenSizeBefore
+		if err = op.raw.admitSeenTargetRowsGrowth(seenIncrement); err != nil {
+			if owned {
+				filtered.Clean(proc.Mp())
+			}
+			return nil, false, err
+		}
+	}
+	op.raw.addAffectedRowsFunc(duplicateRows)
+	return filtered, owned, nil
 }
 
 func (op *PartitionMultiUpdate) resolvePartitionContexts(
@@ -316,33 +358,25 @@ func (op *PartitionMultiUpdate) writePartitionKeyUpdate(
 	input *batch.Batch,
 ) error {
 	mainCtx := target.contexts[0]
-	filtered, owned, duplicateRows, err := filterTargetRows(
-		proc,
-		mainCtx,
-		input,
-		op.raw.ctr.seenTargetRows[targetTableID(mainCtx)],
-	)
-	if err != nil {
-		return err
-	}
-	if owned {
-		defer filtered.Clean(proc.Mp())
-	}
-	op.raw.addAffectedRowsFunc(duplicateRows)
-	if filtered.RowCount() == 0 {
-		return nil
-	}
-
 	deleteContexts := clonePartitionPhaseContexts(target.contexts, true)
-	if err = op.writePartitionPhase(
-		proc, target, deleteContexts, mainCtx.PartitionCols[0], filtered,
+	if err := op.writePartitionPhase(
+		proc, target, deleteContexts, mainCtx.PartitionCols[0], input,
 	); err != nil {
 		return err
 	}
 	insertContexts := clonePartitionPhaseContexts(target.contexts, false)
 	return op.writePartitionPhase(
-		proc, target, insertContexts, mainCtx.PartitionCols[1], filtered,
+		proc, target, insertContexts, mainCtx.PartitionCols[1], input,
 	)
+}
+
+func clonePartitionTargetContexts(contexts []*MultiUpdateCtx) []*MultiUpdateCtx {
+	cloned := make([]*MultiUpdateCtx, len(contexts))
+	for i, ctx := range contexts {
+		cloned[i] = ctx.clone()
+		cloned[i].DedupByTargetRowID = false
+	}
+	return cloned
 }
 
 func clonePartitionPhaseContexts(

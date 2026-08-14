@@ -19,7 +19,6 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -173,7 +172,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			includeCols, len(scanNode.FilterList))
 	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
-		scanNode.FilterList, scanNode, includeCols, pkColName)
+		scanNode.FilterList, scanNode, includeCols, pkColName, false)
 	if err != nil {
 		return nodeID, err
 	}
@@ -186,18 +185,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	// JOIN between source table and cagra_search table function
 	tableFuncTag := builder.genNewBindTag()
 	tableFuncExprs := []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id: int32(types.T_varchar),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblCfgStr,
-					},
-				},
-			},
-		},
+		makePlan2StringConstExprWithType(tblCfgStr),
 		DeepCopyExpr(cagraCtx.vecLitArg),
 	}
 	if predsJSON != "" {

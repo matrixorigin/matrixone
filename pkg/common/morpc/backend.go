@@ -44,6 +44,12 @@ var (
 	backendClosed   = moerr.NewBackendClosedNoCtx()
 	backendDraining = moerr.NewInvalidStateNoCtx("backend is draining")
 	messageSkipped  = moerr.NewInvalidStateNoCtx("request is skipped")
+
+	// Cancellation releases a shared manager worker before goetty's legacy,
+	// timeout-bounded Connect necessarily returns. Retain the same process-wide
+	// bound for those lower-level attempts so rapid invalidation cannot turn
+	// prompt worker cancellation into unbounded dial goroutines.
+	goettyContextCreateSlots = make(chan struct{}, backendCreateWorkerCount)
 )
 
 // WithBackendLogger set the backend logger
@@ -216,6 +222,15 @@ type remoteBackend struct {
 		futures       map[uint64]*Future
 		activeStreams map[uint64]*stream
 	}
+	// queueMetricMu orders queue accounting with channel publication. A receiver
+	// may run as soon as a send commits, so it takes this lock after receiving;
+	// the sender holds it across the send and increment. This prevents transient
+	// negative depths and makes shared per-name gauges exact across backends.
+	queueMetricMu struct {
+		sync.Mutex
+		depth int
+		busy  bool
+	}
 
 	livenessMu struct {
 		sync.Mutex
@@ -383,6 +398,7 @@ func (rb *remoteBackend) getFuture(ctx context.Context, request Message, interna
 	if !internal {
 		f.setSendRelease(rb.options.releaseRequest)
 		f.setResponseRelease(rb.options.freeResponse)
+		f.enableRequestMetrics(rb.metrics)
 	}
 	rb.addFuture(f)
 	return f
@@ -433,26 +449,19 @@ func (rb *remoteBackend) doSend(f *Future) error {
 		// The close method need acquire the write lock, so we cannot block at here.
 		// The write loop may reset the backend's network link and may not be able to
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
+		rb.queueMetricMu.Lock()
 		select {
 		case rb.writeC <- f:
-			queueLen := float64(len(rb.writeC))
-			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(queueLen)
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
+			rb.changeQueueDepthLocked(1)
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			return nil
 		case <-f.send.Ctx.Done():
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			return f.send.Ctx.Err()
 		default:
+			rb.queueMetricMu.Unlock()
 			rb.stateMu.RUnlock()
 			rb.waitWrite(f.send.Ctx)
 		}
@@ -600,43 +609,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	rb.pingTimer = time.NewTimer(rb.getPingTimeout())
 	messages := make([]*Future, 0, rb.options.batchSendSize)
 	stopped := false
-	metricsUpdateTicker := time.NewTicker(time.Second)
-	defer metricsUpdateTicker.Stop()
-
-	updateMetrics := func() {
-		if rb.metrics != nil {
-			rb.mu.RLock()
-			if rb.metrics.activeRequestsGauge != nil {
-				rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
-			}
-			rb.mu.RUnlock()
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(float64(len(rb.writeC)))
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
-		}
-	}
-
-	go func() {
-		for {
-			select {
-			case <-metricsUpdateTicker.C:
-				updateMetrics()
-			case <-rb.stopWriteC:
-				return
-			}
-		}
-	}()
-
 	for {
 		messages, stopped = rb.fetch(messages, rb.options.batchSendSize)
-		updateMetrics()
 		if len(messages) > 0 {
 			rb.metrics.sendingBatchSizeGauge.Set(float64(len(messages)))
 			start := time.Now()
@@ -821,23 +795,6 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 }
 
 func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future, bool) {
-	defer func() {
-		queueLen := float64(len(rb.writeC))
-		if rb.metrics != nil {
-			rb.metrics.sendingQueueSizeGauge.Set(queueLen)
-			if rb.metrics.writeQueueLengthGauge != nil {
-				rb.metrics.writeQueueLengthGauge.Set(queueLen)
-			}
-			if rb.metrics.busyGauge != nil {
-				if len(rb.writeC) >= rb.options.busySize {
-					rb.metrics.busyGauge.Set(1)
-				} else {
-					rb.metrics.busyGauge.Set(0)
-				}
-			}
-		}
-	}()
-
 	n := len(messages)
 	for i := 0; i < n; i++ {
 		messages[i] = nil
@@ -864,6 +821,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 	case <-rb.pingTimer.C:
 		doHeartbeat()
 	case f := <-rb.writeC:
+		rb.changeQueueDepth(-1)
 		rb.notifyWaitWrite()
 		handleHeartbeat()
 		messages = append(messages, f)
@@ -890,6 +848,7 @@ func (rb *remoteBackend) fetchN(messages []*Future, max int) []*Future {
 	for i := 0; i < n; i++ {
 		select {
 		case f := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			messages = append(messages, f)
 		default:
 			return messages
@@ -902,6 +861,7 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 	for {
 		select {
 		case m := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			m.messageSent(backendClosed)
 		default:
 			return
@@ -910,24 +870,26 @@ func (rb *remoteBackend) makeAllWritesDoneWithClosed() {
 }
 
 func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
-	var ids []uint64
-	var waitings []*Future
+	type waitingFuture struct {
+		id uint64
+		f  *Future
+	}
+	var waitings []waitingFuture
 	func() {
 		rb.mu.Lock()
 		defer rb.mu.Unlock()
-		ids = make([]uint64, 0, len(rb.mu.futures))
-		waitings = make([]*Future, 0, len(rb.mu.futures))
+		waitings = make([]waitingFuture, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			if f.waiting.Load() {
-				waitings = append(waitings, f)
-				ids = append(ids, id)
+			if f.waiting.Load() && f.tryRef() {
+				waitings = append(waitings, waitingFuture{id: id, f: f})
 			}
 		}
 	}()
 
-	for i, f := range waitings {
+	for _, waiting := range waitings {
 		rb.metrics.observeBackendError(rb.remote, "wait_response", err)
-		f.error(ids[i], err, nil)
+		waiting.f.error(waiting.id, err, nil)
+		waiting.f.unRef()
 	}
 }
 
@@ -958,8 +920,11 @@ func (rb *remoteBackend) clean() {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	for id := range rb.mu.futures {
-		delete(rb.mu.futures, id)
+	if n := len(rb.mu.futures); n > 0 {
+		clear(rb.mu.futures)
+		if rb.metrics != nil {
+			rb.metrics.activeRequestsGauge.Sub(float64(n))
+		}
 	}
 }
 
@@ -992,7 +957,7 @@ func (rb *remoteBackend) cancelActiveStreams() {
 func (rb *remoteBackend) removeActiveStream(s *stream) {
 	rb.mu.Lock()
 	delete(rb.mu.activeStreams, s.id)
-	delete(rb.mu.futures, s.id)
+	rb.deleteFutureLocked(s.id)
 	channelNotEmpty := len(s.c) > 0
 	rb.finishDrainingLocked()
 	rb.mu.Unlock()
@@ -1035,9 +1000,24 @@ func (rb *remoteBackend) requestDone(
 
 	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
-		delete(rb.mu.futures, id)
+		rb.deleteFutureLocked(id)
 		rb.finishDrainingLocked()
+		// Pin the Future before dropping rb.mu. Close plus writer completion
+		// may otherwise return it to the pool before terminal delivery starts.
+		// tryRef is safe under rb.mu because release callbacks run after f.mu
+		// is unlocked and therefore cannot form an f.mu -> rb.mu cycle.
+		pinned := f.tryRef()
 		rb.mu.Unlock()
+		if !pinned {
+			if cb != nil {
+				cb()
+			}
+			if !msg.internal && response != nil && rb.options.freeResponse != nil {
+				rb.options.freeResponse(response)
+			}
+			return
+		}
+		defer f.unRef()
 		if err == nil {
 			if !f.done(response, cb) &&
 				!msg.internal &&
@@ -1075,9 +1055,13 @@ func (rb *remoteBackend) addFuture(f *Future) {
 	defer rb.mu.Unlock()
 
 	f.ref()
-	rb.mu.futures[f.getSendMessageID()] = f
+	id := f.getSendMessageID()
+	if _, exists := rb.mu.futures[id]; exists {
+		panic("duplicate MORPC future ID")
+	}
+	rb.mu.futures[id] = f
 	if rb.metrics != nil {
-		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
+		rb.metrics.activeRequestsGauge.Inc()
 	}
 }
 
@@ -1085,13 +1069,57 @@ func (rb *remoteBackend) releaseFuture(f *Future) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	delete(rb.mu.futures, f.getSendMessageID())
+	rb.deleteFutureLocked(f.getSendMessageID())
 	rb.finishDrainingLocked()
-	if rb.metrics != nil {
-		rb.metrics.activeRequestsGauge.Set(float64(len(rb.mu.futures)))
-	}
 	f.reset()
 	rb.pool.futures.Put(f)
+}
+
+func (rb *remoteBackend) deleteFutureLocked(id uint64) bool {
+	if _, ok := rb.mu.futures[id]; !ok {
+		return false
+	}
+	delete(rb.mu.futures, id)
+	if rb.metrics != nil {
+		rb.metrics.activeRequestsGauge.Dec()
+	}
+	return true
+}
+
+func (rb *remoteBackend) changeQueueDepth(delta int) {
+	rb.queueMetricMu.Lock()
+	defer rb.queueMetricMu.Unlock()
+	rb.changeQueueDepthLocked(delta)
+}
+
+func (rb *remoteBackend) changeQueueDepthLocked(delta int) {
+	previous := rb.queueMetricMu.depth
+	current := previous + delta
+	if current < 0 {
+		panic("negative MORPC backend write queue depth")
+	}
+	rb.queueMetricMu.depth = current
+	if rb.metrics == nil {
+		return
+	}
+	rb.metrics.sendingQueueSizeGauge.Add(float64(delta))
+	// Keep the historical metric as an exact compatibility alias. New
+	// dashboards use sending_queue_size to avoid duplicate signals.
+	if rb.metrics.writeQueueLengthGauge != nil {
+		rb.metrics.writeQueueLengthGauge.Add(float64(delta))
+	}
+	busy := current >= rb.options.busySize
+	if busy == rb.queueMetricMu.busy {
+		return
+	}
+	rb.queueMetricMu.busy = busy
+	if rb.metrics.busyGauge != nil {
+		if busy {
+			rb.metrics.busyGauge.Inc()
+		} else {
+			rb.metrics.busyGauge.Dec()
+		}
+	}
 }
 
 func (rb *remoteBackend) running() bool {
@@ -1178,6 +1206,7 @@ func (rb *remoteBackend) notifyAllWaitWritesFailed(err error) {
 	for {
 		select {
 		case f := <-rb.writeC:
+			rb.changeQueueDepth(-1)
 			f.messageSent(err)
 		default:
 			return
@@ -1475,6 +1504,8 @@ type goettyBasedBackendFactory struct {
 	options []BackendOption
 }
 
+var _ ContextBackendFactory = (*goettyBasedBackendFactory)(nil)
+
 func NewGoettyBasedBackendFactory(codec Codec, options ...BackendOption) BackendFactory {
 	return &goettyBasedBackendFactory{
 		codec:   codec,
@@ -1489,6 +1520,81 @@ func (bf *goettyBasedBackendFactory) Create(
 	opts = append(opts, bf.options...)
 	opts = append(opts, extraOptions...)
 	return NewRemoteBackend(remote, bf.codec, opts...)
+}
+
+// CreateWithContext adapts goetty's timeout-bounded legacy Connect API to the
+// contextual factory contract. Cancellation returns the shared factory worker
+// immediately. The bounded connect attempt retains ownership of its result and
+// closes a late Backend before it can escape into a replacement generation.
+func (bf *goettyBasedBackendFactory) CreateWithContext(
+	ctx context.Context,
+	remote string,
+	extraOptions ...BackendOption,
+) (Backend, error) {
+	return boundedBackendCreate(ctx, goettyContextCreateSlots, func() (Backend, error) {
+		return bf.Create(remote, extraOptions...)
+	})
+}
+
+func boundedBackendCreate(
+	ctx context.Context,
+	slots chan struct{},
+	create func() (Backend, error),
+) (Backend, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case slots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	resultC := make(chan backendCreateResult)
+	go func() {
+		defer func() { <-slots }()
+		backend, err := create()
+		transferBackendCreateResult(
+			ctx,
+			resultC,
+			backendCreateResult{backend: backend, err: err},
+		)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultC:
+		if err := ctx.Err(); err != nil {
+			if result.backend != nil {
+				result.backend.Close()
+			}
+			return nil, err
+		}
+		return result.backend, result.err
+	}
+}
+
+type backendCreateResult struct {
+	backend Backend
+	err     error
+}
+
+// transferBackendCreateResult is the ownership linearization point for a
+// completed legacy create. An unbuffered transfer gives the Backend to exactly
+// one live receiver; if cancellation wins instead, the producer remains its
+// owner and destroys it before releasing the shared create slot.
+func transferBackendCreateResult(
+	ctx context.Context,
+	resultC chan<- backendCreateResult,
+	result backendCreateResult,
+) {
+	select {
+	case resultC <- result:
+	case <-ctx.Done():
+		if result.backend != nil {
+			result.backend.Close()
+		}
+	}
 }
 
 type stream struct {
@@ -1571,10 +1677,6 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if _, ok := ctx.Deadline(); !ok {
 		panic("deadline not set in context")
 	}
-	f := s.newFutureFunc()
-	f.ref()
-	defer f.Close()
-
 	s.mu.RLock()
 	if s.mu.closed || s.mu.terminal {
 		s.mu.RUnlock()
@@ -1582,6 +1684,8 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 		return moerr.NewStreamClosedNoCtx()
 	}
 
+	f := s.newFutureFunc()
+	defer f.Close()
 	err := s.doSendLocked(ctx, f, request)
 	// unlock before future.close to avoid deadlock with future.Close
 	// 1. current goroutine:        stream.RLock
@@ -1609,8 +1713,14 @@ func (s *stream) doSendLocked(
 		stream:         true,
 		streamSequence: s.sequence,
 	})
-
-	return s.sendFunc(f)
+	f.ref()
+	err := s.sendFunc(f)
+	if err != nil {
+		// The Future never entered the backend write queue, so complete the
+		// writer ownership locally before Close returns it to the pool.
+		f.messageSent(err)
+	}
+	return err
 }
 
 func (s *stream) Receive() (chan Message, error) {

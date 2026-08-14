@@ -55,7 +55,8 @@ func AddColumn(
 	if err != nil {
 		return false, err
 	}
-	if err = applyColumnAttributesToType(ctx.GetContext(), &colType, specNewColumn.Attributes); err != nil {
+	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
+	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -192,6 +193,8 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCharset, *tree.AttributeCollate:
+			// Type metadata was resolved centrally before constructing the column.
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -329,7 +332,6 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 	if uniKey.IndexOption != nil {
 		indexDef.Comment = uniKey.IndexOption.Comment
 	}
-	setIndexDefVisibility(indexDef, uniKey.IndexOption)
 	return indexDef, nil
 }
 

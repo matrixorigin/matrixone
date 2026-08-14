@@ -94,6 +94,21 @@ func EncodeGroupConcatOrderedConfig(config []byte, maxLen uint64) []byte {
 	return runtimeConfig
 }
 
+// HasGroupConcatOrder reports whether a GROUP_CONCAT_ORDER configuration
+// contains at least one real ORDER BY argument. The aggregate config is
+// carried in two forms: the plan payload starts with the version byte, while
+// the execution payload may be prefixed by the runtime max-length header.
+// Invalid payloads are treated as unordered so callers fail closed when
+// deciding whether generic DISTINCT spill is safe.
+func HasGroupConcatOrder(config []byte) bool {
+	if len(config) >= groupConcatOrderedConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
+		config = config[groupConcatOrderedConfigHeaderSize:]
+	}
+	_, orderArgIndexes, _, _, _, err := decodeGroupConcatOrderConfig(config)
+	return err == nil && len(orderArgIndexes) > 0
+}
+
 func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
 	if len(config) >= groupConcatOrderedConfigHeaderSize &&
 		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
@@ -113,7 +128,9 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 			return types.T_blob.ToType()
 		}
 	}
-	return types.T_text.ToType()
+	result := types.T_text.ToType()
+	result.Charset = types.MergeStringCharset(args, result.Charset)
+	return result
 }
 
 func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) AggFuncExec {

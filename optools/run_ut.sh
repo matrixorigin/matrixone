@@ -89,6 +89,25 @@ function logger(){
     logger_base "$level" "$msg" "$log"
 }
 
+function report_active_ut_cases(){
+    if [[ ! -s "${UT_REPORT}" ]]; then
+        logger "ERR" "No Go test JSON is available to identify active UT cases"
+        return 0
+    fi
+
+    logger "ERR" "Active or incomplete UT cases from ${UT_REPORT}:"
+    awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${UT_REPORT}" |
+        LC_ALL=C sort |
+        sed 's/^/[active_ut_cases] /'
+}
+
+function handle_ut_termination(){
+    trap - TERM
+    logger "ERR" "UT runner received SIGTERM; reporting work without terminal Go test events"
+    report_active_ut_cases
+    exit 143
+}
+
 function run_vet(){
     cd $BUILD_WKSP
     horiz_rule
@@ -324,6 +343,7 @@ function run_tests(){
     # a report-parser failure can never replace the authoritative test result.
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
+        report_active_ut_cases
     fi
 
     # The caller must continue into ut_summary even when go test failed.
@@ -379,6 +399,7 @@ if [[ 'SCA' == $TEST_TYPE ]]; then
     horiz_rule
     run_vet
 elif [[ 'UT' == $TEST_TYPE ]]; then
+    trap handle_ut_termination TERM
     horiz_rule
     echo "# Running UT"
     horiz_rule

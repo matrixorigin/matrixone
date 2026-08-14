@@ -28,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
@@ -127,6 +129,27 @@ func (ctr *container) configureOrderedAggSpill(
 				return spillFS.CreateAndRemoveFile(
 					proc.Ctx,
 					fmt.Sprintf("group_concat_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows, retainedMemory int64) {
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
+			},
+		)
+		aggexec.ConfigureOrderedPercentileSpill(
+			agg,
+			ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("ordered_percentile_run_%s", id.String()),
 				)
 			},
 			func(bytes, rows, retainedMemory int64) {
@@ -482,6 +505,8 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			}
 			prepareParamKinds := make([][]vector.PrepareParamKind, len(ctr.aggList))
 			prepareParamKindSummaries := make([]prepareParamKindSummary, len(ctr.aggList))
+			var binaryStringRows [][]bool
+			var binaryStringSummaries []bool
 			hasPrepareParamKinds := false
 			for j, ag := range ctr.aggList {
 				if err := ag.SaveIntermediateResult(cnt, fullFlags, buf); err != nil {
@@ -493,11 +518,22 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 					prepareParamKindSummaries[j].kind, prepareParamKindSummaries[j].seen =
 						accessor.PrepareParamKindSummaryForSelection(fullFlags)
 					hasPrepareParamKinds = hasPrepareParamKinds || prepareParamKindSummaries[j].seen
+					rows := accessor.BinaryStringRowsForSelection(fullFlags)
+					summary := accessor.BinaryStringSummaryForSelection(fullFlags)
+					if len(rows) != 0 || summary {
+						if binaryStringRows == nil {
+							binaryStringRows = make([][]bool, len(ctr.aggList))
+							binaryStringSummaries = make([]bool, len(ctr.aggList))
+						}
+						binaryStringRows[j], binaryStringSummaries[j] = rows, summary
+						hasPrepareParamKinds = true
+					}
 				}
 			}
 			if hasPrepareParamKinds {
 				if err := writePrepareParamKindTrailer(proc.Ctx, buf, ctr.aggExprs,
-					&ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+					&ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries,
+					binaryStringRows, binaryStringSummaries); err != nil {
 					return 0, 0, err
 				}
 			}
@@ -741,8 +777,8 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					expectedRows[i] = accessor.PrepareParamKindRowCountFlat()
 				}
 			}
-			prepareParamKinds, prepareParamKindSummaries, err := readPrepareParamKindTrailer(proc.Ctx, bufferedFile,
-				int32(len(ctr.spillAggList)), &spillPrepareParamKind, expectedRows)
+			prepareParamKinds, prepareParamKindSummaries, binaryStringRows, binaryStringSummaries, err := readPrepareParamKindTrailer(proc.Ctx, bufferedFile,
+				int32(len(ctr.spillAggList)), &spillPrepareParamKind, expectedRows, true)
 			if err != nil {
 				return false, err
 			}
@@ -750,12 +786,12 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if i >= len(aggExprs) || !aggExprs[i].PreservesFirstArgPrepareParamKind() {
 					continue
 				}
+				accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor)
+				if !ok {
+					return false, moerr.NewInternalErrorNoCtx(
+						"aggregate spill state cannot restore provenance")
+				}
 				if i < len(prepareParamKinds) && len(prepareParamKinds[i]) != 0 {
-					accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor)
-					if !ok {
-						return false, moerr.NewInternalErrorNoCtx(
-							"aggregate spill state cannot restore prepared parameter rows")
-					}
 					if err := accessor.RestorePrepareParamKindsFlat(
 						prepareParamKinds[i], ctr.mp); err != nil {
 						return false, err
@@ -766,6 +802,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					if i < len(prepareParamKindSummaries) && prepareParamKindSummaries[i].seen {
 						setter.SetPrepareParamKind(prepareParamKindSummaries[i].kind)
 					}
+				}
+				if i < len(binaryStringRows) && len(binaryStringRows[i]) != 0 {
+					if err := accessor.RestoreBinaryStringRowsFlat(binaryStringRows[i], ctr.mp); err != nil {
+						return false, err
+					}
+				} else if i < len(binaryStringSummaries) {
+					accessor.SetBinaryStringSummary(binaryStringSummaries[i])
 				}
 			}
 		}
@@ -975,9 +1018,17 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 	for i, agExpr := range aggExprs {
 		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
 		for j, arg := range agExpr.GetArgExpressions() {
-			typs[j] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+			typs[j] = types.NewWithCharset(
+				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+			)
 		}
-		aggList[i], err = aggexec.MakeAgg(ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		if ctr.legacyTextMinMax {
+			aggList[i], err = aggexec.MakeAggWithLegacyTextMinMax(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		} else {
+			aggList[i], err = aggexec.MakeAgg(
+				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), typs...)
+		}
 		if err != nil {
 			freeAggListPartial(aggList, i)
 			return nil, err
@@ -1002,6 +1053,20 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 		}
 	}
 	return aggList, nil
+}
+
+func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion14
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

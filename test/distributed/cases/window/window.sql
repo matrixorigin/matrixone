@@ -1138,12 +1138,8 @@ select count(*) from td;
 -- @bvt:issue#13008
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
 -- @bvt:issue
--- @bvt:issue#23427
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
--- @bvt:issue
--- @bvt:issue#23427
 select d,min(d) over (partition by d%7 order by d rows  between 2 preceding and 1 following) from td limit 10;
--- @bvt:issue
 drop table td;
 
 drop table if exists `c`;
@@ -1734,6 +1730,16 @@ from t_desc order by k desc, id;
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
 from t_desc order by k desc, id;
+
+-- Regression for issue #23107: a very large finite PRECEDING bound covers the
+-- partition and must use the cumulative window path.
+create table t_window_23107(id int);
+insert into t_window_23107 values (1), (2), (3), (4), (5), (6),
+  (7), (8), (9), (10), (11), (12);
+select id,
+       sum(id) over (order by id rows between 2147483647 preceding and current row) as running_sum
+from t_window_23107 limit 10;
+drop table t_window_23107;
 
 drop table t_desc;
 drop database test_range_desc;

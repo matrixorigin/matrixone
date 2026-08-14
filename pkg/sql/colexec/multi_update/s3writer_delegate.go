@@ -193,6 +193,12 @@ func newS3Writer(
 	return writer, nil
 }
 
+func (writer *s3WriterDelegate) refreshSelectorState(update *MultiUpdate) {
+	writer.seenTargetRows = update.ctr.seenTargetRows
+	writer.admitSeenGrowth = update.admitSeenTargetRowsGrowth
+	writer.addAffectedRows = update.addAffectedRowsFunc
+}
+
 func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
 	hasInsert := false
 	hasDelete := false

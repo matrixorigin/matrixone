@@ -47,7 +47,7 @@ func updateCtxKey(ctx *MultiUpdateCtx) string {
 		)
 	}
 	if ctx.TableDef != nil {
-		return fmt.Sprintf("%s/%s/%d", ctx.TableDef.DbName, ctx.TableDef.Name, ctx.TableDef.TblId)
+		return fmt.Sprintf("%s/%s/%d", ctx.TableDef.DbName, ctx.TableDef.Name, tableID)
 	}
 	return ""
 }
