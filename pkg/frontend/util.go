@@ -1712,7 +1712,7 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		// text OID; clients must not attempt UTF-8 conversion on the payload.
 		col.SetCharset(charsetBinary)
 	}
-	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
+	if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
@@ -1740,6 +1740,11 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		// Binary string widths are already declared in bytes.
 		col.SetLength(mysqlStringColumnLength(typ.Width, 1))
+	} else if typ.Oid == types.T_blob {
+		// MatrixOne's BLOB OID represents the MySQL BLOB family. Report the
+		// regular BLOB byte capacity so clients do not infer TINYBLOB from the
+		// engine's unspecified width marker.
+		col.SetLength(math.MaxUint16)
 	} else {
 		setColLength(col, typ.Width)
 	}

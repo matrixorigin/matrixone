@@ -1957,6 +1957,78 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	}
 }
 
+func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
+	mock := plan.NewMockOptimizer(false)
+	queryPlan, err := buildSingleSql(mock, t,
+		"select partition_info, rel_createsql, relname from mo_catalog.mo_tables")
+	require.NoError(t, err)
+
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 3)
+
+	want := []struct {
+		name      string
+		oid       types.T
+		mysqlType defines.MysqlType
+		charset   uint16
+		binary    bool
+		length    uint32
+		checkLen  bool
+	}{
+		{
+			name:      "partition_info",
+			oid:       types.T_blob,
+			mysqlType: defines.MYSQL_TYPE_BLOB,
+			charset:   charsetBinary,
+			binary:    true,
+			length:    math.MaxUint16,
+			checkLen:  true,
+		},
+		{name: "rel_createsql", oid: types.T_text, mysqlType: defines.MYSQL_TYPE_BLOB, charset: charsetVarchar},
+		{name: "relname", oid: types.T_varchar, mysqlType: defines.MYSQL_TYPE_VAR_STRING, charset: charsetVarchar},
+	}
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	for i, expected := range want {
+		column := columns[i]
+		require.Equal(t, expected.name, column.Name)
+		require.Equal(t, int32(expected.oid), column.Typ.Id)
+
+		mysqlColumn, err := colDef2MysqlColumn(context.Background(), column)
+		require.NoError(t, err)
+		require.Equal(t, expected.mysqlType, mysqlColumn.ColumnType())
+		require.Equal(t, expected.charset, mysqlColumn.Charset())
+		require.Equal(t, expected.binary, mysqlColumn.Flag()&uint16(defines.BINARY_FLAG) != 0)
+		if expected.checkLen {
+			require.Equal(t, expected.length, mysqlColumn.Length())
+		}
+
+		packet := proto.makeColumnDefinition41Payload(mysqlColumn, int(COM_QUERY))
+		pos := HeaderOffset
+		for range 6 {
+			_, next, ok := proto.readStringLenEnc(packet, pos)
+			require.True(t, ok)
+			pos = next
+		}
+		_, pos, ok := proto.io.ReadUint8(packet, pos)
+		require.True(t, ok)
+		packetCharset, pos, ok := proto.io.ReadUint16(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, expected.charset, packetCharset)
+		packetLength, pos, ok := proto.io.ReadUint32(packet, pos)
+		require.True(t, ok)
+		if expected.checkLen {
+			require.Equal(t, expected.length, packetLength)
+		}
+		packetType, pos, ok := proto.io.ReadUint8(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, uint8(expected.mysqlType), packetType)
+		packetFlags, _, ok := proto.io.ReadUint16(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, expected.binary, packetFlags&uint16(defines.BINARY_FLAG) != 0)
+	}
+}
+
 func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string
