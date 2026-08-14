@@ -887,8 +887,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 show tables;
@@ -968,8 +968,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;
@@ -1043,8 +1043,8 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
-v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
 ➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;

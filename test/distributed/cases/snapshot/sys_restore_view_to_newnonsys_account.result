@@ -19,8 +19,8 @@ count(*)
 drop view if exists v01;
 create view v01 as select * from table01;
 show create view v01;
-View    Create View    character_set_client    collation_connection
-v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `table01`.`col1`, `table01`.`col2`, `table01`.`col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database
@@ -75,8 +75,8 @@ SQL parser error: table "v03" does not exist
 restore account acc01{snapshot="sp100"} to account acc02;
 use test;
 show create view v01;
-View    Create View    character_set_client    collation_connection
-v01    create view v01 as select * from table01;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `table01`.`col1`, `table01`.`col2`, `table01`.`col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database
@@ -610,11 +610,11 @@ drop database test02;
 restore account acc01{snapshot="sp10"} to account acc02;
 use test02;
 show create view employees_view;
-View    Create View    character_set_client    collation_connection
-employees_view    create view employees_view AS SELECT * FROM employees;    utf8mb4    utf8mb4_general_ci
+➤ View[12,10,0]  ¦  Create View[12,123,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+employees_view  ¦  create view `employees_view` as select `employees`.`id`, `employees`.`name`, `employees`.`department`, `employees`.`salary`, `employees`.`hire_date` from `employees`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show create view it_employees_view;
-View    Create View    character_set_client    collation_connection
-it_employees_view    create view it_employees_view AS SELECT * FROM employees WHERE department = 'IT';    utf8mb4    utf8mb4_general_ci
+➤ View[12,12,0]  ¦  Create View[12,154,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+it_employees_view  ¦  create view `it_employees_view` as select `employees`.`id`, `employees`.`name`, `employees`.`department`, `employees`.`salary`, `employees`.`hire_date` from `employees` where `employees`.`department` = 'IT'  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show create view employees_by_department_view;
 View    Create View    character_set_client    collation_connection
 employees_by_department_view    create view employees_by_department_view AS\nselect name, department\nfrom employees\norder by department;    utf8mb4    utf8mb4_general_ci
