@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,6 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func newAutoIncrementAlterOptimizer() *MockOptimizer {
@@ -631,6 +635,130 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["t1"]
+	tableDef.TblId = 272464
+	tableDef.Indexes = []*plan.IndexDef{
+		{
+			IndexName:      "idx_visible",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_index_idx_visible",
+			TableExist:     true,
+			// Legacy default-visible IndexDefs carry the false proto3 zero value.
+			Visible: false,
+		},
+		{
+			IndexName:      "idx_invisible",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_index_idx_invisible",
+			TableExist:     true,
+			Visible:        false,
+		},
+	}
+
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464",
+				sql,
+			)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(2)
+			require.NoError(t, executor.AppendStringRows(result, 0,
+				[]string{"idx_visible", "idx_invisible"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		"ALTER TABLE t1 ADD COLUMN added_col INT")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Len(t, alter.CopyTableDef.Indexes, 2)
+	require.True(t, alter.CopyTableDef.Indexes[0].Visible)
+	require.False(t, alter.CopyTableDef.Indexes[1].Visible)
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `idx_visible` (`b`) INVISIBLE")
+	require.Contains(t, alter.CreateTmpTableSql, "KEY `idx_invisible` (`b`) INVISIBLE")
+}
+
+func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	lookupErr := moerr.NewInternalErrorNoCtx("index visibility lookup failed")
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, lookupErr
+		}),
+	)
+
+	err := reconcileIndexVisibility(&mock.ctxt, 272464, &TableDef{
+		Indexes: []*plan.IndexDef{{IndexName: "idx_a"}},
+	}, nil)
+	require.ErrorIs(t, err, lookupErr)
+}
+
+func TestReconcileIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			return result.GetResult(), nil
+		}),
+	)
+
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_missing"}}}
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil))
+	require.True(t, tableDef.Indexes[0].Visible)
+}
+
+func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{
+		{
+			IndexName:  "uk_b",
+			Parts:      []string{"b"},
+			Unique:     true,
+			TableExist: true,
+		},
+		{
+			IndexName:  "idx_b",
+			Parts:      []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		},
+	}
+
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 DROP COLUMN b")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Empty(t, alter.CopyTableDef.Indexes)
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `uk_b`")
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `idx_b`")
 }
 
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {

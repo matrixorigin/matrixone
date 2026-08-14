@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -819,6 +820,72 @@ func TestScopeCreateTemporaryTableRollsBackAliasAfterLateFailure(t *testing.T) {
 	require.Error(t, s.CreateTable(c))
 	_, exists := session.GetTempTable("test", "temporary_table")
 	require.False(t, exists)
+}
+
+func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
+	newClonePlan := func() *plan2.CloneTable {
+		createTable := &plan2.CreateTable{
+			Database: "test", Temporary: true,
+			TableDef: &plan2.TableDef{Name: "temporary_table"},
+		}
+		createPlan := &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateTable{CreateTable: createTable},
+		}}}
+		return &plan2.CloneTable{
+			CreateTable: createPlan, DstDatabaseName: "test", DstTableName: "temporary_table",
+		}
+	}
+
+	tests := []struct {
+		name    string
+		setup   func(*process.Process, *stubEngine)
+		wantErr string
+	}{
+		{
+			name:    "session is required",
+			setup:   func(*process.Process, *stubEngine) {},
+			wantErr: "session not found for temporary table clone",
+		},
+		{
+			name: "alias must be registered",
+			setup: func(proc *process.Process, _ *stubEngine) {
+				proc.Session = &trackingTempTableSession{tables: make(map[string]string)}
+			},
+			wantErr: "temporary table clone destination test.temporary_table is not registered",
+		},
+		{
+			name: "database lookup error is preserved",
+			setup: func(proc *process.Process, eng *stubEngine) {
+				session := &trackingTempTableSession{tables: make(map[string]string)}
+				session.AddTempTable("test", "temporary_table", "physical_temporary_table")
+				proc.Session = session
+				eng.dbErr = errors.New("database lookup failed")
+			},
+			wantErr: "database lookup failed",
+		},
+		{
+			name: "physical relation must exist",
+			setup: func(proc *process.Process, eng *stubEngine) {
+				session := &trackingTempTableSession{tables: make(map[string]string)}
+				session.AddTempTable("test", "temporary_table", "physical_temporary_table")
+				proc.Session = session
+				eng.dbs["test"] = newStubDatabase("test")
+			},
+			wantErr: "no such table test.physical_temporary_table",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			eng := newStubEngine()
+			test.setup(proc, eng)
+			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
+
+			err := (&Scope{}).RestoreTable(c, newClonePlan())
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestScope_CreateView(t *testing.T) {
