@@ -1,15 +1,18 @@
 # Nightly-refreshed CI builder image: a Go toolchain with every PR-invariant
-# build input prebuilt — the Go module cache, the Go build cache warmed by a
-# full -cover build of the default branch, and the compiled C thirdparties.
-# PR CI mounts its checkout into this image and runs make build: only packages
-# that changed since the nightly refresh recompile, and go build incrementally
+# build input prebuilt — the Go module cache, the Go build caches warmed in
+# the flavors PR CI compiles, and the compiled C thirdparties. PR CI mounts
+# its checkout into this image and runs make build: only packages that
+# changed since the nightly refresh recompile, and go build incrementally
 # downloads any modules newer than the baked cache, so a stale image only
 # costs speed, never correctness.
 #
+# amd64 only: it serves the shared BVT build (matrixorigin/CI build-mo.yaml)
+# and the UT/coverage-UT cache seeds. The arm64 SCA job has its own
+# actions/cache pipeline (see .github/workflows/sca-go-module-cache.yaml).
+#
 # Refreshed by the nightly image workflow (matrixorigin/CI image-build.yaml,
-# ci-builder job) as matrixorigin/matrixone:ci-builder and consumed by
-# matrixorigin/CI build-mo.yaml. Keep the base image in sync with
-# optools/images/Dockerfile.
+# ci-builder job) as matrixorigin/matrixone:ci-builder. Keep the base image
+# in sync with optools/images/Dockerfile.
 FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS warm
 
 ENV GOWORK=off
@@ -35,19 +38,9 @@ COPY . .
 # instead of silently paying cold compiles.
 RUN mkdir -p /mo-prebuilt && touch /mo-prebuilt/warm-status
 
-# The two published architectures warm different flavors, matching what PR
-# CI compiles on each: amd64 runs the BVT build and both UT jobs, arm64
-# runs the SCA job (go vet + golangci-lint over the full tree).
-ARG TARGETARCH
-
-# amd64: warm with the -cover flavor — it is the flavor PR CI builds, and
-# coverage instrumentation changes the compiled objects.
-# arm64: warm the plain build the SCA compile path keys on.
-RUN if [ "${TARGETARCH}" = "arm64" ]; then \
-      make build; \
-    else \
-      make build GOBUILD_OPT=-cover; \
-    fi
+# Warm with the -cover flavor: it is the flavor PR CI builds, and coverage
+# instrumentation changes the compiled objects.
+RUN make build GOBUILD_OPT=-cover
 
 # Warm the UT compile flavors without running any test: -exec /bin/true
 # replaces test-binary execution and -vet=off keeps vet findings out of the
@@ -58,50 +51,30 @@ RUN if [ "${TARGETARCH}" = "arm64" ]; then \
 # partial warm still speeds PR CI up, and PR CI never depends on these
 # layers for correctness.
 #
-# Flavor 1 (amd64): race + matrixone_test, as optools/run_ut.sh compiles for
-# the UT job in ci.yaml.
-RUN if [ "${TARGETARCH}" != "arm64" ]; then \
-      if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-        CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
-        go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./...; then \
-        echo "warm-race=ok" >> /mo-prebuilt/warm-status; \
-      else \
-        echo "warm-race=FAILED" >> /mo-prebuilt/warm-status; \
-        echo "WARNING: race UT warm incomplete; PR CI will compile the misses"; \
-      fi; \
+# Flavor 1: race + matrixone_test, as optools/run_ut.sh compiles for the UT
+# job in ci.yaml.
+RUN if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+      go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./...; then \
+      echo "warm-race=ok" >> /mo-prebuilt/warm-status; \
+    else \
+      echo "warm-race=FAILED" >> /mo-prebuilt/warm-status; \
+      echo "WARNING: race UT warm incomplete; PR CI will compile the misses"; \
     fi
 
-# Flavor 2 (amd64): covermode=set with the full coverpkg list, exactly as
+# Flavor 2: covermode=set with the full coverpkg list, exactly as
 # coverage-ut.yaml compiles (the coverpkg value is part of the compile key,
 # so the package-list filter must match that workflow verbatim).
-RUN if [ "${TARGETARCH}" != "arm64" ]; then \
-      if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
-        cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
-        CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
-        CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
-        go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
-          -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope}; then \
-        echo "warm-coverage=ok" >> /mo-prebuilt/warm-status; \
-      else \
-        echo "warm-coverage=FAILED" >> /mo-prebuilt/warm-status; \
-        echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
-      fi; \
-    fi
-
-# Flavor 3 (arm64): the full static-check pass the SCA job runs. This warms
-# the plain compile of every package plus vet facts in the Go build cache,
-# and golangci-lint's own analysis cache (its pinned version comes from
-# make install-static-check-tools, matching what the SCA runner installs).
-# The empty golangci-lint cache dir must exist on amd64 too so the final
-# stage can COPY it unconditionally.
-RUN mkdir -p /root/.cache/golangci-lint && \
-    if [ "${TARGETARCH}" = "arm64" ]; then \
-      if make install-static-check-tools && make static-check; then \
-        echo "warm-static-check=ok" >> /mo-prebuilt/warm-status; \
-      else \
-        echo "warm-static-check=FAILED" >> /mo-prebuilt/warm-status; \
-        echo "WARNING: static-check warm incomplete; PR CI will compile the misses"; \
-      fi; \
+RUN if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
+      cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
+      CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+      go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
+        -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope}; then \
+      echo "warm-coverage=ok" >> /mo-prebuilt/warm-status; \
+    else \
+      echo "warm-coverage=FAILED" >> /mo-prebuilt/warm-status; \
+      echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
     fi
 
 # Fingerprint the native inputs the prebuilt thirdparties were produced
@@ -126,12 +99,10 @@ ENV GOWORK=off
 ENV GOFLAGS=-modcacherw
 
 ARG GOPROXY="https://proxy.golang.org,direct"
-RUN go env -w GOPROXY=${GOPROXY}
+ENV GOPROXY=${GOPROXY}
 
 COPY --from=warm /go/pkg/mod /go/pkg/mod
 COPY --from=warm /root/.cache/go-build /root/.cache/go-build
-# golangci-lint analysis cache for the arm64 SCA seed (empty on amd64).
-COPY --from=warm /root/.cache/golangci-lint /root/.cache/golangci-lint
 # Seeded into the PR tree before make build; the prerequisite-less file
 # targets in thirdparties/Makefile then treat the C libraries as up to date.
 # Consumers must verify thirdparties.fingerprint matches their checkout
