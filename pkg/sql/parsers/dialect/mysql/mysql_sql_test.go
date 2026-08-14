@@ -815,6 +815,31 @@ func TestCloneTableParsePreservesCloneOptions(t *testing.T) {
 	)
 }
 
+func TestCloneDatabaseParsePreservesIfNotExists(t *testing.T) {
+	stmt, err := ParseOne(
+		context.TODO(),
+		"create database if not exists dst clone src{snapshot = 'sp1'} to account acc",
+		1,
+	)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	cloneStmt, ok := stmt.(*tree.CloneDatabase)
+	require.True(t, ok)
+	require.True(t, cloneStmt.IfNotExists)
+	require.Equal(t, tree.Identifier("dst"), cloneStmt.DstDatabase)
+	require.Equal(t, tree.Identifier("src"), cloneStmt.SrcDatabase)
+	require.NotNil(t, cloneStmt.AtTsExpr)
+	require.NotNil(t, cloneStmt.ToAccountOpt)
+	require.Equal(t, tree.Identifier("acc"), cloneStmt.ToAccountOpt.AccountName)
+
+	require.Equal(
+		t,
+		"create database if not exists `dst` clone `src`{snapshot = 'sp1'} to account `acc`",
+		tree.StringWithOpts(cloneStmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString()),
+	)
+}
+
 func TestCloneTableParseCopyGrantsWithoutToAccount(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),

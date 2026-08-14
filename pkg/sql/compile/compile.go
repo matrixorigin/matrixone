@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -4986,10 +4987,32 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
+	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+		currentFirstFlag := c.anal.isFirst
+		for i := range ss {
+			op := constructPartition(node)
+			op.PreReduce = true
+			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+			ss[i].setRootOperator(op)
+		}
+		c.anal.isFirst = false
+
+		rs := c.newMergeScope(ss)
+		arg := constructPartition(node)
+		arg.PreReduce = true
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		//c.anal.isFirst = currentFirstFlag
 		op := constructOrder(node)
+		if node.PartitionByCount > 0 {
+			op.OrderBySpec = node.OrderBy[:node.PartitionByCount]
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -4999,6 +5022,11 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 
 	currentFirstFlag = c.anal.isFirst
 	arg := constructPartition(node)
+	if node.PartitionByCount > 0 {
+		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
+		arg.Limit = nil
+		arg.PartitionByCount = 0
+	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -5131,10 +5159,20 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
+	partitionTopN := len(ss) == 1
+	if partitionTopN {
+		upstreamOp := ss[0].RootOp
+		for upstreamOp.OpType() == vm.Projection && upstreamOp.GetOperatorBase().NumChildren() == 1 {
+			upstreamOp = upstreamOp.GetOperatorBase().GetChildren(0)
+		}
+		upstream, ok := upstreamOp.(*partition.Partition)
+		partitionTopN = ok && upstream.Limit != nil && upstream.PreReduce
+	}
 	rs := c.newMergeScope(ss)
 
 	currentFirstFlag := c.anal.isFirst
 	arg := constructWindow(c.proc.Ctx, node, c.proc)
+	arg.PartitionTopN = partitionTopN
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
 	c.anal.isFirst = false
@@ -5435,6 +5473,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func (c *Compile) supportsRemotePartitionTopN() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
 func supportsRemoteTextCollationAggregates(service string) bool {
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -5443,6 +5491,19 @@ func supportsRemoteTextCollationAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion14
+}
+
+func supportsRemoteTargetAwareUpdate(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion20
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
