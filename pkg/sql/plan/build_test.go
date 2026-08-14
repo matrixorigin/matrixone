@@ -1931,6 +1931,26 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 			    HAVING n_nationkey >= nation.n_regionkey
 			))`,
 		`
+			SELECT n_nationkey,
+			       MAX(EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) >= nation.n_regionkey
+			       ))
+			FROM nation
+			GROUP BY n_nationkey`,
+		`
+			SELECT n_nationkey
+			FROM nation
+			GROUP BY n_nationkey
+			HAVING MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))`,
+		`
 			SELECT SUM(n_nationkey),
 			       EXISTS (
 			           SELECT n_name
@@ -1940,6 +1960,25 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 			       )
 			FROM nation
 			WHERE n_regionkey = 1`,
+		`
+			SELECT MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))
+			FROM nation
+			WHERE n_regionkey = 1`,
+		`
+			SELECT 1
+			FROM nation
+			WHERE n_regionkey = 1
+			HAVING MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))`,
 	}
 
 	for _, sql := range sqls {

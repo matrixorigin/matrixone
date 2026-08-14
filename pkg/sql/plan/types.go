@@ -604,6 +604,9 @@ type BindContext struct {
 	// ONLY_FULL_GROUP_BY correlation checks.
 	pendingAggregateQuery bool
 
+	// timeBoundaryType is the public type for _wstart/_wend. It is filled once
+	// the time-window grouping key is bound, before the SELECT projection binds
+	// boundary column references.
 	timeBoundaryType *plan.Type
 
 	groupByAst          map[string]int32
@@ -753,6 +756,7 @@ type baseBinder struct {
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
 	subqueryInAggregateInput         bool
+	aggregateInputCorrelation        bool
 }
 
 type boundColumn struct {

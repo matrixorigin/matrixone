@@ -614,6 +614,12 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
+	if b.ctx.aggregateInputParent != nil && parent == b.ctx.aggregateInputParent {
+		if targetBinder, ok := parent.binder.(interface{ setAggregateInputCorrelation(bool) bool }); ok {
+			previousAggregateInputCorrelation := targetBinder.setAggregateInputCorrelation(true)
+			defer targetBinder.setAggregateInputCorrelation(previousAggregateInputCorrelation)
+		}
+	}
 	expr, err = parent.binder.BindColRef(astExpr, depth+1, isRoot)
 
 	if err == nil {
@@ -640,6 +646,9 @@ func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col st
 
 func (b *baseBinder) correlatedFullGroupByAggregateRef(relPos, colPos int32, col string, typ *plan.Type) (int32, int32, bool) {
 	if b == nil || b.ctx == nil || b.builder == nil || typ == nil || !b.builder.mysqlFullGroupByCompat {
+		return 0, 0, false
+	}
+	if b.aggregateInputCorrelation {
 		return 0, 0, false
 	}
 	if !b.ctx.aggregateQueryForFullGroupBy() {
@@ -670,6 +679,12 @@ func (b *baseBinder) correlatedFullGroupByAggregateRef(relPos, colPos int32, col
 	aggPos := int32(len(b.ctx.aggregates))
 	b.ctx.aggregates = append(b.ctx.aggregates, agg)
 	return b.ctx.aggregateTag, aggPos, true
+}
+
+func (b *baseBinder) setAggregateInputCorrelation(v bool) bool {
+	previous := b.aggregateInputCorrelation
+	b.aggregateInputCorrelation = v
+	return previous
 }
 
 func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
@@ -3629,12 +3644,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		sourceType := makeTypeByPlan2Expr(args[0])
-		targetType := types.T_datetime.ToType()
-		function.SetTargetScaleFromSource(&sourceType, &targetType)
-		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
-		if err != nil {
-			return nil, err
+		if types.T(args[0].Typ.Id) == types.T_timestamp {
+			if timeWindowIntervalUsesMicrosecond(args[1]) && args[0].Typ.Scale < 6 {
+				args[0].Typ.Scale = 6
+			}
+		} else {
+			sourceType := makeTypeByPlan2Expr(args[0])
+			targetType := types.T_datetime.ToType()
+			function.SetTargetScaleFromSource(&sourceType, &targetType)
+			if timeWindowIntervalUsesMicrosecond(args[1]) && targetType.Scale < 6 {
+				targetType.Scale = 6
+			}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
 		}
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
@@ -4491,6 +4515,19 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {
+	list := expr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	lit := list.List[1].GetLit()
+	if lit == nil {
+		return false
+	}
+	unit, err := types.IntervalTypeOf(lit.GetSval())
+	return err == nil && unit == types.MicroSecond
 }
 
 func controlFlowValueIndexes(name string, argsLength int) []int {
