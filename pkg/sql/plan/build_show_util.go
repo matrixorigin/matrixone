@@ -43,12 +43,10 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	if ctx != nil && tableDef != nil && tableDef.TblId != 0 {
-		tableDef = DeepCopyTableDef(tableDef, true)
-		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-			return "", nil, err
-		}
-	}
+	// This formatter is also used by context-free consumers that do not own a
+	// source catalog snapshot (CDC, publication, and dump).  Keep it limited to
+	// rendering the supplied definition; planner entry points that resolve a
+	// local source table reconcile its visibility before calling here.
 	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
 }
 

@@ -162,9 +162,9 @@ func reconcileIndexVisibility(
 			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
 		}
 	}
-	if catalog.IsSystemTable(tableID) {
-		// Bootstrap catalog indexes are fixed-visible schema and intentionally
-		// have no mo_indexes rows. Their absence is not incomplete metadata.
+	if catalog.IsSystemTable(tableID) || isSystemDatabase(tableDef.DbName) {
+		// System schemas are fixed-visible bootstrap metadata and intentionally
+		// have no mo_indexes rows. Their absence is not incomplete user metadata.
 		for _, indexDef := range tableDef.Indexes {
 			catalog.SetIndexVisibility(indexDef, true)
 		}
@@ -224,6 +224,10 @@ func reconcileIndexVisibility(
 		catalog.SetIndexVisibility(indexDef, resolvedVisibility[i])
 	}
 	return nil
+}
+
+func isSystemDatabase(dbName string) bool {
+	return slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName))
 }
 
 func autoIncrementValueToOffset(value uint64) uint64 {

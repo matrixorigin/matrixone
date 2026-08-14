@@ -305,6 +305,10 @@ func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *tes
 	)`)
 	require.NoError(t, err)
 	require.NotEmpty(t, tableDef.Indexes)
+	// A formatter caller can have a table ID but still lack ownership of its
+	// source catalog (for example, a subscription or dump). It must not issue a
+	// local mo_indexes lookup merely because a compiler context was supplied.
+	tableDef.TblId = 272466
 
 	// A pre-upgrade default-visible IndexDef has the same false proto3 value as
 	// an explicitly invisible index. Public reconstruction callers cannot tell

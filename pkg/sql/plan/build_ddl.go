@@ -1046,11 +1046,18 @@ func buildCreateTable(
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
+		// Resolve and rewrite a private source definition. Resolve can return a
+		// cached TableDef, and the reconstruction below changes its table name.
+		tableDef = DeepCopyTableDef(tableDef, true)
 		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
 		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
-		// the source definition and asks the normal CREATE planner to rebuild it.
-		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-			return nil, err
+		// a local source definition and asks the normal CREATE planner to rebuild
+		// it. A subscription definition belongs to the publisher, whose catalog
+		// is not available through this compiler context.
+		if sub == nil {
+			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+				return nil, err
+			}
 		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {

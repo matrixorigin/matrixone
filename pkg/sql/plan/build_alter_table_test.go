@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -624,7 +625,7 @@ func TestReconcileIndexVisibilityOverridesStaleMarker(t *testing.T) {
 	require.False(t, visible)
 }
 
-func TestConstructCreateTableSQLReconcilesLegacyIndexVisibility(t *testing.T) {
+func TestBuildShowCreateTableReconcilesLegacyIndexVisibility(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
@@ -651,12 +652,39 @@ func TestConstructCreateTableSQLReconcilesLegacyIndexVisibility(t *testing.T) {
 		Parts:     []string{"b"},
 		Visible:   false,
 	}}
+	mock.ctxt.tables["t1"] = tableDef
 
-	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	got, err := buildSingleStmt(mock, t, "SHOW CREATE TABLE t1")
 	require.NoError(t, err)
-	require.Contains(t, got, "KEY `idx_legacy_invisible` (`b`) INVISIBLE")
+	var createSQL string
+	require.True(t, queryContainsExpr(got.GetQuery(), func(expr *plan.Expr) bool {
+		lit, ok := expr.GetLit().GetValue().(*plan.Literal_Sval)
+		if ok && strings.HasPrefix(lit.Sval, "CREATE TABLE") {
+			createSQL = lit.Sval
+			return true
+		}
+		return false
+	}))
+	require.Contains(t, createSQL, "KEY `idx_legacy_invisible` (`b`) INVISIBLE")
 	_, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
 	require.False(t, isSet)
+}
+
+func TestReconcileIndexVisibilityUsesFixedVisibleSystemDatabase(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &TableDef{
+		TblId:  272395,
+		DbName: catalog.MOTaskDB,
+		Indexes: []*plan.IndexDef{{
+			IndexName: "uk_task_name_account",
+			Visible:   false,
+		}},
+	}
+
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, tableDef.TblId, tableDef, nil))
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.True(t, visible)
 }
 
 func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
