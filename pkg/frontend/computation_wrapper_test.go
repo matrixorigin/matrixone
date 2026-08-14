@@ -202,7 +202,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, ses.SetUserDefinedVar("text_param", "text", ""))
 	isBin, err := ses.txnCompileCtx.ResolveVariableIsBin("binary_param", false, false)
 	require.NoError(t, err)
-	require.True(t, isBin)
+	require.False(t, isBin)
 	isBin, err = ses.txnCompileCtx.ResolveVariableIsBin("text_param", false, false)
 	require.NoError(t, err)
 	require.False(t, isBin)
@@ -228,11 +228,13 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 
 	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
-	require.True(t, cw.proc.GetPrepareParamIsBin(0))
+	require.False(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
 	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true, BinaryString: true}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{
+		Value: "AB\x00\x00", BinaryString: true, PrepareParamKind: vector.PrepareParamBinaryUserVariable,
+	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
