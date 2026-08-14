@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,4 +41,27 @@ func TestIndexVisibilityCompatibility(t *testing.T) {
 	require.True(t, isSet)
 	require.True(t, legacy.Visible)
 	require.Equal(t, plan.IndexOption_VISIBILITY_VISIBLE, legacy.Option.Visibility)
+}
+
+func TestMoTablesLogicalIDIndexHasExplicitVisibility(t *testing.T) {
+	defines := NewDefines()
+	constraint := new(engine.ConstraintDef)
+	require.NoError(t, constraint.UnmarshalBinary(defines.MoTableConstraint))
+
+	for _, ct := range constraint.Cts {
+		indexConstraint, ok := ct.(*engine.IndexDef)
+		if !ok {
+			continue
+		}
+		for _, indexDef := range indexConstraint.Indexes {
+			if indexDef.IndexName != "idx_rel_logical_id" {
+				continue
+			}
+			visible, isSet := GetIndexVisibility(indexDef)
+			require.True(t, isSet)
+			require.True(t, visible)
+			return
+		}
+	}
+	require.Fail(t, "idx_rel_logical_id is missing from the mo_tables constraint")
 }

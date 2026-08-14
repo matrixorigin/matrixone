@@ -79,6 +79,16 @@ func resolveLegacyIndexVisibilities(
 	if len(legacyIndexNames) == 0 {
 		return nil, nil
 	}
+	if catalog.IsSystemTable(tableDef.TblId) {
+		// Bootstrap system indexes are fixed-visible schema and intentionally do
+		// not have mo_indexes rows. Their absence is therefore expected rather
+		// than incomplete user-table metadata.
+		visibilityByName := make(map[string]bool, len(legacyIndexNames))
+		for indexName := range legacyIndexNames {
+			visibilityByName[indexName] = true
+		}
+		return visibilityByName, nil
+	}
 
 	resolver, ok := ctx.(indexVisibilityResolver)
 	if !ok {

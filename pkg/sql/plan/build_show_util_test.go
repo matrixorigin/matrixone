@@ -287,6 +287,29 @@ func TestShowCreateTableRejectsIncompleteLegacyIndexVisibility(t *testing.T) {
 	require.ErrorContains(t, err, "missing visibility metadata for index \"idx_a\" on table 43")
 }
 
+func TestShowCreateTableUsesVisibleSystemIndexWithoutCatalogRow(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_mo_tables (
+		id INT PRIMARY KEY,
+		rel_logical_id BIGINT,
+		UNIQUE KEY idx_rel_logical_id(rel_logical_id)
+	)`)
+	require.NoError(t, err)
+	tableDef.TblId = catalog.MO_TABLES_ID
+	tableDef.Indexes[0].Option = nil
+	tableDef.Indexes[0].Visible = false
+
+	resolver := &legacyIndexVisibilityResolver{
+		CompilerContext:  &mock.ctxt,
+		visibilityByName: map[string]bool{},
+	}
+	got, _, err := ConstructCreateTableSQL(resolver, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, resolver.lastTableID)
+	require.Contains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`)")
+	require.NotContains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`) INVISIBLE")
+}
+
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE prefix_show_src (
