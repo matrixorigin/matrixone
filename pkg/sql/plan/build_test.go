@@ -1921,6 +1921,15 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 			    HAVING n_nationkey >= nation.n_regionkey
 			))
 			FROM nation`,
+		`
+			SELECT 1
+			FROM nation
+			HAVING MAX(EXISTS (
+			    SELECT n_nationkey
+			    FROM nation2
+			    GROUP BY n_nationkey
+			    HAVING n_nationkey >= nation.n_regionkey
+			))`,
 	}
 
 	for _, sql := range sqls {
@@ -1951,6 +1960,44 @@ func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestOnlyFullGroupByWindowOnlyHavingBuildsPreWindowFilter(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT ROW_NUMBER() OVER ()
+		FROM nation
+		HAVING rand() > -1`)
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	found := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW || len(node.Children) == 0 {
+			continue
+		}
+		if planSubtreeHasFilter(query, node.Children[0]) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
+}
+
+func planSubtreeHasFilter(query *plan.Query, nodeID int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if len(node.FilterList) > 0 {
+		return true
+	}
+	for _, childID := range node.Children {
+		if planSubtreeHasFilter(query, childID) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
@@ -1986,6 +2033,15 @@ func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T)
 			       ),
 			       SUM(n_regionkey)
 			FROM nation`, "nation.n_regionkey"},
+		{`
+			SELECT SUM(n_regionkey)
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)`, "nation.n_comment"},
 	}
 
 	for _, tt := range sqls {

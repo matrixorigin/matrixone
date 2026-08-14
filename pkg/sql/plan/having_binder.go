@@ -107,7 +107,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+					b.corrColRefTargetsGroup(corr.Corr) ||
+					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				return expr, nil
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 

@@ -598,6 +598,12 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
+	// selectListHasAggregate is set before HAVING is bound. At that point
+	// SELECT-list aggregates have not been appended to aggregates yet, but the
+	// query block is already an implicit aggregate query for ONLY_FULL_GROUP_BY
+	// correlation checks.
+	selectListHasAggregate bool
+
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
 	groupByParamAst     map[string]int32
@@ -797,8 +803,9 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg    bool
-	rollupHaving bool
+	insideAgg     bool
+	rollupHaving  bool
+	bindingHaving bool
 }
 
 type ProjectionBinder struct {

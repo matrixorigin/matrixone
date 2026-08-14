@@ -5048,6 +5048,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, boundHavingList); err != nil {
 			return
 		}
+	} else if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+		if len(preWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, preWindowHavingList); err != nil {
+				return
+			}
+		}
 	}
 
 	// append TIME WINDOW node
@@ -6930,6 +6937,32 @@ func rollupWindowFuncMustBeMaterialized(expr *tree.FuncExpr) bool {
 	return function.GetFunctionIsAggregateByName(funcName) || strings.EqualFold(funcName, "grouping")
 }
 
+func selectListHasAggregate(selectList tree.SelectExprs) bool {
+	for _, item := range selectList {
+		found := false
+		walkGroupingSetOrderByExpr(item.Expr, func(expr tree.Expr) bool {
+			switch e := expr.(type) {
+			case *tree.Subquery:
+				return false
+			case *tree.FuncExpr:
+				if e.WindowSpec != nil {
+					return false
+				}
+				funcRef, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+				if ok && function.GetFunctionIsAggregateByName(funcRef.ColName()) {
+					found = true
+					return false
+				}
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
 func rewriteRollupWindowExprs(exprs tree.Exprs, state *rollupWindowRewriteState) (tree.Exprs, bool) {
 	if len(exprs) == 0 {
 		return nil, true
@@ -7335,7 +7368,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		if boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder); err != nil {
+		prevSelectListHasAggregate := ctx.selectListHasAggregate
+		ctx.selectListHasAggregate = selectListHasAggregate(selectList)
+		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
+		ctx.selectListHasAggregate = prevSelectListHasAggregate
+		if err != nil {
 			return
 		}
 	}
@@ -7567,6 +7604,10 @@ func (builder *QueryBuilder) bindHaving(
 		return
 	}
 	havingBinder.rollupHaving = clause.RollupHaving
+	havingBinder.bindingHaving = true
+	defer func() {
+		havingBinder.bindingHaving = false
+	}()
 	ctx.binder = havingBinder
 	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
 }

@@ -695,7 +695,8 @@ func (b *baseBinder) corrColRefAllowedByQueryContext(ctx *BindContext, corr *pla
 	if !ok || binding == nil {
 		return false
 	}
-	if len(ctx.groups) == 0 && len(ctx.times) == 0 {
+	if len(ctx.groups) == 0 && len(ctx.times) == 0 &&
+		len(ctx.aggregates) == 0 && !ctx.selectListHasAggregate {
 		return true
 	}
 	return b.builder.mysqlFullGroupByAllowsColumn(ctx, binding, corr.ColPos)
