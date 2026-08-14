@@ -37,6 +37,7 @@ import (
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2704,6 +2705,237 @@ func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {
 	}
 }
 
+func TestMultiTargetUpdateUsesIndependentModernSelectors(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
+			"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var multiUpdate *plan.Node
+	rowNumberWindows := 0
+	guardedAssignmentProjects := 0
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_WINDOW {
+			for _, specExpr := range node.WinSpecList {
+				if spec := specExpr.GetW(); spec != nil &&
+					spec.Name == "row_number" &&
+					len(spec.PartitionBy) == 2 {
+					rowNumberWindows++
+				}
+			}
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 &&
+			query.Nodes[node.Children[0]].NodeType == plan.Node_WINDOW {
+			for _, expr := range node.ProjectList {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "if" {
+					guardedAssignmentProjects++
+				}
+			}
+		}
+	}
+	require.NotNil(t, multiUpdate)
+	require.Equal(t, 2, rowNumberWindows)
+	require.GreaterOrEqual(t, guardedAssignmentProjects, 2,
+		"target-local assignments must be lazily evaluated above the target row-number windows")
+
+	mainCtxs := make(map[string]*plan.UpdateCtx)
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.TableDef == nil {
+			continue
+		}
+		if updateCtx.TableDef.Name == "nation" || updateCtx.TableDef.Name == "nation2" {
+			mainCtxs[updateCtx.TableDef.Name] = updateCtx
+		}
+	}
+	require.Len(t, mainCtxs, 2)
+	for _, name := range []string{"nation", "nation2"} {
+		updateCtx := mainCtxs[name]
+		require.NotNil(t, updateCtx)
+		require.True(t, updateCtx.DedupByTargetRowId)
+		require.Len(t, updateCtx.DeleteCols, 4)
+		require.NotEqual(t, updateCtx.DeleteCols[0].ColPos, updateCtx.DeleteCols[2].ColPos)
+	}
+	require.NotEqual(
+		t,
+		mainCtxs["nation"].DeleteCols[0].ColPos,
+		mainCtxs["nation2"].DeleteCols[0].ColPos,
+	)
+
+	require.Len(t, multiUpdate.Children, 1)
+	lockNode := query.Nodes[multiUpdate.Children[0]]
+	require.Equal(t, plan.Node_LOCK_OP, lockNode.NodeType)
+	for i := 1; i < len(lockNode.LockTargets); i++ {
+		previous := lockNode.LockTargets[i-1]
+		current := lockNode.LockTargets[i]
+		require.True(t,
+			previous.TableId < current.TableId ||
+				(previous.TableId == current.TableId &&
+					previous.PrimaryColIdxInBat <= current.PrimaryColIdxInBat),
+		)
+	}
+}
+
+func TestMultiTargetUpdateIgnoreUsesIndependentTargetBranches(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE IGNORE emp JOIN dept ON emp.deptno = dept.deptno "+
+			"SET emp.empno = dept.deptno, dept.loc = emp.ename",
+	)
+	require.NoError(t, err)
+
+	unionCount := 0
+	var multiUpdate *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			unionCount++
+		}
+		if node.NodeType == plan.Node_MULTI_UPDATE {
+			multiUpdate = node
+		}
+	}
+	require.GreaterOrEqual(t, unionCount, 1)
+	require.NotNil(t, multiUpdate)
+	for _, updateCtx := range multiUpdate.UpdateCtxList {
+		if updateCtx.DedupByTargetRowId {
+			require.GreaterOrEqual(t, len(updateCtx.DeleteCols), 4)
+		}
+	}
+}
+
+func TestMultiTargetUpdateSupportsTwoAutoIncrementTargets(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, tableName := range []string{"nation", "nation2"} {
+		tableDef := mock.ctxt.tables[tableName]
+		pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+		tableDef.Cols[pkPos].Typ.AutoIncr = true
+	}
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey "+
+			"SET n.n_nationkey = DEFAULT, n2.n_nationkey = DEFAULT",
+	)
+	require.NoError(t, err)
+
+	preInsertCount := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PRE_INSERT {
+			continue
+		}
+		preInsertCount++
+		require.True(t, node.PreInsertCtx.HasTargetSelector)
+	}
+	require.Equal(t, 2, preInsertCount)
+}
+
+func TestPartitionedMultiTargetUpdateUsesModernPlan(t *testing.T) {
+	for _, test := range []struct {
+		sql                  string
+		partitionColumnCount int
+	}{
+		{
+			sql: "UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
+				"SET n.n_name = n2.n_name, n2.n_comment = n.n_comment",
+			partitionColumnCount: 1,
+		},
+		{
+			sql: "UPDATE nation2 n2 JOIN nation n ON n.n_nationkey = n2.n_nationkey " +
+				"SET n2.n_comment = n.n_comment, n.n_name = n2.n_name",
+			partitionColumnCount: 1,
+		},
+		{
+			sql: "UPDATE nation n JOIN nation2 n2 ON n.n_nationkey = n2.n_nationkey " +
+				"SET n.n_nationkey = n.n_nationkey + 10, n2.n_comment = n.n_comment",
+			partitionColumnCount: 2,
+		},
+	} {
+		mock := NewMockOptimizer(true)
+		mock.ctxt.tables["nation"].FeatureFlag |= features.Partitioned
+		mock.ctxt.tables["nation"].Partition = &plan.Partition{
+			PartitionDefs: []*plan.PartitionDef{{
+				Def: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "n_nationkey"}}},
+				}}}},
+			}},
+		}
+		logicPlan, err := runOneStmt(mock, t, test.sql)
+		require.NoError(t, err)
+
+		multiUpdates := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				multiUpdates++
+				require.Len(t, node.UpdateCtxList, 2)
+				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx.TableDef.Name == "nation" {
+						require.Len(t, updateCtx.PartitionCols, test.partitionColumnCount)
+						require.NotEqual(t, int32(-1), updateCtx.PartitionCols[0].ColPos)
+					} else {
+						require.Empty(t, updateCtx.PartitionCols)
+					}
+				}
+			}
+		}
+		require.Equal(t, 1, multiUpdates)
+	}
+}
+
+func TestRepeatedPhysicalUpdateTargetsAreRejected(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_name = 'a', b.n_comment = 'b'",
+	)
+	require.ErrorContains(t, err, "updating the same physical table through aliases 'a' and 'b'")
+	require.Nil(t, logicPlan)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+
+	// A sibling alias that is only read from is not a second update target.
+	logicPlan, err = runOneStmt(
+		mock,
+		t,
+		"UPDATE nation a JOIN nation b ON a.n_nationkey = b.n_nationkey "+
+			"SET a.n_name = b.n_name",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan.GetQuery())
+}
+
+func TestModernMultiTargetOnUpdateColumnsKeepActiveSelectorsTyped(t *testing.T) {
+	for _, sql := range []string{
+		"UPDATE emp, dept SET emp.job = 'a', dept.loc = 'b' " +
+			"WHERE emp.deptno = dept.deptno",
+	} {
+		mock := NewMockOptimizer(true)
+		setMockOnUpdateExpr(t, mock, "nation", "n_regionkey", "1")
+		setMockOnUpdateExpr(t, mock, "emp", "sal", "1")
+		setMockOnUpdateExpr(t, mock, "dept", "dname", "'updated'")
+
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+		multiUpdates := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_MULTI_UPDATE {
+				multiUpdates++
+			}
+		}
+		require.Equal(t, 1, multiUpdates)
+	}
+}
+
 func TestUpdatePgStyleFromDedupPicksWholeSourceRow(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -2896,6 +3128,7 @@ func TestUpdatePgStyleFromDedupAllowsDecimal256AndEnumUpdateColumns(t *testing.T
 
 func TestUpdateFallbackMultiTargetGeneratedColumnsKeepProjectLayout(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
@@ -2924,6 +3157,7 @@ func TestUpdateFallbackProjectLayoutDeterministic(t *testing.T) {
 	var want []string
 	for iter := 0; iter < 16; iter++ {
 		mock := NewMockOptimizer(true)
+		forceLegacyMultiTargetUpdateRoute(mock)
 		logicPlan, err := runOneStmt(mock, t, sql)
 		if err != nil {
 			t.Fatalf("build fallback update (iter %d): %v", iter, err)
@@ -2963,6 +3197,7 @@ func fallbackUpdateProjectLayout(query *Query) []string {
 
 func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockDefaultExpr(t, mock, "emp", "job", "job-default")
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 
@@ -2981,6 +3216,7 @@ func TestUpdateFallbackGeneratedColumnsUseDefaultAfterRewrite(t *testing.T) {
 
 func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockOnUpdateExpr(t, mock, "emp", "job", "job-on-update")
 	setMockGeneratedColumn(t, mock, "emp", "ename", "job")
 
@@ -2999,6 +3235,7 @@ func TestUpdateFallbackGeneratedColumnsUseOnUpdateAfterRewrite(t *testing.T) {
 
 func TestUpdateFallbackGeneratedColumnChainUsesFreshExpr(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	setMockGeneratedColumn(t, mock, "emp", "mgr", "empno")
 	setMockGeneratedColumn(t, mock, "emp", "deptno", "mgr")
 
@@ -3192,6 +3429,7 @@ func setMockEmpDeptForeignKeyAction(
 
 func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	// Generate dname from loc on the second table (dept).
 	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
 
@@ -3212,8 +3450,19 @@ func TestUpdateFallbackGeneratedColumnMultiTableNonFirstHasGenerated(t *testing.
 	}
 }
 
+func TestMultiTargetUpdateGeneratedColumnGuardUsesProjectInput(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	setMockGeneratedColumn(t, mock, "dept", "dname", "loc")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET emp.comm = 1, dept.loc = 'modern-gen' WHERE emp.deptno = dept.deptno")
+	require.NoError(t, err)
+	require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "modern-gen"))
+}
+
 func TestUpdateFallbackGeneratedColumnChainAfterOptimize(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	forceLegacyMultiTargetUpdateRoute(mock)
 	// Chain: sal depends on comm, comm is a SET column.
 	// After optimization and rewrite, sal's generated expr should use the SET value of comm.
 	setMockGeneratedColumn(t, mock, "emp", "sal", "comm")
@@ -3302,6 +3551,23 @@ func setMockGeneratedColumn(t *testing.T, mock *MockOptimizer, tableName, genera
 			},
 		},
 		IsStored: true,
+	}
+}
+
+func forceLegacyMultiTargetUpdateRoute(mock *MockOptimizer) {
+	for _, tableName := range []string{"emp", "dept"} {
+		tableDef := mock.ctxt.tables[tableName]
+		parts := make([]string, 0, len(tableDef.Cols))
+		for _, col := range tableDef.Cols {
+			parts = append(parts, col.Name)
+		}
+		tableDef.Indexes = append(tableDef.Indexes, &plan.IndexDef{
+			IndexName:      "force_legacy_update_route",
+			IndexTableName: "force_legacy_update_route_entries",
+			IndexAlgo:      "unsupported_sync_index",
+			Parts:          parts,
+			TableExist:     true,
+		})
 	}
 }
 
@@ -4269,6 +4535,23 @@ func TestInsertIgnoreChildParentFKDropsRows(t *testing.T) {
 }
 
 func TestCheckConstraintWithChildForeignKey(t *testing.T) {
+	var exprContainsFunction func(*plan.Expr, string) bool
+	exprContainsFunction = func(expr *plan.Expr, name string) bool {
+		fn := expr.GetF()
+		if fn == nil {
+			return false
+		}
+		if fn.GetFunc().GetObjName() == name {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsFunction(arg, name) {
+				return true
+			}
+		}
+		return false
+	}
+
 	build := func(sql string) *plan.Query {
 		mock := NewMockOptimizer(true)
 		tableDef := mock.ctxt.tables["emp"]
@@ -4304,7 +4587,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		for nodeID, node := range query.Nodes {
 			if node.NodeType == nodeType {
 				for _, expr := range node.FilterList {
-					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == checkFunc {
+					if exprContainsFunction(expr, checkFunc) {
 						hasCheck = true
 						checkNodeID = int32(nodeID)
 						if nodeType == plan.Node_FILTER && checkFunc == "coalesce" {
@@ -4407,6 +4690,47 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 		require.Len(t, assertNames, 1)
 		require.Contains(t, assertNames[0], "target_check")
 		require.NotContains(t, assertNames[0], "source_check")
+	})
+
+	t.Run("nullable joined target check is guarded by eligibility", func(t *testing.T) {
+		query := build("UPDATE dept d LEFT JOIN emp e ON e.deptno = d.deptno " +
+			"SET e.deptno = e.deptno + 1")
+		guarded := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if exprContainsFunction(expr, "_check_constraint_assert") &&
+					exprContainsFunction(expr, "or") &&
+					exprContainsFunction(expr, "isnotnull") {
+					guarded = true
+				}
+			}
+		}
+		require.True(t, guarded,
+			"CHECK must pass rows whose nullable update target has no Rowid")
+	})
+
+	t.Run("multi target check uses the complete selected candidate", func(t *testing.T) {
+		query := build("UPDATE emp e JOIN dept d ON e.deptno = d.deptno " +
+			"SET e.deptno = e.deptno + 1, d.loc = e.ename")
+		guarded := false
+		for _, node := range query.Nodes {
+			if node.NodeType != plan.Node_ASSERT {
+				continue
+			}
+			for _, expr := range node.FilterList {
+				if exprContainsFunction(expr, "_check_constraint_assert") &&
+					exprContainsFunction(expr, "or") &&
+					exprContainsFunction(expr, "and") &&
+					exprContainsFunction(expr, "=") {
+					guarded = true
+				}
+			}
+		}
+		require.True(t, guarded,
+			"CHECK eligibility must include both target active and row_number = 1")
 	})
 
 	t.Run("on duplicate key update", func(t *testing.T) {
