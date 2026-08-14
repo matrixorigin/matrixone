@@ -745,6 +745,9 @@ func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node
 	}
 
 	orderExpr := sortProjectNode.ProjectList[orderByCol.ColPos]
+	if !encodedOrderMatchesSQLOrder(orderExpr) {
+		return nil
+	}
 	orderExprCol := orderExpr.GetCol()
 	if !canUseRegularIndexHiddenSortKey(scanNode, orderExprCol) {
 		return nil
@@ -1092,7 +1095,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 				continue
 			}
 			builder.protectedScans[scanNode.NodeId]++
-			if requirement.scope == forceIndexForOrder {
+			if requirement.scope == forceIndexForOrder && encodedOrderMatchesSQLOrder(requirement.columns...) {
 				idxNode := builder.qry.Nodes[idxNodeID]
 				idxNode.OrderBy = []*plan.OrderBySpec{{
 					Expr: GetColExpr(idxNode.TableDef.Cols[0].Typ, idxNode.BindingTags[0], 0),
@@ -1343,6 +1346,24 @@ func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	// Static reader limit is valid only when index scan candidates exactly match the SQL filter.
 	numKeyParts := len(scanNode.IndexScanInfo.Parts) - 1
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
+}
+
+// encodedOrderMatchesSQLOrder reports whether encoded regular-index keys and
+// storage metadata are proven to share the logical SQL ordering. Scalar float
+// encoding has an identity order over NaN payloads, while SQL makes all NaNs
+// peers and keeps them last in both directions, so encoded ordering cannot
+// replace the logical sort or drive early truncation.
+func encodedOrderMatchesSQLOrder(orderExprs ...*plan.Expr) bool {
+	for _, expr := range orderExprs {
+		if expr == nil {
+			return false
+		}
+		switch types.T(expr.Typ.Id) {
+		case types.T_float32, types.T_float64:
+			return false
+		}
+	}
+	return len(orderExprs) > 0
 }
 
 func isRegularIndexFullPrefixEquality(expr *plan.Expr, numKeyParts int) bool {

@@ -4989,9 +4989,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				return
 			}
 		}
-		if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
-			setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ)
-		}
 		if selectClause.Having != nil {
 			rollupFilter = selectClause.Having.RollupHaving
 		}
@@ -5003,6 +5000,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
+	}
+
+	if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
+		setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ, astTimeWindow)
 	}
 
 	// bind SELECT clause (Projection List)
@@ -7711,6 +7712,112 @@ func (builder *QueryBuilder) bindProjection(
 	return
 }
 
+func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type, astTimeWindow *tree.TimeWindow) {
+	if ctx == nil || astTimeWindow == nil {
+		return
+	}
+	typ = normalizeTimeWindowBoundaryType(typ, astTimeWindow)
+	ctx.timeBoundaryType = &typ
+}
+
+func normalizeTimeWindowBoundaryType(typ plan.Type, astTimeWindow *tree.TimeWindow) plan.Type {
+	if typ.Id == 0 {
+		typ.Id = int32(types.T_timestamp)
+	}
+	if types.T(typ.Id) == types.T_date {
+		typ.Id = int32(types.T_datetime)
+	}
+	if timeWindowUsesMicrosecond(astTimeWindow) && typ.Scale < 6 {
+		typ.Scale = 6
+	}
+	if timeWindowBoundaryTypeHasFsp(types.T(typ.Id)) && typ.Scale > 0 {
+		typ.Width = typ.Scale
+	}
+	typ.NotNullable = true
+	return typ
+}
+
+func timeWindowBoundaryTypeHasFsp(typ types.T) bool {
+	return typ == types.T_time || typ == types.T_datetime || typ == types.T_timestamp
+}
+
+func timeWindowBoundaryTypeForTimestamp(tsType plan.Type, astTimeWindow *tree.TimeWindow, fallback *plan.Type) plan.Type {
+	boundaryType := tsType
+	if boundaryType.Id == 0 && fallback != nil {
+		boundaryType = *DeepCopyType(fallback)
+	}
+	return normalizeTimeWindowBoundaryType(boundaryType, astTimeWindow)
+}
+
+func timeWindowUsesMicrosecond(astTimeWindow *tree.TimeWindow) bool {
+	if astTimeWindow == nil {
+		return false
+	}
+	if timeWindowUnitIsMicrosecond(astTimeWindow.Interval.Unit) {
+		return true
+	}
+	return astTimeWindow.Sliding != nil && timeWindowUnitIsMicrosecond(astTimeWindow.Sliding.Unit)
+}
+
+func timeWindowUnitIsMicrosecond(unit string) bool {
+	typ, err := types.IntervalTypeOf(unit)
+	return err == nil && typ == types.MicroSecond
+}
+
+func updateTimeWindowBoundaryTypes(ctx *BindContext, boundaryType plan.Type) {
+	if ctx == nil {
+		return
+	}
+	ctx.timeBoundaryType = &boundaryType
+	for _, expr := range ctx.times {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = boundaryType
+		}
+	}
+	for _, expr := range ctx.projects {
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
+	}
+	for _, expr := range ctx.results {
+		updateTimeWindowBoundaryType(ctx, expr, boundaryType)
+	}
+}
+
+func updateTimeWindowBoundaryType(ctx *BindContext, expr *plan.Expr, boundaryType plan.Type) {
+	if isTimeWindowBoundaryExpr(ctx, expr) {
+		expr.Typ = boundaryType
+	}
+}
+
+func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
+	if ctx == nil || expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
+		return true
+	}
+	if col.RelPos != ctx.timeTag {
+		return false
+	}
+
+	// Repeated references to a time-window boundary are resolved through
+	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
+	// the time-tag/column position, not the boundary name. Resolve the carrier
+	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
+	// the same type as their first occurrence. Other time-window aggregates are
+	// function expressions in ctx.times and therefore remain unaffected.
+	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
+		return false
+	}
+	carrier := ctx.times[col.ColPos]
+	carrierCol := carrier.GetCol()
+	return carrierCol != nil &&
+		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
+}
+
 func (builder *QueryBuilder) bindTimeWindow(
 	ctx *BindContext,
 	projectionBinder *ProjectionBinder,
@@ -7756,8 +7863,9 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
-	boundaryType := TimeWindowBoundaryType(ts.Typ)
-	setTimeWindowBoundaryType(ctx, boundaryType)
+	boundaryType := timeWindowBoundaryTypeForTimestamp(ts.Typ, astTimeWindow, ctx.timeBoundaryType)
+	ts.Typ = boundaryType
+	updateTimeWindowBoundaryTypes(ctx, boundaryType)
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7843,53 +7951,6 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
-}
-
-func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type) {
-	typ.NotNullable = true
-	ctx.timeBoundaryType = DeepCopyType(&typ)
-	for _, expr := range ctx.times {
-		if isTimeWindowBoundaryExpr(ctx, expr) {
-			expr.Typ = typ
-		}
-	}
-	for _, expr := range ctx.projects {
-		if isTimeWindowBoundaryExpr(ctx, expr) {
-			expr.Typ = typ
-		}
-	}
-	for _, expr := range ctx.results {
-		if isTimeWindowBoundaryExpr(ctx, expr) {
-			expr.Typ = typ
-		}
-	}
-}
-
-func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
-	if ctx == nil || expr == nil {
-		return false
-	}
-	col := expr.GetCol()
-	if col == nil || col.RelPos != ctx.timeTag {
-		return false
-	}
-	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
-		return true
-	}
-
-	// Repeated references to a time-window boundary are resolved through
-	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
-	// the time-tag/column position, not the boundary name. Resolve the carrier
-	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
-	// the same type as their first occurrence. Other time-window aggregates are
-	// function expressions in ctx.times and therefore remain unaffected.
-	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
-		return false
-	}
-	carrier := ctx.times[col.ColPos]
-	carrierCol := carrier.GetCol()
-	return carrierCol != nil &&
-		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set
@@ -9091,7 +9152,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 		}
 
 		name = tree.NewUnresolvedColName("interval")
-		arg2 = tree.NewTimeUnitExpr("second")
+		arg2 = tree.NewTimeUnitExpr("microsecond")
 		expr = &tree.FuncExpr{
 			Func:  tree.FuncName2ResolvableFunctionReference(name),
 			Exprs: tree.Exprs{div, arg2},
@@ -9115,7 +9176,7 @@ func makeHelpFuncForTimeWindow(astTimeWindow *tree.TimeWindow) (*helpFunc, error
 }
 
 const (
-	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support SECOND, MINUTE, HOUR, DAY as the time unit"
+	unsupportedTimeWindowIntervalUnit = "Time Window aggregate only support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit"
 	timeWindowIntervalMustBePositive  = "time window interval must be greater than zero"
 	timeWindowSlidingMustBePositive   = "time window sliding value must be greater than zero"
 )
@@ -9162,7 +9223,7 @@ func validateTimeWindowIntervalUnit(ctx context.Context, unit string) error {
 		return err
 	}
 	switch typ {
-	case types.Second, types.Minute, types.Hour, types.Day:
+	case types.MicroSecond, types.Second, types.Minute, types.Hour, types.Day:
 		return nil
 	default:
 		return moerr.NewNotSupported(ctx, unsupportedTimeWindowIntervalUnit)

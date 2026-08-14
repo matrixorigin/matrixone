@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,27 @@ func TestDropColumnWithIndex(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, 1, len(def.Indexes[0].Parts))
 	require.Equal(t, "title", def.Indexes[0].Parts[0])
+}
+
+func TestDropColumnRemovesEveryAdjacentSingleColumnIndex(t *testing.T) {
+	def := TableDef{Indexes: []*IndexDef{
+		{IndexName: "uk_body", Unique: true, Parts: []string{"body"}},
+		{
+			IndexName: "idx_body",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{"body", catalog.CreateAlias("id")},
+		},
+		{
+			IndexName: "idx_body_title",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{"body", "title", catalog.CreateAlias("id")},
+		},
+	}}
+
+	require.NoError(t, handleDropColumnWithIndex(context.Background(), "body", &def))
+	require.Len(t, def.Indexes, 1)
+	require.Equal(t, "idx_body_title", def.Indexes[0].IndexName)
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, def.Indexes[0].Parts)
 }
 
 func TestCheckGeometryKeyPartTypes(t *testing.T) {
