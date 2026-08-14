@@ -413,6 +413,82 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		finalName string
+	}{
+		{
+			name:      "rename",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, RENAME COLUMN tmp TO added_col;`,
+			finalName: "added_col",
+		},
+		{
+			name:      "modify",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, MODIFY COLUMN tmp BIGINT;`,
+			finalName: "tmp",
+		},
+		{
+			name:      "change",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, CHANGE COLUMN tmp added_col BIGINT;`,
+			finalName: "added_col",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, tc.finalName))
+		})
+	}
+}
+
+func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		existingUnique bool
+		addClause      string
+	}{
+		{name: "secondary with secondary", addClause: "ADD INDEX idx(b)"},
+		{name: "secondary with unique", addClause: "ADD UNIQUE INDEX idx(b)"},
+		{name: "unique with unique", existingUnique: true, addClause: "ADD UNIQUE INDEX idx(b)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+				IndexName:  "idx",
+				Parts:      []string{"a"},
+				Unique:     tc.existingUnique,
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			}}
+
+			logicPlan, err := buildSingleStmt(mock, t,
+				"ALTER TABLE t1 DROP INDEX idx, "+tc.addClause)
+			require.NoError(t, err)
+			require.Equal(t, plan.AlterTable_INPLACE,
+				logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+		})
+	}
+}
+
+func TestAlterTableInplaceRejectsReplacementBeforeDrop(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+		IndexName:  "idx",
+		Parts:      []string{"a"},
+		IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+		TableExist: true,
+	}}
+
+	_, err := buildSingleStmt(mock, t,
+		"ALTER TABLE t1 ADD INDEX idx(b), DROP INDEX idx")
+	require.Error(t, err)
+}
+
 func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// Match the type metadata produced by ADD COLUMN so the only difference is
@@ -749,7 +825,7 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 				},
 			},
 			wantOk:  false,
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "different type",

@@ -536,6 +536,41 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
+func validateAlterForeignKeyNameActions(
+	ctx context.Context,
+	existing map[string]bool,
+	actions []*plan.AlterTable_Action,
+) error {
+	current := make(map[string]bool, len(existing))
+	for name := range existing {
+		current[name] = true
+	}
+
+	for _, action := range actions {
+		if action == nil {
+			continue
+		}
+		switch alterAction := action.Action.(type) {
+		case *plan.AlterTable_Action_Drop:
+			drop := alterAction.Drop
+			if drop.Typ != plan.AlterTableDrop_FOREIGN_KEY {
+				continue
+			}
+			if !current[drop.Name] {
+				return moerr.NewErrCantDropFieldOrKey(ctx, drop.Name)
+			}
+			delete(current, drop.Name)
+		case *plan.AlterTable_Action_AddFk:
+			name := alterAction.AddFk.Fkey.Name
+			if current[name] {
+				return moerr.NewErrDuplicateKeyName(ctx, name)
+			}
+			current[name] = true
+		}
+	}
+	return nil
+}
+
 func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -596,8 +631,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			}
 		}
 	}
-	//added fk in this alter table statement
-	newAddedFkNames := make(map[string]bool)
+	if err := validateAlterForeignKeyNameActions(c.proc.Ctx, oldFkNames, qry.Actions); err != nil {
+		return err
+	}
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
@@ -659,10 +695,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				alterTableDrop := act.Drop
 				constraintName := alterTableDrop.Name
 				if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
-					//check fk existed in table
-					if _, has := oldFkNames[constraintName]; !has {
-						return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
-					}
 					for _, fk := range oTableDef.Fkeys {
 						if fk.Name == constraintName && fk.ForeignTbl != 0 { //skip self ref foreign key
 							// lock fk table
@@ -681,16 +713,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 				}
 			case *plan.AlterTable_Action_AddFk:
-				//check fk existed in table
-				if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
-					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
-				}
-				//check fk existed in this alter table statement
-				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
-					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
-				}
-				newAddedFkNames[act.AddFk.Fkey.Name] = true
-
 				// lock fk table
 				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
 					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
@@ -734,10 +756,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			constraintName := alterTableDrop.Name
 			switch alterTableDrop.Typ {
 			case plan.AlterTableDrop_FOREIGN_KEY:
-				//check fk existed in table
-				if _, has := oldFkNames[constraintName]; !has {
-					return moerr.NewErrCantDropFieldOrKey(c.proc.Ctx, constraintName)
-				}
 				hasUpdateConstraints = true
 				oTableDef.Fkeys = plan2.RemoveIf(oTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
 					if fk.Name == constraintName {
@@ -802,18 +820,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				extra.IndexTables = newIndexes
 			}
 		case *plan.AlterTable_Action_AddFk:
-			//check fk existed in table
-			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
-				return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
-			}
-			if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
-				//check fk existed in this alter table statement
-				if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
-					return moerr.NewErrDuplicateKeyName(c.proc.Ctx, act.AddFk.Fkey.Name)
-				}
-				newAddedFkNames[act.AddFk.Fkey.Name] = true
-			}
-
 			hasUpdateConstraints = true
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)

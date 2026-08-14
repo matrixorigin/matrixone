@@ -4302,6 +4302,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	// (compile/ddl.go). A not-yet-created hidden table appended there is locked before
 	// HandleCreateIndex builds it → "no such table". So accumulate here, never in tableDef.
 	var addedIdxDefs []*plan.IndexDef
+	currentIndexNames := make(map[string]bool, len(tableDef.Indexes))
+	for _, indexDef := range tableDef.Indexes {
+		currentIndexNames[strings.ToLower(indexDef.IndexName)] = true
+	}
 	droppedForeignKeys := make(map[string]struct{})
 	for _, option := range stmt.Options {
 		if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropForeignKey {
@@ -4335,6 +4339,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						name_not_found = false
 						break
 					}
+				}
+				if !name_not_found {
+					delete(currentIndexNames, strings.ToLower(constraintName))
 				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
@@ -4457,15 +4464,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 
 				indexName := def.GetIndexName()
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4474,7 +4474,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyUniqueIndexName(constrNames, def)
+					setEmptyUniqueIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -4512,19 +4512,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 
 				indexName := def.Name
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated — against both the
-				// table's existing indexes AND those added by earlier actions in this ALTER.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-				for _, idx := range addedIdxDefs {
-					constrNames[strings.ToLower(idx.IndexName)] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4534,7 +4523,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyFullTextIndexName(constrNames, def)
+					setEmptyFullTextIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
@@ -4589,15 +4578,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				indexName := def.Name
 
-				constrNames := map[string]bool{}
-				// Check not empty constraint name whether is duplicated.
-				for _, idx := range tableDef.Indexes {
-					nameLower := strings.ToLower(idx.IndexName)
-					constrNames[nameLower] = true
-				}
-
 				if err := checkDuplicateConstraint(
-					constrNames,
+					currentIndexNames,
 					indexName,
 					false,
 					ctx.GetContext(),
@@ -4607,7 +4589,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				if len(indexName) == 0 {
 					// set empty constraint names(index and unique index)
-					setEmptyIndexName(constrNames, def)
+					setEmptyIndexName(currentIndexNames, def)
 				}
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)

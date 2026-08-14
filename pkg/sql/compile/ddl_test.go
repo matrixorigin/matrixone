@@ -114,6 +114,40 @@ func TestRequireCheckRenameProtocol(t *testing.T) {
 	require.NoError(t, c.requireCheckRenameProtocol(checks))
 }
 
+func TestValidateAlterForeignKeyNameActionsUsesSequentialState(t *testing.T) {
+	dropFK := func(name string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_Drop{
+			Drop: &plan2.AlterTableDrop{Name: name, Typ: plan2.AlterTableDrop_FOREIGN_KEY},
+		}}
+	}
+	addFK := func(name string) *plan2.AlterTable_Action {
+		return &plan2.AlterTable_Action{Action: &plan2.AlterTable_Action_AddFk{
+			AddFk: &plan2.AlterTableAddFk{Fkey: &plan2.ForeignKeyDef{Name: name}},
+		}}
+	}
+
+	existing := map[string]bool{"fk_x": true}
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), existing,
+		[]*plan2.AlterTable_Action{dropFK("fk_x"), addFK("fk_x")},
+	))
+
+	for _, tc := range []struct {
+		name    string
+		actions []*plan2.AlterTable_Action
+	}{
+		{name: "add before drop", actions: []*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x")}},
+		{name: "drop missing", actions: []*plan2.AlterTable_Action{dropFK("missing")}},
+		{name: "duplicate additions", actions: []*plan2.AlterTable_Action{addFK("fk_y"), addFK("fk_y")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateAlterForeignKeyNameActions(
+				context.Background(), existing, tc.actions,
+			))
+		})
+	}
+}
+
 func mongoDBConnectionResult(t *testing.T, proc *process.Process, connectionID, disabled uint64) executor.Result {
 	t.Helper()
 	columnTypes := make([]types.Type, 18)
