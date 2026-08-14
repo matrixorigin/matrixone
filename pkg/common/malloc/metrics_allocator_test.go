@@ -14,7 +14,13 @@
 
 package malloc
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
 
 type cappedTestAllocator struct {
 	capacity int
@@ -42,14 +48,41 @@ func TestMetricsAllocatorAccountsBackingCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := allocator.currentInuse.Load(); got != 1024 {
-		t.Fatalf("in-use bytes = %d, want physical capacity 1024", got)
-	}
-
 	dec.Deallocate()
-	if got := allocator.currentInuse.Load(); got != 0 {
-		t.Fatalf("in-use bytes after release = %d, want 0", got)
+}
+
+func TestMetricsAllocatorAggregatesAbsoluteInuseGauge(t *testing.T) {
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_absolute_inuse"})
+	first := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, nil, nil, nil, gauge)
+	second := NewMetricsAllocator(cappedTestAllocator{capacity: 200}, nil, nil, nil, nil, gauge)
+
+	_, firstDec, err := first.Allocate(1, NoHints)
+	if err != nil {
+		t.Fatal(err)
 	}
+	_, secondDec, err := second.Allocate(1, NoHints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGaugeValue(t, gauge, 300)
+
+	firstDec.Deallocate()
+	assertGaugeValue(t, gauge, 200)
+
+	secondDec.Deallocate()
+	assertGaugeValue(t, gauge, 0)
+}
+
+func assertGaugeValue(t *testing.T, gauge prometheus.Gauge, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if testutil.ToFloat64(gauge) == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("gauge = %v, want %v", testutil.ToFloat64(gauge), want)
 }
 
 func BenchmarkMetricsAllocator(b *testing.B) {

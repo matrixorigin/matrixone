@@ -77,6 +77,11 @@ mo_jemalloc_arena_stat(unsigned arena, const char *suffix, size_t *value) {
 }
 
 static int
+mo_jemalloc_arena_resident(unsigned arena, size_t *value) {
+	return mo_jemalloc_arena_stat(arena, "resident", value);
+}
+
+static int
 mo_jemalloc_read_stats(unsigned arena, mo_jemalloc_stats *stats) {
 	uint64_t epoch = 1;
 	size_t page = 0;
@@ -98,6 +103,7 @@ mo_jemalloc_read_stats(unsigned arena, mo_jemalloc_stats *stats) {
 		mo_jemalloc_arena_stat(arena, "pactive", &pactive) != 0 ||
 		mo_jemalloc_arena_stat(arena, "pdirty", &pdirty) != 0 ||
 		mo_jemalloc_arena_stat(arena, "pmuzzy", &pmuzzy) != 0 ||
+		mo_jemalloc_arena_resident(arena, &stats->resident) != 0 ||
 		mo_jemalloc_arena_stat(arena, "mapped", &stats->mapped) != 0 ||
 		mo_jemalloc_arena_stat(arena, "retained", &stats->retained) != 0 ||
 		mo_jemalloc_arena_stat(arena, "base", &base) != 0 ||
@@ -110,8 +116,6 @@ mo_jemalloc_read_stats(unsigned arena, mo_jemalloc_stats *stats) {
 	stats->dirty = pdirty * page;
 	stats->muzzy = pmuzzy * page;
 	stats->metadata = base + internal;
-	// jemalloc reports arena resident as active + dirty + muzzy + metadata.
-	stats->resident = stats->active + stats->dirty + stats->muzzy + stats->metadata;
 	return 0;
 }
 */
@@ -222,4 +226,15 @@ func (j *JemallocAllocator) Stats() (MemoryCacheStats, error) {
 		Dirty:     uint64(stats.dirty),
 		Muzzy:     uint64(stats.muzzy),
 	}, nil
+}
+
+// nativeResident reads jemalloc's arena resident statistic directly. It keeps
+// the allocator metric aligned with jemalloc's resident definition rather than
+// reconstructing it from individual page-state counters.
+func (j *JemallocAllocator) nativeResident() (uint64, error) {
+	var resident C.size_t
+	if err := C.mo_jemalloc_arena_resident(C.uint(j.arena), &resident); err != 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("read jemalloc arena %d resident: %d", j.arena, int(err))
+	}
+	return uint64(resident), nil
 }

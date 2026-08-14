@@ -48,6 +48,9 @@ func TestJemallocAllocatorReportsClassBackingAndArenaStats(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, during.Allocated, before.Allocated+backingSize)
 	require.GreaterOrEqual(t, during.Active, during.Allocated)
+	nativeResident, err := allocator.nativeResident()
+	require.NoError(t, err)
+	require.Equal(t, nativeResident, during.Resident)
 
 	dec.Deallocate()
 	after, err := allocator.Stats()

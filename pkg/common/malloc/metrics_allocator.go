@@ -30,7 +30,8 @@ type MetricsAllocator[U Allocator] struct {
 	inuseBytesGauge        prometheus.Gauge
 	allocateObjectsCounter prometheus.Counter
 	inuseObjectsGauge      prometheus.Gauge
-	// absoluteInuseGauge publishes instantaneous in-use bytes (not deltas). Nil disables reporting.
+	// absoluteInuseGauge aggregates in-use bytes across allocators that share
+	// the same metric label. Nil disables reporting.
 	absoluteInuseGauge prometheus.Gauge
 
 	allocateBytes   ShardedCounter[uint64, atomic.Uint64, *atomic.Uint64]
@@ -39,8 +40,6 @@ type MetricsAllocator[U Allocator] struct {
 	inuseObjects    ShardedCounter[int64, atomic.Int64, *atomic.Int64]
 
 	updating atomic.Bool
-	// currentInuse mirrors allocator in-use bytes and feeds absoluteInuseGauge.
-	currentInuse atomic.Int64
 }
 
 type metricsDeallocatorArgs struct {
@@ -73,7 +72,6 @@ func NewMetricsAllocator[U Allocator](
 		deallocatorPool: NewClosureDeallocatorPool(
 			func(hints Hints, args *metricsDeallocatorArgs) {
 				ret.inuseBytes.Add(-int64(args.size))
-				ret.currentInuse.Add(-int64(args.size))
 				ret.inuseObjects.Add(-1)
 				ret.triggerUpdate()
 			},
@@ -103,7 +101,6 @@ func (m *MetricsAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 	backingSize := uint64(cap(ptr))
 	m.allocateBytes.Add(backingSize)
 	m.inuseBytes.Add(int64(backingSize))
-	m.currentInuse.Add(int64(backingSize))
 	m.allocateObjects.Add(1)
 	m.inuseObjects.Add(1)
 	m.triggerUpdate()
@@ -130,12 +127,17 @@ func (m *MetricsAllocator[U]) triggerUpdate() {
 				m.allocateBytesCounter.Add(float64(n))
 			}
 
-			if m.inuseBytesGauge != nil {
+			if m.inuseBytesGauge != nil || m.absoluteInuseGauge != nil {
 				var n int64
 				m.inuseBytes.Each(func(v *atomic.Int64) {
 					n += v.Swap(0)
 				})
-				m.inuseBytesGauge.Add(float64(n))
+				if m.inuseBytesGauge != nil {
+					m.inuseBytesGauge.Add(float64(n))
+				}
+				if m.absoluteInuseGauge != nil {
+					m.absoluteInuseGauge.Add(float64(n))
+				}
 			}
 
 			if m.allocateObjectsCounter != nil {
@@ -152,10 +154,6 @@ func (m *MetricsAllocator[U]) triggerUpdate() {
 					n += v.Swap(0)
 				})
 				m.inuseObjectsGauge.Add(float64(n))
-			}
-
-			if m.absoluteInuseGauge != nil {
-				m.absoluteInuseGauge.Set(float64(m.currentInuse.Load()))
 			}
 
 			m.updating.Store(false)

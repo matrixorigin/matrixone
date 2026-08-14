@@ -52,6 +52,10 @@ type Cache[K comparable, V any] struct {
 
 	enqueueJobs1 chan *_CacheItem[K, V] // items to be enqueued to queue1
 	enqueueJobs2 chan *_CacheItem[K, V] // items to be enqueued to queue2
+	// pendingBytes covers items accepted by Set but waiting in enqueueJobs. It
+	// is part of physical cache usage: the backing allocation already exists,
+	// even though queueLock has not yet charged it to used1/used2.
+	pendingBytes atomic.Int64
 
 	queueLock sync.RWMutex
 	used1     int64
@@ -350,6 +354,7 @@ func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V])
 
 func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 	if !c.queueLock.TryLock() {
+		c.pendingBytes.Add(item.size)
 		// try put itemQueue or itemQueue2, let the queueLock holder do the job
 		if ghostItemSet {
 			select {
@@ -358,7 +363,6 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 			default:
 				// queue full, block until get lock
 				c.queueLock.Lock()
-				defer c.queueLock.Unlock()
 			}
 		} else {
 			select {
@@ -367,9 +371,10 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 			default:
 				// queue full, block until get lock
 				c.queueLock.Lock()
-				defer c.queueLock.Unlock()
 			}
 		}
+		defer c.queueLock.Unlock()
+		defer c.pendingBytes.Add(-item.size)
 	} else {
 		// locked
 		defer c.queueLock.Unlock()
@@ -389,8 +394,10 @@ func (c *Cache[K, V]) helpEnqueue() {
 		select {
 		case item := <-c.enqueueJobs1:
 			c.enqueuePendingItem(item, cacheItemQueue1)
+			c.pendingBytes.Add(-item.size)
 		case item := <-c.enqueueJobs2:
 			c.enqueuePendingItem(item, cacheItemQueue2)
+			c.pendingBytes.Add(-item.size)
 		default:
 			return
 		}
@@ -726,7 +733,7 @@ func (c *Cache[K, V]) runPendingPostEvicts(ctx context.Context, pendingPostEvict
 func (c *Cache[K, V]) used() int64 {
 	c.queueLock.RLock()
 	defer c.queueLock.RUnlock()
-	return c.used1 + c.used2
+	return c.used1 + c.used2 + c.pendingBytes.Load()
 }
 
 func (c *Cache[K, V]) Used() int64 {
