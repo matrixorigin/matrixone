@@ -4,6 +4,8 @@
 package pipeline
 
 import (
+	bytes "bytes"
+	compress_gzip "compress/gzip"
 	encoding_binary "encoding/binary"
 	fmt "fmt"
 	io "io"
@@ -12,6 +14,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	descriptor "github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -6307,7 +6310,48 @@ func init() {
 	proto.RegisterType((*Apply)(nil), "pipeline.Apply")
 }
 
-func init() { proto.RegisterFile("pipeline.proto", fileDescriptor_7ac67a7adf3df9c7) }
+func init() {
+	proto.RegisterFile("pipeline.proto", patchPipelineDescriptor(fileDescriptor_7ac67a7adf3df9c7))
+}
+
+func patchPipelineDescriptor(compressed []byte) []byte {
+	r, err := compress_gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return compressed
+	}
+	var raw bytes.Buffer
+	_, err = raw.ReadFrom(r)
+	_ = r.Close()
+	if err != nil {
+		return compressed
+	}
+	var file descriptor.FileDescriptorProto
+	if err = proto.Unmarshal(raw.Bytes(), &file); err != nil {
+		return compressed
+	}
+	for _, message := range file.MessageType {
+		if message.GetName() != "HashJoin" {
+			continue
+		}
+		for _, field := range message.Field {
+			if field.GetName() == "asof_right_col" {
+				return compressed
+			}
+		}
+		name, jsonName, label, typ, number := "asof_right_col", "asofRightCol", descriptor.FieldDescriptorProto_LABEL_OPTIONAL, descriptor.FieldDescriptorProto_TYPE_INT32, int32(16)
+		message.Field = append(message.Field, &descriptor.FieldDescriptorProto{Name: &name, JsonName: &jsonName, Label: &label, Type: &typ, Number: &number})
+	}
+	data, err := proto.Marshal(&file)
+	if err != nil {
+		return compressed
+	}
+	var out bytes.Buffer
+	zw := compress_gzip.NewWriter(&out)
+	if _, err = zw.Write(data); err != nil || zw.Close() != nil {
+		return compressed
+	}
+	return out.Bytes()
+}
 
 var fileDescriptor_7ac67a7adf3df9c7 = []byte{
 	// 8031 bytes of a gzipped FileDescriptorProto

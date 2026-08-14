@@ -59,9 +59,20 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 		"select * from # c\n  asof join u on asof.k = u.k",
 		"select * from // c\n  asof join u on asof.k = u.k",
 		"select * from t, asof join u on asof.k = u.k",
+		"select * from (asof join u on asof.k = u.k)",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
 		stmt.Free()
 	}
+}
+
+func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select * from t asof join u on asof.k = u.k", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+	require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType)
+	left := join.Left.(*tree.AliasedTableExpr)
+	require.Equal(t, tree.Identifier("asof"), left.As.Alias)
 }

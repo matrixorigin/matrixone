@@ -923,7 +923,6 @@ func (ctr *container) findAsofPredecessor(
 			return left > right
 		})
 		ctr.asofIndexes[groupKey] = ordered
-		ctr.asofIndexValues = append(ctr.asofIndexValues, ordered)
 	}
 
 	leftCol, strict := asofTemporalMetadata(hashJoin.NonEqCond)

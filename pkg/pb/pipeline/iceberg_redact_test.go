@@ -55,6 +55,21 @@ func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
 	}
 }
 
+func TestHashJoinDescriptorContainsAsofRightCol(t *testing.T) {
+	file := decodePipelineFileDescriptor(t)
+	for _, message := range file.GetMessageType() {
+		if message.GetName() != "HashJoin" {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if field.GetName() == "asof_right_col" && field.GetNumber() == 16 {
+				return
+			}
+		}
+	}
+	t.Fatal("pipeline descriptor missing HashJoin.asof_right_col = 16")
+}
+
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
 	t.Helper()
 	compressed := proto.FileDescriptor("pipeline.proto")

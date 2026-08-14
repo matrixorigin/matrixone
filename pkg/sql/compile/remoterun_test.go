@@ -486,7 +486,7 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, nil))
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, &pipeline.Pipeline{}))
 	_, _, err := convertToPipelineInstruction(selectorPreInsert, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 20")
+		require.ErrorContains(t, err, "requires MORPC protocol version 20")
 	_, _, err = convertToPipelineInstruction(targetAwareMultiUpdate, proc, ctx, 1)
 	require.ErrorContains(t, err, "requires MORPC protocol version 20")
 	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)

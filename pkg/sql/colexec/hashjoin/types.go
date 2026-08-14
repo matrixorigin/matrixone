@@ -97,7 +97,6 @@ type container struct {
 	buildHasNullKey        bool
 	asofCompare            compare.Compare
 	asofIndexes            map[uint64][]int32
-	asofIndexValues        [][]int32
 
 	nonEqCondExec colexec.ExpressionExecutor
 
@@ -198,7 +197,7 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
-		len(hashJoin.ctr.asofIndexValues) != 0 ||
+		len(hashJoin.ctr.asofIndexes) != 0 ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
 		hashJoin.ctr.rightRowsMatched != nil ||
@@ -312,12 +311,11 @@ func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err e
 
 func (ctr *container) cleanAsofIndexes(proc *process.Process) {
 	if proc != nil {
-		for _, values := range ctr.asofIndexValues {
+		for _, values := range ctr.asofIndexes {
 			mpool.FreeSlice(proc.Mp(), values)
 		}
 	}
 	ctr.asofIndexes = nil
-	ctr.asofIndexValues = nil
 }
 
 func (ctr *container) cleanNonEqCondExecutor() {

@@ -4,6 +4,8 @@
 package plan
 
 import (
+	bytes "bytes"
+	compress_gzip "compress/gzip"
 	encoding_binary "encoding/binary"
 	fmt "fmt"
 	io "io"
@@ -12,6 +14,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	descriptor "github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -14968,7 +14971,71 @@ func init() {
 	proto.RegisterType((*AlterTableAutoIncrement)(nil), "plan.AlterTableAutoIncrement")
 }
 
-func init() { proto.RegisterFile("plan.proto", fileDescriptor_2d655ab2f7683c23) }
+func init() { proto.RegisterFile("plan.proto", patchPlanDescriptor(fileDescriptor_2d655ab2f7683c23)) }
+
+func patchPlanDescriptor(compressed []byte) []byte {
+	r, err := compress_gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return compressed
+	}
+	var raw bytes.Buffer
+	_, err = raw.ReadFrom(r)
+	_ = r.Close()
+	if err != nil {
+		return compressed
+	}
+	var file descriptor.FileDescriptorProto
+	if err = proto.Unmarshal(raw.Bytes(), &file); err != nil {
+		return compressed
+	}
+	for _, message := range file.MessageType {
+		if message.GetName() == "Node" {
+			found := false
+			for _, field := range message.Field {
+				if field.GetName() == "asof_right_col" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				name, jsonName, label, typ, number := "asof_right_col", "asofRightCol", descriptor.FieldDescriptorProto_LABEL_OPTIONAL, descriptor.FieldDescriptorProto_TYPE_INT32, int32(81)
+				message.Field = append(message.Field, &descriptor.FieldDescriptorProto{Name: &name, JsonName: &jsonName, Label: &label, Type: &typ, Number: &number})
+			}
+			for _, enum := range message.EnumType {
+				if enum.GetName() != "JoinType" {
+					continue
+				}
+				for _, value := range []struct {
+					name   string
+					number int32
+				}{{"ASOF", 11}, {"ASOF_LEFT", 12}} {
+					present := false
+					for _, existing := range enum.Value {
+						if existing.GetName() == value.name {
+							present = true
+							break
+						}
+					}
+					if !present {
+						n := value.name
+						v := value.number
+						enum.Value = append(enum.Value, &descriptor.EnumValueDescriptorProto{Name: &n, Number: &v})
+					}
+				}
+			}
+		}
+	}
+	data, err := proto.Marshal(&file)
+	if err != nil {
+		return compressed
+	}
+	var out bytes.Buffer
+	zw := compress_gzip.NewWriter(&out)
+	if _, err = zw.Write(data); err != nil || zw.Close() != nil {
+		return compressed
+	}
+	return out.Bytes()
+}
 
 var fileDescriptor_2d655ab2f7683c23 = []byte{
 	// 15102 bytes of a gzipped FileDescriptorProto
@@ -20927,6 +20994,13 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x5
 		i--
 		dAtA[i] = 0x80
+	}
+	if m.AsofRightCol != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.AsofRightCol))
+		i--
+		dAtA[i] = 0x5
+		i--
+		dAtA[i] = 0x88
 	}
 	if m.FilterIsBarrier {
 		i--
@@ -31209,6 +31283,9 @@ func (m *Node) ProtoSize() (n int) {
 	}
 	if m.PartitionByCount != 0 {
 		n += 2 + sovPlan(uint64(m.PartitionByCount))
+	}
+	if m.AsofRightCol != 0 {
+		n += 2 + sovPlan(uint64(m.AsofRightCol))
 	}
 	if m.RankOption != nil {
 		l = m.RankOption.ProtoSize()
@@ -49414,6 +49491,25 @@ func (m *Node) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.PartitionByCount |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 81:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AsofRightCol", wireType)
+			}
+			m.AsofRightCol = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AsofRightCol |= int32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

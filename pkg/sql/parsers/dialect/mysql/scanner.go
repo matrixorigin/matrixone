@@ -901,7 +901,7 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	// Only allow the contextual join modifier after an already parsed table
 	// factor. This preserves `FROM asof JOIN ...` and `t AS asof JOIN ...`.
 	prev := s.previousSignificantPos(start - 1)
-	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',') {
+	if prev >= 0 && (s.buf[prev] == '.' || s.buf[prev] == ',' || s.buf[prev] == '(') {
 		return false
 	}
 	end := prev + 1
@@ -917,6 +917,9 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
+		if s.asofQualifierInJoin(pos + len("join")) {
+			return false
+		}
 		return true
 	}
 	if !hasKeywordAt(s.buf, pos, "left") {
@@ -925,6 +928,9 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	pos += len("left")
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
+		if s.asofQualifierInJoin(pos + len("join")) {
+			return false
+		}
 		return true
 	}
 	if !hasKeywordAt(s.buf, pos, "outer") {
@@ -932,7 +938,20 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos += len("outer")
 	pos = s.skipBlankAndCommentsFrom(pos)
-	return hasKeywordAt(s.buf, pos, "join")
+	if !hasKeywordAt(s.buf, pos, "join") {
+		return false
+	}
+	return !s.asofQualifierInJoin(pos + len("join"))
+}
+
+func (s *Scanner) asofQualifierInJoin(pos int) bool {
+	rest := strings.ToLower(s.buf[pos:])
+	on := strings.Index(rest, " on ")
+	if on < 0 {
+		return false
+	}
+	rest = rest[on:]
+	return strings.Contains(rest, "asof.")
 }
 
 // previousSignificantPos walks over whitespace and SQL comments.  ASOF must
