@@ -3897,6 +3897,21 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 // lose precision for numeric columns compared with string constants.
 func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr, exact bool) (*plan.Expr, error) {
 	operands := []*Expr{left, right}
+	rightTypeID := types.T(right.Typ.Id)
+	if right.ExactDecimalParam && (rightTypeID == types.T_float32 || rightTypeID == types.T_float64) {
+		// A binary-protocol FLOAT parameter contributes a REAL domain only to
+		// its own comparison.  Promoting the complete IN list would also round
+		// independent STRING/NEWDECIMAL parameters at the 2^53 boundary.
+		targetType := types.T_float64.ToType()
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
+		}
+		return BindFuncExprImplByPlanExpr(ctx, operator, operands)
+	}
 	if exact {
 		if err := normalizeDecimalStringLiteralComparisonArgs(ctx, operator, operands); err != nil {
 			return nil, err
@@ -4317,16 +4332,7 @@ func bindFuncExprImplByPlanExpr(
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
-			leftIsPreparedParam := isDirectDynamicParam(args[0]) || args[0].ExactDecimalParam
-			preparedListParams := 0
-			if leftIsPreparedParam {
-				preparedListParams++
-			}
-			for _, item := range rightList.List {
-				if isDirectDynamicParam(item) || item.ExactDecimalParam {
-					preparedListParams++
-				}
-			}
+			leftIsPreparedParam := containsDynamicParam(args[0]) || args[0].ExactDecimalParam
 			// MySQL chooses the left runtime numeric parameter's REAL domain for
 			// the complete IN predicate when a runtime string peer is present. Do
 			// this before list packing so the vector and expanded comparisons share
@@ -4358,18 +4364,19 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 			}
-			useRuntimeListReal := len(rightList.List) > 1
-			if useRuntimeListReal {
-				useRuntimeListReal = false
+			useStaticListReal := len(rightList.List) > 1
+			if useStaticListReal {
+				useStaticListReal = false
 				for _, item := range rightList.List {
 					itemType := types.T(item.Typ.Id)
-					if item.ExactDecimalParam && (itemType == types.T_float32 || itemType == types.T_float64) {
-						useRuntimeListReal = true
+					if !item.ExactDecimalParam && !containsDynamicParam(item) &&
+						(itemType == types.T_float32 || itemType == types.T_float64) {
+						useStaticListReal = true
 						break
 					}
 				}
 			}
-			if useRuntimeListReal {
+			if useStaticListReal {
 				floatType := types.T_float64.ToType()
 				target := makePlan2Type(&floatType)
 				args[0], err = appendCastBeforeExpr(ctx, args[0], target)
@@ -4383,10 +4390,6 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 			}
-			groupID := int32(0)
-			if preparedListParams > 1 {
-				groupID = nextExactDecimalListGroupID()
-			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -4398,7 +4401,7 @@ func bindFuncExprImplByPlanExpr(
 				// Prepared TEXT parameters derive their exact DECIMAL domain from
 				// the execution value. Do not pack them into the peer-typed IN
 				// vector, which would truncate scale before that value is known.
-				if !partitionIn && (leftIsPreparedParam || isDirectDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
+				if !partitionIn && (leftIsPreparedParam || containsDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
@@ -4454,23 +4457,21 @@ func bindFuncExprImplByPlanExpr(
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
+					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
 					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
-					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					exactComparison := exactSingleComparison || leftIsPreparedParam || isDirectDynamicParam(expr) || expr.ExactDecimalParam
+					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
 					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison)
 					if err != nil {
 						return nil, err
 					}
-					tmpExpr.ExactDecimalGroup = groupID
 					expanded = append(expanded, tmpExpr)
 				}
 				return combinePlanExprsBalanced(ctx, "and", expanded)

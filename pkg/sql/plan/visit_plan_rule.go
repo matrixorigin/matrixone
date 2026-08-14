@@ -670,11 +670,13 @@ func preparedDecimalInCommonDomain(fn *plan.Function, params []*Expr) (bool, boo
 			continue
 		}
 		count++
-		pos := int(cast.Args[0].GetP().Pos)
-		if pos >= 0 && pos < len(params) {
-			paramType := types.T(params[pos].Typ.Id)
-			real = real || paramType == types.T_float32 || paramType == types.T_float64 ||
-				preparedDecimalParamRequiresReal(params[pos])
+		if count == 1 {
+			pos := int(cast.Args[0].GetP().Pos)
+			if pos >= 0 && pos < len(params) {
+				paramType := types.T(params[pos].Typ.Id)
+				real = paramType == types.T_float32 || paramType == types.T_float64 ||
+					preparedDecimalParamRequiresReal(params[pos])
+			}
 		}
 	}
 	return count > 1, real

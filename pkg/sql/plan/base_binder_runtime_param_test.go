@@ -362,7 +362,7 @@ func exprContainsParam(expr *planpb.Expr) bool {
 	return false
 }
 
-func TestRuntimeMixedINUsesOneRealListDomain(t *testing.T) {
+func TestRuntimeMixedINPreservesIndependentWireDomains(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	column := &planpb.Expr{
 		Typ:  MakePlan2Type(&decimalType),
@@ -383,9 +383,44 @@ func TestRuntimeMixedINUsesOneRealListDomain(t *testing.T) {
 	require.NoError(t, err)
 	comparisonTypes := collectComparisonOperandTypes(expr)
 	require.Len(t, comparisonTypes, 2)
-	for _, comparison := range comparisonTypes {
-		require.Equal(t, types.T_float64, comparison[0])
-		require.Equal(t, types.T_float64, comparison[1])
+	require.True(t, comparisonTypes[0][0].IsDecimal())
+	require.True(t, comparisonTypes[0][1].IsDecimal())
+	require.Equal(t, types.T_float64, comparisonTypes[1][0])
+	require.Equal(t, types.T_float64, comparisonTypes[1][1])
+}
+
+func TestStaticFloatINUsesOneRealListDomain(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 38, 10)
+	column := &planpb.Expr{
+		Typ:  MakePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	for _, floatExpr := range []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(9007199254740992),
+		func() *planpb.Expr {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "+", []*planpb.Expr{
+				makePlan2Float64ConstExprWithType(9007199254740992),
+				makePlan2Float64ConstExprWithType(0),
+			})
+			require.NoError(t, err)
+			return expr
+		}(),
+	} {
+		list := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_tuple)},
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+				floatExpr, makePlan2StringConstExprWithType("0"),
+			}}},
+		}
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in",
+			[]*planpb.Expr{DeepCopyExpr(column), list})
+		require.NoError(t, err)
+		comparisonTypes := collectComparisonOperandTypes(expr)
+		require.NotEmpty(t, comparisonTypes)
+		for _, comparison := range comparisonTypes {
+			require.Equal(t, types.T_float64, comparison[0])
+			require.Equal(t, types.T_float64, comparison[1])
+		}
 	}
 }
 

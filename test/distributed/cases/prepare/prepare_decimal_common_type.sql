@@ -266,6 +266,13 @@ PREPARE p_in_real_ctas FROM
 PREPARE p_in_real_update FROM 'UPDATE runtime_in_real SET id=id+10 WHERE d IN (?,?)';
 SET @real=CAST(9007199254740992 AS DOUBLE);
 SET @zero='0';
+SELECT id FROM runtime_in_real WHERE d IN (9007199254740992e0,'0') ORDER BY id;
+SELECT id FROM runtime_in_real WHERE d NOT IN (9007199254740992e0,'0') ORDER BY id;
+SELECT id FROM runtime_in_real
+  WHERE d IN ((9007199254740992e0+0e0),'0') ORDER BY id;
+CREATE TABLE runtime_in_static_ctas AS
+  SELECT id FROM runtime_in_real WHERE d IN (9007199254740992e0,'0');
+SELECT id FROM runtime_in_static_ctas ORDER BY id;
 EXECUTE p_in_real USING @real,@zero;
 EXECUTE p_not_in_real USING @real,@zero;
 EXECUTE p_or_real USING @real,@zero;
@@ -273,12 +280,15 @@ EXECUTE p_in_real_ctas USING @real,@zero;
 SELECT id FROM runtime_in_real_ctas ORDER BY id;
 EXECUTE p_in_real_update USING @real,@zero;
 SELECT id FROM runtime_in_real ORDER BY id;
+UPDATE runtime_in_real SET id=id+100 WHERE d IN (9007199254740992e0,'0');
+SELECT id FROM runtime_in_real ORDER BY id;
 DEALLOCATE PREPARE p_in_real;
 DEALLOCATE PREPARE p_not_in_real;
 DEALLOCATE PREPARE p_or_real;
 DEALLOCATE PREPARE p_in_real_ctas;
 DEALLOCATE PREPARE p_in_real_update;
 DROP TABLE runtime_in_real_ctas;
+DROP TABLE runtime_in_static_ctas;
 DROP TABLE runtime_in_real;
 
 PREPARE p_leading_zero FROM 'SELECT COALESCE(?,CAST(2 AS DECIMAL(1,0)))';
