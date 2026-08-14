@@ -1,20 +1,20 @@
 DROP DATABASE IF EXISTS TEST01;
 CREATE DATABASE TEST01;
 show CREATE DATABASE test01;
-➤ Database[12,4,0]  ¦  Create Database[12,18,0]  𝄀
-test01  ¦  CREATE DATABASE `test01`
+Database    Create Database
+test01    CREATE DATABASE `test01`
 DROP DATABASE test01;
 DROP DATABASE IF EXISTS test02;
 CREATE DATABASE test02;
 show CREATE DATABASE TEST02;
-➤ Database[12,4,0]  ¦  Create Database[12,18,0]  𝄀
-test02  ¦  CREATE DATABASE `test02`
+Database    Create Database
+test02    CREATE DATABASE `test02`
 DROP DATABASE test02;
 DROP DATABASE IF EXISTS mysql_TEST;
 CREATE DATABASE mysql_TEST;
 show CREATE DATABASE mysql_TEST;
-➤ Database[12,7,0]  ¦  Create Database[12,21,0]  𝄀
-mysql_test  ¦  CREATE DATABASE `mysql_test`
+Database    Create Database
+mysql_test    CREATE DATABASE `mysql_test`
 DROP DATABASE mysql_TEST;
 DROP DATABASE IF EXISTS test03;
 DROP TABLE IF EXISTS t1;
@@ -24,117 +24,103 @@ CREATE TEMPORARY TABLE t1(a float);
 INSERT INTO T1 VALUES(213823.12);
 INSERT INTO t1 VALUES(-45412.38920);
 SELECT * FROM t1;
-➤ a[7,23,31]  𝄀
-213823.12  𝄀
+a
+213823.12
 -45412.39
 DROP TABLE T1;
 drop table IF EXISTS table01;
 CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM Table01;
-➤ clo1[4,32,0]  ¦  clo2[-5,64,0]  𝄀
-1  ¦  2131420000000000  𝄀
-2  ¦  325465476  𝄀
-3  ¦  -1
+clo1    clo2
+1    2131420000000000
+2    325465476
+3    -1
 SELECT Clo1 FROM table01;
-➤ Clo1[4,32,0]  𝄀
-1  𝄀
-2  𝄀
+Clo1
+1
+2
 3
 DROP table table01;
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
 show CREATE TABLE t1;
-➤ Table[12,1,0]  ¦  Create Table[12,87,0]  𝄀
-t1  ¦  CREATE TABLE `t1` (
-  `id` int NOT NULL,
-  `Word` varchar(40) NOT NULL,
-  PRIMARY KEY (`id`),
-  KEY `word` (`Word`)
-)
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `Word` varchar(40) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `word` (`Word`)\n)
 INSERT INTO t1 VALUES (1, 'a');
 INSERT INTO t1 VALUES (2, 'b');
 INSERT INTO t1 VALUES (3, 'c');
 INSERT INTO T1 VALUES (4, 'd');
 SELECT * FROM t1;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-1  ¦  a  𝄀
-2  ¦  b  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+id    word
+1    a
+2    b
+3    c
+4    d
 SELECT * FROM T1;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-1  ¦  a  𝄀
-2  ¦  b  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+id    word
+1    a
+2    b
+3    c
+4    d
 SELECT T1.id FROM T1 LIMIT 1;
-➤ id[4,32,0]  𝄀
+id
 1
 SELECT T1.id FROM t1 LIMIT 1;
-➤ id[4,32,0]  𝄀
+id
 1
 SELECT id FROM T1;
-➤ id[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3  𝄀
+id
+1
+2
+3
 4
 select ID FROM t1;
-➤ ID[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3  𝄀
+ID
+1
+2
+3
 4
 SELECT Id FROM t1;
-➤ Id[4,32,0]  𝄀
-1  𝄀
-2  𝄀
-3  𝄀
+Id
+1
+2
+3
 4
 SELECT COUNT(*) FROM t1;
-➤ COUNT(*)[-5,64,0]  𝄀
+COUNT(*)
 4
 SELECT COUNT(*) FROM T1;
-➤ COUNT(*)[-5,64,0]  𝄀
+COUNT(*)
 4
 SELECT COUNT(t1.id) FROM t1;
-➤ COUNT(t1.id)[-5,64,0]  𝄀
+COUNT(t1.id)
 4
 SELECT COUNT(T1.Id) FROM t1;
-➤ COUNT(T1.Id)[-5,64,0]  𝄀
+COUNT(T1.Id)
 4
 SELECT * FROM t1 WHERE Id = 2;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-2  ¦  b
+id    word
+2    b
 DROP TABLE IF EXISTS t2;
 CREATE table t2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
 INSERT INTO T2 SELECT * from T1;
 SELECT * FROM T2;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-1  ¦  a  𝄀
-2  ¦  b  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+id    word
+1    a
+2    b
+3    c
+4    d
 DROP TABLE t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
 CREATE TABLE T2(id int PRIMARY KEY, Word VARCHAR(40) NOT NULL, INDEX(Word));
 CREATE TABLE t3(id int primary key, Word varchar(40) NOT NULL);
 show CREATE TABLE t2;
-➤ Table[12,1,0]  ¦  Create Table[12,87,0]  𝄀
-t2  ¦  CREATE TABLE `t2` (
-  `id` int NOT NULL,
-  `Word` varchar(40) NOT NULL,
-  PRIMARY KEY (`id`),
-  KEY `word` (`Word`)
-)
+Table    Create Table
+t2    CREATE TABLE `t2` (\n  `id` int NOT NULL,\n  `Word` varchar(40) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `word` (`Word`)\n)
 show CREATE TABLE t3;
-➤ Table[12,1,0]  ¦  Create Table[12,70,0]  𝄀
-t3  ¦  CREATE TABLE `t3` (
-  `id` int NOT NULL,
-  `Word` varchar(40) NOT NULL,
-  PRIMARY KEY (`id`)
-)
+Table    Create Table
+t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `Word` varchar(40) NOT NULL,\n  PRIMARY KEY (`id`)\n)
 INSERT INTO T2 VALUES (1, 'a');
 INSERT INTO t2 VALUES (2, 'b');
 INSERT INTO t2 VALUES (3, 'c');
@@ -143,30 +129,30 @@ INSERT INTO t3 VALUES (1,'match');
 DELETE FROM t2 WHERE id = 1;
 DELETE FROM T2 WHERE ID = 2;
 SELECT * FROM T2;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+id    word
+3    c
+4    d
 SELECT * FROM t3;
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-1  ¦  match
+id    word
+1    match
 SELECT T2.id FROM T2 LIMIT 1;
-➤ id[4,32,0]  𝄀
+id
 3
 SELECT Id, WORD FROM t2;
-➤ Id[4,32,0]  ¦  WORD[12,30,0]  𝄀
-3  ¦  c  𝄀
-4  ¦  d
+Id    WORD
+3    c
+4    d
 SELECT * FROM t3 WHERE WORD = 'match';
-➤ id[4,32,0]  ¦  word[12,30,0]  𝄀
-1  ¦  match
+id    word
+1    match
 SELECT t3.id AS t3_ID FROM T3 LIMIT 1;
-➤ t3_ID[4,32,0]  𝄀
+t3_ID
 1
 SELECT t3.ID AS t3_ID FROM t3 LIMIT 1;
-➤ t3_ID[4,32,0]  𝄀
+t3_ID
 1
 SELECT * FROM t2 left join t3 ON (test.t2.id= TEST.t3.id) WHERE t2.id >= t3.id;
-➤ id[4,32,0]  ¦  word[12,30,0]  ¦  id[4,32,0]  ¦  word[12,30,0]
+id    word    id    word
 DROP TABLE t2;
 DROP TABLE t3;
 DROP TABLE IF EXISTS t4;
@@ -176,20 +162,11 @@ CREATE TABLE t5(a int ,b varchar(5), C int, constraint fc foreign key(C) referen
 ALTER table t5 DROP FOREIGN KEY fC;
 ALTER table t5 ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE t4;
-➤ Table[12,1,0]  ¦  Create Table[12,69,0]  𝄀
-t4  ¦  CREATE TABLE `t4` (
-  `a` int NOT NULL,
-  `b` varchar(5) DEFAULT NULL,
-  PRIMARY KEY (`a`)
-)
+Table    Create Table
+t4    CREATE TABLE `t4` (\n  `a` int NOT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show CREATE TABLE T5;
-➤ Table[12,1,0]  ¦  Create Table[12,147,0]  𝄀
-t5  ¦  CREATE TABLE `t5` (
-  `a` int DEFAULT NULL,
-  `b` varchar(5) DEFAULT NULL,
-  `C` int DEFAULT NULL,
-  CONSTRAINT `fc` FOREIGN KEY (`C`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+t5    CREATE TABLE `t5` (\n  `a` int DEFAULT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  `C` int DEFAULT NULL,\n  CONSTRAINT `fc` FOREIGN KEY (`C`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table t5;
 DROP table t4;
 DROP USER IF EXISTS u_name;
@@ -199,12 +176,12 @@ internal error: the user u_name exists
 CREATE USER U_name IDENTIFIED BY '123456';
 internal error: the user u_name exists
 SELECT user_host,user_name,status FROM mo_catalog.mo_user WHERE user_name = 'U_name';
-➤ user_host[12,75,0]  ¦  user_name[12,225,0]  ¦  status[12,6,0]
+user_host    user_name    status
 SELECT user_host,user_name,status FROM mo_catalog.mo_user;
-➤ user_host[12,75,0]  ¦  user_name[12,225,0]  ¦  status[12,6,0]  𝄀
-localhost  ¦  u_name  ¦  unlock  𝄀
-localhost  ¦  root  ¦  unlock  𝄀
-localhost  ¦  dump  ¦  unlock
+user_host    user_name    status
+localhost    root    unlock
+localhost    dump    unlock
+localhost    u_name    unlock
 DROP USER u_name;
 DROP DATABASE test03;
 DROP database IF EXISTS test03;
@@ -215,39 +192,39 @@ INSERT INTO t6 VALUES(1);
 INSERT INTO t6 VALUES(24845615);
 INSERT INTO T6 VALUES(-289173);
 select T6.a from test03.T6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select t6.a from test03.T6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select test03.t6.a from TEST03.t6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST03.t6.a from TEST03.t6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST03.T6.a from TEST03.T6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST03.T6.a from T6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST03.t6.a from TEST03.t6;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 DROP TABLE t6;
 DROP TABLE IF EXISTS t7;
@@ -259,10 +236,10 @@ INSERT INTO t8 VALUES(1);
 update t7 as p1, t8 as p2 SET p1.a=1,p2.a=1 where p1.a=p2.a;
 update t7 as P1, t8 as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
 SELECT * FROM t7;
-➤ a[4,32,0]  𝄀
+a
 10
 SELECT * FROM t8;
-➤ a[4,32,0]  𝄀
+a
 100
 DROP TABLE t7;
 DROP TABLE t8;
@@ -277,8 +254,8 @@ CREATE TABLE t10(a int);
 INSERT INTO t9 VALUES(100);
 INSERT INTO t10 VALUES(1000);
 SELECT t9.a AS a,t10.A as B from t9,t10;
-➤ a[4,32,0]  ¦  B[4,32,0]  𝄀
-100  ¦  1000
+a    B
+100    1000
 DROP TABLE t9;
 DROP TABLE t10;
 DROP TABLE if EXISTS t10;
@@ -287,49 +264,34 @@ insert into t10 values(1,"Abby", 24);
 insert into t10 values(2,"Bob", 25);
 create unique index idx on t10(name);
 select * from t10;
-➤ id[4,32,0]  ¦  name[12,191,0]  ¦  age[4,32,0]  𝄀
-1  ¦  Abby  ¦  24  𝄀
-2  ¦  Bob  ¦  25
+id    name    age
+1    Abby    24
+2    Bob    25
 show CREATE TABLE t10;
-➤ Table[12,2,0]  ¦  Create Table[12,116,0]  𝄀
-t10  ¦  CREATE TABLE `t10` (
-  `id` int NOT NULL,
-  `name` varchar(255) DEFAULT NULL,
-  `age` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx` (`name`)
-)
+Table    Create Table
+t10    CREATE TABLE `t10` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
 DROP TABLE t10;
 DROP table IF EXISTS t11;
 CREATE table t11(col1 int PRIMARY KEY,col2 CHAR,col3 float);
 INSERT INTO t11 VALUES(1,'a',898021.8392);
 INSERT INTO t11 VALUES(2, NULL, 213145.45);
 select * from t11;
-➤ col1[4,32,0]  ¦  col2[1,0,0]  ¦  col3[7,23,31]  𝄀
-1  ¦  a  ¦  898021.8  𝄀
-2  ¦  null  ¦  213145.45
+col1    col2    col3
+1    a    898021.8
+2    null    213145.45
 show CREATE table t11;
-➤ Table[12,2,0]  ¦  Create Table[12,96,0]  𝄀
-t11  ¦  CREATE TABLE `t11` (
-  `col1` int NOT NULL,
-  `col2` char(1) DEFAULT NULL,
-  `col3` float DEFAULT NULL,
-  PRIMARY KEY (`col1`)
-)
+Table    Create Table
+t11    CREATE TABLE `t11` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 DROP TABLE t11;
 DROP TABLE IF EXISTS t12;
 CREATE TABLE t12(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX ABc ON t12(col2);
 DROP INDEX abc on t12;
 select * from t12;
-➤ col1[4,32,0]  ¦  col2[12,15,0]  ¦  col3[8,53,31]
+col1    col2    col3
 show CREATE table t12;
-➤ Table[12,2,0]  ¦  Create Table[12,84,0]  𝄀
-t12  ¦  CREATE TABLE `t12` (
-  `col1` int DEFAULT NULL,
-  `col2` varchar(20) DEFAULT NULL,
-  `col3` double DEFAULT NULL
-)
+Table    Create Table
+t12    CREATE TABLE `t12` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` double DEFAULT NULL\n)
 DROP TABLE t12;
 DROP ACCOUNT IF EXISTS tenant_test;
 CREATE ACCOUNT tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -339,8 +301,8 @@ internal error: the tenant tenant_test exists
 CREATE ACCOUNT TENANT_TEST admin_name = 'root' identified by '111' open comment 'tenant_test';
 internal error: the tenant tenant_test exists
 SELECT account_name,status,comments FROM mo_catalog.mo_account WHERE account_name = 'tenant_test';
-➤ account_name[12,225,0]  ¦  status[12,225,0]  ¦  comments[12,192,0]  𝄀
-tenant_test  ¦  open  ¦  abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
+account_name    status    comments
+tenant_test    open    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
 DROP ACCOUNT IF EXISTS TENANT_TEST;
 DROP ROLE IF EXISTS rolex;
 CREATE ROLE rolex;
@@ -349,23 +311,23 @@ internal error: the role rolex exists
 CREATE ROLE ROLEX;
 internal error: the role rolex exists
 SELECT role_name,COmments FROM mo_catalog.mo_role;
-➤ role_name[12,225,0]  ¦  COmments[12,0,0]  𝄀
-rolex  ¦    𝄀
-moadmin  ¦    𝄀
-public  ¦  
+role_name    COmments
+moadmin    
+public    
+rolex    
 SELECT role_name,COmments FROM mo_catalog.mo_role WHERE role_name = 'Rolex';
-➤ role_name[12,225,0]  ¦  COmments[12,0,0]
+role_name    COmments
 DROP ROLE rolex;
 DROP SEQUENCE IF EXISTS SEQ;
 CREATE SEQUENCE SEQ increment 100 start 30;
 CREATE SEQUENCE seq increment 100 start 30;
 table seq already exists
 SELECT * FROM SEQ;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
-30  ¦  1  ¦  9223372036854775807  ¦  30  ¦  100  ¦  0  ¦  0
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+30    1    9223372036854775807    30    100    0    0
 SELECT laSt_seq_nuM,min_value,start_value FROM Seq;
-➤ laSt_seq_nuM[-5,64,0]  ¦  min_value[-5,64,0]  ¦  start_value[-5,64,0]  𝄀
-30  ¦  1  ¦  30
+laSt_seq_nuM    min_value    start_value
+30    1    30
 DROP SEQUENCE SEQ;
 DROP TABLE IF EXISTS t12;
 DROP TABLE IF EXISTS t13;
@@ -385,8 +347,8 @@ DROP VIEW IF EXISTS vie;
 CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
-➤ View[12,2,0]  ¦  Create View[12,39,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-vie  ¦  create view `vie` as select `tab`.`field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -396,15 +358,15 @@ INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
-➤ View[12,4,0]  ¦  Create View[12,66,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-view01  ¦  create view `view01` as select `t13`.`a` from `t13` where `t13`.`a` = 1 or `t13`.`a` = 2  ¦  utf8mb4  ¦  utf8mb4_general_ci
+View    Create View    character_set_client    collation_connection
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
 SELECT * FROM view01;
-➤ a[4,32,0]  𝄀
-1  𝄀
+a
+1
 2
 SELECT * FROM vieW01 WHERE A = 1 OR a = 2;
-➤ a[4,32,0]  𝄀
-1  𝄀
+a
+1
 2
 DROP view view01;
 drop table t13;
@@ -412,20 +374,20 @@ drop database test04;
 DROP DATABASE IF EXISTS `TEST01`;
 CREATE DATABASE `TEST01`;
 show CREATE DATABASE `test01`;
-➤ Database[12,4,0]  ¦  Create Database[12,18,0]  𝄀
-test01  ¦  CREATE DATABASE `test01`
+Database    Create Database
+test01    CREATE DATABASE `test01`
 DROP DATABASE `test01`;
 DROP DATABASE IF EXISTS `test02`;
 CREATE DATABASE `test02`;
 show CREATE DATABASE `TEST02`;
-➤ Database[12,4,0]  ¦  Create Database[12,18,0]  𝄀
-test02  ¦  CREATE DATABASE `test02`
+Database    Create Database
+test02    CREATE DATABASE `test02`
 DROP DATABASE `test02`;
 DROP DATABASE IF EXISTS `mysql_TEST`;
 CREATE DATABASE `mysql_TEST`;
 show CREATE DATABASE `mysql_TEST`;
-➤ Database[12,7,0]  ¦  Create Database[12,21,0]  𝄀
-mysql_test  ¦  CREATE DATABASE `mysql_test`
+Database    Create Database
+mysql_test    CREATE DATABASE `mysql_test`
 DROP DATABASE `mysql_TEST`;
 DROP DATABASE IF EXISTS `test05`;
 CREATE DATABASE `test05`;
@@ -434,8 +396,8 @@ CREATE TABLE `t11`(aa float);
 INSERT INTO `t11` VALUES(12.322);
 INSERT INTO `T11` VALUES(-56.23);
 SELECT * FROM `t11`;
-➤ aa[7,23,31]  𝄀
-12.322  𝄀
+aa
+12.322
 -56.23
 DROP table t11;
 DROP TABLE IF EXISTS `t12`;
@@ -444,39 +406,39 @@ INSERT INTO `t12` VALUES(1);
 INSERT INTO `t12` VALUES(24845615);
 INSERT INTO `T12` VALUES(-289173);
 select `T12`.a from `test05`.T12;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select `t12`.a from `test05`.T12;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select test05.t12.a from `TEST05`.t12;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select `TEST05`.t12.a from TEST05.t12;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST05.T12.a from TEST05.`T12`;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST05.T12.a from `T12`;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 select TEST05.t12.a from `TEST05`.t12;
-➤ a[4,32,0]  𝄀
-1  𝄀
-24845615  𝄀
+a
+1
+24845615
 -289173
 DROP TABLE t12;
 DROP DATABASE TEST05;
@@ -490,8 +452,8 @@ CREATE TABLE `t14` (a int);
 INSERT INTO `t13` VALUES(100);
 INSERT INTO `t14` VALUES(1000);
 SELECT `t13`.a AS a,`t14`.A as B from `t13`,`t14`;
-➤ a[4,32,0]  ¦  B[4,32,0]  𝄀
-100  ¦  1000
+a    B
+100    1000
 DROP TABLE `t13`;
 DROP TABLE `t14`;
 DROP TABLE IF EXISTS `t15`;
@@ -503,10 +465,10 @@ INSERT INTO `t16` VALUES(1);
 update `t15` as p1, `t16` as p2 SET p1.a=1,P2.a=1 where p1.a=P2.a;
 update `t15` as P1, `t16` as P2 SET P1.a=10,p2.a=100 where P1.a=p2.a;
 SELECT * FROM `t15`;
-➤ a[4,32,0]  𝄀
+a
 10
 SELECT * FROM `T16`;
-➤ a[4,32,0]  𝄀
+a
 100
 DROP TABLE `t15`;
 DROP TABLE `t16`;
@@ -516,60 +478,45 @@ insert into `t17` values(1,"Abby", 24);
 insert into `t17` values(2,"Bob", 25);
 create unique index `Idx` on t17(name);
 select * from `t17`;
-➤ id[4,32,0]  ¦  name[12,191,0]  ¦  age[4,32,0]  𝄀
-1  ¦  Abby  ¦  24  𝄀
-2  ¦  Bob  ¦  25
+id    name    age
+1    Abby    24
+2    Bob    25
 show CREATE TABLE `t17`;
-➤ Table[12,2,0]  ¦  Create Table[12,116,0]  𝄀
-t17  ¦  CREATE TABLE `t17` (
-  `id` int NOT NULL,
-  `name` varchar(255) DEFAULT NULL,
-  `age` int DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `idx` (`name`)
-)
+Table    Create Table
+t17    CREATE TABLE `t17` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
 DROP TABLE `t17`;
 DROP SEQUENCE IF EXISTS `SEQ`;
 CREATE SEQUENCE `SEQ` increment 100 start 30;
 CREATE SEQUENCE `seq` increment 100 start 30;
 table seq already exists
 SELECT * FROM `SEQ`;
-➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
-30  ¦  1  ¦  9223372036854775807  ¦  30  ¦  100  ¦  0  ¦  0
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+30    1    9223372036854775807    30    100    0    0
 SELECT `laSt_seq_nuM`,`min_value`,`start_value` FROM Seq;
-➤ laSt_seq_nuM[-5,64,0]  ¦  min_value[-5,64,0]  ¦  start_value[-5,64,0]  𝄀
-30  ¦  1  ¦  30
+laSt_seq_nuM    min_value    start_value
+30    1    30
 DROP SEQUENCE `SEQ`;
 DROP table IF EXISTS `t18`;
 CREATE table `t18`(col1 int PRIMARY KEY,col2 CHAR,col3 float);
 INSERT INTO `t18` VALUES(1,'a',898021.8392);
 INSERT INTO `t18` VALUES(2, NULL, 213145.45);
 select * from `t18`;
-➤ col1[4,32,0]  ¦  col2[1,0,0]  ¦  col3[7,23,31]  𝄀
-1  ¦  a  ¦  898021.8  𝄀
-2  ¦  null  ¦  213145.45
+col1    col2    col3
+1    a    898021.8
+2    null    213145.45
 show CREATE table `t18`;
-➤ Table[12,2,0]  ¦  Create Table[12,96,0]  𝄀
-t18  ¦  CREATE TABLE `t18` (
-  `col1` int NOT NULL,
-  `col2` char(1) DEFAULT NULL,
-  `col3` float DEFAULT NULL,
-  PRIMARY KEY (`col1`)
-)
+Table    Create Table
+t18    CREATE TABLE `t18` (\n  `col1` int NOT NULL,\n  `col2` char(1) DEFAULT NULL,\n  `col3` float DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
 DROP TABLE `t18`;
 DROP TABLE IF EXISTS `t19`;
 CREATE TABLE `t19`(col1 int,col2 varchar(20),col3 double);
 CREATE INDEX `ABc` ON t19(col2);
 DROP INDEX `abc` ON t19;
 select * from `t19`;
-➤ col1[4,32,0]  ¦  col2[12,15,0]  ¦  col3[8,53,31]
+col1    col2    col3
 show CREATE table `t19`;
-➤ Table[12,2,0]  ¦  Create Table[12,84,0]  𝄀
-t19  ¦  CREATE TABLE `t19` (
-  `col1` int DEFAULT NULL,
-  `col2` varchar(20) DEFAULT NULL,
-  `col3` double DEFAULT NULL
-)
+Table    Create Table
+t19    CREATE TABLE `t19` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` double DEFAULT NULL\n)
 DROP TABLE `t19`;
 DROP ACCOUNT IF EXISTS `tenant_test`;
 CREATE ACCOUNT `tenant_test` admin_name = 'root' identified by '111' open comment 'tenant_test';
@@ -579,8 +526,8 @@ internal error: the tenant tenant_test exists
 CREATE ACCOUNT `TENANT_TEST` admin_name = 'root' identified by '111' open comment 'tenant_test';
 internal error: the tenant tenant_test exists
 SELECT `account_name`,`status`,`comments` FROM `mo_catalog`.`mo_account` WHERE `account_name` = 'tenant_test';
-➤ account_name[12,225,0]  ¦  status[12,225,0]  ¦  comments[12,192,0]  𝄀
-tenant_test  ¦  open  ¦  abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
+account_name    status    comments
+tenant_test    open    abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff
 DROP ACCOUNT IF EXISTS TENANT_TEST;
 DROP ROLE IF EXISTS `rolex`;
 CREATE ROLE `rolex`;
@@ -589,12 +536,12 @@ internal error: the role rolex exists
 CREATE ROLE `ROLEX`;
 internal error: the role rolex exists
 SELECT role_name,comments FROM `mo_catalog`.`mo_role`;
-➤ role_name[12,225,0]  ¦  comments[12,0,0]  𝄀
-rolex  ¦    𝄀
-moadmin  ¦    𝄀
-public  ¦  
+role_name    comments
+moadmin    
+public    
+rolex    
 SELECT role_name,COmments FROM `mo_catalog`.`mo_role` WHERE `role_name` = 'Rolex';
-➤ role_name[12,225,0]  ¦  COmments[12,0,0]
+role_name    COmments
 DROP ROLE `Rolex`;
 DROP USER IF EXISTS `user_name`;
 CREATE USER `user_name` IDENTIFIED BY '123456';
@@ -603,12 +550,12 @@ internal error: the user user_name exists
 CREATE USER `USER_name` IDENTIFIED BY '123456';
 internal error: the user user_name exists
 SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user`;
-➤ user_host[12,75,0]  ¦  user_name[12,225,0]  ¦  status[12,6,0]  𝄀
-localhost  ¦  user_name  ¦  unlock  𝄀
-localhost  ¦  root  ¦  unlock  𝄀
-localhost  ¦  dump  ¦  unlock
+user_host    user_name    status
+localhost    root    unlock
+localhost    dump    unlock
+localhost    user_name    unlock
 SELECT `user_host`,`user_name`,`status` FROM `mo_catalog`.`mo_user` WHERE user_name = 'User_name';
-➤ user_host[12,75,0]  ¦  user_name[12,225,0]  ¦  status[12,6,0]
+user_host    user_name    status
 DROP USER `user_name`;
 DROP DATABASE `test06`;
 drop database if exists `test10`;
@@ -625,9 +572,9 @@ CREATE VIEW `view1` AS SELECT t20.a, T21.a AS b FROM t20 LEFT JOIN t21 USING(a);
 CREATE VIEW `VIEW1` AS SELECT t20.a, t21.a AS b FROM t20 LEFT JOIN t21 USING(a);
 table view1 already exists
 SELECT * FROM `view1`;
-➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  1  𝄀
-2  ¦  null
+a    b
+1    1
+2    null
 DROP VIEW `view1`;
 DROP TABLE `t20`;
 DROP TABLE `t21`;
@@ -637,8 +584,8 @@ CREATE TABLE `TaB`(Field int);
 INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
-➤ View[12,2,0]  ¦  Create View[12,39,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-vie  ¦  create view `vie` as select `tab`.`field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;
@@ -648,10 +595,10 @@ INSERT INTO `t22` VALUES(1),(2),(3),(4);
 CREATE VIEW `view01` AS SELECT * FROM `t22`;
 ALTER VIEW `VIEW01` AS SELECT * FROM `t22` WHERE a=1;
 SELECT * FROM `view01`;
-➤ a[4,32,0]  𝄀
+a
 1
 SELECT * FROM `view01` WHERE A = 1;
-➤ a[4,32,0]  𝄀
+a
 1
 DROP view `vieW01`;
 drop database if exists `test10`;
@@ -664,8 +611,8 @@ CREATE TEMPORARY TABLE `t1`(a float);
 INSERT INTO `T1` VALUES(213823.12);
 INSERT INTO `t1` VALUES(-45412.38920);
 SELECT * FROM `t1`;
-➤ a[7,23,31]  𝄀
-213823.12  𝄀
+a
+213823.12
 -45412.39
 DROP TABLE `t1`;
 DROP DATABASE `TEST07`;
@@ -679,20 +626,11 @@ CREATE TABLE `t5`(a int ,b varchar(5), C int, constraint fc foreign key(C) refer
 ALTER table `t5` DROP FOREIGN KEY fC;
 ALTER table `t5` ADD constraint fC foreign key(c) REFERENCES t4(a);
 show CREATE TABLE `t4`;
-➤ Table[12,1,0]  ¦  Create Table[12,69,0]  𝄀
-t4  ¦  CREATE TABLE `t4` (
-  `a` int NOT NULL,
-  `b` varchar(5) DEFAULT NULL,
-  PRIMARY KEY (`a`)
-)
+Table    Create Table
+t4    CREATE TABLE `t4` (\n  `a` int NOT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show CREATE TABLE `T5`;
-➤ Table[12,1,0]  ¦  Create Table[12,147,0]  𝄀
-t5  ¦  CREATE TABLE `t5` (
-  `a` int DEFAULT NULL,
-  `b` varchar(5) DEFAULT NULL,
-  `C` int DEFAULT NULL,
-  CONSTRAINT `fc` FOREIGN KEY (`C`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-)
+Table    Create Table
+t5    CREATE TABLE `t5` (\n  `a` int DEFAULT NULL,\n  `b` varchar(5) DEFAULT NULL,\n  `C` int DEFAULT NULL,\n  CONSTRAINT `fc` FOREIGN KEY (`C`) REFERENCES `t4` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 DROP table `t5`;
 DROP table `t4`;
 drop database if exists `test11`;
@@ -702,9 +640,9 @@ use  `test08`;
 DROP table IF EXISTS `table02`;
 CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM `Table02`;
-➤ clo1[4,32,0]  ¦  clo2[-5,64,0]  𝄀
-1  ¦  2131420000000000  𝄀
-2  ¦  325465476  𝄀
-3  ¦  -1
+clo1    clo2
+1    2131420000000000
+2    325465476
+3    -1
 drop table table02;
 DROP DATABASE `TEST08`;

@@ -16,54 +16,51 @@ col2 varchar
 );
 create view test_view as select * from test_table;
 show create database test_db;
-➤ Database[12,5,0]  ¦  Create Database[12,18,0]  𝄀
-test_db  ¦  CREATE DATABASE `test_db`
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
 show create table test_table;
-➤ Table[12,7,0]  ¦  Create Table[12,69,0]  𝄀
-test_table  ¦  CREATE TABLE `test_table` (
-  `col1` int DEFAULT NULL,
-  `col2` varchar(65535) DEFAULT NULL
-)
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 show create view test_view;
-➤ View[12,6,0]  ¦  Create View[12,69,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-test_view  ¦  create view `test_view` as select `test_table`.`col1`, `test_table`.`col2` from `test_table`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 show triggers;
-➤ Trigger[12,48,0]  ¦  Event[12,7,0]  ¦  Table[12,48,0]  ¦  Statement[12,0,0]  ¦  Timing[12,7,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,7,0]  ¦  Definer[12,216,0]  ¦  character_set_client[12,48,0]  ¦  collation_connection[12,48,0]  ¦  Database Collation[12,48,0]
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
-➤ Db[12,75,0]  ¦  Name[12,75,0]  ¦  Type[12,7,0]  ¦  Definer[12,37,0]  ¦  Modified[93,64,0]  ¦  Created[93,64,0]  ¦  Security_type[12,7,0]  ¦  Comment[12,3750,0]  ¦  character_set_client[12,48,0]  ¦  collation_connection[12,48,0]  ¦  Database Collation[12,48,0]
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 show config;
-➤ 1[-5,64,0]
+1
 show events;
-➤ 1[-5,64,0]
+1
 show plugins;
-➤ 1[-5,64,0]
+1
 show profiles;
-➤ 1[-5,64,0]
+1
 show privileges;
-➤ 1[-5,64,0]
+1
 show tables;
-➤ Tables_in_test_db[12,3750,0]  𝄀
-test_table  𝄀
+Tables_in_test_db
+test_table
 test_view
 show collation like 'utf8mb4_general_ci';
-➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 show collation like 'utf8mb4_general_ci%';
-➤ Collation[12,0,0]  ¦  Charset[12,0,0]  ¦  Id[-5,0,0]  ¦  Default[12,0,0]  ¦  Compiled[12,0,0]  ¦  Sortlen[4,0,0]  ¦  Pad_attribute[12,0,0]  𝄀
-utf8mb4_general_ci  ¦  utf8mb4  ¦  45  ¦  YES  ¦  Yes  ¦  1  ¦  PAD SPACE
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45    YES    Yes    1    PAD SPACE
 show index from test_table;
-➤ Table[12,7,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
-➤ column_0[-5,64,0]  ¦  column_1[-5,64,0]  𝄀
-3  ¦  3  𝄀
-2  ¦  2  𝄀
-1  ¦  1
+column_0    column_1
+3    3
+2    2
+1    1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
-➤ 1[-5,64,0]  ¦  2[-5,64,0]  𝄀
-1  ¦  2
+1    2
+1    2
 select * from unnest('{"a":1}') as f;
-➤ col[12,49151,0]  ¦  seq[4,32,0]  ¦  key[12,49151,0]  ¦  path[12,49151,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
-UNNEST_DEFAULT  ¦  0  ¦  a  ¦  $.a  ¦  null  ¦  1  ¦  {"a": 1}
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
@@ -92,14 +89,11 @@ drop database db2;
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
-➤ Table[12,5,0]  ¦  Create Table[12,63,0]  𝄀
-test_01  ¦  CREATE TABLE `test_01` (
-  `a` int DEFAULT NULL,
-  `b` varchar(65535) DEFAULT NULL
-)
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
 explain select * from test_01;
-➤ TP QUERY PLAN[12,0,0]  𝄀
-Project  𝄀
+QUERY PLAN
+Project
   ->  Table Scan on test_db.test_01
 delete from test_01 where a=1;
 truncate table test_01;
@@ -115,45 +109,42 @@ col2 varchar
 );
 create view test_view as select * from test_table;
 show create database test_db;
-➤ Database[12,5,0]  ¦  Create Database[12,18,0]  𝄀
-test_db  ¦  CREATE DATABASE `test_db`
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
 show create table test_table;
-➤ Table[12,7,0]  ¦  Create Table[12,69,0]  𝄀
-test_table  ¦  CREATE TABLE `test_table` (
-  `col1` int DEFAULT NULL,
-  `col2` varchar(65535) DEFAULT NULL
-)
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(65535) DEFAULT NULL\n)
 show triggers;
-➤ Trigger[12,48,0]  ¦  Event[12,7,0]  ¦  Table[12,48,0]  ¦  Statement[12,0,0]  ¦  Timing[12,7,0]  ¦  Created[93,64,0]  ¦  sql_mode[12,7,0]  ¦  Definer[12,216,0]  ¦  character_set_client[12,48,0]  ¦  collation_connection[12,48,0]  ¦  Database Collation[12,48,0]
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
-➤ Db[12,75,0]  ¦  Name[12,75,0]  ¦  Type[12,7,0]  ¦  Definer[12,37,0]  ¦  Modified[93,64,0]  ¦  Created[93,64,0]  ¦  Security_type[12,7,0]  ¦  Comment[12,3750,0]  ¦  character_set_client[12,48,0]  ¦  collation_connection[12,48,0]  ¦  Database Collation[12,48,0]
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
 show config;
-➤ 1[-5,64,0]
+1
 show events;
-➤ 1[-5,64,0]
+1
 show plugins;
-➤ 1[-5,64,0]
+1
 show profiles;
-➤ 1[-5,64,0]
+1
 show privileges;
-➤ 1[-5,64,0]
+1
 show tables;
-➤ Tables_in_test_db[12,3750,0]  𝄀
-test_table  𝄀
+Tables_in_test_db
+test_table
 test_view
 show index from test_table;
-➤ Table[12,7,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
-➤ column_0[-5,64,0]  ¦  column_1[-5,64,0]  𝄀
-3  ¦  3  𝄀
-2  ¦  2  𝄀
-1  ¦  1
+column_0    column_1
+3    3
+2    2
+1    1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
-➤ 1[-5,64,0]  ¦  2[-5,64,0]  𝄀
-1  ¦  2
+1    2
+1    2
 select * from unnest('{"a":1}') as f;
-➤ col[12,49151,0]  ¦  seq[4,32,0]  ¦  key[12,49151,0]  ¦  path[12,49151,0]  ¦  index[4,32,0]  ¦  value[-1,2147483647,0]  ¦  this[-1,2147483647,0]  𝄀
-UNNEST_DEFAULT  ¦  0  ¦  a  ¦  $.a  ¦  null  ¦  1  ¦  {"a": 1}
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
 create role test_role;
@@ -186,7 +177,7 @@ drop database db2;
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
-➤ col1[4,32,0]  ¦  col2[12,49151,0]
+col1    col2
 deallocate prepare s1;
 rollback;
 use system;

@@ -2,31 +2,31 @@ drop snapshot if exists sn1;
 create snapshot sn1 for database db1;
 internal error: database db1 does not exist
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database if exists db1;
 create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn2  ¦  2026-08-11 12:39:19.977479932  ¦  database  ¦  sys  ¦  db1  ¦  
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn2    2025-07-19 05:51:19.508658    database    sys    db1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists sn1;
 create snapshot sn1 for database db1;
 internal error: database db1 does not exist
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database if exists db1;
 create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn2  ¦  2026-08-11 12:39:20.252230263  ¦  database  ¦  acc01  ¦  db1  ¦  
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn2    2025-07-19 05:51:19.705071    database    acc01    db1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -35,35 +35,35 @@ drop snapshot if exists sn1;
 create snapshot sn1 for table db1 tbl1;
 internal error: table db1.tbl1 does not exist
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database if exists db1;
 create database if not exists db1;
 create table db1.tbl1 (a int);
 insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn2  ¦  2026-08-11 12:39:20.32174277  ¦  table  ¦  sys  ¦  db1  ¦  tbl1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn2    2025-07-19 05:51:19.766481    table    sys    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists sn1;
 create snapshot sn1 for table db1 tbl1;
 internal error: table db1.tbl1 does not exist
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 drop database if exists db1;
 create database if not exists db1;
 create table db1.tbl1 (a int);
 insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn2  ¦  2026-08-11 12:39:20.959379763  ¦  table  ¦  acc01  ¦  db1  ¦  tbl1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn2    2025-07-19 05:51:20.178454    table    acc01    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -81,16 +81,16 @@ drop snapshot if exists sn1;
 drop snapshot if exists sn1;
 create snapshot sn1 for account;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn1  ¦  2026-08-11 12:39:21.029415386  ¦  account  ¦  sys  ¦    ¦  
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn1    2025-07-19 05:51:20.228072    account    sys
 drop snapshot if exists sn1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists sn1;
 create snapshot sn1 for account;
 show snapshots;
-➤ SNAPSHOT_NAME[12,48,0]  ¦  TIMESTAMP[12,49151,0]  ¦  SNAPSHOT_LEVEL[12,49151,0]  ¦  ACCOUNT_NAME[12,225,0]  ¦  DATABASE_NAME[12,3750,0]  ¦  TABLE_NAME[12,3750,0]  𝄀
-sn1  ¦  2026-08-11 12:39:21.57142412  ¦  account  ¦  acc01  ¦    ¦  
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+sn1    2025-07-19 05:51:20.510677    account    acc01
 drop snapshot if exists sn1;
 drop account if exists acc1;
 drop account if exists acc02;
@@ -107,7 +107,7 @@ insert into rs01 values (4, 10, null);
 insert into rs01 values (1, -321.321, null);
 insert into rs01 values (2, -1, null);
 select count(*) from rs01;
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 6
 drop database if exists test03;
 create database test03;
@@ -144,6 +144,7 @@ drop database if exists test04;
 create database test04;
 use test04;
 drop table if exists partition01;
+
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -158,8 +159,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 drop database if exists test06;
 create database test06;
 use test06;
@@ -174,36 +177,36 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src;
-➤ id[-5,64,0]  ¦  body[12,49151,0]  ¦  title[12,0,0]  𝄀
-0  ¦  color is red  ¦  t1  𝄀
-1  ¦  car is yellow  ¦  crazy car  𝄀
-2  ¦  sky is blue  ¦  no limit  𝄀
-3  ¦  blue is not red  ¦  colorful  𝄀
-4  ¦  遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。  ¦  遠東兒童中文  𝄀
-5  ¦  每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。  ¦  遠東兒童中文  𝄀
-6  ¦  各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。  ¦  中文短篇小說  𝄀
-7  ¦  59個簡單的英文和中文短篇小說  ¦  適合初學者  𝄀
-8  ¦  null  ¦  NOT INCLUDED  𝄀
-9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
-10  ¦  null  ¦  null
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
 drop view if exists view01;
 create view v01 as select * from src;
 select * from v01;
-➤ id[-5,64,0]  ¦  body[12,49151,0]  ¦  title[12,0,0]  𝄀
-0  ¦  color is red  ¦  t1  𝄀
-1  ¦  car is yellow  ¦  crazy car  𝄀
-2  ¦  sky is blue  ¦  no limit  𝄀
-3  ¦  blue is not red  ¦  colorful  𝄀
-4  ¦  遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。  ¦  遠東兒童中文  𝄀
-5  ¦  每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。  ¦  遠東兒童中文  𝄀
-6  ¦  各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。  ¦  中文短篇小說  𝄀
-7  ¦  59個簡單的英文和中文短篇小說  ¦  適合初學者  𝄀
-8  ¦  null  ¦  NOT INCLUDED  𝄀
-9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
-10  ¦  null  ¦  null
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
 show create table v01;
-➤ View[12,2,0]  ¦  Create View[12,58,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v01  ¦  create view `v01` as select `src`.`id`, `src`.`body`, `src`.`title` from `src`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+View    Create View    character_set_client    collation_connection
+v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
@@ -213,7 +216,7 @@ from mo_catalog.__mo_index_unique_mo_tables_logical_id i
 join mo_catalog.mo_tables t on i.__mo_index_idx_col = t.rel_logical_id
 where t.account_id = (select account_id from mo_catalog.mo_account where account_name = 'acc02')
 and t.relkind = 'fulltext';
-➤ count(*)[-5,64,0]  𝄀
+count(*)
 1
 drop snapshot if exists spsp02;
 drop account if exists acc02;

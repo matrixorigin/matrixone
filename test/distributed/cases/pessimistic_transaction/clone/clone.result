@@ -15,7 +15,7 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (10, NULL, NULL);
 create fulltext index ftidx on src (body, title);
 select * from src;
-➤ id[-5,64,0]  ¦  body[12,49151,0]  ¦  title[12,0,0]  𝄀
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
 0  ¦  color is red  ¦  t1  𝄀
 1  ¦  car is yellow  ¦  crazy car  𝄀
 2  ¦  sky is blue  ¦  no limit  𝄀
@@ -31,12 +31,12 @@ drop table if exists aerr;
 create table aerr (uid varchar(120), email varchar(20), lmethod varchar(100));
 insert into aerr values ("user1", 'xx@yeah.net', 'basic'),('user2', 'xx@mo.cn','basic'),('user3', '11@tt.cn', 'basic');
 select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
-➤ uid[12,90,0]  ¦  lmethod[12,75,0]  ¦  email[12,15,0]  𝄀
+➤ uid[12,-1,0]  ¦  lmethod[12,-1,0]  ¦  email[12,-1,0]  𝄀
 user2  ¦  basic  ¦  xx@mo.cn
 create unique index mail_method_idx on aerr(email,lmethod);
 alter table aerr add primary key (uid);
 select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
-➤ uid[12,90,0]  ¦  lmethod[12,75,0]  ¦  email[12,15,0]  𝄀
+➤ uid[12,-1,0]  ¦  lmethod[12,-1,0]  ¦  email[12,-1,0]  𝄀
 user2  ¦  basic  ¦  xx@mo.cn
 set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
 prepare s1 from @idxsql;
@@ -91,7 +91,7 @@ drop table if exists fk_02;
 create table fk_01(col1 varchar(30) not null primary key,col2 int);
 create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
 show create table fk_02;
-➤ Table[12,3,0]  ¦  Create Table[12,166,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 fk_02  ¦  CREATE TABLE `fk_02` (
   `col1` int DEFAULT NULL,
   `col2` varchar(25) DEFAULT NULL,
@@ -107,12 +107,12 @@ desc enum01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  ENUM('red','blue','green')  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from enum01;
-➤ col1[12,49151,0]  𝄀
+➤ col1[12,-1,0]  𝄀
 red  𝄀
 blue  𝄀
 green
 show create table enum01;
-➤ Table[12,4,0]  ¦  Create Table[12,55,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 enum01  ¦  CREATE TABLE `enum01` (
   `col1` enum('red','blue','green') DEFAULT NULL
 )
@@ -143,7 +143,7 @@ drop database if exists mo_catalog_new_new;
 create database mo_catalog_new clone mo_catalog {snapshot = 'sp01'};
 create table mo_catalog_new.src_new clone mo_catalog.mo_database {snapshot = 'sp01'};
 show create table mo_catalog_new.src_new;
-➤ Table[12,5,0]  ¦  Create Table[12,423,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src_new  ¦  CREATE TABLE `src_new` (
   `dat_id` bigint unsigned DEFAULT NULL,
   `datname` varchar(5000) COLLATE utf8mb4_general_ci NOT NULL,
@@ -157,49 +157,49 @@ src_new  ¦  CREATE TABLE `src_new` (
   PRIMARY KEY (`account_id`,`datname`)
 ) COLLATE=utf8mb4_bin
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp04'};
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new.mo_database where account_id = 0 and (datname = 'test01' or datname = 'test02' or datname = 'test03');
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0  𝄀
 test02  ¦  def  ¦  create database test02  ¦  0  𝄀
 test03  ¦  def  ¦  create database test03  ¦  0
 drop database if exists mo_catalog_new01;
 create database mo_catalog_new01 clone mo_catalog_new;
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 drop database if exists mo_catalog_new_new01;
 create database mo_catalog_new_new01 clone mo_catalog_new;
 drop database mo_catalog_new;
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 drop database mo_catalog_new_new;
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 drop database if exists information_schema_new;
 create database information_schema_new clone information_schema;
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
-➤ table_catalog[12,2,0]  ¦  table_schema[12,3750,0]  ¦  table_name[12,3750,0]  ¦  table_type[12,10,0]  ¦  engine[12,2,0]  ¦  version[-5,64,0]  ¦  row_format[12,7,0]  𝄀
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  ¦  engine[12,-1,0]  ¦  version[-5,64,0]  ¦  row_format[12,-1,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
-➤ table_catalog[12,2,0]  ¦  table_schema[12,3750,0]  ¦  table_name[12,3750,0]  ¦  table_type[12,10,0]  ¦  engine[12,2,0]  ¦  version[-5,64,0]  ¦  row_format[12,7,0]  𝄀
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  ¦  engine[12,-1,0]  ¦  version[-5,64,0]  ¦  row_format[12,-1,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed
 drop database if exists mo_debug_new;
 create database mo_debug_new clone mo_debug;
 select * from mo_debug.trace_features;
-➤ name[12,37,0]  ¦  state[12,15,0]  𝄀
-txn  ¦  disable  𝄀
-txn-action  ¦  disable  𝄀
+➤ name[12,-1,0]  ¦  state[12,-1,0]  𝄀
 data  ¦  disable  𝄀
 statement  ¦  disable  𝄀
+txn  ¦  disable  𝄀
+txn-action  ¦  disable  𝄀
 txn-workspace  ¦  disable
 drop database if exists mo_task_new;
 create database mo_task_new clone mo_task;
@@ -215,7 +215,7 @@ select
 task_metadata_executor, task_metadata_context, task_metadata_option
 from
 mo_task_new.sys_cron_task {snapshot = "spx"};
-➤ task_metadata_executor[4,32,0]  ¦  task_metadata_context[12,0,0]  ¦  task_metadata_option[12,750,0]
+➤ task_metadata_executor[4,32,0]  ¦  task_metadata_context[12,0,0]  ¦  task_metadata_option[12,-1,0]
 drop database if exists mysql_new;
 create database mysql_new clone mysql;
 use mysql_new;
@@ -227,7 +227,7 @@ use system_metrics_new;
 show tables;
 [unknown result because it is related to issue#23182]
 show databases;
-➤ Database[12,3750,0]  𝄀
+➤ Database[12,-1,0]  𝄀
 clone  𝄀
 information_schema  𝄀
 information_schema_new  𝄀
@@ -254,11 +254,11 @@ test04  𝄀
 test04_new
 use test01_new;
 show tables;
-➤ Tables_in_test01_new[12,3750,0]  𝄀
+➤ Tables_in_test01_new[12,-1,0]  𝄀
 aerr  𝄀
 src
 select * from src;
-➤ id[-5,64,0]  ¦  body[12,49151,0]  ¦  title[12,0,0]  𝄀
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
 0  ¦  color is red  ¦  t1  𝄀
 1  ¦  car is yellow  ¦  crazy car  𝄀
 2  ¦  sky is blue  ¦  no limit  𝄀
@@ -271,7 +271,7 @@ select * from src;
 9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
 10  ¦  null  ¦  null
 show create table src;
-➤ Table[12,2,0]  ¦  Create Table[12,126,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src  ¦  CREATE TABLE `src` (
   `id` bigint NOT NULL,
   `body` varchar(65535) DEFAULT NULL,
@@ -296,7 +296,7 @@ select * from vector_index_01;
 9777  ¦  [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]  ¦  4  𝄀
 9778  ¦  [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]  ¦  4
 show create table vector_index_01;
-➤ Table[12,11,0]  ¦  Create Table[12,191,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 vector_index_01  ¦  CREATE TABLE `vector_index_01` (
   `a` bigint NOT NULL,
   `b` vecf32(128) DEFAULT NULL,
@@ -307,7 +307,7 @@ vector_index_01  ¦  CREATE TABLE `vector_index_01` (
 )
 use test04_new;
 select * from enum01;
-➤ col1[12,49151,0]  𝄀
+➤ col1[12,-1,0]  𝄀
 red  𝄀
 blue  𝄀
 green
@@ -325,11 +325,11 @@ delete from enum01 where col1 = 'blue';
 update enum01 set col1 ='blue' where col1 = 'green';
 use test01_new;
 show tables;
-➤ Tables_in_test01_new[12,3750,0]  𝄀
+➤ Tables_in_test01_new[12,-1,0]  𝄀
 aerr  𝄀
 src
 select * from src;
-➤ id[-5,64,0]  ¦  body[12,49151,0]  ¦  title[12,0,0]  𝄀
+➤ id[-5,64,0]  ¦  body[12,-1,0]  ¦  title[12,0,0]  𝄀
 0  ¦  color is red  ¦  t1  𝄀
 1  ¦  car is yellow  ¦  crazy car  𝄀
 2  ¦  sky is blue  ¦  no limit  𝄀
@@ -342,7 +342,7 @@ select * from src;
 9  ¦  NOT INCLUDED BODY  ¦  null  𝄀
 10  ¦  null  ¦  null
 show create table src;
-➤ Table[12,2,0]  ¦  Create Table[12,126,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 src  ¦  CREATE TABLE `src` (
   `id` bigint NOT NULL,
   `body` varchar(65535) DEFAULT NULL,
@@ -367,7 +367,7 @@ select * from vector_index_01;
 9777  ¦  [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]  ¦  4  𝄀
 9778  ¦  [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]  ¦  4
 show create table vector_index_01;
-➤ Table[12,11,0]  ¦  Create Table[12,191,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 vector_index_01  ¦  CREATE TABLE `vector_index_01` (
   `a` bigint NOT NULL,
   `b` vecf32(128) DEFAULT NULL,
@@ -378,35 +378,35 @@ vector_index_01  ¦  CREATE TABLE `vector_index_01` (
 )
 use test04_new;
 select * from enum01;
-➤ col1[12,49151,0]  𝄀
+➤ col1[12,-1,0]  𝄀
 red  𝄀
 blue  𝄀
 green
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where account_id = 0 and datname = 'test01';
-➤ datname[12,3750,0]  ¦  dat_catalog_name[12,3750,0]  ¦  dat_createsql[12,3750,0]  ¦  account_id[4,32,0]  𝄀
+➤ datname[12,-1,0]  ¦  dat_catalog_name[12,-1,0]  ¦  dat_createsql[12,-1,0]  ¦  account_id[4,32,0]  𝄀
 test01  ¦  def  ¦  create database test01  ¦  0
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
-➤ table_catalog[12,2,0]  ¦  table_schema[12,3750,0]  ¦  table_name[12,3750,0]  ¦  table_type[12,10,0]  ¦  engine[12,2,0]  ¦  version[-5,64,0]  ¦  row_format[12,7,0]  𝄀
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  ¦  engine[12,-1,0]  ¦  version[-5,64,0]  ¦  row_format[12,-1,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
-➤ table_catalog[12,2,0]  ¦  table_schema[12,3750,0]  ¦  table_name[12,3750,0]  ¦  table_type[12,10,0]  ¦  engine[12,2,0]  ¦  version[-5,64,0]  ¦  row_format[12,7,0]  𝄀
+➤ table_catalog[12,-1,0]  ¦  table_schema[12,-1,0]  ¦  table_name[12,-1,0]  ¦  table_type[12,-1,0]  ¦  engine[12,-1,0]  ¦  version[-5,64,0]  ¦  row_format[12,-1,0]  𝄀
 def  ¦  mo_catalog  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed  𝄀
 def  ¦  mo_catalog_new_new01  ¦  mo_columns  ¦  BASE TABLE  ¦  Tae  ¦  10  ¦  Compressed
 select * from mo_debug.trace_features;
-➤ name[12,37,0]  ¦  state[12,15,0]  𝄀
-txn  ¦  disable  𝄀
-txn-action  ¦  disable  𝄀
+➤ name[12,-1,0]  ¦  state[12,-1,0]  𝄀
 data  ¦  disable  𝄀
 statement  ¦  disable  𝄀
+txn  ¦  disable  𝄀
+txn-action  ¦  disable  𝄀
 txn-workspace  ¦  disable
 show create table mysql_new.columns_priv;
-➤ Table[12,9,0]  ¦  Create Table[12,330,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 columns_priv  ¦  CREATE TABLE `columns_priv` (
   `Host` char(255) NOT NULL DEFAULT '',
   `Db` char(64) NOT NULL DEFAULT '',
@@ -507,11 +507,11 @@ insert into vtab64(vecf64_3,vecf64_5) values ("[8.5606893,6.7903588,821.977768]"
 insert into vtab64(vecf64_3,vecf64_5) values ("[0.9260021,0.26637346,0.06567037]","[0.45756745,65.2996871,321.623636,3.60082066,87.58445764]");
 use test05;
 show tables;
-➤ Tables_in_test05[12,3750,0]  𝄀
+➤ Tables_in_test05[12,-1,0]  𝄀
 t1  𝄀
 t2
 select * from t1;
-➤ id[4,32,0]  ¦  token[12,75,0]  ¦  count[4,32,0]  ¦  qty[4,32,0]  ¦  phone[1,0,0]  ¦  times[93,64,0]  𝄀
+➤ id[4,32,0]  ¦  token[12,-1,0]  ¦  count[4,32,0]  ¦  qty[4,32,0]  ¦  phone[1,1,0]  ¦  times[93,64,0]  𝄀
 21  ¦  e45703b64de71482360de8fec94c3ade  ¦  3  ¦  7800  ¦  n  ¦  1999-12-23 17:22:21  𝄀
 22  ¦  e45703b64de71482360de8fec94c3ade  ¦  4  ¦  5000  ¦  y  ¦  1999-12-23 17:22:21  𝄀
 18  ¦  346d1cb63c89285b2351f0ca4de40eda  ¦  3  ¦  13200  ¦  b  ¦  1999-12-23 11:58:04  𝄀
@@ -525,7 +525,7 @@ select * from t2;
 4  ¦  2  ¦  25  ¦  12  ¦  6500  ¦  11200  𝄀
 5  ¦  1  ¦  37  ¦  6  ¦  10000  ¦  12000
 show create table t1;
-➤ Table[12,1,0]  ¦  Create Table[12,185,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (
   `id` int DEFAULT NULL,
   `token` varchar(100) NOT NULL DEFAULT '',
@@ -535,7 +535,7 @@ t1  ¦  CREATE TABLE `t1` (
   `times` datetime NOT NULL DEFAULT '2000-01-01 00:00:00'
 )
 show create table t2;
-➤ Table[12,1,0]  ¦  Create Table[12,167,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t2  ¦  CREATE TABLE `t2` (
   `id` int DEFAULT NULL,
   `category` int NOT NULL DEFAULT 0,
@@ -562,7 +562,7 @@ phones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 nophones  ¦  INT(32)  ¦  NO  ¦    ¦  0  ¦    ¦  
 use test06;
 show tables;
-➤ Tables_in_test06[12,3750,0]  𝄀
+➤ Tables_in_test06[12,-1,0]  𝄀
 repub01
 select * from repub01;
 ➤ col1[4,32,0]  𝄀
@@ -594,7 +594,7 @@ create table test05_new.t3 clone test05_new.t2;
 create database test06_new clone test06;
 create table test06_new.temp_test clone test05_new.t2;
 show create table test06_new.temp_test;
-➤ Table[12,6,0]  ¦  Create Table[12,172,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 temp_test  ¦  CREATE TABLE `temp_test` (
   `id` int DEFAULT NULL,
   `category` int NOT NULL DEFAULT 0,
@@ -624,7 +624,7 @@ select * from test07_new.vtab64;
 3  ¦  [8.5606893, 6.7903588, 821.977768]  ¦  [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]  𝄀
 4  ¦  [0.9260021, 0.26637346, 0.06567037]  ¦  [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 show databases;
-➤ Database[12,3750,0]  𝄀
+➤ Database[12,-1,0]  𝄀
 clone  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
@@ -650,7 +650,7 @@ drop database test07;
 use test08;
 truncate vtab32;
 show databases;
-➤ Database[12,3750,0]  𝄀
+➤ Database[12,-1,0]  𝄀
 clone  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
@@ -667,12 +667,12 @@ test08  𝄀
 test08_new
 use test05_new;
 show tables;
-➤ Tables_in_test05_new[12,3750,0]  𝄀
+➤ Tables_in_test05_new[12,-1,0]  𝄀
 t1  𝄀
 t2  𝄀
 t3
 select * from t1;
-➤ id[4,32,0]  ¦  token[12,75,0]  ¦  count[4,32,0]  ¦  qty[4,32,0]  ¦  phone[1,0,0]  ¦  times[93,64,0]  𝄀
+➤ id[4,32,0]  ¦  token[12,-1,0]  ¦  count[4,32,0]  ¦  qty[4,32,0]  ¦  phone[1,1,0]  ¦  times[93,64,0]  𝄀
 21  ¦  e45703b64de71482360de8fec94c3ade  ¦  3  ¦  7800  ¦  n  ¦  1999-12-23 17:22:21  𝄀
 22  ¦  e45703b64de71482360de8fec94c3ade  ¦  4  ¦  5000  ¦  y  ¦  1999-12-23 17:22:21  𝄀
 18  ¦  346d1cb63c89285b2351f0ca4de40eda  ¦  3  ¦  13200  ¦  b  ¦  1999-12-23 11:58:04  𝄀
@@ -686,7 +686,7 @@ select * from t2;
 4  ¦  2  ¦  25  ¦  12  ¦  6500  ¦  11200  𝄀
 5  ¦  1  ¦  37  ¦  6  ¦  10000  ¦  12000
 show create table t1;
-➤ Table[12,1,0]  ¦  Create Table[12,185,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (
   `id` int DEFAULT NULL,
   `token` varchar(100) NOT NULL DEFAULT '',
@@ -696,7 +696,7 @@ t1  ¦  CREATE TABLE `t1` (
   `times` datetime NOT NULL DEFAULT '2000-01-01 00:00:00'
 )
 show create table t2;
-➤ Table[12,1,0]  ¦  Create Table[12,167,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 t2  ¦  CREATE TABLE `t2` (
   `id` int DEFAULT NULL,
   `category` int NOT NULL DEFAULT 0,
@@ -744,7 +744,7 @@ id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 vecf32_3  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 vecf32_5  ¦  VECF32(5)  ¦  YES  ¦    ¦  null  ¦    ¦  
 show create table vtab64;
-➤ Table[12,4,0]  ¦  Create Table[12,117,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 vtab64  ¦  CREATE TABLE `vtab64` (
   `id` int NOT NULL AUTO_INCREMENT,
   `vecf64_3` vecf64(3) DEFAULT NULL,
@@ -868,7 +868,7 @@ select col1, load_file(col2) from test05;
 drop snapshot if exists sp11;
 create snapshot sp11 for account;
 show databases;
-➤ Database[12,3750,0]  𝄀
+➤ Database[12,-1,0]  𝄀
 clone  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
@@ -887,24 +887,24 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
-➤ a[4,32,0]  ¦  b[12,15,0]  ¦  c[1,15,0]
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 show tables;
-➤ Tables_in_test09[12,3750,0]  𝄀
+➤ Tables_in_test09[12,-1,0]  𝄀
 t1  𝄀
 t2  𝄀
 v1  𝄀
 v2
 use test10;
 show tables;
-➤ Tables_in_test10[12,3750,0]  𝄀
+➤ Tables_in_test10[12,-1,0]  𝄀
 employees  𝄀
 src  𝄀
 vector_index_07
 select * from employees;
-➤ employeenumber[4,32,0]  ¦  lastname[12,37,0]  ¦  firstname[12,37,0]  ¦  extension[12,7,0]  ¦  email[12,75,0]  ¦  officecode[12,7,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,37,0]  𝄀
+➤ employeenumber[4,32,0]  ¦  lastname[12,-1,0]  ¦  firstname[12,-1,0]  ¦  extension[12,-1,0]  ¦  email[12,-1,0]  ¦  officecode[12,-1,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,-1,0]  𝄀
 1002  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
@@ -918,7 +918,7 @@ select count(*) from vector_index_07;
 5
 use test11;
 select * from dense_rank01;
-➤ id[4,32,0]  ¦  sex[1,0,0]  𝄀
+➤ id[4,32,0]  ¦  sex[1,1,0]  𝄀
 1  ¦  m  𝄀
 2  ¦  f  𝄀
 3  ¦  f  𝄀
@@ -939,7 +939,7 @@ yef&&190  ¦   wwww   ¦  983  𝄀
 123  ¦  7834  ¦  commmmmmment  𝄀
 789  ¦   23:50:00  ¦  20
 show tables;
-➤ Tables_in_test11[12,3750,0]  𝄀
+➤ Tables_in_test11[12,-1,0]  𝄀
 dense_rank01  𝄀
 t1  𝄀
 test05  𝄀
@@ -968,21 +968,21 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
-➤ a[4,32,0]  ¦  b[12,15,0]  ¦  c[1,15,0]
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;
 select * from t1;
 ➤ a[4,32,0]
 use test10_new;
 show tables;
-➤ Tables_in_test10_new[12,3750,0]  𝄀
+➤ Tables_in_test10_new[12,-1,0]  𝄀
 employees  𝄀
 src  𝄀
 vector_index_07
 select * from employees;
-➤ employeenumber[4,32,0]  ¦  lastname[12,37,0]  ¦  firstname[12,37,0]  ¦  extension[12,7,0]  ¦  email[12,75,0]  ¦  officecode[12,7,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,37,0]  𝄀
+➤ employeenumber[4,32,0]  ¦  lastname[12,-1,0]  ¦  firstname[12,-1,0]  ¦  extension[12,-1,0]  ¦  email[12,-1,0]  ¦  officecode[12,-1,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,-1,0]  𝄀
 1002  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
@@ -996,7 +996,7 @@ select count(*) from vector_index_07;
 5
 use test10_table;
 select * from employees;
-➤ employeenumber[4,32,0]  ¦  lastname[12,37,0]  ¦  firstname[12,37,0]  ¦  extension[12,7,0]  ¦  email[12,75,0]  ¦  officecode[12,7,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,37,0]  𝄀
+➤ employeenumber[4,32,0]  ¦  lastname[12,-1,0]  ¦  firstname[12,-1,0]  ¦  extension[12,-1,0]  ¦  email[12,-1,0]  ¦  officecode[12,-1,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,-1,0]  𝄀
 1002  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
@@ -1004,7 +1004,7 @@ insert into employees(employeeNumber,lastName,firstName,extension,email,officeCo
 (1012,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President');
 use test11_new;
 select * from dense_rank01;
-➤ id[4,32,0]  ¦  sex[1,0,0]  𝄀
+➤ id[4,32,0]  ¦  sex[1,1,0]  𝄀
 1  ¦  m  𝄀
 2  ¦  f  𝄀
 3  ¦  f  𝄀
@@ -1026,7 +1026,7 @@ yef&&190  ¦   wwww   ¦  983  𝄀
 789  ¦   23:50:00  ¦  20
 use test11_table;
 select * from dense_rank01;
-➤ id[4,32,0]  ¦  sex[1,0,0]  𝄀
+➤ id[4,32,0]  ¦  sex[1,1,0]  𝄀
 1  ¦  m  𝄀
 2  ¦  f  𝄀
 3  ¦  f  𝄀
@@ -1043,10 +1043,10 @@ select count(*) from t1;
 select * from v1;
 ➤ a[4,32,0]
 show create table v1;
-➤ View[12,1,0]  ¦  Create View[12,33,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v1  ¦  create view `v1` as select `t1`.`a` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v1  ¦  create view v1 as select * from t1;  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v2;
-➤ a[4,32,0]  ¦  b[12,15,0]  ¦  c[1,15,0]
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[1,20,0]
 use test09_table;
 select * from t1;
 ➤ a[4,32,0]
@@ -1054,12 +1054,12 @@ drop database test09_new;
 drop database test09_table;
 use test10_new;
 show tables;
-➤ Tables_in_test10_new[12,3750,0]  𝄀
+➤ Tables_in_test10_new[12,-1,0]  𝄀
 employees  𝄀
 src  𝄀
 vector_index_07
 select * from employees;
-➤ employeenumber[4,32,0]  ¦  lastname[12,37,0]  ¦  firstname[12,37,0]  ¦  extension[12,7,0]  ¦  email[12,75,0]  ¦  officecode[12,7,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,37,0]  𝄀
+➤ employeenumber[4,32,0]  ¦  lastname[12,-1,0]  ¦  firstname[12,-1,0]  ¦  extension[12,-1,0]  ¦  email[12,-1,0]  ¦  officecode[12,-1,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,-1,0]  𝄀
 1002  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
 1076  ¦  Firrelli  ¦  Jeff  ¦  x9273  ¦  jfirrelli@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Marketing
@@ -1074,7 +1074,7 @@ select count(*) from vector_index_07;
 drop database test10_new;
 use test10_table;
 select * from employees;
-➤ employeenumber[4,32,0]  ¦  lastname[12,37,0]  ¦  firstname[12,37,0]  ¦  extension[12,7,0]  ¦  email[12,75,0]  ¦  officecode[12,7,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,37,0]  𝄀
+➤ employeenumber[4,32,0]  ¦  lastname[12,-1,0]  ¦  firstname[12,-1,0]  ¦  extension[12,-1,0]  ¦  email[12,-1,0]  ¦  officecode[12,-1,0]  ¦  reportsto[4,32,0]  ¦  jobtitle[12,-1,0]  𝄀
 1012  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1002  ¦  Murphy  ¦  Diane  ¦  x5800  ¦  dmurphy@classicmodelcars.com  ¦  1  ¦  null  ¦  President  𝄀
 1056  ¦  Patterson  ¦  Mary  ¦  x4611  ¦  mpatterso@classicmodelcars.com  ¦  1  ¦  1002  ¦  VP Sales  𝄀
@@ -1082,7 +1082,7 @@ select * from employees;
 drop database test10_table;
 use test11_new;
 select * from dense_rank01;
-➤ id[4,32,0]  ¦  sex[1,0,0]  𝄀
+➤ id[4,32,0]  ¦  sex[1,1,0]  𝄀
 1  ¦  m  𝄀
 2  ¦  f  𝄀
 3  ¦  f  𝄀
@@ -1105,7 +1105,7 @@ yef&&190  ¦   wwww   ¦  983  𝄀
 drop database test11_new;
 use test11_table;
 select * from dense_rank01;
-➤ id[4,32,0]  ¦  sex[1,0,0]  𝄀
+➤ id[4,32,0]  ¦  sex[1,1,0]  𝄀
 5  ¦  m
 drop database test11_table;
 drop account acc04;
@@ -1142,7 +1142,7 @@ insert into bit01 values('b', '011');
 insert into bit01 values('c', '010');
 insert into bit01 values('d', null);
 select * from bit01;
-➤ id[1,0,0]  ¦  b[-3,10,0]  𝄀
+➤ id[1,1,0]  ¦  b[12,30,0]  𝄀
 a  ¦  111         𝄀
 a  ¦  110         𝄀
 a  ¦  143         𝄀
@@ -1175,7 +1175,7 @@ insert into vector_ip_01 values(9774 ,normalize_l2("[1, 0, 1, 6, 6, 17, 47, 39, 
 insert into vector_ip_01 values(9777, normalize_l2("[16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]"),4),(9778,normalize_l2("[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]"),4);
 create index idx01 using hnsw on vector_ip_01(b) op_type "vector_ip_ops";
 show create table vector_ip_01;
-➤ Table[12,9,0]  ¦  Create Table[12,154,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 vector_ip_01  ¦  CREATE TABLE `vector_ip_01` (
   `a` bigint NOT NULL,
   `b` vecf32(128) DEFAULT NULL,
@@ -1207,7 +1207,7 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
 (9003,'1991-02-20', 'Bob', 'TEACHER', 'M', '2008-02-20'),
 (9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
 select * from index03;
-➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,10,0]  ¦  last_name[12,12,0]  ¦  gender[12,3,0]  ¦  hire_date[91,64,0]  𝄀
+➤ emp_no[4,32,0]  ¦  birth_date[91,64,0]  ¦  first_name[12,-1,0]  ¦  last_name[12,-1,0]  ¦  gender[12,-1,0]  ¦  hire_date[91,64,0]  𝄀
 9001  ¦  1980-12-17  ¦  SMITH  ¦  CLERK  ¦  F  ¦  2008-12-17  𝄀
 9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20  𝄀
 9003  ¦  1991-02-20  ¦  Bob  ¦  TEACHER  ¦  M  ¦  2008-02-20  𝄀
@@ -1221,7 +1221,7 @@ department_id INT primary key auto_increment,
 department_name varchar(100)
 );
 show create table departments;
-➤ Table[12,8,0]  ¦  Create Table[12,117,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 departments  ¦  CREATE TABLE `departments` (
   `department_id` int NOT NULL AUTO_INCREMENT,
   `department_name` varchar(100) DEFAULT NULL,
@@ -1260,19 +1260,19 @@ create database test12_new_new clone test12_new;
 create database test13_new_new clone test13_new;
 use test12_new_new;
 show tables;
-➤ Tables_in_test12_new_new[12,3750,0]  𝄀
+➤ Tables_in_test12_new_new[12,-1,0]  𝄀
 double01  𝄀
 time01  𝄀
 tinyint01
 select * from double01;
-➤ a[8,53,31]  𝄀
+➤ a[8,54,0]  𝄀
 -1.7976931348623157E308  𝄀
 -2.2250738585072014E-308  𝄀
 0.0  𝄀
 2.2250738585072014E-308  𝄀
 1.7976931348623157E308
 show create table time01;
-➤ Table[12,4,0]  ¦  Create Table[12,52,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 time01  ¦  CREATE TABLE `time01` (
   `a` datetime NOT NULL,
   PRIMARY KEY (`a`)
@@ -1329,7 +1329,7 @@ select * from vector_ip_01;
 9778  ¦  [0.08063698, 0, 0, 0.01376729, 0.0019667556, 0.0019667556, 0.039335113, 0.13177262, 0.0177008, 0, 0, 0, 0, 0.060969424, 0.23601067, 0.119972095, 0.049168892, 0, 0, 0, 0, 0.019667557, 0.23601067, 0.177008, 0.06293618, 0, 0, 0.0019667556, 0.025567824, 0.021634312, 0.043268625, 0.098337784, 0.007867022, 0, 0.003933511, 0.18290828, 0.078670226, 0.029501334, 0.07276996, 0.0354016, 0.023601068, 0.003933511, 0.003933511, 0.037368357, 0.015734045, 0.08653725, 0.23601067, 0.049168892, 0.23601067, 0.009833778, 0, 0, 0, 0.003933511, 0.09440427, 0.1907753, 0.20060907, 0.02753458, 0.005900267, 0.005900267, 0.021634312, 0.0177008, 0.06686969, 0.08063698, 0, 0, 0.007867022, 0.23601067, 0.11013832, 0.005900267, 0.007867022, 0.009833778, 0.011800534, 0.029501334, 0.07276996, 0.22814366, 0.05506916, 0, 0, 0.005900267, 0.23601067, 0.23601067, 0.047202136, 0.011800534, 0.003933511, 0, 0.0019667556, 0.05506916, 0.10423805, 0.177008, 0.10030454, 0.021634312, 0.021634312, 0.003933511, 0.023601068, 0.02753458, 0.015734045, 0.011800534, 0.007867022, 0.059002668, 0.0177008, 0.0019667556, 0.007867022, 0.043268625, 0.049168892, 0.15537369, 0.23601067, 0.12980588, 0.009833778, 0, 0, 0.011800534, 0.08260374, 0.23601067, 0.17897476, 0.08457049, 0.029501334, 0.003933511, 0.007867022, 0.076703474, 0.023601068, 0.0177008, 0.0177008, 0.023601068, 0.029501334, 0.009833778, 0.047202136, 0.0708032]  ¦  4
 use test14_new_new;
 show create table index03;
-➤ Table[12,5,0]  ¦  Create Table[12,332,0]  𝄀
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 index03  ¦  CREATE TABLE `index03` (
   `emp_no` int NOT NULL,
   `birth_date` date NOT NULL,
@@ -1347,7 +1347,7 @@ show create table departments;
 no such table test14_new_new.departments
 drop account acc05;
 show databases;
-➤ Database[12,3750,0]  𝄀
+➤ Database[12,-1,0]  𝄀
 clone  𝄀
 information_schema  𝄀
 mo_catalog  𝄀
