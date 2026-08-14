@@ -1027,6 +1027,188 @@ func TestNormalSelectDoesNotCaptureExpandedStarList(t *testing.T) {
 	require.Nil(t, bindCtx.expandedSelectLists)
 }
 
+func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
+	starExpr := tree.SelectExpr{Expr: tree.UnqualifiedStar{}}
+	qualifiedStar := tree.SelectExpr{Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("t", 1))}
+	columnExpr := tree.SelectExpr{Expr: tree.NewUnresolvedColName("c")}
+	sampleStar, err := tree.NewSamplePercentFuncExpression1(50, true, nil)
+	require.NoError(t, err)
+	sampleColumn, err := tree.NewSamplePercentFuncExpression1(50, false, tree.Exprs{tree.NewUnresolvedColName("c")})
+	require.NoError(t, err)
+
+	require.False(t, viewSelectHasStar(nil))
+	require.False(t, viewSelectHasSampleStar(nil))
+	require.True(t, selectExprHasStar(starExpr))
+	require.True(t, selectExprHasStar(qualifiedStar))
+	require.False(t, selectExprHasStar(columnExpr))
+	require.True(t, selectExprHasStar(tree.SelectExpr{Expr: sampleStar}))
+	require.False(t, selectExprHasStar(tree.SelectExpr{Expr: sampleColumn}))
+	require.False(t, selectExprHasSampleStar(columnExpr))
+	require.True(t, selectExprHasSampleStar(tree.SelectExpr{Expr: sampleStar}))
+	require.False(t, selectExprHasSampleStar(tree.SelectExpr{Expr: sampleColumn}))
+
+	starClause := &tree.SelectClause{Exprs: tree.SelectExprs{starExpr}}
+	columnClause := &tree.SelectClause{Exprs: tree.SelectExprs{columnExpr}}
+	wrappedStar := &tree.Select{Select: starClause}
+	parenStar := &tree.ParenSelect{Select: wrappedStar}
+	union := &tree.UnionClause{Left: starClause, Right: columnClause}
+	require.True(t, selectStatementHasStar(starClause))
+	require.True(t, selectStatementHasStar(wrappedStar))
+	require.True(t, selectStatementHasStar(parenStar))
+	require.True(t, selectStatementHasStar(union))
+	require.False(t, selectStatementHasStar(nil))
+	require.False(t, selectStatementHasStar(columnClause))
+
+	sampleClause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: sampleStar}}}
+	sampleSelect := &tree.Select{Select: sampleClause}
+	sampleParen := &tree.ParenSelect{Select: sampleSelect}
+	sampleUnion := &tree.UnionClause{Left: sampleClause, Right: columnClause}
+	require.True(t, selectStatementHasSampleStar(sampleClause))
+	require.True(t, selectStatementHasSampleStar(sampleSelect))
+	require.True(t, selectStatementHasSampleStar(sampleParen))
+	require.True(t, selectStatementHasSampleStar(sampleUnion))
+	require.False(t, selectStatementHasSampleStar(nil))
+	require.False(t, selectStatementHasSampleStar(columnClause))
+}
+
+func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
+	makeStarSelect := func() (*tree.Select, *tree.SelectClause) {
+		clause := &tree.SelectClause{
+			Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}},
+			From:  &tree.From{},
+		}
+		return &tree.Select{Select: clause}, clause
+	}
+	replacement := func() tree.SelectExprs {
+		return tree.SelectExprs{{Expr: tree.NewUnresolvedColName("stable_col")}}
+	}
+
+	selectTable, selectClause := makeStarSelect()
+	subquerySelect, subqueryClause := makeStarSelect()
+	aliasedSelect, aliasedClause := makeStarSelect()
+	parenSelect, parenClause := makeStarSelect()
+	joinLeft, joinLeftClause := makeStarSelect()
+	joinRight, joinRightClause := makeStarSelect()
+	applyLeft, applyLeftClause := makeStarSelect()
+	applyRight, applyRightClause := makeStarSelect()
+	sourceSelect, sourceClause := makeStarSelect()
+
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		selectClause:     replacement(),
+		subqueryClause:   replacement(),
+		aliasedClause:    replacement(),
+		parenClause:      replacement(),
+		joinLeftClause:   replacement(),
+		joinRightClause:  replacement(),
+		applyLeftClause:  replacement(),
+		applyRightClause: replacement(),
+		sourceClause:     replacement(),
+	}
+	tables := tree.TableExprs{
+		selectTable,
+		&tree.Subquery{Select: subquerySelect},
+		&tree.AliasedTableExpr{Expr: aliasedSelect},
+		&tree.ParenTableExpr{Expr: parenSelect},
+		tree.NewJoinTableExpr(tree.JOIN_TYPE_INNER, joinLeft, joinRight, nil),
+		&tree.ApplyTableExpr{Left: applyLeft, Right: applyRight},
+		tree.NewStatementSource(sourceSelect),
+		&tree.TableName{},
+	}
+	stableTables, rewritten := viewTableExprsWithExpandedStars(tables, expanded)
+	require.True(t, rewritten)
+	require.Len(t, stableTables, len(tables))
+	require.NotSame(t, tables[0], stableTables[0])
+
+	stableFrom, rewritten := viewFromWithExpandedStars(&tree.From{Tables: tables}, expanded)
+	require.True(t, rewritten)
+	require.Len(t, stableFrom.Tables, len(tables))
+	_, rewritten = viewFromWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewTableExprsWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+
+	stable, rewritten := viewSelectWithExpandedStars(&tree.Select{Select: &tree.SelectClause{From: &tree.From{Tables: tables}}}, expanded)
+	require.True(t, rewritten)
+	require.NotNil(t, stable)
+	_, rewritten = viewSelectWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+
+	// Exercise the statement wrappers and their defensive failure paths.
+	wrapped := &tree.Select{Select: &tree.SelectClause{From: &tree.From{Tables: tree.TableExprs{&tree.ParenTableExpr{Expr: selectTable}}}}}
+	_, rewritten = viewSelectStatementWithExpandedStars(wrapped, expanded)
+	require.True(t, rewritten)
+	paren := &tree.ParenSelect{Select: selectTable}
+	_, rewritten = viewSelectStatementWithExpandedStars(paren, expanded)
+	require.True(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.ParenSelect{Select: &tree.Select{}}, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.Select{Select: nil}, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.UnionClause{Left: nil, Right: selectTable}, expanded)
+	require.False(t, rewritten)
+}
+
+func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
+	const viewSQL = "create view v_star as select * from nation"
+	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewSQL, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	createView := parsed.(*tree.CreateView)
+	stmt := createView.AsSource
+	clause := stmt.Select.(*tree.SelectClause)
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		clause: {{Expr: tree.NewUnresolvedColName("stable_col")}},
+	}
+	ctx := NewMockCompilerContext(false)
+
+	got, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, "", expanded)
+	require.Equal(t, "", got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, viewSQL, nil)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+	noStar := &tree.Select{Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("c")}}, From: &tree.From{}}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, noStar, viewSQL, expanded)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+
+	sampleStar, err := tree.NewSamplePercentFuncExpression1(50, true, nil)
+	require.NoError(t, err)
+	sample := &tree.Select{Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: sampleStar}}, From: &tree.From{}}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, sample, viewSQL, map[*tree.SelectClause]tree.SelectExprs{
+		sample.Select.(*tree.SelectClause): expanded[clause],
+	})
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+
+	wrongClause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}}, From: &tree.From{}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, &tree.Select{Select: wrongClause}, viewSQL, expanded)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, "not valid sql", expanded)
+	require.Equal(t, "not valid sql", got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, viewSQL+";"+viewSQL, expanded)
+	require.Equal(t, viewSQL+";"+viewSQL, got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, "select * from nation", expanded)
+	require.Equal(t, "select * from nation", got)
+	require.False(t, rewritten)
+
+	alterSQL := "alter view v_star as select * from nation"
+	alterStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, alterSQL, 1)
+	require.NoError(t, err)
+	defer alterStmt.Free()
+	alterView := alterStmt.(*tree.AlterView)
+	alterSource := alterView.AsSource
+	alterClause := alterSource.Select.(*tree.SelectClause)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, alterSource, alterSQL, map[*tree.SelectClause]tree.SelectExprs{
+		alterClause: expanded[clause],
+	})
+	require.True(t, rewritten)
+	require.Contains(t, got, "create view")
+}
+
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
