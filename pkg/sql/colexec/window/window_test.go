@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	execpartition "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1694,6 +1695,82 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int32
+	}{
+		{name: "asc", want: []int32{10, 20}},
+		{name: "desc", flag: plan.OrderBySpec_DESC, want: []int32{60, 40}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[1], []float64{
+				math.Float64frombits(0x7ff8000000000002), math.Inf(1), 1, 0, -1,
+				math.Inf(-1), math.Float64frombits(0x7ff8000000000001),
+			}, nil, proc.Mp()))
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{70, 60, 40, 31, 20, 10, 71}, nil, proc.Mp())
+			input.SetRowCount(7)
+
+			// This is the physical shape of ROW_NUMBER() ... WHERE rn <= 2:
+			// the PARTITION reducer must retain the SQL-order prefix before the
+			// window operator assigns row numbers.
+			partitionArg := &execpartition.Partition{
+				OrderBySpecs: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(0, types.T_int32.ToType())},
+					{Expr: newColExprWithType(1, types.T_float64.ToType()), Flag: tc.flag},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+				Limit: &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}},
+				},
+				PartitionByCount: 1,
+				PreReduce:        true,
+			}
+			partitionChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partitionArg.AppendChild(partitionChild)
+			require.NoError(t, partitionArg.Prepare(proc))
+
+			partitionExpr := newColExprWithType(0, types.T_int32.ToType())
+			orderExpr := newColExprWithType(1, types.T_float64.ToType())
+			windowArg := &Window{
+				WinSpecList: []*plan.Expr{{
+					Expr: &plan.Expr_W{W: &plan.WindowSpec{
+						Name:        "row_number",
+						WindowFunc:  newFunExpr("row_number"),
+						PartitionBy: []*plan.Expr{partitionExpr},
+						OrderBy: []*plan.OrderBySpec{
+							{Expr: orderExpr, Flag: tc.flag},
+							{Expr: newColExprWithType(2, types.T_int32.ToType())},
+						},
+					}},
+				}},
+				Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+				PartitionTopN: true,
+			}
+			windowArg.AppendChild(partitionArg)
+			require.NoError(t, windowArg.Prepare(proc))
+
+			result, err := vm.Exec(windowArg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+			windowArg.Free(proc, false, nil)
+			partitionArg.Free(proc, false, nil)
+			partitionChild.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestWindowOrderHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -2298,6 +2375,99 @@ func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 		testSearchLeftRightNumeric(t, mp, types.T_float64,
 			[]float64{1, 2, 2, 4}, []float64{4, 2, 2, 1}, f64Lit)
 	})
+}
+
+func TestBuildRangeIntervalFloatNaNsUseSQLOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oid        types.T
+		ascValues  []any
+		descValues []any
+		literal    func() *plan.Expr
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			ascValues: []any{
+				float32(1), float32(2), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			descValues: []any{
+				float32(2), float32(1), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			literal: f32Lit,
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			ascValues: []any{
+				float64(1), float64(2), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			descValues: []any{
+				float64(2), float64(1), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			literal: f64Lit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+			for _, direction := range []struct {
+				name   string
+				values []any
+				desc   bool
+			}{
+				{name: "asc", values: tc.ascValues},
+				{name: "desc", values: tc.descValues, desc: true},
+			} {
+				t.Run(direction.name, func(t *testing.T) {
+					vec := vector.NewVec(tc.oid.ToType())
+					switch tc.oid {
+					case types.T_float32:
+						values := make([]float32, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float32)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					case types.T_float64:
+						values := make([]float64, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float64)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					}
+					defer vec.Free(mp)
+
+					ctr := &container{
+						orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+						desc:      []bool{direction.desc},
+					}
+					frame := &plan.FrameClause{
+						Type: plan.FrameClause_RANGE,
+						Start: &plan.FrameBound{
+							Type: plan.FrameBound_PRECEDING,
+							Val:  tc.literal(),
+						},
+						End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+					}
+
+					// A finite row adjacent to the NaN peer group must still use
+					// the SQL relation for the binary search.
+					start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 0, start)
+					require.Equal(t, 2, end)
+
+					// All NaN payloads are one peer group, and an offset from a
+					// NaN remains NaN for RANGE boundary purposes.
+					start, end, err = ctr.buildRangeInterval(2, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 2, start)
+					require.Equal(t, 4, end)
+				})
+			}
+		})
+	}
 }
 
 // TestSearchLeftRightDecimalTypes covers decimal64/128.

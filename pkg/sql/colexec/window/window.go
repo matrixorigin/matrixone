@@ -1682,34 +1682,34 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float32], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float32OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[float64], cmpl)
+			left = genericSearchLeft(start, end-1, col, col[rowIdx], float64OrderEqual, cmpl)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if plus {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			} else {
-				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				left = genericSearchLeft(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -2106,34 +2106,34 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 		}
 	case types.T_float32:
 		col := vector.MustFixedColNoTypeCheck[float32](vec)
-		cmpl := genericGreater[float32]
+		cmpl := float32OrderAscGreater
 		if desc {
-			cmpl = genericLess[float32]
+			cmpl = float32OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float32])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float32OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Fval).Fval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float32OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float32], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float32OrderEqual, cmpl)
 			}
 		}
 	case types.T_float64:
 		col := vector.MustFixedColNoTypeCheck[float64](vec)
-		cmpl := genericGreater[float64]
+		cmpl := float64OrderAscGreater
 		if desc {
-			cmpl = genericLess[float64]
+			cmpl = float64OrderDescGreater
 		}
 		if expr == nil {
-			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[float64])
+			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], float64OrderEqual)
 		} else {
 			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Dval).Dval
 			if sub {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]-c, float64OrderEqual, cmpl)
 			} else {
-				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, genericEqual[float64], cmpl)
+				right = genericSearchRight(start, end-1, col, col[rowIdx]+c, float64OrderEqual, cmpl)
 			}
 		}
 	case types.T_decimal64:
@@ -2401,6 +2401,34 @@ func genericGreater[T types.OrderedT](a, b T) bool {
 
 func genericLess[T types.OrderedT](a, b T) bool {
 	return a < b
+}
+
+// The RANGE binary searches operate on vectors sorted with the SQL ORDER BY
+// relation. Native float comparisons do not provide the peer/equality and
+// boundary behavior required for NaNs, so keep the search predicates aligned
+// with the sort relation for both directions.
+func float32OrderEqual(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) == 0
+}
+
+func float32OrderAscGreater(a, b float32) bool {
+	return types.Float32OrderAscCompare(a, b) > 0
+}
+
+func float32OrderDescGreater(a, b float32) bool {
+	return types.Float32OrderDescCompare(a, b) > 0
+}
+
+func float64OrderEqual(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) == 0
+}
+
+func float64OrderAscGreater(a, b float64) bool {
+	return types.Float64OrderAscCompare(a, b) > 0
+}
+
+func float64OrderDescGreater(a, b float64) bool {
+	return types.Float64OrderDescCompare(a, b) > 0
 }
 
 func decimal64Equal(a, b types.Decimal64) bool {
