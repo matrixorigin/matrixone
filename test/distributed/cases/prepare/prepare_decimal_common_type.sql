@@ -112,6 +112,37 @@ SET @p='1e100tail';
 EXECUTE p_mysql_numeric_conversion USING @p,@p,@p;
 DEALLOCATE PREPARE p_mysql_numeric_conversion;
 
+-- Equivalent exact numeric-prefix spellings must keep the same DECIMAL domain.
+PREPARE p_wide_spelling FROM
+  'SELECT COALESCE(?,CAST(0.0000000002 AS DECIMAL(10,10)))+1-COALESCE(?,CAST(0.0000000002 AS DECIMAL(10,10)))';
+SET @p='999999999999999999999999999999999999';
+EXECUTE p_wide_spelling USING @p,@p;
+SET @p='1e35';
+EXECUTE p_wide_spelling USING @p,@p;
+SET @p='999999999999999999999999999999999999tail';
+EXECUTE p_wide_spelling USING @p,@p;
+DEALLOCATE PREPARE p_wide_spelling;
+
+-- Oversized full and prefix spellings share the approximate numeric domain;
+-- a suffix must never turn overflow into a saturated DECIMAL maximum.
+PREPARE p_oversized_prefix FROM
+  'SELECT COALESCE(?,CAST(0 AS DECIMAL(1,0)))';
+SET @p='1e76';
+EXECUTE p_oversized_prefix USING @p;
+SET @p='10000000000000000000000000000000000000000000000000000000000000000000000000000tail';
+EXECUTE p_oversized_prefix USING @p;
+DEALLOCATE PREPARE p_oversized_prefix;
+
+-- Native BETWEEN uses the same runtime numeric-prefix normalization as its
+-- equivalent pair of scalar DECIMAL comparisons.
+PREPARE p_runtime_between FROM
+  'SELECT ? BETWEEN CAST(? AS DECIMAL(46,10)) AND CAST(? AS DECIMAL(46,10)),? NOT BETWEEN CAST(? AS DECIMAL(46,10)) AND CAST(? AS DECIMAL(46,10))';
+SET @left='100000000000000000000000000000000000tail';
+SET @bound='100000000000000000000000000000000000';
+EXECUTE p_runtime_between USING @left,@bound,@bound,@left,@bound,@bound;
+EXECUTE p_runtime_between USING @left,@bound,@bound,@left,@bound,@bound;
+DEALLOCATE PREPARE p_runtime_between;
+
 -- FLOAT participates in numeric aggregation and promotes the result to DOUBLE.
 PREPARE p_float FROM
   'SELECT COALESCE(?,d,f),GREATEST(?,d,f),LEAST(?,d,f) FROM common_peers';

@@ -479,7 +479,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		needResetFunction := false
 		comparisonNeedsReal := rule.realDecimalGroups[e.ExactDecimalGroup]
 		preparedInGroup, preparedInNeedsReal := preparedDecimalInCommonDomain(exprImpl.F, rule.params)
-		if isDecimalComparisonOperator(exprImpl.F.Func.GetObjName()) {
+		if isDecimalComparisonFunction(exprImpl.F.Func.GetObjName()) {
 			for i, arg := range exprImpl.F.Args {
 				replacement, ok, err := rule.preparedDecimalComparisonValue(arg)
 				if err != nil {
@@ -709,7 +709,7 @@ func rebindPreparedDecimalGroupAsReal(ctx context.Context, expr *plan.Expr) (*pl
 		return expr, nil
 	}
 	name := fn.Func.GetObjName()
-	if isDecimalComparisonOperator(name) {
+	if isDecimalComparisonFunction(name) {
 		floatType := types.T_float64.ToType()
 		target := makePlan2Type(&floatType)
 		args := make([]*plan.Expr, len(fn.Args))
@@ -889,7 +889,7 @@ func (rule *findDecimalComparisonParamRule) ApplyExpr(expr *plan.Expr) (*plan.Ex
 		if fn == nil {
 			return expr, nil
 		}
-		if fn.Func != nil && isDecimalComparisonOperator(fn.Func.GetObjName()) {
+		if fn.Func != nil && isDecimalComparisonFunction(fn.Func.GetObjName()) {
 			dependsOnRuntimeDomain := false
 			for _, arg := range fn.Args {
 				if _, ok := preparedDecimalComparisonCast(arg); ok {

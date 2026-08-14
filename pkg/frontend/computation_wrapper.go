@@ -744,10 +744,7 @@ const preparedNumericTextBindingCharset = uint8(255)
 const (
 	preparedNumericTextPrefix    int32 = 2
 	preparedNumericTextFloat     int32 = 3
-	preparedNumericWide          int32 = 4
 	preparedNumericFallback      int32 = 5
-	preparedNumericPrefixMax     int32 = 6
-	preparedNumericApprox        int32 = 7
 	preparedNumericExact         int32 = 8
 	preparedNumericProtocolExact int32 = 9
 )
@@ -789,37 +786,16 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	binding.Charset = preparedNumericTextBindingCharset
 	integral := max(width-scale, 0)
 	switch {
-	case full && integral > 76:
+	case integral > 76:
 		binding.Size = preparedNumericTextFloat
 	case integral <= 35:
 		binding.Size = preparedNumericTextPrefix
 		binding.Width, binding.Scale = 65, 30
-	case full && scale > 0 && integral > 35 && width <= 76:
-		// Preserve the actual domain once a complete payload crosses the ordinary
-		// 35-integral-digit envelope and carries meaningful fractional digits.
-		// Inflating 36+9 to DECIMAL(76,9) would falsely overflow when a peer adds
-		// one scale digit, even though DECIMAL(46,10) represents both values.
-		binding.Size = preparedNumericExact
-		binding.Width, binding.Scale = max(width, 1), scale
-	case full && !exponent && scale == 0 && integral > 35 && integral <= 76:
-		// A complete integer payload already has an exact Decimal256 domain.
-		// Do not invent nine fractional digits: doing so can make an otherwise
-		// representable common DECIMAL domain appear wider than 76 digits and
-		// force the binder to fall back to FLOAT64.
-		binding.Size = preparedNumericExact
-		binding.Width = max(width, 1)
-	case integral <= 67 && scale <= 9:
-		binding.Size = preparedNumericWide
-		binding.Width, binding.Scale = 76, 9
-	case full && integral > 67 && integral <= 76 && scale <= 9:
-		// A fixed exact DECIMAL domain cannot retain both 68+ integral digits
-		// and an arbitrary fractional peer. Use an explicit numeric
-		// approximation instead of silently falling back to lexical TEXT.
-		binding.Size = preparedNumericApprox
-	case full && width <= 76:
-		// The payload is exactly representable by Decimal256, but does not fit
-		// either stable MySQL-compatible envelope above. Retain its physical
-		// domain and include width/scale in the prepared generation key.
+	case width <= 76:
+		// Once a numeric prefix crosses the ordinary 35-integral-digit envelope,
+		// preserve its actual Decimal256 domain regardless of whether the spelling
+		// uses an exponent or has a suffix. The execution-time MySQL cast consumes
+		// the same prefix, so lexical spelling must not change the common domain.
 		binding.Size = preparedNumericExact
 		binding.Width, binding.Scale = max(width, 1), scale
 	case full:
@@ -827,9 +803,6 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 		// domain exceeds Decimal256. Keep numeric ordering through an explicit
 		// approximation instead of making the result depend on lexical spelling.
 		binding.Size = preparedNumericTextFloat
-	case !full && integral > 76:
-		binding.Size = preparedNumericPrefixMax
-		binding.Width, binding.Scale = 74, 9
 	default:
 		binding.Size = preparedNumericFallback
 	}
@@ -1418,8 +1391,6 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
-		prepareStmt.exactDecimalParamPositions = excludePreparedParamDependencies(
-			prepareStmt.exactDecimalParamPositions, newDependencies)
 		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
 		prepareStmt.exactDecimalComparisonParamsSet = true
 		prepareStmt.ColDefData = newColDefData
@@ -1497,8 +1468,6 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		prepareStmt.exactDecimalParamPositions = excludePreparedParamDependencies(
-			prepareStmt.exactDecimalParamPositions, prepareStmt.paramBindingDependencies)
 		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
 		prepareStmt.exactDecimalComparisonParamsSet = true
 	}
@@ -1565,20 +1534,6 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
-}
-
-func excludePreparedParamDependencies(positions []int32, dependencies []bool) []int32 {
-	if len(positions) == 0 || len(dependencies) == 0 {
-		return positions
-	}
-	filtered := positions[:0]
-	for _, pos := range positions {
-		if pos >= 0 && int(pos) < len(dependencies) && dependencies[pos] {
-			continue
-		}
-		filtered = append(filtered, pos)
-	}
-	return filtered
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

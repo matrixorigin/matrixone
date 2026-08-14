@@ -91,6 +91,57 @@ func TestPrepareRuntimeParamOrderPreservesProtocolSlots(t *testing.T) {
 	require.Equal(t, int32(types.T_int64), rule.paramTypes[2])
 }
 
+func TestResetExactDecimalComparisonNormalizesNativeBetweenParams(t *testing.T) {
+	decimalType := types.New(types.T_decimal256, 46, 10)
+	makeRuntimeCast := func(pos int32) *planpb.Expr {
+		param := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+		cast, err := appendCastBeforeExpr(context.Background(), param, makePlan2Type(&decimalType))
+		require.NoError(t, err)
+		cast.ExactDecimalParam = true
+		return cast
+	}
+
+	between, err := BindFuncExprImplByPlanExpr(context.Background(), "between", []*planpb.Expr{
+		makeRuntimeCast(0), makeRuntimeCast(1), makeRuntimeCast(2),
+	})
+	require.NoError(t, err)
+	positionRule := &findDecimalComparisonParamRule{positions: make(map[int32]struct{})}
+	_, err = positionRule.ApplyExpr(between)
+	require.NoError(t, err)
+	require.Equal(t, map[int32]struct{}{0: {}, 1: {}, 2: {}}, positionRule.positions)
+	params := []*planpb.Expr{
+		makePlan2StringConstExprWithType("100000000000000000000000000000000000tail"),
+		makePlan2StringConstExprWithType("100000000000000000000000000000000000"),
+		makePlan2StringConstExprWithType("100000000000000000000000000000000000"),
+	}
+	rewritten, err := NewResetExactDecimalComparisonParamRule(
+		context.Background(), params, nil).ApplyExpr(between)
+	require.NoError(t, err)
+	require.Equal(t, "between", rewritten.GetF().GetFunc().GetObjName())
+	var containsParam func(*planpb.Expr) bool
+	containsParam = func(expr *planpb.Expr) bool {
+		if expr == nil {
+			return false
+		}
+		if expr.GetP() != nil {
+			return true
+		}
+		for _, arg := range expr.GetF().GetArgs() {
+			if containsParam(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, arg := range rewritten.GetF().GetArgs() {
+		require.True(t, types.T(arg.Typ.Id).IsDecimal(), arg.String())
+		require.False(t, containsParam(arg), "runtime BETWEEN parameters must be materialized before execution")
+	}
+}
+
 func TestApplyRuleToWindowSpecPropagatesFieldErrors(t *testing.T) {
 	newWindow := func() *planpb.WindowSpec {
 		param := func() *planpb.Expr {

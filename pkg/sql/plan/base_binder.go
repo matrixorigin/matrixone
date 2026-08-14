@@ -5284,6 +5284,10 @@ func isDecimalComparisonOperator(name string) bool {
 	}
 }
 
+func isDecimalComparisonFunction(name string) bool {
+	return name == "between" || isDecimalComparisonOperator(name)
+}
+
 // foldDecimalComparisonStringConstants evaluates only query-invariant string
 // expressions before overload resolution. Runtime strings (columns, variables,
 // and prepared parameters) stay on MySQL's generic REAL coercion path.

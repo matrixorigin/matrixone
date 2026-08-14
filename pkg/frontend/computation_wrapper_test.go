@@ -450,7 +450,7 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 	}{
 		{name: "ordinary", width: 13, scale: 2, full: true, wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
 		{name: "wide 67 plus 9", width: 76, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 76, wantScale: 9},
-		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericPrefixMax, wantWidth: 74, wantScale: 9},
+		{name: "overflowing numeric prefix", width: 101, full: false, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "65 integral digits remain exact", width: 65, full: true, wantMode: preparedNumericExact, wantWidth: 65},
 		{name: "76 integral digits remain exact", width: 76, full: true, wantMode: preparedNumericExact, wantWidth: 76},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
@@ -516,8 +516,12 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "999999999999999999999999999999999999.0000000000", wantWidth: 36, wantFull: true, wantBindingMode: preparedNumericExact},
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 68, wantFull: true, wantBindingMode: preparedNumericExact},
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
-		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericWide},
-		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericPrefixMax},
+		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericExact},
+		{value: "999999999999999999999999999999999999tail", wantWidth: 36, wantBindingMode: preparedNumericExact},
+		{value: "1e67tail", wantWidth: 68, wantExponent: true, wantBindingMode: preparedNumericExact},
+		{value: "1e75tail", wantWidth: 76, wantExponent: true, wantBindingMode: preparedNumericExact},
+		{value: "1e76tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
+		{value: "1e100tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e100", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e-31", wantWidth: 31, wantScale: 31, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextPrefix, wantBindWidth: 65, wantBindScale: 30},
 		{value: "1e999999999999999999999999999999", wantWidth: 77, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
@@ -699,6 +703,8 @@ func TestInitExecuteStmtParamKeepsWideIntegerTextInExactCommonDomain(t *testing.
 	for _, value := range []string{
 		"999999999999999999999999999999999999",
 		"999999999999999999999999999999999999.0000000000",
+		"1e35",
+		"999999999999999999999999999999999999tail",
 	} {
 		t.Run(value, func(t *testing.T) {
 			prepareStmt.params.CleanOnlyData()
@@ -712,6 +718,35 @@ func TestInitExecuteStmtParamKeepsWideIntegerTextInExactCommonDomain(t *testing.
 			require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
 			require.Equal(t, int32(46), columns[0].Typ.Width)
 			require.Equal(t, int32(10), columns[0].Typ.Scale)
+		})
+	}
+}
+
+func TestInitExecuteStmtParamUsesApproximateDomainForOversizedNumericPrefix(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 123, "select coalesce(?, cast(0 as decimal(1,0)))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+	for _, value := range []string{
+		"1e76",
+		"1e76tail",
+		"10000000000000000000000000000000000000000000000000000000000000000000000000000tail",
+	} {
+		t.Run(value, func(t *testing.T) {
+			prepareStmt.params.CleanOnlyData()
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, int32(types.T_float64), columns[0].Typ.Id)
 		})
 	}
 }
@@ -810,6 +845,35 @@ func TestInitExecuteStmtParamMapsRuntimeBindingCategoriesByPosition(t *testing.T
 	require.True(t, resultTypes[1].IsDecimal())
 	require.Equal(t, types.T_float64.ToType(), prepareStmt.paramBindingTypes[0])
 	require.Equal(t, preparedNumericTextPrefix, prepareStmt.paramBindingTypes[1].Size)
+}
+
+func TestInitExecuteStmtParamKeepsBetweenRuntimeNormalizationDependencies(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 117,
+		"select ? between cast(? as decimal(46,10)) and cast(? as decimal(46,10))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{
+		"100000000000000000000000000000000000tail",
+		"100000000000000000000000000000000000",
+		"100000000000000000000000000000000000",
+	} {
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	}
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+
+	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, queryPlan)
+	require.Equal(t, []int32{0, 1, 2}, prepareStmt.exactDecimalParamPositions)
+	require.Equal(t, []int32{0, 1, 2}, cw.runtimeDecimalParamPositions)
 }
 
 func TestInitExecuteStmtParamMasksNonDependentTargetFunctionBindings(t *testing.T) {

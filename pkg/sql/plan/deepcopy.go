@@ -237,13 +237,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	return proto.Clone(node).(*plan.Node)
 }
 
-func deepCopyExternScan(scan *plan.ExternScan) *plan.ExternScan {
-	if scan == nil {
-		return nil
-	}
-	return proto.Clone(scan).(*plan.ExternScan)
-}
-
 func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {
 	if oldParam == nil {
 		return nil
