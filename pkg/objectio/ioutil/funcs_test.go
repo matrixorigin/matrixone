@@ -71,6 +71,73 @@ func TestEvalDeleteMaskFromDNCreatedTombstonesAbortColumnCompatibility(t *testin
 		require.True(t, rows.Contains(3))
 		rows.Release()
 	})
+
+	t.Run("missing commit timestamp returns an error", func(t *testing.T) {
+		missingCommitTS := vector.NewConstNull(types.T_TS.ToType(), 3, mp)
+		abortColumn := vector.NewConstNull(types.T_bool.ToType(), 3, mp)
+		defer missingCommitTS.Free(mp)
+		defer abortColumn.Free(mp)
+
+		rows, err := EvalDeleteMaskFromDNCreatedTombstones(
+			rowIDs, missingCommitTS, abortColumn, objectio.BlockObject{}, types.BuildTSForTest(2, 0), &blockID,
+		)
+		require.ErrorContains(t, err, "commit-ts column is unavailable")
+		require.False(t, rows.IsValid())
+	})
+}
+
+func TestValidateTombstoneCommitTSColumn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	valid := vector.NewVec(types.T_TS.ToType())
+	for i := int64(1); i <= 3; i++ {
+		require.NoError(t, vector.AppendFixed(valid, types.BuildTS(i, 0), false, mp))
+	}
+	column, err := ValidateTombstoneCommitTSColumn(3, valid)
+	require.NoError(t, err)
+	require.True(t, column.IsPresent())
+	require.Equal(t, types.BuildTS(1, 0), column.At(0))
+	require.Equal(t, types.BuildTS(3, 0), column.At(2))
+	valid.Free(mp)
+
+	missing := vector.NewConstNull(types.T_TS.ToType(), 3, mp)
+	_, err = ValidateTombstoneCommitTSColumn(3, missing)
+	require.ErrorContains(t, err, "unavailable")
+	missing.Free(mp)
+
+	partial := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(partial, types.BuildTS(1, 0), false, mp))
+	_, err = ValidateTombstoneCommitTSColumn(3, partial)
+	require.ErrorContains(t, err, "1 rows, expected 3")
+	partial.Free(mp)
+
+	shortBacking := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(shortBacking, types.BuildTS(1, 0), false, mp))
+	shortBacking.SetLength(3)
+	_, err = ValidateTombstoneCommitTSColumn(3, shortBacking)
+	require.ErrorContains(t, err, "backing bytes")
+	shortBacking.Free(mp)
+
+	nullCommitTS := vector.NewVec(types.T_TS.ToType())
+	require.NoError(t, vector.AppendFixed(nullCommitTS, types.BuildTS(1, 0), true, mp))
+	_, err = ValidateTombstoneCommitTSColumn(1, nullCommitTS)
+	require.ErrorContains(t, err, "contains null rows")
+	nullCommitTS.Free(mp)
+
+	wrongType := vector.NewVec(types.T_int64.ToType())
+	_, err = ValidateTombstoneCommitTSColumn(0, wrongType)
+	require.ErrorContains(t, err, "expected TS")
+	wrongType.Free(mp)
+
+	constant, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(1, 0), 3, mp)
+	require.NoError(t, err)
+	column, err = ValidateTombstoneCommitTSColumn(3, constant)
+	require.NoError(t, err)
+	require.True(t, column.IsPresent())
+	require.Equal(t, types.BuildTS(1, 0), column.At(0))
+	require.Equal(t, types.BuildTS(1, 0), column.At(2))
+	constant.Free(mp)
 }
 
 func TestValidateTombstoneAbortColumn(t *testing.T) {

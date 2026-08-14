@@ -10874,6 +10874,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 && parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -11782,10 +11785,30 @@ var supportedControlBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					typ := types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+					if typ.Scale > 0 {
+						typ.Width = typ.Scale
+					}
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return Truncate
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_timestamp, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+					if typ.Scale > 0 {
+						typ.Width = typ.Scale
+					}
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateTimestamp
 				},
 			},
 		},

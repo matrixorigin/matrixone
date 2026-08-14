@@ -17,6 +17,7 @@ package top
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -169,6 +170,62 @@ func TestTopCopiesNullVarlenaRow(t *testing.T) {
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 }
 
+func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int64
+	}{
+		{
+			name: "ascending",
+			want: []int64{10, 20, 1},
+		},
+		{
+			name: "descending",
+			flag: plan.OrderBySpec_DESC,
+			want: []int64{20, 10, 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := newTestCase(
+				t,
+				mpool.MustNewZero(),
+				[]types.Type{types.T_float64.ToType(), types.T_int64.ToType()},
+				3,
+				[]*plan.OrderBySpec{
+					{Expr: newExpression(0), Flag: tc.flag},
+					{Expr: newExpression(1)},
+				},
+			)
+			require.NoError(t, testCase.arg.Prepare(testCase.proc))
+
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+			for _, value := range []float64{
+				math.Float64frombits(0x7ff8000000000002), 1, -1,
+				math.Float64frombits(0x7ff8000000000001),
+			} {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, testCase.proc.Mp()))
+			}
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{2, 20, 10, 1}, nil, testCase.proc.Mp()))
+			bat.SetRowCount(4)
+			resetChildren(testCase.arg, []*batch.Batch{bat, batch.EmptyBatch})
+
+			result, err := vm.Exec(testCase.arg, testCase.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			got := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1])
+			require.Equal(t, tc.want, got)
+
+			testCase.arg.Free(testCase.proc, false, nil)
+			testCase.arg.GetChildren(0).Free(testCase.proc, false, nil)
+			testCase.proc.Free()
+			require.Zero(t, testCase.proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestTopSpill(t *testing.T) {
 	limit := int64(topSpillThreshold + 1000)
 	batchRows := 8192
@@ -246,27 +303,20 @@ func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
 	src.Vecs[0] = vec
 	src.SetRowCount(2)
 	defer src.Clean(mp)
-	data, err := src.MarshalBinary()
+	var encoded bytes.Buffer
+	withMetadata, err := src.MarshalBinaryWithPrepareParamKinds(&encoded, false)
 	require.NoError(t, err)
-	withMetadata, err := appendTopSpillPrepareParamMetadata(data, src)
-	require.NoError(t, err)
-	base, metadata, metadataRows, err := splitTopSpillPrepareParamMetadata(withMetadata)
-	require.NoError(t, err)
-	require.NotEqual(t, data, withMetadata)
 	decoded := batch.NewWithSize(1)
 	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithAnyMp(base, mp))
-	require.NoError(t, restoreTopSpillPrepareParamMetadata(decoded, metadata, metadataRows, mp))
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(withMetadata, mp))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-
-	bad := append([]byte(nil), withMetadata...)
-	bad[len(bad)-1] = 0xff
-	_, _, _, err = splitTopSpillPrepareParamMetadata(bad)
-	require.Error(t, err)
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {

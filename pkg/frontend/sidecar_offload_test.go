@@ -76,18 +76,29 @@ func TestStripSidecarHint(t *testing.T) {
 	assert.Equal(t, "SELECT * FROM t", stripSidecarHint("SELECT * FROM t"))
 }
 
-func TestSidecarPerformRunsLocally(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
+func TestSidecarSelectorIsScopedToOneStatement(t *testing.T) {
 	ctx := context.Background()
-
-	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ PERFORM SELECT 1"))
-	require.True(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR GPU */ PERFORM SELECT 1"))
-	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ SELECT 1"))
-	require.False(t, sidecarQueryMustRunLocally(ctx, ses, "/*+ SIDECAR */ invalid"))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []bool
+	}{
+		{name: "hinted select has unhinted sibling", sql: "/*+ SIDECAR */ SELECT 1; SELECT 2", want: []bool{true, false}},
+		{name: "perform remains local", sql: "/*+ SIDECAR */ PERFORM SELECT 1; SELECT 2", want: []bool{false, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer freeStatements(stmts)
+			fragments, err := schedulingSQLByStatementWithSQLMode(ctx, tc.sql, "")
+			require.NoError(t, err)
+			require.Len(t, fragments, len(stmts))
+			require.Len(t, stmts, len(tc.want))
+			for i := range stmts {
+				require.Equal(t, tc.want[i], siriusStatementSelected(fragments[i], stmts[i]))
+			}
+		})
+	}
 }
 
 func TestWrapForGPUExecution(t *testing.T) {

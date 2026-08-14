@@ -51,6 +51,26 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+type captureSQLExecutor struct {
+	exec func(context.Context, string, executor.Options) (executor.Result, error)
+}
+
+func (e *captureSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	return e.exec(ctx, sql, opts)
+}
+
+func (e *captureSQLExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return moerr.NewInternalErrorNoCtx("unexpected ExecTxn")
+}
+
 type autoIncrementOffsetCompilerContext struct {
 	*MockCompilerContext
 	offset int64
@@ -94,6 +114,80 @@ func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	require.Equal(t, "t2", renames[1].GetTableDef().GetName())
 	require.Equal(t, "t2", renames[1].GetActions()[0].GetAlterName().GetOldName())
 	require.Equal(t, "t3", renames[1].GetActions()[0].GetAlterName().GetNewName())
+}
+
+func TestBuildRejectsCrossDatabaseTableRename(t *testing.T) {
+	testCases := []struct {
+		name        string
+		sql         string
+		wantErrCode uint16
+	}{
+		{
+			name:        "rename table changes database and name",
+			sql:         "rename table tpch.nation to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table changes only database",
+			sql:         "rename table tpch.nation to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes database and name",
+			sql:         "alter table tpch.nation rename to other.renamed",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "alter table changes only database",
+			sql:         "alter table tpch.nation rename to other.nation",
+			wantErrCode: moerr.ErrNotSupported,
+		},
+		{
+			name:        "rename table resolves source before rejecting target database",
+			sql:         "rename table tpch.missing_table to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name:        "alter table resolves source before rejecting target database",
+			sql:         "alter table tpch.missing_table rename to other.renamed",
+			wantErrCode: moerr.ErrNoSuchTable,
+		},
+		{
+			name: "rename table keeps explicit database",
+			sql:  "rename table tpch.nation to tpch.renamed",
+		},
+		{
+			name: "rename table inherits source database",
+			sql:  "rename table tpch.nation to renamed",
+		},
+		{
+			name: "alter table keeps explicit database",
+			sql:  "alter table tpch.nation rename to tpch.renamed",
+		},
+		{
+			name: "alter table inherits source database",
+			sql:  "alter table tpch.nation rename to renamed",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			if testCase.wantErrCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, testCase.wantErrCode), err)
+				if testCase.wantErrCode == moerr.ErrNotSupported {
+					require.Contains(t, err.Error(), "cross-database table rename")
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, p)
+		})
+	}
 }
 
 func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
@@ -269,6 +363,8 @@ func TestBuildCreateTableRejectsIncompatibleCharsetAndCollation(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) character set utf8mb4 collate binary",
 		"create table t(v varchar(8) character set binary collate utf8mb4_bin)",
+		"create table t(v varchar(8)) character set latin1 collate ascii_general_ci",
+		"create table t(v varchar(8) character set ascii collate latin1_swedish_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -293,6 +389,51 @@ func TestBuildCreateTableAcceptsUTF8MB3Aliases(t *testing.T) {
 			defer stmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildCreateTableAcceptsSingleByteCharsetCompatibilityAliases(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		wantTable uint32
+	}{
+		{
+			name: "latin1 column",
+			sql: "create table t(v varchar(8) character set latin1 " +
+				"collate latin1_swedish_ci)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name: "ascii column case insensitive spelling",
+			sql: "create table t(v varchar(8) character set ASCII " +
+				"collate ASCII_GENERAL_CI)",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "latin1 table default",
+			sql:       "create table t(v varchar(8)) character set latin1 collate latin1_swedish_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+		{
+			name:      "ascii table default",
+			sql:       "create table t(v varchar(8)) character set ascii collate ascii_general_ci",
+			wantTable: uint32(types.CharsetUTF8),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, tc.wantTable, tableDef.DefaultCharset)
+			require.Equal(t, uint32(types.CharsetUTF8), tableDef.Cols[0].Typ.Charset)
 		})
 	}
 }
@@ -2049,6 +2190,175 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
 }
 
+func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "like", sql: "CREATE TABLE visibility_like LIKE legacy_visibility_source"},
+		{name: "clone", sql: "CREATE TABLE visibility_clone CLONE legacy_visibility_source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			const sourceName = "legacy_visibility_source"
+			const sourceID = 272464
+
+			source := DeepCopyTableDef(ctx.tables["test_idx"], true)
+			source.Name = sourceName
+			source.DbName = ctx.DefaultDatabase()
+			source.TblId = sourceID
+			source.Indexes = []*plan.IndexDef{
+				{
+					IndexName:  "idx_legacy_visible",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    false,
+				},
+				{
+					IndexName:  "idx_invisible",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    false,
+				},
+				{
+					IndexName:  "idx_stale_marker",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    true,
+					Option: &plan.IndexOption{
+						Visibility: plan.IndexOption_VISIBILITY_VISIBLE,
+					},
+				},
+			}
+			ctx.tables[sourceName] = source
+			ctx.objects[sourceName] = &plan.ObjectRef{
+				SchemaName: ctx.DefaultDatabase(),
+				ObjName:    sourceName,
+				Obj:        sourceID,
+			}
+
+			proc := testutil.NewProc(t)
+			proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+			ctx.GetProcessFunc = func() *process.Process { return proc }
+			visibilityQueries := 0
+			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+				moruntime.InternalSQLExecutor,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					if sql != "SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464" {
+						return executor.Result{}, nil
+					}
+					visibilityQueries++
+					result := executor.NewMemResult(
+						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+					)
+					result.NewBatchWithRowCount(3)
+					require.NoError(t, executor.AppendStringRows(result, 0,
+						[]string{"idx_legacy_visible", "idx_invisible", "idx_stale_marker"}))
+					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0, 0}))
+					return result.GetResult(), nil
+				}),
+			)
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, 1, visibilityQueries)
+
+			createPlan := built
+			if clone := built.GetDdl().GetCloneTable(); clone != nil {
+				createPlan = clone.GetCreateTable()
+			}
+			createTable := createPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			visibility := make(map[string]bool, len(createTable.TableDef.Indexes))
+			for _, indexDef := range createTable.TableDef.Indexes {
+				visibility[indexDef.IndexName] = indexDef.Visible
+				_, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
+			}
+			require.True(t, visibility["idx_legacy_visible"])
+			require.False(t, visibility["idx_invisible"])
+			require.False(t, visibility["idx_stale_marker"])
+			persistedSQL := strings.ToUpper(tableDefCreateSQL(createTable.TableDef))
+			require.Contains(t, persistedSQL, "IDX_INVISIBLE")
+			require.Equal(t, 2, strings.Count(persistedSQL, " INVISIBLE"))
+		})
+	}
+}
+
+func TestRunSqlWithSnapshotUsesSourceTenant(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+
+	const sourceTenant = uint32(42)
+	var capturedAccountID uint32
+	var capturedContextAccountID uint32
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&captureSQLExecutor{exec: func(
+			execCtx context.Context,
+			_ string,
+			opts executor.Options,
+		) (executor.Result, error) {
+			capturedAccountID = opts.AccountID()
+			capturedContextAccountID, _ = defines.GetAccountId(execCtx)
+			return executor.Result{}, nil
+		}},
+	)
+
+	result, err := runSqlWithSnapshot(ctx, "select 1", &Snapshot{
+		Tenant: &SnapshotTenant{TenantID: sourceTenant},
+	})
+	require.NoError(t, err)
+	defer result.Close()
+	require.Equal(t, sourceTenant, capturedAccountID)
+	require.Equal(t, sourceTenant, capturedContextAccountID)
+}
+
+func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	const sequenceSQL = "CREATE SEQUENCE seq1 INCREMENT 2 START WITH 11 NO CYCLE"
+
+	sequenceStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sequenceSQL, 1)
+	require.NoError(t, err)
+	defer sequenceStmt.Free()
+	sequencePlan, err := BuildPlan(ctx, sequenceStmt, false)
+	require.NoError(t, err)
+
+	sequenceDef := DeepCopyTableDef(
+		sequencePlan.GetDdl().GetCreateSequence().GetTableDef(),
+		true,
+	)
+	sequenceDef.DbName = ctx.DefaultDatabase()
+	// The sequence builder stores relkind in the properties; catalog resolution
+	// exposes it as TableType on the resolved source definition.
+	sequenceDef.TableType = catalog.SystemSequenceRel
+	ctx.tables[sequenceDef.Name] = sequenceDef
+	ctx.objects[sequenceDef.Name] = &plan.ObjectRef{
+		SchemaName: ctx.DefaultDatabase(),
+		ObjName:    sequenceDef.Name,
+	}
+
+	for _, createSQL := range []string{
+		"CREATE TABLE dst_live CLONE seq1",
+		"CREATE TABLE dst_snapshot CLONE seq1 {SNAPSHOT = 'sp1'}",
+		"CREATE TABLE dst_like LIKE seq1",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			createStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+			require.NoError(t, err)
+			defer createStmt.Free()
+
+			_, err = BuildPlan(ctx, createStmt, false)
+			require.ErrorContains(t, err, "tpch.seq1 is not BASE TABLE")
+		})
+	}
+}
+
 func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
 	const rootSQL = "/* before */ CREATE TABLE partitioned_t (category VARCHAR(20)) PARTITION BY LIST COLUMNS (category) (PARTITION p0 VALUES IN ('A'));"
 	ctx := &rootSQLCompilerContext{
@@ -2829,6 +3139,56 @@ func TestBuildRegularSecondaryIndexPersistsPrefixLengths(t *testing.T) {
 	}
 }
 
+func TestBuildIndexPersistsVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name    string
+		sql     string
+		visible bool
+	}{
+		{
+			name:    "default regular index is visible",
+			sql:     "CREATE TABLE idx_visibility_default (id INT PRIMARY KEY, a INT, KEY idx_a(a))",
+			visible: true,
+		},
+		{
+			name:    "explicit visible regular index",
+			sql:     "CREATE TABLE idx_visibility_visible (id INT PRIMARY KEY, a INT, KEY idx_a(a) VISIBLE)",
+			visible: true,
+		},
+		{
+			name:    "invisible regular index",
+			sql:     "CREATE TABLE idx_visibility_invisible (id INT PRIMARY KEY, a INT, KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible unique index",
+			sql:     "CREATE TABLE idx_visibility_unique (id INT PRIMARY KEY, a INT, UNIQUE KEY idx_a(a) INVISIBLE)",
+			visible: false,
+		},
+		{
+			name:    "invisible fulltext index",
+			sql:     "CREATE TABLE idx_visibility_fulltext (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY idx_body(body) INVISIBLE)",
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
+			require.NotEmpty(t, indexes)
+			for _, indexDef := range indexes {
+				got, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
+				require.Equal(t, tc.visible, got)
+				require.Equal(t, tc.visible, indexDef.Visible)
+			}
+		})
+	}
+}
+
 func TestBuildPrefixIndexV2ProtocolGate(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := mock.CurrentContext().GetProcess()
@@ -3066,6 +3426,60 @@ func TestCreateTableAsSelectWithTemporalFractionalSeconds(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
 			require.NoError(t, err)
 			stmt.Free()
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesTimeWindowMicrosecondBoundaryScale(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_datetime.ToTypeWithScale(0))
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		"create table hf_scale_materialized as "+
+			"select _wstart, _wend, count(*) as row_count "+
+			"from tw_scale interval(ts, 1, microsecond)")
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.GreaterOrEqual(t, len(createTable.TableDef.Cols), 2)
+	for _, col := range createTable.TableDef.Cols[:2] {
+		require.Equal(t, int32(types.T_datetime), col.Typ.Id, col.Name)
+		require.Equal(t, int32(6), col.Typ.Scale, col.Name)
+		require.Equal(t, int32(6), col.Typ.Width, col.Name)
+	}
+}
+
+func TestCreateTableAsSelectTimeWindowBoundaryType(t *testing.T) {
+	tests := []struct {
+		name     string
+		castType string
+		oid      types.T
+		scale    int32
+	}{
+		{name: "date", castType: "date", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale zero", castType: "datetime", oid: types.T_datetime, scale: 0},
+		{name: "datetime scale six", castType: "datetime(6)", oid: types.T_datetime, scale: 6},
+		{name: "timestamp scale three", castType: "timestamp(3)", oid: types.T_timestamp, scale: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			sql := "create table tw_rollup as " +
+				"select _wstart as ws, _wend as we, count(*) as c " +
+				"from (select 1 as k, cast('2026-01-01 00:00:01.123456' as " + test.castType + ") as event_ts) src " +
+				"group by k interval(event_ts, 1, minute)"
+			plan, err := buildSingleStmt(mock, t, sql)
+			require.NoError(t, err)
+
+			cols := plan.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			require.GreaterOrEqual(t, len(cols), 3)
+			for _, idx := range []int{0, 1} {
+				require.Equal(t, int32(test.oid), cols[idx].Typ.Id, cols[idx].Name)
+				require.Equal(t, test.scale, cols[idx].Typ.Scale, cols[idx].Name)
+				require.False(t, cols[idx].Default.NullAbility, cols[idx].Name)
+			}
 		})
 	}
 }
@@ -3790,6 +4204,23 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 		mock.ctxt.tables[child.Name] = child
 		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
 		mock.ctxt.id2name[child.TblId] = child.Name
+		proc := testutil.NewProc(t)
+		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+			moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t,
+					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
+				result := executor.NewMemResult(
+					[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+				)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx1"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+				return result.GetResult(), nil
+			}),
+		)
 
 		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
 		require.Error(t, err)

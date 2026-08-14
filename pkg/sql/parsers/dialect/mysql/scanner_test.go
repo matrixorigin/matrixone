@@ -100,6 +100,149 @@ func TestQuotedUnicodeIdentifier(t *testing.T) {
 	}
 }
 
+func TestUnquotedExtendedIdentifier(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		value string
+	}{
+		{name: "UTF-8 continuation", input: "t_ãg", value: "t_ãg"},
+		{name: "UTF-8 leading", input: "数量", value: "数量"},
+		{name: "maximum BMP code point", input: "\uFFFF", value: "\uFFFF"},
+		{name: "digit leading", input: "1数量", value: "1数量"},
+		{name: "digit leading with exponent letter", input: "1e数量", value: "1e数量"},
+		{name: "raw latin1 client byte", input: "t_\xe9g", value: "t_\xe9g"},
+		{name: "digit leading raw latin1 client byte", input: "1\xe9A", value: "1\xe9a"},
+		{name: "keyword prefix", input: "selectã", value: "selectã"},
+		{name: "charset name as identifier", input: "_utf8mb4", value: "_utf8mb4"},
+		{name: "charset prefix with ASCII suffix", input: "_utf8mb4table", value: "_utf8mb4table"},
+		{name: "charset prefix with digit suffix", input: "_utf8mb41", value: "_utf8mb41"},
+		{name: "charset prefix with BMP suffix", input: "_utf8mb4数量", value: "_utf8mb4数量"},
+		{name: "charset prefix with raw latin1 suffix", input: "_utf8mb4\xe9A", value: "_utf8mb4\xe9A"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != ID || value != test.value {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(ID), test.value)
+			}
+		})
+	}
+}
+
+func TestCharsetIntroducer(t *testing.T) {
+	for _, input := range []string{"_utf8mb4'test'", "_utf8mb4 \t'test'"} {
+		t.Run(input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != STRING || value != "test" {
+				t.Fatalf("Scan charset introducer = (%s, %q), want (%s, %q)",
+					tokenName(token), value, tokenName(STRING), "test")
+			}
+		})
+	}
+}
+
+func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantTokens []int
+	}{
+		{name: "leading supplementary", input: "😀", wantTokens: []int{LEX_ERROR}},
+		{name: "ASCII then supplementary", input: "t😀", wantTokens: []int{ID, LEX_ERROR}},
+		{name: "digit then supplementary", input: "1😀", wantTokens: []int{INTEGRAL, LEX_ERROR}},
+		{name: "hex prefix then supplementary", input: "0x😀", wantTokens: []int{LEX_ERROR}},
+		{name: "bit prefix then supplementary", input: "0b😀", wantTokens: []int{LEX_ERROR}},
+		{name: "user variable then supplementary", input: "@😀", wantTokens: []int{LEX_ERROR}},
+		{name: "system variable then supplementary", input: "@@😀", wantTokens: []int{LEX_ERROR}},
+		{name: "charset prefix then supplementary", input: "_utf8mb4😀", wantTokens: []int{ID, LEX_ERROR}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			for i, want := range test.wantTokens {
+				token, _ := scanner.Scan()
+				if token != want {
+					t.Fatalf("Scan(%q) token %d = %s, want %s",
+						test.input, i, tokenName(token), tokenName(want))
+				}
+			}
+		})
+	}
+}
+
+func TestUnquotedRawByteDirectIdentifierEntries(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantToken int
+		wantValue string
+	}{
+		{name: "hex prefix", input: "0x\xe9A", wantToken: ID, wantValue: "0x\xe9a"},
+		{name: "bit prefix", input: "0b\xe9A", wantToken: ID, wantValue: "0b\xe9a"},
+		{name: "user variable", input: "@\xe9A", wantToken: AT_ID, wantValue: "\xe9A"},
+		{name: "system variable", input: "@@\xe9A", wantToken: AT_AT_ID, wantValue: "\xe9A"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != test.wantToken || value != test.wantValue {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(test.wantToken), test.wantValue)
+			}
+		})
+	}
+}
+
+func TestUnquotedIdentifierRejectsPunctuationBeforeUnicode(t *testing.T) {
+	tests := []struct {
+		name          string
+		input         string
+		wantToken     int
+		wantValue     string
+		wantNextToken int
+		wantNextValue string
+	}{
+		{name: "decimal point", input: "1.数量", wantToken: FLOAT, wantValue: "1.", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "positive exponent", input: "1e+数量", wantToken: FLOAT, wantValue: "1e+", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "negative exponent", input: "1e-数量", wantToken: FLOAT, wantValue: "1e-", wantNextToken: ID, wantNextValue: "数量"},
+		{name: "hex prefix", input: "0x.数量", wantToken: LEX_ERROR, wantValue: "."},
+		{name: "bit prefix", input: "0b+数量", wantToken: LEX_ERROR, wantValue: "+"},
+		{name: "user variable", input: "@+数量", wantToken: LEX_ERROR},
+		{name: "system variable", input: "@@-数量", wantToken: LEX_ERROR},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != test.wantToken || value != test.wantValue {
+				t.Fatalf("Scan(%q) = (%s, %q), want (%s, %q)",
+					test.input, tokenName(token), value, tokenName(test.wantToken), test.wantValue)
+			}
+			if test.wantNextToken != 0 {
+				token, value = scanner.Scan()
+				if token != test.wantNextToken || value != test.wantNextValue {
+					t.Fatalf("Scan(%q) next = (%s, %q), want (%s, %q)",
+						test.input, tokenName(token), value, tokenName(test.wantNextToken), test.wantNextValue)
+				}
+			}
+		})
+	}
+}
+
 func TestScannerSQLModePipeConcat(t *testing.T) {
 	s := NewScannerWithSQLMode(dialect.MYSQL, "||", ParseSQLModeFlags("PIPES_AS_CONCAT"))
 	id, _ := s.Scan()
@@ -113,6 +256,66 @@ func TestScannerSQLModePipeConcat(t *testing.T) {
 	id, _ = s.Scan()
 	if id != OR {
 		t.Fatalf("default || token after scanner reuse = %s, want OR", tokenName(id))
+	}
+}
+
+func TestScannerContextualOffset(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{input: "offset", want: ID},
+		{input: "offset from t", want: ID},
+		{input: "offset /* comment */ from t", want: ID},
+		{input: "offset order by 1", want: ID},
+		{input: "offset by rank", want: ID},
+		{input: "offset interval(ts, 1, day)", want: ID},
+		{input: "offset full join t", want: ID},
+		{input: "offset set a = 1", want: ID},
+		{input: "offset }", want: ID},
+		{input: "offset(1)", want: ID},
+		{input: "offset (1)", want: OFFSET},
+		{input: "offset 1", want: OFFSET},
+		{input: "offset ?", want: OFFSET},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			token, _ := scanner.Scan()
+			if token != test.want {
+				t.Fatalf("Scan(%q) token = %d, want %d", test.input, token, test.want)
+			}
+		})
+	}
+
+	ansiScanner := NewScannerWithSQLMode(dialect.MYSQL, `offset ("c")`, SQLModeFlags(SQLModeANSIQuotes))
+	_, _ = ansiScanner.Scan()
+	if !ansiScanner.offsetAliasColumnListAhead() {
+		t.Fatal("ANSI-quoted identifier list was not recognized")
+	}
+}
+
+func TestOffsetAliasColumnListAhead(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{input: "offset (c)", want: true},
+		{input: "offset /* comment */ (`c1`, c2)", want: true},
+		{input: "offset (1)", want: false},
+		{input: `offset ("c")`, want: false},
+		{input: "offset (c + 1)", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			_, _ = scanner.Scan()
+			if got := scanner.offsetAliasColumnListAhead(); got != test.want {
+				t.Fatalf("offsetAliasColumnListAhead(%q) = %v, want %v", test.input, got, test.want)
+			}
+		})
 	}
 }
 

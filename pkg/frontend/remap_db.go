@@ -121,6 +121,11 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		remapTableName(s.Table, remap)
 	case *tree.AlterTable:
 		remapTableName(s.Table, remap)
+		for _, opt := range s.Options {
+			if rename, ok := opt.(*tree.AlterOptionTableName); ok {
+				remapObjectName(rename.Name, remap)
+			}
+		}
 	case *tree.AlterView:
 		remapTableName(s.Name, remap)
 		if s.AsSource != nil {

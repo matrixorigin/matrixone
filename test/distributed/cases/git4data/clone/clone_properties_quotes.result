@@ -1,0 +1,108 @@
+drop database if exists clone_prop_quote_src;
+drop database if exists clone_prop_quote_db_dst;
+create database clone_prop_quote_src;
+use clone_prop_quote_src;
+create table prop_src(id int primary key)
+properties(
+'key"double' = 'value"double',
+'key''single' = 'value''single',
+'key\\backslash' = 'value\\backslash',
+'key"mixed''\\' = 'value"mixed''\\'
+);
+insert into prop_src values (1), (2);
+show create table prop_src;
+➤ Table[12,6,0]  ¦  Create Table[12,165,0]  𝄀
+prop_src  ¦  CREATE TABLE `prop_src` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) PROPERTIES('key"double' = 'value"double', 'key''single' = 'value''single', 'key\\backslash' = 'value\\backslash', 'key"mixed''\\' = 'value"mixed''\\')
+create database clone_prop_quote_db_dst clone clone_prop_quote_src;
+create table clone_prop_quote_table_dst clone prop_src;
+create table clone_prop_quote_like_dst like prop_src;
+show create table clone_prop_quote_table_dst;
+➤ Table[12,19,0]  ¦  Create Table[12,178,0]  𝄀
+clone_prop_quote_table_dst  ¦  CREATE TABLE `clone_prop_quote_table_dst` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) PROPERTIES('key"double' = 'value"double', 'key''single' = 'value''single', 'key\\backslash' = 'value\\backslash', 'key"mixed''\\' = 'value"mixed''\\')
+show create table clone_prop_quote_like_dst;
+➤ Table[12,18,0]  ¦  Create Table[12,177,0]  𝄀
+clone_prop_quote_like_dst  ¦  CREATE TABLE `clone_prop_quote_like_dst` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) PROPERTIES('key"double' = 'value"double', 'key''single' = 'value''single', 'key\\backslash' = 'value\\backslash', 'key"mixed''\\' = 'value"mixed''\\')
+show create table clone_prop_quote_db_dst.prop_src;
+➤ Table[12,6,0]  ¦  Create Table[12,165,0]  𝄀
+prop_src  ¦  CREATE TABLE `prop_src` (
+  `id` int NOT NULL,
+  PRIMARY KEY (`id`)
+) PROPERTIES('key"double' = 'value"double', 'key''single' = 'value''single', 'key\\backslash' = 'value\\backslash', 'key"mixed''\\' = 'value"mixed''\\')
+select id from prop_src order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from clone_prop_quote_table_dst order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from clone_prop_quote_like_dst order by id;
+➤ id[4,32,0]
+select id from clone_prop_quote_db_dst.prop_src order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+insert into clone_prop_quote_table_dst values (3);
+insert into clone_prop_quote_like_dst values (4);
+insert into clone_prop_quote_db_dst.prop_src values (5);
+insert into prop_src values (6);
+select id from prop_src order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6
+select id from clone_prop_quote_table_dst order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from clone_prop_quote_like_dst order by id;
+➤ id[4,32,0]  𝄀
+4
+select id from clone_prop_quote_db_dst.prop_src order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+5
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'clone_prop_quote_src.clone_prop_quote_failure_table');
+➤ add_fault_point(fj/cn/clone_fails, :::, echo, 40, clone_prop_quote_src.clone_prop_quote_failure_table)[-7,1,0]  𝄀
+1
+create table clone_prop_quote_failure_table clone prop_src;
+internal error: injected table clone error
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'clone_prop_quote_src' and relname = 'clone_prop_quote_failure_table';
+➤ count(*)[-5,64,0]  𝄀
+0
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'clone_prop_quote_failure_db.prop_src');
+➤ add_fault_point(fj/cn/clone_fails, :::, echo, 40, clone_prop_quote_failure_db.prop_src)[-7,1,0]  𝄀
+1
+create database clone_prop_quote_failure_db clone clone_prop_quote_src;
+internal error: injected table clone error
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select count(*) from mo_catalog.mo_database
+where datname = 'clone_prop_quote_failure_db';
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database if exists clone_prop_quote_src;
+drop database if exists clone_prop_quote_db_dst;
+drop database if exists clone_prop_quote_failure_db;

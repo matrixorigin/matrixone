@@ -115,21 +115,40 @@ func TestAffectedRows(t *testing.T) {
 }
 
 func TestGetSpillFileService(t *testing.T) {
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	assert.Nil(t, err)
-	proc := &Process{
-		Base: &BaseProcess{
-			FileService: localFS,
-		},
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name    string
+		procCtx context.Context
+	}{
+		{name: "nil process context"},
+		{name: "canceled process context", procCtx: canceledCtx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localFS, err := fileservice.NewLocalFS(
+				context.Background(),
+				defines.LocalFileServiceName,
+				t.TempDir(),
+				fileservice.DisabledCacheConfig,
+				nil,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
+			proc := &Process{
+				Ctx: tc.procCtx,
+				Base: &BaseProcess{
+					FileService: localFS,
+				},
+			}
+
+			spillFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			file, err := spillFS.CreateAndRemoveFile(context.Background(), "probe")
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+		})
 	}
-	_, err = proc.GetSpillFileService()
-	assert.Nil(t, err)
 }
 
 func TestGetSpillFileServiceError(t *testing.T) {
@@ -201,16 +220,18 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
 	params := vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(params, []byte("binary"), false, proc.Mp()))
-	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+	proc.SetOwnedPrepareParamsWithMetadata(params, []bool{true}, []bool{true})
 
 	state := proc.DetachPrepareParams()
 	require.Nil(t, proc.GetPrepareParams())
 	require.False(t, proc.GetPrepareParamIsBin(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 	require.Equal(t, 1, params.Length(), "detach must not release owned params")
 
 	proc.BorrowPrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.False(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()
@@ -219,6 +240,7 @@ func TestDetachAndRestorePrepareParams(t *testing.T) {
 	proc.RestorePrepareParams(state)
 	require.Same(t, params, proc.GetPrepareParams())
 	require.True(t, proc.GetPrepareParamIsBin(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	require.True(t, proc.Base.prepareParamsOwned)
 
 	proc.Free()

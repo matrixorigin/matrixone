@@ -39,12 +39,12 @@ func LoadColumnsData(
 	m *mpool.MPool,
 	policy fileservice.Policy,
 ) (dataMeta objectio.ObjectDataMeta, release func(), fromCache bool, err error) {
-	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
 	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name().UnsafeString()
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
 	if vectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -113,11 +113,11 @@ func readColumnsData(
 		readTypes = append(readTypes, objectio.TSType, types.T_bool.ToType())
 	}
 
-	name := location.Name().UnsafeString()
 	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
 		return ioVectors, false, err
 	}
+	name := location.Name().UnsafeString()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	ioVectors, err = objectio.ReadOneBlock(
 		ctx,
@@ -451,12 +451,12 @@ func LoadColumnsData2(
 	needCopy bool,
 	vPool *containers.VectorPool,
 ) (vectors []containers.Vector, release func(), err error) {
-	name := location.Name()
 	var meta objectio.ObjectMeta
 	var ioVectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
+	name := location.Name()
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 	if ioVectors, err = objectio.ReadOneBlock(ctx, &dataMeta, name.UnsafeString(), location.ID(), cols, typs, nil, fs, policy); err != nil {
 		return

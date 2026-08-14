@@ -3584,6 +3584,12 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestLoadFileRejectsEmptyPath(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := readLoadFileContents("", proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+}
+
 func evalLoadFileForTest(
 	t *testing.T,
 	proc *process.Process,

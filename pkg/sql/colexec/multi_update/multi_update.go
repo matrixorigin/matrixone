@@ -20,7 +20,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -77,11 +82,11 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 			info.tableType = tableType
 			info.isContiguous = isContiguousMapping(updateCtx.InsertCols)
-			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+			update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 		}
 	}
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		if update.Action != UpdateWriteS3 {
 			if info.Source == nil {
 				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
@@ -101,6 +106,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	if len(update.ctr.deleteBuf) == 0 {
 		update.ctr.deleteBuf = make([]*batch.Batch, len(update.MultiUpdateCtx))
 	}
+	if err := update.prepareSeenTargetRows(proc); err != nil {
+		return err
+	}
+	if update.Action == UpdateWriteS3 {
+		if err := update.prepareSeenTargetRowsAdmission(proc.GetService()); err != nil {
+			return err
+		}
+	}
 
 	update.ctr.affectedRows = 0
 	update.ctr.flushed = false
@@ -117,6 +130,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 			writer.segmentMap = colexec.MustGetServer(proc.GetService()).GetCnSegmentMap()
 			update.ctr.s3Writer = writer
+		} else {
+			update.ctr.s3Writer.refreshSelectorState(update)
 		}
 
 	case UpdateFlushS3Info:
@@ -376,33 +391,222 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 }
 
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
+	targetBatches := make(map[int]*batch.Batch)
+	defer func() {
+		for _, targetBatch := range targetBatches {
+			if targetBatch != bat {
+				targetBatch.Clean(proc.Mp())
+			}
+		}
+	}()
+
 	for i, updateCtx := range update.MultiUpdateCtx {
+		targetIdx := updateCtx.TargetUpdateCtxIdx
+		if targetIdx < 0 || targetIdx >= len(update.MultiUpdateCtx) {
+			return moerr.NewInternalError(proc.Ctx, "invalid multi-target update context index")
+		}
+		contextBatch, ok := targetBatches[targetIdx]
+		if !ok {
+			var duplicateRows uint64
+			contextBatch, _, duplicateRows, err = filterTargetRows(
+				proc,
+				update.MultiUpdateCtx[targetIdx],
+				bat,
+				update.ctr.seenTargetRows[targetTableID(update.MultiUpdateCtx[targetIdx])],
+			)
+			if err != nil {
+				return err
+			}
+			update.addAffectedRowsFunc(duplicateRows)
+			targetBatches[targetIdx] = contextBatch
+		}
+		if contextBatch.RowCount() == 0 {
+			continue
+		}
+
 		// delete rows
 		if len(updateCtx.DeleteCols) > 0 {
-			err = update.delete_table(proc, analyzer, updateCtx, bat, i)
-			if err != nil {
-				return
+			if err = update.delete_table(proc, analyzer, updateCtx, contextBatch, i); err != nil {
+				return err
 			}
 		}
 
 		// insert rows
-		if len(updateCtx.InsertCols) > 0 {
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
-			switch tableType {
-			case UpdateMainTable:
-				err = update.insert_main_table(proc, analyzer, i, bat)
-			case UpdateUniqueIndexTable:
-				err = update.insert_unique_index_table(proc, analyzer, i, bat)
-			case UpdateSecondaryIndexTable:
-				err = update.insert_secondary_index_table(proc, analyzer, i, bat)
-			}
-			if err != nil {
-				return
-			}
+		if len(updateCtx.InsertCols) == 0 {
+			continue
+		}
+		tableType := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx).tableType
+		switch tableType {
+		case UpdateMainTable:
+			err = update.insert_main_table(proc, analyzer, i, contextBatch)
+		case UpdateUniqueIndexTable:
+			err = update.insert_unique_index_table(proc, analyzer, i, contextBatch)
+		case UpdateSecondaryIndexTable:
+			err = update.insert_secondary_index_table(proc, analyzer, i, contextBatch)
+		}
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func filterTargetRows(
+	proc *process.Process,
+	updateCtx *MultiUpdateCtx,
+	input *batch.Batch,
+	seen *hashmap.StrHashMap,
+) (*batch.Batch, bool, uint64, error) {
+	if !updateCtx.DedupByTargetRowID {
+		return input, false, 0, nil
+	}
+	if len(updateCtx.DeleteCols) < 4 ||
+		updateCtx.DeleteCols[0] < 0 ||
+		updateCtx.DeleteCols[0] >= len(input.Vecs) ||
+		updateCtx.DeleteCols[2] < 0 ||
+		updateCtx.DeleteCols[2] >= len(input.Vecs) ||
+		updateCtx.DeleteCols[3] < 0 ||
+		updateCtx.DeleteCols[3] >= len(input.Vecs) {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector columns")
+	}
+
+	rowIDVec := input.Vecs[updateCtx.DeleteCols[0]]
+	rowNumberVec := input.Vecs[updateCtx.DeleteCols[2]]
+	activeVec := input.Vecs[updateCtx.DeleteCols[3]]
+	if rowIDVec.GetType().Oid != types.T_Rowid ||
+		rowNumberVec.GetType().Oid != types.T_int64 ||
+		activeVec.GetType().Oid != types.T_bool {
+		return nil, false, 0, moerr.NewInternalError(proc.Ctx, "invalid multi-target update selector types")
+	}
+
+	rowNumbers := vector.MustFixedColWithTypeCheck[int64](rowNumberVec)
+	active := vector.MustFixedColWithTypeCheck[bool](activeVec)
+	rowIDNulls := rowIDVec.GetNulls()
+	rowNumberNulls := rowNumberVec.GetNulls()
+	activeNulls := activeVec.GetNulls()
+	selections := make([]int64, 0, input.RowCount())
+	for i := 0; i < input.RowCount(); i++ {
+		if rowIDNulls.Contains(uint64(i)) ||
+			rowNumberNulls.Contains(uint64(i)) ||
+			activeNulls.Contains(uint64(i)) ||
+			rowNumbers[i] != 1 ||
+			!active[i] {
+			continue
+		}
+		selections = append(selections, int64(i))
+	}
+
+	// The input can carry a build-side allocation account whose lifetime ends
+	// at the operator boundary. The filtered batch is independently owned by
+	// MULTI_UPDATE, so do not inherit that execution-local account.
+	filtered, err := input.CloneWithoutAllocationAccount(proc.Mp(), true)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	filtered.Shrink(selections, false)
+	filtered.SetRowCount(len(selections))
+	if seen == nil || filtered.RowCount() == 0 {
+		return filtered, true, 0, nil
+	}
+
+	physicalSelections := make([]int64, 0, filtered.RowCount())
+	iterator := seen.NewIterator()
+	for offset := 0; offset < filtered.RowCount(); offset += hashmap.UnitLimit {
+		count := min(hashmap.UnitLimit, filtered.RowCount()-offset)
+		oldGroupCount := seen.GroupCount()
+		values, zValues, err := iterator.Insert(
+			offset,
+			count,
+			[]*vector.Vector{filtered.Vecs[updateCtx.DeleteCols[0]]},
+		)
+		if err != nil {
+			filtered.Clean(proc.Mp())
+			return nil, false, 0, err
+		}
+		nextGroup := oldGroupCount
+		for i, value := range values {
+			if zValues[i] != 0 && value > nextGroup {
+				nextGroup++
+				physicalSelections = append(physicalSelections, int64(offset+i))
+			}
+		}
+	}
+	duplicateRows := uint64(filtered.RowCount() - len(physicalSelections))
+	filtered.Shrink(physicalSelections, false)
+	filtered.SetRowCount(len(physicalSelections))
+	return filtered, true, duplicateRows, nil
+}
+
+func (update *MultiUpdate) prepareSeenTargetRows(proc *process.Process) error {
+	if update.ctr.seenTargetRows != nil {
+		return nil
+	}
+	targetCounts := make(map[uint64]int)
+	for _, ctx := range update.MultiUpdateCtx {
+		if !features.IsIndexTable(ctx.TableDef.FeatureFlag) {
+			targetCounts[targetTableID(ctx)]++
+		}
+	}
+	update.ctr.seenTargetRows = make(map[uint64]*hashmap.StrHashMap)
+	for tableID, count := range targetCounts {
+		if count < 2 {
+			continue
+		}
+		seen, err := hashmap.NewStrHashMap(false, proc.Mp())
+		if err != nil {
+			return err
+		}
+		update.ctr.seenTargetRows[tableID] = seen
+	}
+	return nil
+}
+
+func (update *MultiUpdate) prepareSeenTargetRowsAdmission(sid string) error {
+	if len(update.ctr.seenTargetRows) == 0 {
+		return nil
+	}
+	if update.ctr.seenRowsRSC != nil {
+		return nil
+	}
+	value, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.CNMemoryThrottler)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("can not get global variable %s", runtime.CNMemoryThrottler)
+	}
+	update.ctr.seenRowsRSC = value.(rscthrottler.RSCThrottler)
+	if err := update.admitSeenTargetRowsGrowth(update.seenTargetRowsSize()); err != nil {
+		update.ctr.seenRowsRSC = nil
+		return err
+	}
+	return nil
+}
+
+func (update *MultiUpdate) admitSeenTargetRowsGrowth(increment int64) error {
+	if increment <= 0 || update.ctr.seenRowsRSC == nil {
+		return nil
+	}
+	if _, granted := update.ctr.seenRowsRSC.Acquire(increment); !granted {
+		return moerr.NewInternalErrorNoCtx(
+			"multi-target update Rowid deduplication exceeded the CN memory admission limit",
+		)
+	}
+	update.ctr.seenRowsGrant += increment
+	return nil
+}
+
+func (update *MultiUpdate) seenTargetRowsSize() int64 {
+	var size int64
+	for _, seen := range update.ctr.seenTargetRows {
+		size += seen.Size()
+	}
+	return size
+}
+
+func targetTableID(ctx *MultiUpdateCtx) uint64 {
+	if ctx.TargetTableID != 0 {
+		return ctx.TargetTableID
+	}
+	return ctx.TableDef.TblId
 }
 
 func (update *MultiUpdate) resetMultiUpdateCtxs() {
@@ -423,13 +627,13 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
-		update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
+		update.ctr.updateCtxInfos[updateCtxKey(updateCtx)] = info
 	}
 }
 
 func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
-		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
+		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		info.Source = nil
 		if update.Action != UpdateWriteS3 {
 			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)

@@ -51,6 +51,13 @@ func mustDatetime(t *testing.T, s string) types.Datetime {
 	return d
 }
 
+func mustDatetimeScale(t *testing.T, s string, scale int32) types.Datetime {
+	t.Helper()
+	d, err := types.ParseDatetime(s, scale)
+	require.NoError(t, err)
+	return d
+}
+
 // makePartInput builds a batch shaped (ts datetime, val int32, part int64).
 func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 	t.Helper()
@@ -266,6 +273,86 @@ func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 	in.Clean(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	interval, err := calcDatetime(1000, types.MicroSecond)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(500, types.MicroSecond)
+	require.NoError(t, err)
+
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000100", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000900", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001100", 6),
+	}, nil, proc.Mp()))
+	in.SetRowCount(3)
+
+	arg := newPartArg(t, proc, sliding, false)
+	arg.Interval = interval
+	arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+
+	require.Equal(t, []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000000", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000500", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001000", 6),
+	}, starts)
+	require.Equal(t, []int64{30, 50, 30}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testing.T) {
+	for _, scale := range []int32{0, 3, 6} {
+		t.Run(types.T_datetime.ToTypeWithScale(scale).String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			oneMicrosecond, err := calcDatetime(1, types.MicroSecond)
+			require.NoError(t, err)
+
+			in := batch.New([]string{"ts", "val"})
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale))
+			in.Vecs[1] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
+			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+				mustDatetimeScale(t, "2026-08-12 10:00:00", scale),
+			}, nil, proc.Mp()))
+			in.SetRowCount(1)
+
+			arg := newPartArg(t, proc, oneMicrosecond, false)
+			arg.WEnd = true
+			arg.Interval = oneMicrosecond
+			arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+			arg.Children = nil
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, res.Batch)
+			require.GreaterOrEqual(t, len(res.Batch.Vecs), 3)
+
+			startVec := res.Batch.Vecs[1]
+			endVec := res.Batch.Vecs[2]
+			require.Equal(t, int32(6), startVec.GetType().Scale)
+			require.Equal(t, int32(6), endVec.GetType().Scale)
+			start := vector.MustFixedColNoTypeCheck[types.Datetime](startVec)[0]
+			end := vector.MustFixedColNoTypeCheck[types.Datetime](endVec)[0]
+			require.Equal(t, types.Datetime(1), end-start)
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
 }
 
 // Sliding windows carry state across rows, so a partition boundary has to
@@ -748,6 +835,70 @@ func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding 
 	for i := 1; i < len(starts); i++ {
 		require.Equal(t, sliding, starts[i]-starts[i-1], "window %d must advance exactly one slide", i)
 	}
+}
+
+func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}))
+	require.Equal(t, int32(fill), ctr.status)
+	require.LessOrEqual(t, ctr.left, nextValue)
+	require.Greater(t, ctr.right, nextValue)
+}
+
+func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}))
+	require.Equal(t, int32(nextWindow), ctr.status)
+	require.Equal(t, base, ctr.left)
+	require.Equal(t, base+interval, ctr.right)
 }
 
 // The boundary window is already included in the flushed generation. The

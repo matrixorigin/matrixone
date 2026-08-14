@@ -203,6 +203,12 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Contains(t, out, "dbyyy.t")
 		require.NotContains(t, out, "dbxxx")
 	})
+	t.Run("alter table rename remaps source and destination", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "alter table dbxxx.t rename to dbxxx.t2", remap)
+		require.Contains(t, out, "dbyyy.t")
+		require.Contains(t, out, "dbyyy.t2")
+		require.NotContains(t, out, "dbxxx")
+	})
 	t.Run("drop table multi", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "drop table dbxxx.t, dbxxx.s", remap)
 		require.Contains(t, out, "dbyyy.t")

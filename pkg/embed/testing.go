@@ -17,15 +17,10 @@ package embed
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -129,13 +124,23 @@ const (
 	basicClusterHAKeeperCheckInterval          = time.Second
 	basicClusterHAKeeperBootstrapRetryInterval = 500 * time.Millisecond
 	basicClusterServiceStartupRetryInterval    = 100 * time.Millisecond
+	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
 )
 
 func startBasicCluster() (Cluster, error) {
-	return StartTestCluster(
+	c, err := StartTestCluster(
 		WithCNCount(3),
 		WithPreStart(adjustBasicClusterService),
 	)
+	if err != nil {
+		return c, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), basicClusterTaskServiceReadyTimeout)
+	defer cancel()
+	if err := waitBasicClusterTaskServices(ctx, c); err != nil {
+		return cleanupClusterOnError(c, err)
+	}
+	return c, nil
 }
 
 func adjustBasicClusterService(svc ServiceOperator) {
@@ -174,36 +179,42 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-func prepareBasicCluster(c Cluster) {
-	// Initialize essential frontend/session state using SQL executor
-	svc, e := c.GetCNService(0)
-	if e != nil {
-		return
-	}
-	// Create and register a TaskService for embed cluster
-	// Build a simple address factory using CN SQL address
-	cfg := svc.GetServiceConfig()
-	sqlAddr := fmt.Sprintf("%s:%d", cfg.CN.Frontend.Host, cfg.CN.Frontend.Port)
-	addressFactory := func(ctx context.Context, random bool) (string, error) { return sqlAddr, nil }
-	holder := taskservice.NewTaskServiceHolder(mruntime.ServiceRuntime(svc.ServiceID()), addressFactory)
-	// register special user for task framework
-	username := "task_user"
-	password := "task_pass"
-	frontend.SetSpecialUser(username, []byte(password))
-	_ = holder.Create(logservicepb.CreateTaskService{
-		User: logservicepb.TaskTableUser{
-			Username: username,
-			Password: password,
-		},
-		TaskDatabase: "mo_task",
-	})
-	if ts, ok := holder.Get(); ok {
-		mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("task-service", ts)
-	}
+type taskServiceGetter interface {
+	GetTaskService() (taskservice.TaskService, bool)
+}
 
-	// Also prepare and register a ParameterUnit for compile path fallback
-	pu := config.NewParameterUnit(&cfg.CN.Frontend, nil, nil, nil)
-	mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("parameter-unit", pu)
+func waitBasicClusterTaskServices(ctx context.Context, c Cluster) error {
+	for index := range 3 {
+		svc, err := c.GetCNService(index)
+		if err != nil {
+			return err
+		}
+		getter, ok := svc.RawService().(taskServiceGetter)
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf(
+				"CN %s does not expose its task service", svc.ServiceID())
+		}
+		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
+			return moerr.NewInternalErrorf(
+				ctx, "CN %s task service did not become ready: %v", svc.ServiceID(), err)
+		}
+	}
+	return nil
+}
+
+func waitTaskServiceReady(
+	ctx context.Context,
+	getter taskServiceGetter,
+	retryInterval time.Duration,
+) error {
+	for {
+		if service, ok := getter.GetTaskService(); ok && service != nil {
+			return nil
+		}
+		if err := waitStartupRetry(ctx, retryInterval); err != nil {
+			return err
+		}
+	}
 }
 
 // RunBaseClusterTests starting an integration test for a 1 log, 1tn, 3cn base cluster is very slow
@@ -216,7 +227,6 @@ func RunBaseClusterTests(
 ) {
 	t.Helper()
 	basicClusterState.Run(t, startBasicCluster, func(c Cluster) {
-		prepareBasicCluster(c)
 		fn(c)
 	})
 }
