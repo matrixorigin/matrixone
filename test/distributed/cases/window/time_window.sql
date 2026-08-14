@@ -371,24 +371,9 @@ insert into tw_interval_timestamp_domain values
   (2, '1970-01-01 00:00:01.000000');
 select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour);
 select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day);
-select count(*) as null_start_rows from (
-  select _wstart, _wend, count(*) as n
-  from tw_interval_timestamp_domain
-  where id = 2
-  interval(event_ts, 1, day) sliding(1, day)
-) q where _wstart is null;
-select count(*) as null_end_rows from (
-  select _wstart, _wend, count(*) as n
-  from tw_interval_timestamp_domain
-  where id = 1
-  interval(event_ts, 1, hour) sliding(1, hour)
-) q where _wend is null;
-select count(*) as gapfill_null_start_rows from (
-  select _wstart, _wend, count(*) as n
-  from tw_interval_timestamp_domain
-  where id = 2
-  interval(event_ts, 1, day) sliding(1, day) fill(linear)
-) q where _wstart is null;
+select count(*) as null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day)) q where _wstart is null;
+select count(*) as null_end_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour) sliding(1, hour)) q where _wend is null;
+select count(*) as gapfill_null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day) fill(linear)) q where _wstart is null;
 drop table tw_interval_timestamp_domain;
 set time_zone = @old_time_zone;
 
