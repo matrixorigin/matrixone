@@ -19,23 +19,35 @@ select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
        char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
+select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+from pad_char_to_full_length_t;
 select count(*) from pad_char_to_full_length_t where length(c) = 2;
 select count(*) from pad_char_to_full_length_t where c = 'MO';
+select count(*) from pad_char_to_full_length_t where c >= 'MO' and c <= 'MO';
+select count(*) from pad_char_to_full_length_t where c between 'MO' and 'MO';
+select count(*) from pad_char_to_full_length_t where c in ('MO', 'XX');
 select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
 select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 
 prepare pad_char_stmt from
-    'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<'') from pad_char_to_full_length_t';
+    'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
+            cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+     from pad_char_to_full_length_t';
 
 set sql_mode = 'PAD_CHAR_TO_FULL_LENGTH';
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
        char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
+select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
+from pad_char_to_full_length_t;
 select count(*) from pad_char_to_full_length_t where length(c) = 8;
 select count(*) from pad_char_to_full_length_t where c = 'MO';
+select count(*) from pad_char_to_full_length_t where c >= 'MO' and c <= 'MO';
+select count(*) from pad_char_to_full_length_t where c between 'MO' and 'MO';
+select count(*) from pad_char_to_full_length_t where c in ('MO', 'XX');
 select count(*) from pad_char_to_full_length_t as lhs
 join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
 select count(*) from pad_char_to_full_length_t as lhs

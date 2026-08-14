@@ -5021,7 +5021,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					}
 				}
 				typ := makePlan2Type(&castType)
-				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
+				if isPadSpaceComparisonFunction(name) &&
+					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else {
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -6351,6 +6356,19 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 		fn.SyntaxExplicitCast = true
 	}
 	return cast, nil
+}
+
+func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
+}
+
+func isPadSpaceComparisonFunction(name string) bool {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between":
+		return true
+	default:
+		return false
+	}
 }
 
 func appendCastBeforeExprWithOverload(
