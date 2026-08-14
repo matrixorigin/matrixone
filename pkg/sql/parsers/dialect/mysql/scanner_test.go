@@ -259,6 +259,66 @@ func TestScannerSQLModePipeConcat(t *testing.T) {
 	}
 }
 
+func TestScannerContextualOffset(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int
+	}{
+		{input: "offset", want: ID},
+		{input: "offset from t", want: ID},
+		{input: "offset /* comment */ from t", want: ID},
+		{input: "offset order by 1", want: ID},
+		{input: "offset by rank", want: ID},
+		{input: "offset interval(ts, 1, day)", want: ID},
+		{input: "offset full join t", want: ID},
+		{input: "offset set a = 1", want: ID},
+		{input: "offset }", want: ID},
+		{input: "offset(1)", want: ID},
+		{input: "offset (1)", want: OFFSET},
+		{input: "offset 1", want: OFFSET},
+		{input: "offset ?", want: OFFSET},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			token, _ := scanner.Scan()
+			if token != test.want {
+				t.Fatalf("Scan(%q) token = %d, want %d", test.input, token, test.want)
+			}
+		})
+	}
+
+	ansiScanner := NewScannerWithSQLMode(dialect.MYSQL, `offset ("c")`, SQLModeFlags(SQLModeANSIQuotes))
+	_, _ = ansiScanner.Scan()
+	if !ansiScanner.offsetAliasColumnListAhead() {
+		t.Fatal("ANSI-quoted identifier list was not recognized")
+	}
+}
+
+func TestOffsetAliasColumnListAhead(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{input: "offset (c)", want: true},
+		{input: "offset /* comment */ (`c1`, c2)", want: true},
+		{input: "offset (1)", want: false},
+		{input: `offset ("c")`, want: false},
+		{input: "offset (c + 1)", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, test.input)
+			_, _ = scanner.Scan()
+			if got := scanner.offsetAliasColumnListAhead(); got != test.want {
+				t.Fatalf("offsetAliasColumnListAhead(%q) = %v, want %v", test.input, got, test.want)
+			}
+		})
+	}
+}
+
 func tokenName(id int) string {
 	if id == STRING {
 		return "STRING"
