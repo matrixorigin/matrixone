@@ -3189,20 +3189,6 @@ func queryUpstreamAndCreateLocalDBTables(
 	return tableIDs, indexTableMappings, nil
 }
 
-// checkDatabaseExists checks if a database exists locally
-func checkDatabaseExists(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
-	sql := fmt.Sprintf("SELECT 1 FROM mo_catalog.mo_database WHERE datname = '%s' LIMIT 1", strings.ReplaceAll(dbName, "'", "''"))
-	bh.ClearExecResultSet()
-	if err := bh.Exec(ctx, sql); err != nil {
-		return false, err
-	}
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	return len(erArray) > 0 && erArray[0].GetRowCount() > 0, nil
-}
-
 // checkTableExists checks if a table exists locally
 func checkTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string) (bool, error) {
 	sql := fmt.Sprintf(
