@@ -1851,12 +1851,12 @@ func (v *Vector) GetIsBinaryStringAt(row int) bool {
 	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
 		return false
 	}
+	if v.binaryStringRowsActive {
+		return v.binaryStringRows.Contains(uint64(row))
+	}
 	switch v.typ.Oid {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true
-	}
-	if v.binaryStringRowsActive {
-		return v.binaryStringRows.Contains(uint64(row))
 	}
 	return v.binaryString
 }
@@ -1894,6 +1894,15 @@ func (v *Vector) setIsBinaryStringAt(row int, binaryString, normalize bool, pool
 		if v.IsNull(0) {
 			return nil
 		}
+		if v.staticBinaryStringType() && !binaryString {
+			if err := v.ensureBinaryStringCapacity(v.length, firstMPool(pools)); err != nil {
+				return err
+			}
+			v.binaryStringRows.InitWithSize(int64(v.length))
+			v.binaryStringRowsActive = true
+			v.binaryString = false
+			return nil
+		}
 		v.setBinaryStringScalar(binaryString)
 		return nil
 	}
@@ -1901,7 +1910,8 @@ func (v *Vector) setIsBinaryStringAt(row int, binaryString, normalize bool, pool
 		return nil
 	}
 	if !v.binaryStringRowsActive {
-		if v.binaryString == binaryString {
+		defaultBinaryString := v.binaryString || v.staticBinaryStringType()
+		if defaultBinaryString == binaryString {
 			return nil
 		}
 		mp := firstMPool(pools)
@@ -1910,7 +1920,7 @@ func (v *Vector) setIsBinaryStringAt(row int, binaryString, normalize bool, pool
 		}
 		v.binaryStringRows.InitWithSize(int64(v.length))
 		v.binaryStringRowsActive = true
-		if v.binaryString {
+		if defaultBinaryString {
 			v.binaryStringRows.AddRange(0, uint64(v.length))
 			nullsIterator := v.nsp.GetBitmap().Iterator()
 			for nullsIterator.HasNext() {
@@ -2003,7 +2013,11 @@ func (v *Vector) normalizeBinaryStringRows() {
 	count := v.binaryStringRows.CountRange(0, uint64(v.length))
 	switch {
 	case count == 0:
-		v.setBinaryStringScalar(false)
+		if v.staticBinaryStringType() {
+			v.binaryString = false
+		} else {
+			v.setBinaryStringScalar(false)
+		}
 	case count == nonNull:
 		v.setBinaryStringScalar(true)
 	default:
@@ -2022,10 +2036,26 @@ func (v *Vector) normalizeBinaryStringRowsAfterSingleUpdate() {
 		return
 	}
 	if v.binaryStringRows.Count() == 0 {
-		v.setBinaryStringScalar(false)
+		if v.staticBinaryStringType() {
+			v.binaryString = false
+		} else {
+			v.setBinaryStringScalar(false)
+		}
 		return
 	}
 	v.binaryString = true
+}
+
+func (v *Vector) staticBinaryStringType() bool {
+	if v == nil {
+		return false
+	}
+	switch v.typ.Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
 }
 
 func (v *Vector) clearBinaryStringAt(row int) {

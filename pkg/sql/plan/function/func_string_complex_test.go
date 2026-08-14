@@ -617,7 +617,7 @@ func TestStringCompositionPreservesSelectedRowBinarySemantics(t *testing.T) {
 		[]*vector.Vector{text, binary}, leastResult, proc, 2, nil))
 	require.Equal(t, [][]byte{[]byte("a"), []byte("y")},
 		vector.InefficientMustBytesCol(leastResult.GetResultVector()))
-	require.False(t, leastResult.GetResultVector().GetIsBinaryStringAt(0))
+	require.True(t, leastResult.GetResultVector().GetIsBinaryStringAt(0))
 	require.True(t, leastResult.GetResultVector().GetIsBinaryStringAt(1))
 }
 

@@ -671,6 +671,11 @@ func TestRawBinaryLiteralUsesBinaryStringTypesOnlyInStringConsumers(t *testing.T
 	}
 
 	assertType(bind("concat", raw, makePlan2StringConstExprWithType("a")), types.T_varbinary, 7)
+	assertType(bind("char_length", raw), types.T_uint64, 0)
+	assertType(bind("left", raw, makePlan2Int64ConstExprWithType(1)), types.T_varbinary, 3)
+	assertType(bind("right", raw, makePlan2Int64ConstExprWithType(1)), types.T_varbinary, 3)
+	assertType(bind("reverse", raw), types.T_varbinary, 3)
+	assertType(bind("ord", raw), types.T_int64, 0)
 	assertType(bind("substring", raw, makePlan2Int64ConstExprWithType(1)), types.T_varbinary, 3)
 	assertType(bind("lower", raw), types.T_varbinary, 3)
 	assertType(bind("repeat", raw, makePlan2Int64ConstExprWithType(2)), types.T_varbinary, 6)
@@ -679,6 +684,7 @@ func TestRawBinaryLiteralUsesBinaryStringTypesOnlyInStringConsumers(t *testing.T
 		makePlan2StringConstExprWithType("你好")), types.T_varbinary, 8)
 	assertType(bind("case", makePlan2BoolConstExprWithType(true), raw,
 		makePlan2StringConstExprWithType("你好")), types.T_varbinary, 8)
+	assertType(bind("unary_plus", raw), types.T_varbinary, 3)
 
 	assertType(bind("|", raw, makePlan2StringConstExprWithType("\x01", true)), types.T_uint64, 0)
 	assertType(bind("unary_tilde", raw), types.T_uint64, 0)

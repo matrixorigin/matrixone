@@ -34,3 +34,20 @@ MySQL 8.4.8 并非拒绝所有 binary REGEXP，而是在隐式类型转换前拒
 - 对其他冲突逐一比较 base/ours/theirs，保留双方独立契约，禁止用整文件选边覆盖。
 - merge 后重新检查冲突标记、生成文件一致性，并运行 parser、`moerr`、planner 的 list/build/vet/test 以及 REGEXP focused tests。
 - 自检完整 merge diff 后提交 merge commit并推送到 `origin/issue-25295-binary-planner`。
+
+## PR review comments：binary-string 完整闭环
+
+### 统一不变量
+
+binary-string provenance 必须由所有合法来源产生，经参数/变量/表达式/物化/格式化重解析传播，并由每个字符串消费者按 MySQL 的函数域规则解释；不能只依赖静态 OID，也不能用批级 true 覆盖 selected-row false。返回类型宽度必须覆盖所有可产生的字节，CTAS 格式化结果必须能在任意 SQL mode 下等价重解析。
+
+### 修复矩阵
+
+1. 补齐 X/0x/B/0b literal 的来源识别与字符串消费者覆盖，包括长度、切片、反转、填充、替换、定位、ORD、选择函数、LIKE/REGEXP；REGEXP 静态合法性同时识别 `Literal.IsBin`。
+2. frontend 将 COM_STMT BLOB 与 SQL PREPARE 用户变量的 binary-string provenance 写入 `ParamValue.BinaryString`，并贯通 mock/生产 `TxnCompilerContext`。
+3. 为 COALESCE/IFNULL/CASE 等 selected-row 结果提供可表达 false 的行级 provenance，避免静态 VARBINARY/BLOB 覆盖动态选中结果。
+4. LEAST/GREATEST 采用所有字符串实参的 binary common domain，而不是最终选中值的类型。
+5. 修正 CTAS 宽度：INSERT 计入插入串增量，CONCAT_WS 按实际 separator 次数累计，CHAR 的上界保持可用 VARBINARY 宽度。
+6. CTAS 内部 SQL 使用 mode-independent binary literal 格式，并修正 `_binary` 与 `CHAR(... USING ...)` 的 formatter/parser 往返。
+7. 为 unary `+` 增加 binary-string identity 语义，同时保持普通文本/数值的一元加号规则。
+8. 每项增加 focused UT；对外语义增加真实 SQL/CTAS、SQL PREPARE 和 COM_STMT 回归，覆盖评论中的失败例及相邻 text/binary/NULL 控制组。

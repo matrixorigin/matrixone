@@ -3928,6 +3928,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	if err := normalizeNonConstantTemporalComparisonArgs(ctx, name, args, argsType); err != nil {
 		return nil, err
 	}
+	if name == "unary_plus" && len(args) == 1 {
+		if binaryType, ok := binaryLiteralStringType(args[0]); ok {
+			result := DeepCopyExpr(args[0])
+			result.Typ = makePlan2Type(&binaryType)
+			return result, nil
+		}
+	}
 
 	var funcID int64
 	var returnType types.Type
@@ -4395,6 +4402,9 @@ func regexpOperandIsBinaryString(expr *Expr) bool {
 	if lit := expr.GetLit(); lit != nil && lit.Isnull {
 		return false
 	}
+	if _, ok := binaryLiteralStringType(expr); ok {
+		return true
+	}
 	switch types.T(expr.Typ.Id) {
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		return true
@@ -4448,6 +4458,15 @@ func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (i
 }
 
 func binaryLiteralStringType(expr *Expr) (types.Type, bool) {
+	if expr == nil {
+		return types.Type{}, false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "cast") && len(fn.Args) > 0 {
+		switch types.T(expr.Typ.Id) {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			return binaryLiteralStringType(fn.Args[0])
+		}
+	}
 	literal := expr.GetLit()
 	if literal == nil || !literal.IsBin || literal.Isnull {
 		return types.Type{}, false
@@ -4481,10 +4500,21 @@ func binaryLiteralStringLookupTypes(name string, args []*Expr, argTypes []types.
 
 func binaryLiteralLookupUsesArgument(name string, argCount, idx int) bool {
 	switch name {
-	case "concat", "concat_ws", "coalesce":
+	case "concat", "concat_ws", "coalesce", "least", "greatest":
 		return true
-	case "substring", "substr", "mid", "lower", "lcase", "upper", "ucase", "repeat":
+	case "char_length", "length", "octet_length", "bit_length", "ord", "reverse",
+		"substring", "substr", "mid", "left", "right", "lower", "lcase", "upper", "ucase", "repeat",
+		"ltrim", "rtrim", "substring_index", "regexp_substr":
 		return idx == 0
+	case "lpad", "rpad", "replace", "insert", "locate", "instr", "position",
+		"reg_match", "not_reg_match", "regexp_like", "regexp_instr", "regexp_replace":
+		return true
+	case "trim":
+		return idx == 1 || idx == 2
+	case "elt", "make_set":
+		return idx > 0
+	case "export_set":
+		return idx > 0 && idx < 4
 	case "if", "iff":
 		return idx == 1 || idx == 2
 	case "case":
@@ -4523,6 +4553,13 @@ func binaryStringResultUsesArgument(name string, argCount, idx int) bool {
 }
 
 func literalNonNegativeInt64(expr *Expr) (int64, bool) {
+	for {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, "cast") || len(fn.Args) == 0 {
+			break
+		}
+		expr = fn.Args[0]
+	}
 	literal := expr.GetLit()
 	if literal == nil || literal.Isnull {
 		return 0, false

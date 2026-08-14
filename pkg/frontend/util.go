@@ -197,7 +197,7 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, nil, isBin...)
 }
 
 func getExprValueWithPrepareMeta(
@@ -206,6 +206,7 @@ func getExprValueWithPrepareMeta(
 	execCtx *ExecCtx,
 	preparedExpression bool,
 	prepareParamKind *vector.PrepareParamKind,
+	binaryString *bool,
 	isBin ...*bool,
 ) (interface{}, error) {
 	/*
@@ -311,6 +312,9 @@ func getExprValueWithPrepareMeta(
 
 	if len(isBin) > 0 {
 		*isBin[0] = resultVec.GetIsBin()
+	}
+	if binaryString != nil {
+		*binaryString = resultVec.GetIsBinaryStringAt(0)
 	}
 	if prepareParamKind != nil {
 		*prepareParamKind = resultVec.GetPrepareParamKind()

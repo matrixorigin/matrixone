@@ -4316,6 +4316,7 @@ type UserDefinedVar struct {
 	Value            interface{}
 	Sql              string
 	IsBin            bool
+	BinaryString     bool
 	PrepareParamKind vector.PrepareParamKind
 }
 

@@ -116,6 +116,8 @@ func TestBuildRegexpUsesMySQLBinaryCompatibilityContract(t *testing.T) {
 	for _, sql := range []string{
 		"select _binary 'abc' regexp 'a'",
 		"select 'abc' regexp _binary 'a'",
+		"select X'61' regexp 'a'",
+		"select 'a' regexp X'61'",
 		"select cast(null as binary) regexp 'a'",
 		"select regexp_replace('abc', 'a', _binary 'x')",
 	} {

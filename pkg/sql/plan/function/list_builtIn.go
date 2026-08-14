@@ -74,6 +74,28 @@ func concatReturnType(parameters []types.Type) types.Type {
 	return types.New(types.T_varbinary, int32(width), 0)
 }
 
+func concatWsReturnType(parameters []types.Type) types.Type {
+	result := concatReturnType(parameters)
+	if result.Oid != types.T_varbinary || len(parameters) < 3 {
+		return result
+	}
+	separator := parameters[0]
+	if separator.Oid == types.T_blob || separator.Oid == types.T_text || separator.Width < 0 {
+		return types.T_blob.ToType()
+	}
+	separatorWidth := int64(separator.Width)
+	if separator.Oid == types.T_char || separator.Oid == types.T_varchar {
+		separatorWidth *= utf8.UTFMax
+	}
+	extraSeparators := int64(len(parameters) - 2)
+	width := int64(result.Width) + separatorWidth*extraSeparators
+	if width > int64(types.MaxVarBinaryLen) {
+		width = int64(types.MaxVarBinaryLen)
+	}
+	result.Width = int32(width)
+	return result
+}
+
 func jsonConstructorSupportsType(oid types.T) bool {
 	switch oid {
 	case types.T_any,
@@ -461,7 +483,7 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				retType:    concatReturnType,
+				retType:    concatWsReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInConcat
 				},
@@ -2441,6 +2463,14 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
+				newOp: func() executeLogicOfOverload {
+					return Left
+				},
+			},
+			{
 				overloadId: 1,
 				args:       []types.T{types.T_char, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
@@ -2467,6 +2497,14 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
+				newOp: func() executeLogicOfOverload {
+					return Right
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType:    binaryStringTransformReturnType,
 				newOp: func() executeLogicOfOverload {
 					return Right
 				},
@@ -2620,6 +2658,22 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
+				newOp: func() executeLogicOfOverload {
+					return builtInLpad
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_varbinary},
+				retType:    binaryStringTransformReturnType,
+				newOp: func() executeLogicOfOverload {
+					return builtInLpad
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_varchar},
+				retType:    binaryStringTransformReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInLpad
 				},
@@ -3017,6 +3071,14 @@ var supportedStringBuiltIns = []FuncNew{
 					return Reverse
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary},
+				retType:    binaryStringTransformReturnType,
+				newOp: func() executeLogicOfOverload {
+					return Reverse
+				},
+			},
 		},
 	},
 
@@ -3034,6 +3096,22 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return derivedStringReturnType(parameters, 0, types.T_varchar)
 				},
+				newOp: func() executeLogicOfOverload {
+					return builtInRpad
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_varbinary},
+				retType:    binaryStringTransformReturnType,
+				newOp: func() executeLogicOfOverload {
+					return builtInRpad
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varbinary, types.T_int64, types.T_varchar},
+				retType:    binaryStringTransformReturnType,
 				newOp: func() executeLogicOfOverload {
 					return builtInRpad
 				},

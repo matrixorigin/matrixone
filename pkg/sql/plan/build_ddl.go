@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -407,7 +408,8 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 		return binaryType, true
 	}
 	exprType := makeTypeByPlan2Expr(expr)
-	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+	if expr.GetF() == nil && expr.GetW() == nil &&
+		(exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob) {
 		return exprType, true
 	}
 	if variable := expr.GetV(); variable != nil {
@@ -465,7 +467,11 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 		return ctasBinaryStringType(ctx, fn.Args[0])
 	}
 	if name == "char" {
-		return types.T_blob.ToType(), true
+		width := int64(len(fn.Args)) * utf8.UTFMax
+		if width > int64(types.MaxVarBinaryLen) {
+			return types.T_blob.ToType(), true
+		}
+		return types.New(types.T_varbinary, int32(width), 0), true
 	}
 
 	var resultType types.Type
@@ -480,7 +486,8 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 		}
 		found = true
 		if argType.Oid == types.T_blob {
-			return argType, true
+			resultType = argType
+			continue
 		}
 		if resultType.Oid == types.T_any || resultType.Oid == 0 {
 			resultType = argType
@@ -496,10 +503,13 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 }
 
 func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceType types.Type) types.Type {
-	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
-		return exprType
-	}
 	result := sourceType
+	if exprType.Oid == types.T_binary || exprType.Oid == types.T_varbinary || exprType.Oid == types.T_blob {
+		result = exprType
+	}
+	if result.Oid == types.T_blob && name != "insert" && name != "concat_ws" {
+		return result
+	}
 	if result.Oid == types.T_binary {
 		result.Oid = types.T_varbinary
 	}
@@ -534,8 +544,72 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 		}
 	case "lpad", "rpad":
 		limitWidth(1)
+	case "insert":
+		if len(args) >= 4 {
+			if literalType, ok := nestedBinaryLiteralStringType(args[0]); ok {
+				result = literalType
+			}
+			insertType := makeTypeByPlan2Expr(args[3])
+			if binaryType, ok := nestedBinaryLiteralStringType(args[3]); ok {
+				insertType = binaryType
+			}
+			if result.Width < 0 || insertType.Width < 0 || insertType.Oid == types.T_blob || insertType.Oid == types.T_text {
+				return types.T_blob.ToType()
+			}
+			width := int64(result.Width) + int64(insertType.Width)
+			if insertType.Oid == types.T_char || insertType.Oid == types.T_varchar {
+				width = int64(result.Width) + int64(insertType.Width)*utf8.UTFMax
+			}
+			if width > int64(types.MaxVarBinaryLen) {
+				return types.T_blob.ToType()
+			}
+			result.Width = int32(width)
+		}
+	case "concat_ws":
+		if len(args) >= 2 {
+			argumentWidth := func(arg *Expr) (int64, bool) {
+				typ := makeTypeByPlan2Expr(arg)
+				if literalType, ok := nestedBinaryLiteralStringType(arg); ok {
+					typ = literalType
+				}
+				if typ.Width < 0 || typ.Oid == types.T_blob || typ.Oid == types.T_text {
+					return 0, false
+				}
+				width := int64(typ.Width)
+				if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+					width *= utf8.UTFMax
+				}
+				return width, true
+			}
+			separatorWidth, ok := argumentWidth(args[0])
+			if !ok {
+				return types.T_blob.ToType()
+			}
+			width := separatorWidth * int64(len(args)-2)
+			for _, arg := range args[1:] {
+				argWidth, ok := argumentWidth(arg)
+				if !ok {
+					return types.T_blob.ToType()
+				}
+				width += argWidth
+			}
+			if width > int64(types.MaxVarBinaryLen) {
+				return types.T_blob.ToType()
+			}
+			result = types.New(types.T_varbinary, int32(width), 0)
+		}
 	}
 	return result
+}
+
+func nestedBinaryLiteralStringType(expr *Expr) (types.Type, bool) {
+	if binaryType, ok := binaryLiteralStringType(expr); ok {
+		return binaryType, true
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "cast") && len(fn.Args) > 0 {
+		return nestedBinaryLiteralStringType(fn.Args[0])
+	}
+	return types.Type{}, false
 }
 
 func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility bool) (*plan.Default, error) {
@@ -1258,7 +1332,9 @@ func buildCreateTable(
 			}
 		}
 		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+		if tableDef.TableType == catalog.SystemViewRel ||
+			tableDef.TableType == catalog.SystemExternalRel ||
+			tableDef.TableType == catalog.SystemSequenceRel {
 			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
 			if err != nil {
 				return nil, err
@@ -2084,6 +2160,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			dialect.MYSQL,
 			tree.WithQuoteString(true),
 			tree.WithQuoteIdentifier(),
+			tree.WithModeIndependentStringLiterals(),
 		)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s) as __mo_ctas_source", restoreIntervalSyntaxForCTAS(fmtCtx.String())))

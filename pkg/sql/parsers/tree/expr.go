@@ -964,6 +964,9 @@ type FuncExpr struct {
 	// aggregate. OrderBy is also used for GROUP_CONCAT's function-local
 	// ordering, so the marker keeps the two syntaxes distinct.
 	WithinGroup bool
+
+	// UsingCharset preserves the grammar form of CONVERT(expr USING charset).
+	UsingCharset bool
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
@@ -1007,6 +1010,14 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
+	} else if node.UsingCharset && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" using ")
+		if charset, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(charset.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
 	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {

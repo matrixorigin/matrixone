@@ -4872,6 +4872,17 @@ func TestSetPrepareParamKindsAndBinaryStringFromReader(t *testing.T) {
 	require.True(t, vec.GetIsBinaryStringAt(2))
 }
 
+func TestStaticBinaryTypeAllowsRowTextOverride(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(vec, []byte("text"), false, mp))
+	defer vec.Free(mp)
+	require.True(t, vec.GetIsBinaryStringAt(0))
+	require.NoError(t, vec.SetIsBinaryStringAt(0, false, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	require.False(t, vec.GetIsBinaryStringAt(0))
+}
+
 func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {
 	tests := []struct {
 		name       string
