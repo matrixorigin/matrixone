@@ -399,8 +399,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
+		typ := plan.Type{Id: int32(types.T_timestamp), NotNullable: true}
+		if b.ctx.timeBoundaryType != nil {
+			typ = *DeepCopyType(b.ctx.timeBoundaryType)
+			typ.NotNullable = true
+		}
 		expr = &plan.Expr{
-			Typ: plan.Type{Id: int32(types.T_timestamp)},
+			Typ: typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -637,7 +642,7 @@ func (b *baseBinder) correlatedFullGroupByAggregateRef(relPos, colPos int32, col
 	if b == nil || b.ctx == nil || b.builder == nil || typ == nil || !b.builder.mysqlFullGroupByCompat {
 		return 0, 0, false
 	}
-	if len(b.ctx.groups) == 0 && len(b.ctx.times) == 0 {
+	if !b.ctx.aggregateQueryForFullGroupBy() {
 		return 0, 0, false
 	}
 	if groupByContainsColumn(b.ctx, relPos, colPos) {
@@ -680,6 +685,21 @@ func (b *baseBinder) corrColRefAllowedByCurrentQuery(corr *plan.CorrColRef) bool
 	return b.corrColRefAllowedByQueryContext(b.ctx, corr)
 }
 
+func (b *baseBinder) corrColRefTargetsCurrentQueryInput(corr *plan.CorrColRef) bool {
+	if b == nil || b.ctx == nil || corr == nil {
+		return false
+	}
+	binding, ok := b.ctx.bindingByTag[corr.RelPos]
+	return ok && binding != nil
+}
+
+func (b *baseBinder) corrColRefTargetsAggregateInputParent(corr *plan.CorrColRef) bool {
+	if b == nil || b.ctx == nil || b.ctx.aggregateInputParent == nil || corr == nil {
+		return false
+	}
+	return b.corrColRefTargetContext(corr) == b.ctx.aggregateInputParent
+}
+
 func (b *baseBinder) corrColRefAllowedByTargetQuery(corr *plan.CorrColRef) bool {
 	return b.corrColRefAllowedByQueryContext(b.corrColRefTargetContext(corr), corr)
 }
@@ -695,8 +715,7 @@ func (b *baseBinder) corrColRefAllowedByQueryContext(ctx *BindContext, corr *pla
 	if !ok || binding == nil {
 		return false
 	}
-	if len(ctx.groups) == 0 && len(ctx.times) == 0 &&
-		len(ctx.aggregates) == 0 && !ctx.selectListHasAggregate {
+	if !ctx.aggregateQueryForFullGroupBy() {
 		return true
 	}
 	return b.builder.mysqlFullGroupByAllowsColumn(ctx, binding, corr.ColPos)
@@ -718,6 +737,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.subqueryInAggregateInput {
+		subCtx.aggregateInputParent = b.ctx
+	}
 	if b.numericSubqueryTarget != nil && !astExpr.Exists {
 		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
 	}
@@ -5481,7 +5503,8 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	if firstExpr.GetLit() != nil {
 		lit = firstExpr.GetLit()
 		innerExpr = firstExpr
-	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
+	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
+		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
 			lit = funcExpr.F.Args[0].GetLit()

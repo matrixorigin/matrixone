@@ -1930,6 +1930,16 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 			    GROUP BY n_nationkey
 			    HAVING n_nationkey >= nation.n_regionkey
 			))`,
+		`
+			SELECT SUM(n_nationkey),
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			WHERE n_regionkey = 1`,
 	}
 
 	for _, sql := range sqls {
@@ -2035,6 +2045,34 @@ func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T)
 			FROM nation`, "nation.n_regionkey"},
 		{`
 			SELECT SUM(n_regionkey)
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)`, "nation.n_comment"},
+		{`
+			SELECT 1
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)
+			ORDER BY SUM(n_regionkey)`, "nation.n_comment"},
+		{`
+			SELECT 1
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			) AND SUM(n_regionkey) > 0`, "nation.n_comment"},
+		{`
+			SELECT SUM(SUM(n_regionkey)) OVER ()
 			FROM nation
 			HAVING EXISTS (
 			    SELECT n_name

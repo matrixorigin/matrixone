@@ -4890,6 +4890,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, selectList, lockNode, notCacheable, boundTimeWindowGroupBy, havingBinder, boundHavingList, err = builder.bindSelectClause(
 			ctx,
 			selectClause,
+			astOrderBy,
 			astLimit,
 			astTimeWindow,
 			helpFunc,
@@ -4902,6 +4903,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			if err = resolveRollupWindowOrderSourceProbes(builder.GetContext(), astOrderBy, selectClause.OrderBySourceProbes); err != nil {
 				return
 			}
+		}
+		if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
+			setTimeWindowBoundaryType(ctx, boundTimeWindowGroupBy.Typ)
 		}
 		if selectClause.Having != nil {
 			rollupFilter = selectClause.Having.RollupHaving
@@ -6937,30 +6941,39 @@ func rollupWindowFuncMustBeMaterialized(expr *tree.FuncExpr) bool {
 	return function.GetFunctionIsAggregateByName(funcName) || strings.EqualFold(funcName, "grouping")
 }
 
-func selectListHasAggregate(selectList tree.SelectExprs) bool {
+func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Where, orderBy tree.OrderBy) bool {
 	for _, item := range selectList {
-		found := false
-		walkGroupingSetOrderByExpr(item.Expr, func(expr tree.Expr) bool {
-			switch e := expr.(type) {
-			case *tree.Subquery:
-				return false
-			case *tree.FuncExpr:
-				if e.WindowSpec != nil {
-					return false
-				}
-				funcRef, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
-				if ok && function.GetFunctionIsAggregateByName(funcRef.ColName()) {
-					found = true
-					return false
-				}
-			}
-			return !found
-		})
-		if found {
+		if exprHasPendingAggregate(item.Expr) {
+			return true
+		}
+	}
+	if having != nil && exprHasPendingAggregate(having.Expr) {
+		return true
+	}
+	for _, order := range orderBy {
+		if order != nil && exprHasPendingAggregate(order.Expr) {
 			return true
 		}
 	}
 	return false
+}
+
+func exprHasPendingAggregate(astExpr tree.Expr) bool {
+	found := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		switch e := expr.(type) {
+		case *tree.Subquery:
+			return false
+		case *tree.FuncExpr:
+			funcRef, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+			if ok && e.WindowSpec == nil && function.GetFunctionIsAggregateByName(funcRef.ColName()) {
+				found = true
+				return false
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 func rewriteRollupWindowExprs(exprs tree.Exprs, state *rollupWindowRewriteState) (tree.Exprs, bool) {
@@ -7211,6 +7224,7 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 func (builder *QueryBuilder) bindSelectClause(
 	ctx *BindContext,
 	clause *tree.SelectClause,
+	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
@@ -7368,10 +7382,10 @@ func (builder *QueryBuilder) bindSelectClause(
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		prevSelectListHasAggregate := ctx.selectListHasAggregate
-		ctx.selectListHasAggregate = selectListHasAggregate(selectList)
+		prevPendingAggregateQuery := ctx.pendingAggregateQuery
+		ctx.pendingAggregateQuery = queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
-		ctx.selectListHasAggregate = prevSelectListHasAggregate
+		ctx.pendingAggregateQuery = prevPendingAggregateQuery
 		if err != nil {
 			return
 		}
@@ -7711,6 +7725,8 @@ func (builder *QueryBuilder) bindTimeWindow(
 			return
 		}
 	}
+	boundaryType := TimeWindowBoundaryType(ts.Typ)
+	setTimeWindowBoundaryType(ctx, boundaryType)
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7733,7 +7749,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 		if tmp, err = projectionBinder.BindExpr(helpFunc.dateAdd, 0, true); err != nil {
 			return
 		}
-		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, ts.Typ); err != nil {
+		if wEnd, err = appendCastBeforeExpr(builder.GetContext(), tmp, boundaryType); err != nil {
 			return
 		}
 	}
@@ -7796,6 +7812,53 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+func setTimeWindowBoundaryType(ctx *BindContext, typ plan.Type) {
+	typ.NotNullable = true
+	ctx.timeBoundaryType = DeepCopyType(&typ)
+	for _, expr := range ctx.times {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+	for _, expr := range ctx.projects {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+	for _, expr := range ctx.results {
+		if isTimeWindowBoundaryExpr(ctx, expr) {
+			expr.Typ = typ
+		}
+	}
+}
+
+func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
+	if ctx == nil || expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != ctx.timeTag {
+		return false
+	}
+	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
+		return true
+	}
+
+	// Repeated references to a time-window boundary are resolved through
+	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
+	// the time-tag/column position, not the boundary name. Resolve the carrier
+	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
+	// the same type as their first occurrence. Other time-window aggregates are
+	// function expressions in ctx.times and therefore remain unaffected.
+	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
+		return false
+	}
+	carrier := ctx.times[col.ColPos]
+	carrierCol := carrier.GetCol()
+	return carrierCol != nil &&
+		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set

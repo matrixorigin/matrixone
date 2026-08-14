@@ -108,6 +108,9 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				return expr, nil
+			}
 			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
 				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
 					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
@@ -148,6 +151,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
 				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
 				b.corrColRefTargetsGroup(corr.Corr) ||
 				b.corrColRefAllowedByTargetQuery(corr.Corr) {
@@ -682,6 +686,11 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	prevSubqueryInAggregateInput := b.subqueryInAggregateInput
+	b.subqueryInAggregateInput = b.insideAgg
+	defer func() {
+		b.subqueryInAggregateInput = prevSubqueryInAggregateInput
+	}()
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 
