@@ -103,9 +103,11 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	// check if the database is a subscription
-	if sub, err := ctx.GetSubscriptionMeta(dbName, snapshot); err != nil {
+	sub, err := ctx.GetSubscriptionMeta(dbName, snapshot)
+	if err != nil {
 		return nil, err
-	} else if sub != nil {
+	}
+	if sub != nil {
 		if !pubsub.InSubMetaTables(sub, tblName) {
 			return nil, moerr.NewInternalErrorNoCtxf("table %s not found in publication %s", tblName, sub.Name)
 		}
@@ -146,6 +148,15 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		newTableDef := *tableDef
 		newTableDef.Name = tblName
 		tableDef = &newTableDef
+	}
+	if sub == nil && tableDef.TblId != 0 {
+		// SHOW CREATE owns the local source table, its snapshot, and the compiler
+		// catalog context. Normalize legacy visibility before formatting while
+		// leaving subscription definitions to their publisher-provided metadata.
+		tableDef = DeepCopyTableDef(tableDef, true)
+		if err = reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, err
+		}
 	}
 
 	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)

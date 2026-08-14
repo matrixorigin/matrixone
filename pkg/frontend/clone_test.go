@@ -68,6 +68,24 @@ func TestCloneCatalogLockBatch(t *testing.T) {
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
+func TestGeneratedCloneRestoreSnapshotTS(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		optionBits uint32
+		want       int64
+	}{
+		{name: "autocommit keeps generated timestamp", want: 42},
+		{name: "explicit transaction keeps shared visibility", optionBits: OPTION_BEGIN},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := &Session{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{optionBits: test.optionBits},
+			}}
+			require.Equal(t, test.want, generatedCloneRestoreSnapshotTS(ses, 42))
+		})
+	}
+}
+
 func TestShouldLockDataBranchCloneSource(t *testing.T) {
 	timestampSource := &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42},
