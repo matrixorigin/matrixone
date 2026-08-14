@@ -289,7 +289,12 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}()
 
 	reqBegin := time.Now()
-	routineCtx := rt.getCancelRoutineCtx()
+	routineCtx, cancelHungRequest := context.WithTimeoutCause(
+		rt.getCancelRoutineCtx(),
+		10*time.Minute,
+		moerr.CauseNewMOHungSpan,
+	)
+	defer cancelHungRequest()
 
 	parameters := rt.getParameters()
 	//all offspring related to the request inherit the txnCtx
