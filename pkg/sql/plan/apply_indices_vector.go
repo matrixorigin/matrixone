@@ -1133,29 +1133,6 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 	return false
 }
 
-// replaceScoreFnInExpr rewrites every call to fnName inside expr into the index scan's score
-// column, returning the rewritten expression. scoreExpr is called per occurrence so each gets
-// its own node rather than sharing one that a later pass could mutate.
-//
-// This is the generic half of replaceDistFnInExpr, which does the same for vector distances
-// but decides what to replace using metric- and query-vector-specific tests. Both exist for the
-// same reason: an index placeholder nested inside a larger expression -- a comparison, a cast,
-// arithmetic -- is still a placeholder, and leaving it behind means it reaches execution and
-// throws (#26961 for vector distances, the MATCH-score filter case for fulltext).
-//
-// Matching on the name alone is only correct when every call to fnName in the expression is
-// answered by the SAME index scan. Fulltext is not in that position -- one query can carry
-// several different MATCHes -- so it uses replaceScoreFnInExprBy with an argument-aware
-// predicate instead.
-func replaceScoreFnInExpr(expr *plan.Expr, fnName string, scoreExpr func() *plan.Expr) *plan.Expr {
-	return replaceScoreFnInExprBy(expr, func(fn *plan.Function) *plan.Expr {
-		if fn.Func != nil && fn.Func.ObjName == fnName {
-			return scoreExpr()
-		}
-		return nil
-	})
-}
-
 // replaceScoreFnInExprBy walks expr and offers every function call to rewrite. A non-nil
 // return replaces that call; nil leaves it in place and the walk descends into its arguments.
 // Returns the rewritten expression.

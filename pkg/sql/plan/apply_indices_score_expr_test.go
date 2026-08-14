@@ -58,41 +58,55 @@ func TestExprCallsFunc(t *testing.T) {
 	require.False(t, exprCallsFunc(scoreFn(">", scoreLit(), scoreLit()), "fulltext_match"))
 }
 
-// TestReplaceScoreFnInExpr: the generic half of replaceDistFnInExpr. Vector decides WHAT to
-// replace with metric and query-vector tests; fulltext needs only the name, so the two share
-// the walk and not the predicate.
-func TestReplaceScoreFnInExpr(t *testing.T) {
+// TestReplaceScoreFnInExprBy: the shared walk. The callback sees the whole *plan.Function, so
+// a caller with several candidate index scans can decide WHICH one a call belongs to (fulltext
+// does this by argument) and leave alone the ones no scan answers.
+func TestReplaceScoreFnInExprBy(t *testing.T) {
 	col := func() *plan.Expr {
 		return &plan.Expr{
 			Typ:  plan.Type{Id: int32(types.T_float32)},
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 12, ColPos: 1}},
 		}
 	}
+	byName := func(name string) func(*plan.Function) *plan.Expr {
+		return func(fn *plan.Function) *plan.Expr {
+			if fn.Func != nil && fn.Func.ObjName == name {
+				return col()
+			}
+			return nil
+		}
+	}
+	rewrite := byName("fulltext_match")
 
 	// the placeholder itself becomes the score column
-	got := replaceScoreFnInExpr(scoreFn("fulltext_match"), "fulltext_match", col)
+	got := replaceScoreFnInExprBy(scoreFn("fulltext_match"), rewrite)
 	require.NotNil(t, got.GetCol())
 	require.Equal(t, int32(12), got.GetCol().RelPos)
 
 	// wrapped: the comparison survives, only the inner call is swapped
 	pred := scoreFn(">", scoreFn("fulltext_match"), scoreLit())
-	got = replaceScoreFnInExpr(pred, "fulltext_match", col)
+	got = replaceScoreFnInExprBy(pred, rewrite)
 	require.NotNil(t, got.GetF())
 	require.Equal(t, ">", got.GetF().Func.ObjName)
 	require.NotNil(t, got.GetF().Args[0].GetCol(), "the inner MATCH must become the score column")
 
 	// every occurrence gets its OWN node, so a later pass mutating one cannot corrupt another
 	two := scoreFn("and", scoreFn("fulltext_match"), scoreFn("fulltext_match"))
-	got = replaceScoreFnInExpr(two, "fulltext_match", col)
+	got = replaceScoreFnInExprBy(two, rewrite)
 	a, b := got.GetF().Args[0], got.GetF().Args[1]
 	require.NotNil(t, a.GetCol())
 	require.NotNil(t, b.GetCol())
 	require.NotSame(t, a, b)
 
+	// a callback returning nil leaves the call in place and the walk descends into its args
+	kept := replaceScoreFnInExprBy(scoreFn(">", scoreFn("fulltext_match"), scoreLit()),
+		func(fn *plan.Function) *plan.Expr { return nil })
+	require.NotNil(t, kept.GetF().Args[0].GetF(), "an unmatched call must survive untouched")
+
 	// unrelated expressions are untouched
 	plain := scoreFn(">", scoreLit(), scoreLit())
-	require.Equal(t, plain, replaceScoreFnInExpr(plain, "fulltext_match", col))
-	require.Nil(t, replaceScoreFnInExpr(nil, "fulltext_match", col))
+	require.Equal(t, plain, replaceScoreFnInExprBy(plain, rewrite))
+	require.Nil(t, replaceScoreFnInExprBy(nil, rewrite))
 }
 
 // matchFn builds a bound fulltext_match: (pattern, mode, index-part columns...), the shape

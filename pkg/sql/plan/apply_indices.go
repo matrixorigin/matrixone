@@ -654,9 +654,12 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// which has no project node and so never replaced a MATCH in the select list.
 			// The children were rewritten before this node was visited, so resolve against the
 			// scans they built.
-			if builder.resolveProjectMatchesOverJoin(projNode, builder.sortNodeBelowProject(projNode)) {
-				return nodeID, nil
-			}
+			//
+			// Deliberately does NOT return: this only rewrites expressions in place, it builds
+			// no node, so the vector-index section below must still get its turn. Returning
+			// here cost a query that both projects a MATCH over a join and orders by a vector
+			// distance its vector index, silently falling back to brute force.
+			builder.resolveProjectMatchesOverJoin(projNode, builder.resolveSortNode(projNode, 1))
 		}
 	}
 

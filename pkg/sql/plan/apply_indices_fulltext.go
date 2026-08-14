@@ -1221,20 +1221,6 @@ func remapCoveredBaseColRefs(expr *plan.Expr, scanTag, ftTag, pkColPos int32,
 	return expr
 }
 
-// sortNodeBelowProject returns the SORT sitting directly under projNode, if any. ORDER BY over
-// a join lands there, and its expressions carry their own MATCH rather than referencing the
-// projection.
-func (builder *QueryBuilder) sortNodeBelowProject(projNode *plan.Node) *plan.Node {
-	if projNode == nil || len(projNode.Children) != 1 {
-		return nil
-	}
-	child := builder.qry.Nodes[projNode.Children[0]]
-	if child != nil && child.NodeType == plan.Node_SORT {
-		return child
-	}
-	return nil
-}
-
 // resolveProjectMatchesOverJoin replaces MATCHes in a PROJECT's select list with the score
 // column of the fulltext scan that answers them, when those scans were built while rewriting
 // the children of a JOIN below it.
@@ -1251,6 +1237,9 @@ func (builder *QueryBuilder) sortNodeBelowProject(projNode *plan.Node) *plan.Nod
 // scope, comparing index parts by column name alone would answer match(b.body) with a's score.
 //
 // A MATCH nothing answers is left alone and still raises 20105.
+//
+// Rewrites in place and builds no node, so the caller must NOT treat a true return as "this
+// project is handled" and skip the rewrites that follow it.
 func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, sortNode *plan.Node) bool {
 	if projNode == nil || len(builder.ftJoinServed) == 0 {
 		return false
