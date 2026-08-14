@@ -205,8 +205,8 @@ id    body    title
 9    NOT INCLUDED BODY    null
 10    null    null
 show create table v01;
-➤ View[12,2,0]  ¦  Create View[12,58,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v01  ¦  create view `v01` as select `src`.`id`, `src`.`body`, `src`.`title` from `src`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,80,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `src`.`id` as `id`, `src`.`body` as `body`, `src`.`title` as `title` from `src`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;

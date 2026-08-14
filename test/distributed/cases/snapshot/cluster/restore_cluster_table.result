@@ -268,8 +268,8 @@ INSERT INTO sales (id, sale_date, amount) values
 use test02;
 create view v01 as select * from test01.sales;
 show create view v01;
-➤ View[12,2,0]  ¦  Create View[12,75,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v01  ¦  create view `v01` as select `sales`.`id`, `sales`.`sale_date`, `sales`.`amount` from `test01`.`sales`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,102,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `sales`.`id` as `id`, `sales`.`sale_date` as `sale_date`, `sales`.`amount` as `amount` from `test01`.`sales`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
 id    sale_date    amount
 1    2018-12-25    100.00
@@ -279,8 +279,8 @@ id    sale_date    amount
 use test03;
 create view v02 as select * from test02.v01;
 show create view v02;
-➤ View[12,2,0]  ¦  Create View[12,69,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v02  ¦  create view `v02` as select `v01`.`id`, `v01`.`sale_date`, `v01`.`amount` from `test02`.`v01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,96,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v02  ¦  create view `v02` as select `v01`.`id` as `id`, `v01`.`sale_date` as `sale_date`, `v01`.`amount` as `amount` from `test02`.`v01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v02;
 id    sale_date    amount
 1    2018-12-25    100.00

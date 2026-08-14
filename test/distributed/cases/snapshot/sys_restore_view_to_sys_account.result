@@ -15,8 +15,8 @@ count(*)
 drop view if exists v01;
 create view v01 as select * from table01;
 show create view v01;
-➤ View[12,2,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v01  ¦  create view `v01` as select `table01`.`col1`, `table01`.`col2`, `table01`.`col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,93,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `table01`.`col1` as `col1`, `table01`.`col2` as `col2`, `table01`.`col3` as `col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database
@@ -92,8 +92,8 @@ col1    col2    col3
 2    -1    null
 restore account sys{snapshot="sp100"};
 show create view v01;
-➤ View[12,2,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
-v01  ¦  create view `v01` as select `table01`.`col1`, `table01`.`col2`, `table01`.`col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,93,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v01  ¦  create view `v01` as select `table01`.`col1` as `col1`, `table01`.`col2` as `col2`, `table01`.`col3` as `col3` from `table01`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 select * from v01;
 col1    col2    col3
 1    null    database

@@ -37,8 +37,7 @@ create table copied as select * from v_star;
 select column_name, ordinal_position from information_schema.columns where table_schema = 'view_star_static_columns' and table_name = 'copied' order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  ordinal_position[4,32,0]  𝄀
 a  ¦  1  𝄀
-b  ¦  2  𝄀
-__mo_fake_pk_col  ¦  3
+b  ¦  2
 create view v_nested as select * from v_star;
 select * from v_nested order by a;
 ➤ a[4,32,0]  ¦  b[12,3,0]  𝄀
