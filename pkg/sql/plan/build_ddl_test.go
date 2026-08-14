@@ -51,6 +51,26 @@ type rootSQLCompilerContext struct {
 	calls   int
 }
 
+type captureSQLExecutor struct {
+	exec func(context.Context, string, executor.Options) (executor.Result, error)
+}
+
+func (e *captureSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts executor.Options,
+) (executor.Result, error) {
+	return e.exec(ctx, sql, opts)
+}
+
+func (e *captureSQLExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return moerr.NewInternalErrorNoCtx("unexpected ExecTxn")
+}
+
 type autoIncrementOffsetCompilerContext struct {
 	*MockCompilerContext
 	offset int64
@@ -2094,6 +2114,123 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	persisted := tableDefCreateSQL(built.GetDdl().GetCreateTable().GetTableDef())
 	require.NotContains(t, strings.ToUpper(persisted), " LIKE ")
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
+}
+
+func TestBuildCreateTableLikeAndCloneReconcileLegacyIndexVisibility(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "like", sql: "CREATE TABLE visibility_like LIKE legacy_visibility_source"},
+		{name: "clone", sql: "CREATE TABLE visibility_clone CLONE legacy_visibility_source"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			const sourceName = "legacy_visibility_source"
+			const sourceID = 272464
+
+			source := DeepCopyTableDef(ctx.tables["test_idx"], true)
+			source.Name = sourceName
+			source.DbName = ctx.DefaultDatabase()
+			source.TblId = sourceID
+			source.Indexes = []*plan.IndexDef{
+				{
+					IndexName:  "idx_legacy_visible",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    false,
+				},
+				{
+					IndexName:  "idx_invisible",
+					Parts:      []string{"n_name"},
+					TableExist: true,
+					Visible:    false,
+				},
+			}
+			ctx.tables[sourceName] = source
+			ctx.objects[sourceName] = &plan.ObjectRef{
+				SchemaName: ctx.DefaultDatabase(),
+				ObjName:    sourceName,
+				Obj:        sourceID,
+			}
+
+			proc := testutil.NewProc(t)
+			proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+			ctx.GetProcessFunc = func() *process.Process { return proc }
+			visibilityQueries := 0
+			moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+				moruntime.InternalSQLExecutor,
+				executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+					if sql != "SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464" {
+						return executor.Result{}, nil
+					}
+					visibilityQueries++
+					result := executor.NewMemResult(
+						[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+					)
+					result.NewBatchWithRowCount(2)
+					require.NoError(t, executor.AppendStringRows(result, 0,
+						[]string{"idx_legacy_visible", "idx_invisible"}))
+					require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0}))
+					return result.GetResult(), nil
+				}),
+			)
+
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, 1, visibilityQueries)
+
+			createPlan := built
+			if clone := built.GetDdl().GetCloneTable(); clone != nil {
+				createPlan = clone.GetCreateTable()
+			}
+			createTable := createPlan.GetDdl().GetCreateTable()
+			require.NotNil(t, createTable)
+			visibility := make(map[string]bool, len(createTable.TableDef.Indexes))
+			for _, indexDef := range createTable.TableDef.Indexes {
+				visibility[indexDef.IndexName] = indexDef.Visible
+			}
+			require.True(t, visibility["idx_legacy_visible"])
+			require.False(t, visibility["idx_invisible"])
+			persistedSQL := strings.ToUpper(tableDefCreateSQL(createTable.TableDef))
+			require.Contains(t, persistedSQL, "IDX_INVISIBLE")
+			require.Equal(t, 1, strings.Count(persistedSQL, " INVISIBLE"))
+		})
+	}
+}
+
+func TestRunSqlWithSnapshotUsesSourceTenant(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+
+	const sourceTenant = uint32(42)
+	var capturedAccountID uint32
+	var capturedContextAccountID uint32
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&captureSQLExecutor{exec: func(
+			execCtx context.Context,
+			_ string,
+			opts executor.Options,
+		) (executor.Result, error) {
+			capturedAccountID = opts.AccountID()
+			capturedContextAccountID, _ = defines.GetAccountId(execCtx)
+			return executor.Result{}, nil
+		}},
+	)
+
+	result, err := runSqlWithSnapshot(ctx, "select 1", &Snapshot{
+		Tenant: &SnapshotTenant{TenantID: sourceTenant},
+	})
+	require.NoError(t, err)
+	defer result.Close()
+	require.Equal(t, sourceTenant, capturedAccountID)
+	require.Equal(t, sourceTenant, capturedContextAccountID)
 }
 
 func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {

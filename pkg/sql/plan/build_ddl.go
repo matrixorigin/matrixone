@@ -1046,6 +1046,12 @@ func buildCreateTable(
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
+		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
+		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
+		// the source definition and asks the normal CREATE planner to rebuild it.
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, err
+		}
 		hadStructuredChecks := len(tableDef.Checks) > 0
 		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
 			return nil, err
@@ -1088,6 +1094,7 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			true,
 		)
 		if err != nil {
 			return nil, err

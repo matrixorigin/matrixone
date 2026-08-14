@@ -532,7 +532,7 @@ func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
 	require.Contains(t, alter.CreateTmpTableSql, "KEY `idx_invisible` (`b`) INVISIBLE")
 }
 
-func TestReconcileAlterCopyIndexVisibilityPropagatesCatalogError(t *testing.T) {
+func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
@@ -546,13 +546,13 @@ func TestReconcileAlterCopyIndexVisibilityPropagatesCatalogError(t *testing.T) {
 		}),
 	)
 
-	err := reconcileAlterCopyIndexVisibility(&mock.ctxt, 272464, &TableDef{
+	err := reconcileIndexVisibility(&mock.ctxt, 272464, &TableDef{
 		Indexes: []*plan.IndexDef{{IndexName: "idx_a"}},
-	})
+	}, nil)
 	require.ErrorIs(t, err, lookupErr)
 }
 
-func TestReconcileAlterCopyIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) {
+func TestReconcileIndexVisibilityDefaultsMissingMetadataToVisible(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	proc := testutil.NewProc(t)
 	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
@@ -569,7 +569,7 @@ func TestReconcileAlterCopyIndexVisibilityDefaultsMissingMetadataToVisible(t *te
 	)
 
 	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_missing"}}}
-	require.NoError(t, reconcileAlterCopyIndexVisibility(&mock.ctxt, 272464, tableDef))
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil))
 	require.True(t, tableDef.Indexes[0].Visible)
 }
 

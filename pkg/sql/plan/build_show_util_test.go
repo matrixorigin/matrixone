@@ -249,11 +249,33 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.True(t, visibility["idx_visible"])
 	require.False(t, visibility["uq_invisible"])
 
-	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, true, nil)
+	got, _, err := constructCreateTableSQL(
+		&mock.ctxt, tableDef, nil, true, nil, true, true,
+	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
 	require.NotContains(t, got, "KEY `idx_default` (`a`) INVISIBLE")
 	require.NotContains(t, got, "KEY `idx_visible` (`a`) INVISIBLE")
+}
+
+func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_visibility_src (
+		id INT PRIMARY KEY,
+		a INT,
+		KEY idx_a(a)
+	)`)
+	require.NoError(t, err)
+	require.NotEmpty(t, tableDef.Indexes)
+
+	// A pre-upgrade default-visible IndexDef has the same false proto3 value as
+	// an explicitly invisible index. Public reconstruction callers cannot tell
+	// them apart without mo_indexes, so they must retain the legacy visible
+	// default instead of emitting INVISIBLE.
+	tableDef.Indexes[0].Visible = false
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.NotContains(t, got, "INVISIBLE")
 }
 
 func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {

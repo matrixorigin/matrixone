@@ -147,14 +147,19 @@ func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
 	return false
 }
 
-func reconcileAlterCopyIndexVisibility(ctx CompilerContext, tableID uint64, tableDef *TableDef) error {
+func reconcileIndexVisibility(
+	ctx CompilerContext,
+	tableID uint64,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) error {
 	if len(tableDef.Indexes) == 0 {
 		return nil
 	}
-	result, err := runSql(ctx, fmt.Sprintf(
+	result, err := runSqlWithSnapshot(ctx, fmt.Sprintf(
 		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
 		tableID,
-	))
+	), snapshot)
 	if err != nil {
 		return err
 	}
@@ -249,7 +254,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// default-visible and explicitly invisible indexes. mo_indexes is the
 	// authoritative source, so normalize the copied definition before applying
 	// the ALTER actions and serializing the temporary CREATE TABLE statement.
-	if err := reconcileAlterCopyIndexVisibility(cctx, tableDef.TblId, copyTableDef); err != nil {
+	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
 	// The copied definition contains the source allocator's cached offset. It
@@ -390,7 +395,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
+	createTmpDdl, _, err := constructCreateTableSQL(
+		cctx, copyTableDef, snapshot, true, nil, true, true,
+	)
 	if err != nil {
 		return nil, err
 	}
