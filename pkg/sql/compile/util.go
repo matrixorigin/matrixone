@@ -304,7 +304,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					// 9. index visible
 					visible := INDEX_VISIBLE_NO
-					if indexDef.Visible {
+					if isVisible, _ := catalog.GetIndexVisibility(indexDef); isVisible {
 						visible = INDEX_VISIBLE_YES
 					}
 					fmt.Fprintf(buffer, "%d, ", visible)
@@ -322,10 +322,8 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%d, ", i+1)
 
 					// 14. index vec_options
-					if indexDef.Option != nil {
-						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "%s, ", sqlquote.String(fmt.Sprintf("parser=%s,ngram_token_size=%d", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)))
-						}
+					if indexDef.Option != nil && indexDef.Option.ParserName != "" {
+						fmt.Fprintf(buffer, "%s, ", sqlquote.String(fmt.Sprintf("parser=%s,ngram_token_size=%d", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)))
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 					}

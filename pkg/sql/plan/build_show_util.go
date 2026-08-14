@@ -43,11 +43,20 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
-	// IndexDef.Visible historically used false both as the proto3 zero value for
-	// default-visible indexes and for explicitly invisible indexes. Public
-	// reconstruction callers do not have authoritative catalog metadata, so they
-	// must keep the legacy default-visible rendering.
-	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true, false)
+	// This formatter is also used by context-free consumers that do not own a
+	// source catalog snapshot (CDC, publication, and dump).  Keep it limited to
+	// rendering the supplied definition; planner entry points that resolve a
+	// local source table reconcile its visibility before calling here.
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
+
+func createTableIndexVisible(indexDef *plan.IndexDef) bool {
+	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
+		return visible
+	}
+	// A context-free caller cannot query mo_indexes. Preserve proto3's
+	// historical default rather than treating an omitted bool as INVISIBLE.
+	return true
 }
 
 func constructCreateTableSQL(
@@ -57,7 +66,6 @@ func constructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
-	indexVisibilityKnown bool,
 ) (string, tree.Statement, error) {
 	var err error
 	var createStr string
@@ -261,6 +269,7 @@ func constructCreateTableSQL(
 			}
 
 			var indexStr string
+			indexVisible := createTableIndexVisible(indexdef)
 			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
 				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
 					indexStr += " FULLTEXT2 "
@@ -340,10 +349,9 @@ func constructCreateTableSQL(
 						}
 					}
 				}
-				if indexVisibilityKnown && !indexdef.Visible {
+				if !indexVisible {
 					indexStr += " INVISIBLE"
 				}
-
 			} else {
 				rewriteIndexStr := ""
 				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
@@ -409,7 +417,7 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
-				if indexVisibilityKnown && !indexdef.Visible {
+				if !indexVisible {
 					indexStr += " INVISIBLE"
 					rewriteIndexStr += " INVISIBLE"
 				}
