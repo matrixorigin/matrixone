@@ -214,6 +214,10 @@ message PreInsert {
   bool is_old_update = 10;
   bool is_new_update = 11;
   bool reject_zero_temporal = 12;
+  bool has_target_selector = 13;
+  int32 target_row_number_col = 14;
+  int32 target_active_col = 15;
+  int32 target_row_id_col = 16;
 }
 
 message PostDml {
