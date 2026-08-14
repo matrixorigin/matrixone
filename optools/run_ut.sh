@@ -254,13 +254,16 @@ function run_tests(){
         logger "INF" "Run UT with race check"
         local plan_package
         local serial_test_scope
-        local heavy_test_scope
+        local cluster_test_scope
+        local resource_heavy_test_scope
         local light_test_scope
         local package
+        local cluster_package_parallel=2
         local package_status=0
         local light_status=0
         local serial_status=0
-        local heavy_status=0
+        local cluster_status=0
+        local resource_heavy_status=0
         local plan_status=0
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
@@ -268,6 +271,9 @@ function run_tests(){
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
+        fi
+        if (( HEAVY_RACE_PARALLEL < cluster_package_parallel )); then
+            cluster_package_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
@@ -290,22 +296,45 @@ function run_tests(){
             return 0
         fi
 
-        if ! heavy_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/sql/plan/function \
-            ./pkg/tests/dml \
-            ./pkg/tests/shard \
-            ./pkg/tests/partition \
-            ./pkg/tests/txnexecutor); then
-            logger "ERR" "Failed to resolve heavy race-test packages"
+        # Derive cluster owners from each race test binary's complete dependency
+        # graph. This also catches packages that start a cluster through a test
+        # helper, without relying on an incomplete directory allowlist.
+        if ! cluster_test_scope=$(list_embedded_cluster_test_packages ${test_scope}); then
+            logger "ERR" "Failed to discover embedded-cluster race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
+
+        # Group precedence is exclusive > embedded cluster > resource heavy >
+        # light. Keep every package in exactly one group even when its test
+        # dependencies evolve.
+        cluster_test_scope=$(remove_packages_from_scope \
+            "${cluster_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope})
+
+        if ! resource_heavy_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/backup \
+            ./pkg/fileservice \
+            ./pkg/sql/plan/function \
+            ./pkg/vm/engine/test \
+            ./pkg/vm/engine/tae/db/test); then
+            logger "ERR" "Failed to resolve resource-heavy race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        resource_heavy_test_scope=$(remove_packages_from_scope \
+            "${resource_heavy_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${cluster_test_scope})
 
         light_test_scope=$(remove_packages_from_scope \
             "${test_scope}" \
             "${plan_package}" \
             ${serial_test_scope} \
-            ${heavy_test_scope})
+            ${cluster_test_scope} \
+            ${resource_heavy_test_scope})
 
         if [[ -n "${light_test_scope}" ]]; then
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
@@ -326,14 +355,23 @@ function run_tests(){
             fi
         done
 
-        logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
-        heavy_status=$?
+        # These packages link embedded clusters with substantial race-detector
+        # memory. The runner-wide file-lock admission keeps complete cluster
+        # lifecycles serialized across test binaries. Allow one additional
+        # package process to overlap linking, setup, and non-cluster work without
+        # returning to the six-way contention that starved HAKeeper.
+        logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
+        cluster_status=$?
+
+        logger "INF" "Run resource-heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope >> $UT_REPORT
+        resource_heavy_status=$?
 
         run_plan_race_shards "${plan_package}"
         plan_status=$?
 
-        if (( light_status != 0 || serial_status != 0 || heavy_status != 0 || plan_status != 0 )); then
+        if (( light_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
