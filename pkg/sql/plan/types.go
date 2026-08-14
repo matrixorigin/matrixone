@@ -330,6 +330,7 @@ type QueryBuilder struct {
 	ctxByNode                   []*BindContext
 	nameByColRef                map[[2]int32]string
 	protectedScans              map[int32]int
+	updateTargetScans           map[int32]struct{}
 	projectSpecialGuards        map[int32]*specialIndexGuard
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
@@ -361,9 +362,8 @@ type QueryBuilder struct {
 	isRestoreByTs          bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
-	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	aggSpillMem int64
@@ -404,6 +404,7 @@ type QueryBuilder struct {
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
 	irregularMaintSkipInsert  bool
+	irregularUpdateMaints     []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -427,6 +428,16 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep  int32
+	deleteStep  int32
+	deletePkPos int32
+	deletePkTyp plan.Type
+	indexes     []*plan.IndexDef
+	tableDef    *plan.TableDef
+	objRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {

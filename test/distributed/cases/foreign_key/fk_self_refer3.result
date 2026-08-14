@@ -144,6 +144,7 @@ delete A from t1 as A,  t1 as B where A.a = B.b;
 delete A,B from t1 as A,  t1 as B where A.a = B.b;
 update t1 as A,t1 as B set A.a = 4 where A.a = B.b;
 update t1 as A,t1 as B set A.a = 4, B.b = 3 where A.a = B.b;
+not supported: updating the same physical table through aliases 'a' and 'b'
 update t1 as A,t1 as B set A.a = 4, A.b = 3 where A.a = B.b;
 update t1 as A,t1 as B set B.a = 4 where A.a = B.b;
 update t1 as A,t1 as B set A.a = 4 where A.a = 3;
