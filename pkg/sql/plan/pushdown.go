@@ -29,6 +29,9 @@ const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	originalNodeID := nodeID
+	if builder.checkPlanningCanceled() != nil {
+		return originalNodeID, filters
+	}
 	// Record before pushdownFilters
 	builder.optimizationHistory = append(builder.optimizationHistory,
 		fmt.Sprintf("pushdownFilters:before (nodeID: %d, nodeType: %s, filters: %d)", nodeID, builder.qry.Nodes[nodeID].NodeType, len(filters)))
@@ -483,14 +486,22 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		switch node.JoinType {
 		case plan.Node_INNER, plan.Node_SEMI:
 			//inner and semi join can deduce new predicate from both side
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		case plan.Node_RIGHT, plan.Node_ANTI:
 			//right join can deduce new predicate only from right side to left
-			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(rightPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[0], deduced, separateNonEquiConds)
+			}
 		case plan.Node_LEFT, plan.Node_SINGLE:
 			//left join can deduce new predicate only from left side to right
-			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+			if deduced := deduceNewFilterList(leftPushdown, node.OnList); len(deduced) > 0 {
+				builder.pushdownFilters(node.Children[1], deduced, separateNonEquiConds)
+			}
 		}
 
 		if builder.qry.Nodes[node.Children[1]].NodeType == plan.Node_FUNCTION_SCAN {

@@ -68,6 +68,21 @@ type sqlModeMockCompilerContext struct {
 	sqlMode string
 }
 
+type cancelAfterGetContextCompilerContext struct {
+	CompilerContext
+	ctx       context.Context
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func (c *cancelAfterGetContextCompilerContext) GetContext() context.Context {
+	c.remaining--
+	if c.remaining == 0 {
+		c.cancel()
+	}
+	return c.ctx
+}
+
 func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if varName == "sql_mode" {
 		return c.sqlMode, nil
@@ -8032,6 +8047,81 @@ func TestUpdateIgnoreRecomputesGeneratedColumnsForRepeatedPhysicalCandidates(t *
 		}
 	}
 	require.Equal(t, 1, multiUpdates)
+}
+
+func buildRepeatedAliasUpdateSQL(aliasCount int) string {
+	var from strings.Builder
+	from.WriteString("nation a0")
+	for i := 1; i < aliasCount; i++ {
+		fmt.Fprintf(&from, " join nation a%d on a0.n_nationkey=a%d.n_nationkey", i, i)
+	}
+	assignments := make([]string, aliasCount)
+	for i := range assignments {
+		assignments[i] = fmt.Sprintf("a%d.n_comment='v%d'", i, i)
+	}
+	return "update ignore " + from.String() + " set " + strings.Join(assignments, ",")
+}
+
+func TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate(t *testing.T) {
+	for _, aliasCount := range []int{8, 16, 24} {
+		t.Run(fmt.Sprintf("%d aliases", aliasCount), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			logicPlan, err := runOneStmt(mock, t, buildRepeatedAliasUpdateSQL(aliasCount))
+			require.NoError(t, err)
+			aggregates := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG {
+					aggregates++
+				}
+			}
+			require.Equal(t, 1, aggregates,
+				"every prefix must reuse the same physical-row contribution aggregate")
+			require.Less(t, len(logicPlan.GetQuery().Nodes), 30*aliasCount,
+				"planner node growth must remain linear in the alias count")
+		})
+	}
+}
+
+func TestUpdateIgnoreRepeatedAliasPlanningObservesCancellation(t *testing.T) {
+	const aliasCount = 24
+
+	t.Run("filter pushdown stops after in-flight cancellation", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(t.Context(), buildRepeatedAliasUpdateSQL(aliasCount), 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		mock := NewMockOptimizer(true)
+		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, bindErr)
+
+		cancelCtx, cancel := context.WithCancel(t.Context())
+		builder.compCtx = &cancelAfterGetContextCompilerContext{
+			CompilerContext: builder.compCtx,
+			ctx:             cancelCtx,
+			cancel:          cancel,
+			remaining:       8,
+		}
+		builder.pushdownFilters(rootID, nil, false)
+		require.ErrorIs(t, builder.checkPlanningCanceled(), context.Canceled)
+		require.NotEmpty(t, builder.optimizationHistory)
+	})
+
+	t.Run("create query returns cancellation", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(t.Context(), buildRepeatedAliasUpdateSQL(aliasCount), 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		mock := NewMockOptimizer(true)
+		builder := NewQueryBuilder(plan.Query_UPDATE, mock.CurrentContext(), false, true)
+		rootID, bindErr := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+		require.NoError(t, bindErr)
+		builder.qry.Steps = append(builder.qry.Steps, rootID)
+
+		canceledCtx, cancel := context.WithCancel(t.Context())
+		cancel()
+		mock.ctxt.SetContext(canceledCtx)
+		_, createErr := builder.createQuery()
+		require.ErrorIs(t, createErr, context.Canceled)
+	})
 }
 
 func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited map[int32]struct{}) bool {
