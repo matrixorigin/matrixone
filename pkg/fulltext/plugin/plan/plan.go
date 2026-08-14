@@ -59,17 +59,6 @@ func (Hooks) ApplyForSort(_ planplugin.PlanBuilder, _ *planplugin.VectorSortCont
 	return nodeID, false, nil
 }
 
-// matchPlaceholderFuncs are the plan functions MATCH() AGAINST() binds to. Neither has an
-// evaluable implementation: pkg/sql/plan/function/func_fulltext.go raises "MATCH() AGAINST()
-// function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is
-// not supported yet" for both. They are placeholders that the fulltext rewrite is expected
-// to replace with an index scan.
-//
-// fulltext_match is what a WHERE MATCH binds to and what survives when no index matches;
-// fulltext_match_score is what an unmatched SELECT MATCH is converted into
-// (getFullTextMatchFromProject). Either one surviving optimization means the query throws.
-var matchPlaceholderFuncs = []string{"fulltext_match", "fulltext_match_score"}
-
 // ValidateViewDefinition refuses to persist a view whose MATCH() AGAINST() no FULLTEXT
 // index can serve.
 //
