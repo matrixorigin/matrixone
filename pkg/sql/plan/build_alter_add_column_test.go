@@ -102,6 +102,9 @@ func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
 				IndexOption: tc.option,
 			})
 			require.NoError(t, err)
+			got, isSet := catalog.GetIndexVisibility(indexDef)
+			require.True(t, isSet)
+			require.Equal(t, tc.visible, got)
 			require.Equal(t, tc.visible, indexDef.Visible)
 		})
 	}

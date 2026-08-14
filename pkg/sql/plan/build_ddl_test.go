@@ -3094,6 +3094,9 @@ func TestBuildIndexPersistsVisibility(t *testing.T) {
 			indexes := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes()
 			require.NotEmpty(t, indexes)
 			for _, indexDef := range indexes {
+				got, isSet := catalog.GetIndexVisibility(indexDef)
+				require.True(t, isSet)
+				require.Equal(t, tc.visible, got)
 				require.Equal(t, tc.visible, indexDef.Visible)
 			}
 		})

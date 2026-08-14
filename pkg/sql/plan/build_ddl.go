@@ -2796,7 +2796,7 @@ func setIndexDefsVisibility(indexDefs []*plan.IndexDef, option *tree.IndexOption
 }
 
 func setIndexDefVisibility(indexDef *plan.IndexDef, option *tree.IndexOption) {
-	indexDef.Visible = option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE
+	catalog.SetIndexVisibility(indexDef, option == nil || option.Visible != tree.VISIBLE_TYPE_INVISIBLE)
 }
 
 func checkSpatialIndexColumnSupport(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef) error {

@@ -606,6 +606,72 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	return obj, tableDef, nil
 }
 
+// ResolveIndexVisibility reads the catalog's authoritative visibility metadata
+// for legacy IndexDefs. New constraints persist the value in IndexOption, but
+// old proto3 IndexDef.Visible=false is ambiguous between default-visible and
+// explicitly invisible indexes.
+func (tcc *TxnCompilerContext) ResolveIndexVisibility(tableID uint64, snapshot *plan2.Snapshot) (map[string]bool, error) {
+	ctx := tcc.GetContext()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	bh := tcc.GetSession().GetShareTxnBackgroundExec(ctx, false)
+	defer bh.Close()
+	return getIndexVisibilities(ctx, bh, tableID, snapshot)
+}
+
+func getIndexVisibilities(
+	ctx context.Context,
+	bh BackgroundExec,
+	tableID uint64,
+	snapshot *plan2.Snapshot,
+) (map[string]bool, error) {
+	queryCtx := ctx
+	snapshotHint := ""
+	if plan2.IsSnapshotValid(snapshot) {
+		snapshotHint = fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+	}
+	if snapshot != nil && snapshot.Tenant != nil {
+		queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
+	}
+
+	bh.ClearExecResultSet()
+	if err := bh.Exec(queryCtx, fmt.Sprintf(
+		"SELECT name, is_visible FROM mo_catalog.mo_indexes%s WHERE table_id = %d",
+		snapshotHint, tableID,
+	)); err != nil {
+		return nil, err
+	}
+
+	results, err := getResultSet(queryCtx, bh)
+	if err != nil {
+		return nil, err
+	}
+	visibilityByName := make(map[string]bool)
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			name, err := result.GetString(queryCtx, row, 0)
+			if err != nil {
+				return nil, err
+			}
+			isVisible, err := result.GetInt64(queryCtx, row, 1)
+			if err != nil {
+				return nil, err
+			}
+			visible := isVisible != 0
+			name = strings.ToLower(name)
+			if previous, ok := visibilityByName[name]; ok && previous != visible {
+				return nil, moerr.NewInternalErrorf(queryCtx,
+					"inconsistent visibility metadata for index %q on table %d", name, tableID,
+				)
+			}
+			visibilityByName[name] = visible
+		}
+	}
+	return visibilityByName, nil
+}
+
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,

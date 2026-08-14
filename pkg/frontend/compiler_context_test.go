@@ -15,10 +15,17 @@
 package frontend
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
@@ -109,4 +116,37 @@ func TestGetConfig(t *testing.T) {
 			require.True(t, len(tcc.GetAccountName()) > 0)
 		})
 	}
+}
+
+func TestGetIndexVisibilitiesAtSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	result := mock_frontend.NewMockExecResult(ctrl)
+	result.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+	result.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("idx_visible", nil)
+	result.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(1), nil)
+	result.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("IDX_INVISIBLE", nil)
+	result.EXPECT().GetInt64(gomock.Any(), uint64(1), uint64(1)).Return(int64(0), nil)
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(gomock.Any(),
+		"SELECT name, is_visible FROM mo_catalog.mo_indexes {MO_TS = 42} WHERE table_id = 99",
+	).DoAndReturn(func(queryCtx context.Context, _ string) error {
+		accountID, err := defines.GetAccountId(queryCtx)
+		require.NoError(t, err)
+		require.Equal(t, uint32(7), accountID)
+		return nil
+	})
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{result})
+
+	got, err := getIndexVisibilities(ctx, bh, 99, &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{
+		"idx_visible":   true,
+		"idx_invisible": false,
+	}, got)
 }

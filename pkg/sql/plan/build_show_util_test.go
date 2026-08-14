@@ -38,6 +38,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type legacyIndexVisibilityResolver struct {
+	CompilerContext
+	visibilityByName map[string]bool
+	lastTableID      uint64
+}
+
+func (r *legacyIndexVisibilityResolver) ResolveIndexVisibility(tableID uint64, _ *Snapshot) (map[string]bool, error) {
+	r.lastTableID = tableID
+	return r.visibilityByName, nil
+}
+
 func Test_buildTestShowCreateTable(t *testing.T) {
 	tests := []struct {
 		name string
@@ -221,6 +232,59 @@ func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got, "KEY `idx_name` (`name`) INVISIBLE")
 	require.Contains(t, got, "FULLTEXT `idx_body`(`body`) INVISIBLE")
+}
+
+func TestShowCreateTableReconcilesLegacyIndexVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_index_visibility (
+		id INT PRIMARY KEY,
+		a INT,
+		b INT,
+		KEY idx_visible(a),
+		KEY idx_invisible(b)
+	)`)
+	require.NoError(t, err)
+	tableDef.TblId = 42
+	for _, indexDef := range tableDef.Indexes {
+		// Simulate a constraint serialized before IndexOption.Visibility was
+		// introduced: the legacy proto3 false means neither visible nor
+		// invisible without mo_indexes.is_visible.
+		indexDef.Option = nil
+		indexDef.Visible = false
+	}
+
+	resolver := &legacyIndexVisibilityResolver{
+		CompilerContext: &mock.ctxt,
+		visibilityByName: map[string]bool{
+			"idx_visible":   true,
+			"idx_invisible": false,
+		},
+	}
+	got, _, err := ConstructCreateTableSQL(resolver, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), resolver.lastTableID)
+	require.Contains(t, got, "KEY `idx_visible` (`a`)")
+	require.NotContains(t, got, "KEY `idx_visible` (`a`) INVISIBLE")
+	require.Contains(t, got, "KEY `idx_invisible` (`b`) INVISIBLE")
+}
+
+func TestShowCreateTableRejectsIncompleteLegacyIndexVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_index_visibility_missing (
+		id INT PRIMARY KEY,
+		a INT,
+		KEY idx_a(a)
+	)`)
+	require.NoError(t, err)
+	tableDef.TblId = 43
+	tableDef.Indexes[0].Option = nil
+	tableDef.Indexes[0].Visible = false
+
+	_, _, err = ConstructCreateTableSQL(&legacyIndexVisibilityResolver{
+		CompilerContext:  &mock.ctxt,
+		visibilityByName: map[string]bool{},
+	}, tableDef, nil, false, nil)
+	require.ErrorContains(t, err, "missing visibility metadata for index \"idx_a\" on table 43")
 }
 
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {

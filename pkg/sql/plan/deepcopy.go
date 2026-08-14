@@ -489,6 +489,7 @@ func DeepCopyIndexOption(indexOption *plan.IndexOption) *plan.IndexOption {
 	}
 	newIndexOption := &plan.IndexOption{
 		CreateExtraTable: indexOption.CreateExtraTable,
+		Visibility:       indexOption.Visibility,
 	}
 
 	return newIndexOption
