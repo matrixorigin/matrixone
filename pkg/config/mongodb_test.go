@@ -16,7 +16,9 @@ package config
 
 import (
 	"testing"
+	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +26,11 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	var parameters MongoDBParameters
 	parameters.SetDefaultValues()
 	require.NoError(t, parameters.Validate(t.Context()))
+	require.True(t, parameters.Enable)
+	require.False(t, parameters.EnablePerAccount)
+	require.False(t, parameters.AllowLoopback)
+	require.Empty(t, parameters.AllowedHostSuffixes)
+	require.Empty(t, parameters.AllowedCIDRs)
 	require.Positive(t, parameters.MaxConversionErrors)
 	require.InDelta(t, 0.10, parameters.MaxConversionErrorRate, 0)
 	parameters.MaxValueBytes = parameters.MaxBatchBytes + 1
@@ -31,6 +38,43 @@ func TestMongoDBParametersDefaultsAndValidation(t *testing.T) {
 	parameters.MaxValueBytes = 1
 	parameters.MaxConversionErrorRate = 1.1
 	require.Error(t, parameters.Validate(t.Context()))
+}
+
+func TestMongoDBEnableDefaultPreservesExplicitDisable(t *testing.T) {
+	var omitted FrontendParameters
+	_, err := toml.Decode("", &omitted)
+	require.NoError(t, err)
+	omitted.SetDefaultValues()
+	require.True(t, omitted.MongoDB.Enable)
+	require.False(t, omitted.MongoDB.EnablePerAccount)
+
+	var disabled FrontendParameters
+	_, err = toml.Decode(`[mongodb]
+enable = false
+enable-per-account = true
+allowed-accounts = [7, 8]
+connect-timeout = "3s"
+max-pool-size = 20
+max-conversion-error-rate = 0.2
+`, &disabled)
+	require.NoError(t, err)
+	disabled.SetDefaultValues()
+	require.False(t, disabled.MongoDB.Enable)
+	require.True(t, disabled.MongoDB.EnablePerAccount)
+	require.Equal(t, []uint32{7, 8}, disabled.MongoDB.AllowedAccounts)
+	require.Equal(t, 3*time.Second, disabled.MongoDB.ConnectTimeout.Duration)
+	require.Equal(t, uint64(20), disabled.MongoDB.MaxPoolSize)
+	require.InDelta(t, 0.2, disabled.MongoDB.MaxConversionErrorRate, 0)
+
+	// A reload that keeps the MongoDB section but omits enable restores the
+	// default and must not retain the previous explicit opt-out.
+	_, err = toml.Decode("[mongodb]\nallowed-cidrs = [\"10.0.0.0/8\"]\n", &disabled)
+	require.NoError(t, err)
+	disabled.SetDefaultValues()
+	require.True(t, disabled.MongoDB.Enable)
+	require.False(t, disabled.MongoDB.EnablePerAccount)
+	require.Empty(t, disabled.MongoDB.AllowedAccounts)
+	require.Equal(t, []string{"10.0.0.0/8"}, disabled.MongoDB.AllowedCIDRs)
 }
 
 func TestMongoDBParametersRejectMalformedEndpointPolicy(t *testing.T) {

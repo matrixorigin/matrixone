@@ -15,6 +15,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	burnttoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -278,9 +280,45 @@ type MongoDBParameters struct {
 	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
 	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
 	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+
+	// enableConfigured distinguishes an omitted enable key from an explicit
+	// operator opt-out. It is deliberately private so config dumps continue to
+	// expose only the effective bool value.
+	enableConfigured bool
+}
+
+// UnmarshalTOML retains presence information for enable. MongoDB is enabled
+// when the key is omitted, but an explicit false must survive the post-decode
+// defaulting pass used by mo-service, embedded deployments, and tests.
+func (parameters *MongoDBParameters) UnmarshalTOML(value any) error {
+	table, _ := value.(map[string]any)
+
+	// Decode through an alias to reuse BurntSushi's normal type conversions
+	// without recursively invoking this method.
+	type plainMongoDBParameters MongoDBParameters
+	var encoded bytes.Buffer
+	if err := burnttoml.NewEncoder(&encoded).Encode(value); err != nil {
+		return err
+	}
+	var decoded plainMongoDBParameters
+	if _, err := burnttoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = MongoDBParameters(decoded)
+	_, parameters.enableConfigured = table["enable"]
+	return nil
+}
+
+func DefaultMongoDBParameters() MongoDBParameters {
+	var parameters MongoDBParameters
+	parameters.SetDefaultValues()
+	return parameters
 }
 
 func (parameters *MongoDBParameters) SetDefaultValues() {
+	if !parameters.enableConfigured {
+		parameters.Enable = true
+	}
 	if parameters.ConnectTimeout.Duration == 0 {
 		parameters.ConnectTimeout.Duration = 10 * time.Second
 	}

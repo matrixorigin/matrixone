@@ -502,6 +502,16 @@ func TestMongoDBFeatureGateAndRuntimeConfiguration(t *testing.T) {
 	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: parameters}})
 	require.ErrorContains(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 7}), "are disabled")
 
+	defaultService := "mongodb-default-gate-" + t.Name()
+	InitServerLevelVars(defaultService)
+	defaults := config.DefaultMongoDBParameters()
+	setPu(defaultService, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: defaults}})
+	for _, accountID := range []uint32{0, 7, 8} {
+		require.NoError(t, ensureMongoDBFeatureEnabledForSession(
+			t.Context(), mongoDBFeatureSession{service: defaultService, accountID: accountID}))
+	}
+	require.False(t, defaults.EnablePerAccount)
+
 	parameters.Enable = true
 	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: parameters}})
 	require.NoError(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 7}))
