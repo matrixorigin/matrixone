@@ -51,7 +51,19 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	}
 	castLeft.Charset = charset
 	castRight.Charset = charset
-	return hasCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+	// CHAR values may carry PAD_CHAR_TO_FULL_LENGTH representation padding.
+	// Compare them in the VARCHAR domain so the implicit cast removes that
+	// padding before scalar comparisons and hash-key construction.
+	charCast := false
+	if castLeft.Oid == types.T_char {
+		castLeft.Oid = types.T_varchar
+		charCast = true
+	}
+	if castRight.Oid == types.T_char {
+		castRight.Oid = types.T_varchar
+		charCast = true
+	}
+	return hasCast || charCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
 }
 
 func isDatetimeTimestampComparison(left, right types.Type) bool {
@@ -119,7 +131,7 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
+				has, t1, t2 := comparisonTypeCastRule(inputs[0], inputs[1])
 				if has {
 					if equalAndNotEqualOperatorSupports(t1, t2) {
 						if t1.Oid == t2.Oid && t1.Oid.IsDecimal() {

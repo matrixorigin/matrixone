@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -7970,6 +7971,7 @@ func strToStr(
 	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
+	trimCharPadding := from.GetSourceVector().GetType().Oid == types.T_char && toType.Oid == types.T_varchar
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).
@@ -8033,6 +8035,9 @@ func strToStr(
 				continue
 			}
 			// check the length.
+			if trimCharPadding {
+				v = bytes.TrimRight(v, " ")
+			}
 			s := convertByteSliceToString(v)
 			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(s) > destLen {
 				// CHAR/VARCHAR over-length handling:
@@ -8090,6 +8095,9 @@ func strToStr(
 					return err
 				}
 				continue
+			}
+			if trimCharPadding {
+				v = bytes.TrimRight(v, " ")
 			}
 			if err := to.AppendBytes(v, false); err != nil {
 				return err

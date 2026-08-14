@@ -25,6 +25,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCharEqualityIgnoresRepresentationPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.New(types.T_char, 8, 0), []string{"MO      ", "MO      "}, nil),
+		NewFunctionTestInput(types.New(types.T_char, 8, 0), []string{"MO", "MX"}, nil),
+	}
+	for _, test := range []struct {
+		name string
+		fn   fEvalFn
+		want []bool
+	}{
+		{name: "equal", fn: equalFn, want: []bool{true, false}},
+		{name: "not equal", fn: notEqualFn, want: []bool{false, true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil)
+			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestDatetimeTimestampComparisonPreservesInstantSemantics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

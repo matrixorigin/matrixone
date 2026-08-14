@@ -3145,6 +3145,34 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 	}
 }
 
+func TestStrToStrTrimsCharPaddingWhenCastingToVarchar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+	input.SetType(types.New(types.T_char, 8, 0))
+	defer input.Free(mp)
+	from := vector.GenerateFunctionStrParameter(input)
+
+	for _, test := range []struct {
+		name   string
+		toType types.Type
+		want   string
+	}{
+		{name: "varchar drops CHAR representation padding", toType: types.New(types.T_varchar, 8, 0), want: "MO"},
+		{name: "char preserves CHAR representation padding", toType: types.New(types.T_char, 8, 0), want: "MO      "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false))
+
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, test.want, string(got))
+		})
+	}
+}
+
 func Test_NewStrictCast_NonStringToCharVarcharRejectsOverWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

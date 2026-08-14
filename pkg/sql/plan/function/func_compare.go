@@ -304,7 +304,11 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char:
+		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
+			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+		}, selectList)
+	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		return opBinaryBytesBytesToFixedNullSafe(parameters, rs, proc, length, func(a, b []byte) bool {
 			return bytes.Equal(a, b)
 		}, selectList)
@@ -466,7 +470,11 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) == 0
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_char:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+		}, selectList)
+	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 		if parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
@@ -1202,7 +1210,11 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
 			return compareJsonBytes(a, b) != 0
 		}, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
+	case types.T_char:
+		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(a, b []byte) bool {
+			return !bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+		}, selectList)
+	case types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		return opBinaryStrStrToFixed[bool](parameters, rs, proc, length, func(a, b string) bool {
 			return a != b
 		}, selectList)
