@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -154,6 +155,27 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion16)
 	withoutServiceOwner := NewCNS3DataWriter(proc.Mp(), fs, tableDef, -1, true)
 	require.Equal(t, uint8(compress.Lz4), writeAndColumnAlgorithm(withoutServiceOwner))
+}
+
+func TestChunkedColumnPolicyProtocolThreshold(t *testing.T) {
+	require.Nil(t, chunkedColumnPolicyForService(""))
+
+	serviceID := fmt.Sprintf("chunked-policy-%s", t.Name())
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	policy := chunkedColumnPolicyForService(serviceID)
+	require.NotNil(t, policy)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	require.False(t, policy())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	require.True(t, policy())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int32(defines.MORPCVersion20))
+	require.False(t, policy())
+
+	missingPolicy := chunkedColumnPolicyForService("missing-" + serviceID)
+	require.NotNil(t, missingPolicy)
+	require.False(t, missingPolicy())
 }
 
 func testCNS3WriterTableDef() *plan.TableDef {
