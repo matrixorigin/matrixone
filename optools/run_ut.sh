@@ -258,6 +258,7 @@ function run_tests(){
         local resource_heavy_test_scope
         local light_test_scope
         local package
+        local cluster_package_parallel=2
         local package_status=0
         local light_status=0
         local serial_status=0
@@ -270,6 +271,9 @@ function run_tests(){
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
+        fi
+        if (( HEAVY_RACE_PARALLEL < cluster_package_parallel )); then
+            cluster_package_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
@@ -352,10 +356,12 @@ function run_tests(){
         done
 
         # These packages link embedded clusters with substantial race-detector
-        # memory. Run their complete package processes in an isolated serial
-        # stage; the runner-wide cluster lease remains the lifecycle backstop.
-        logger "INF" "Run embedded-cluster race-test packages serially"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
+        # memory. The runner-wide file-lock admission keeps complete cluster
+        # lifecycles serialized across test binaries. Allow one additional
+        # package process to overlap linking, setup, and non-cluster work without
+        # returning to the six-way contention that starved HAKeeper.
+        logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
         cluster_status=$?
 
         logger "INF" "Run resource-heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
