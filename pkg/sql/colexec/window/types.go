@@ -72,6 +72,9 @@ type Window struct {
 	Fs []*plan.OrderBySpec
 	// agg func
 	Aggs []aggexec.AggFuncExecExpression
+	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
+	// candidate partitions and evaluate their explicit boundaries once.
+	PartitionTopN bool
 
 	vm.OperatorBase
 }

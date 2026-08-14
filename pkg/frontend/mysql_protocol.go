@@ -2097,6 +2097,10 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 	if mp.ses != nil {
 		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }

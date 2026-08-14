@@ -101,7 +101,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	w := window.WinSpecList[0].Expr.(*plan.Expr_W).W
-	if len(w.PartitionBy) == 0 {
+	if len(w.PartitionBy) == 0 || window.PartitionTopN {
 		ctr.status = receiveAll
 	}
 
@@ -277,7 +277,12 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.os = nil
 			ctr.sels = nil
 			w := window.WinSpecList[0]
-			if window.Fs = makeOrderBy(w); window.Fs != nil {
+			if window.PartitionTopN {
+				window.Fs = makePartitionTopNOrderBy(w)
+			} else {
+				window.Fs = makeOrderBy(w)
+			}
+			if window.Fs != nil {
 				if len(ctr.orderVecs) == 0 {
 					ctr.orderVecs = make([]colexec.ExprEvalVector, len(window.Fs))
 					for j := range ctr.orderVecs {
@@ -695,7 +700,11 @@ func (ctr *container) processOrderFuncRange(
 			if err := checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
-			values[j-outputStart] = int64(j + 1)
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			values[j-outputStart] = int64(j - partitionStart + 1)
 		}
 	case "ntile":
 		bucketCount, err := ctr.ntileBucketCount(idx)
@@ -1315,6 +1324,18 @@ func makeOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
 	return w.OrderBy
 }
 
+func makePartitionTopNOrderBy(expr *plan.Expr) []*plan.OrderBySpec {
+	w := expr.Expr.(*plan.Expr_W).W
+	orderBy := make([]*plan.OrderBySpec, 0, len(w.PartitionBy)+len(w.OrderBy))
+	for _, partitionExpr := range w.PartitionBy {
+		orderBy = append(orderBy, &plan.OrderBySpec{
+			Expr: partitionExpr,
+			Flag: plan.OrderBySpec_INTERNAL,
+		})
+	}
+	return append(orderBy, w.OrderBy...)
+}
+
 func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (err error) {
 	input := []*batch.Batch{bat}
 
@@ -1441,7 +1462,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 	}
 
-	ctr.ps = nil
+	if !ap.PartitionTopN {
+		ctr.ps = nil
+	}
 
 	return false, nil
 }
