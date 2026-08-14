@@ -18,8 +18,10 @@ import (
 	"context"
 	"fmt"
 
+	"encoding/json"
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -379,8 +381,27 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 
+	// Optional pushed score range (argVecs[4], a query const): the planner turns an
+	// AND-reachable `MATCH(...) <op> const` into a relevance interval the engine applies to
+	// each scored doc, so out-of-range rows never cross into the join above. Absent on a
+	// direct fulltext2_search(...) call or when no score predicate was pushed.
+	var scoreRange *fulltext2.ScoreRange
+	if len(tf.ctr.argVecs) > 4 {
+		if rv := tf.ctr.argVecs[4]; rv != nil && rv.Length() > 0 && !rv.IsNull(0) {
+			if s := rv.GetStringAt(0); len(s) > 0 {
+				var r fulltext2.ScoreRange
+				if err := json.Unmarshal([]byte(s), &r); err != nil {
+					return moerr.NewInternalErrorf(proc.Ctx,
+						"fulltext2_search: invalid score range %q: %v", s, err)
+				}
+				scoreRange = &r
+			}
+		}
+	}
+
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
 	q := fulltext2.Fulltext2Query{
+		ScoreRange:       scoreRange,
 		Pattern:          []byte(pattern),
 		Boolean:          mode == int64(tree.FULLTEXT_BOOLEAN),
 		BagOfWords:       mode == int64(tree.FULLTEXT_BM25),

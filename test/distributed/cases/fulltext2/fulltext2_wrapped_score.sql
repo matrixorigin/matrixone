@@ -137,6 +137,32 @@ create table nodx(id int primary key, txt text);
 insert into nodx values (1,'hello');
 select id from nodx where match(txt) against('hello') > 0.1;
 
+-- ---------------- score range pushed into the engine -----------------------------
+-- fulltext2 scores documents itself, so an AND-reachable `MATCH(...) <op> const` is handed to
+-- the search as a relevance interval and out-of-range documents never cross into the join.
+-- The planner keeps its own Filter as well and widens each pushed bound outward by one float32
+-- ULP (SQL compares in double, the engine scores in float32), so the pushdown can only remove
+-- work, never rows -- these must return exactly what the Filter alone would.
+select id, match(body) against('hello') as sc from two where match(body) against('hello') order by id;
+
+select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125 order by id;
+select id from two where match(body) against('hello') and match(body) against('hello') < 0.0125 order by id;
+select id from two where match(body) against('hello')
+  and match(body) against('hello') > 0.0118 and match(body) against('hello') < 0.0138 order by id;
+
+-- inclusive bounds
+select id from two where match(body) against('hello') and match(body) against('hello') >= 0.013416502 order by id;
+select id from two where match(body) against('hello') and match(body) against('hello') <= 0.013416502 order by id;
+
+-- an OR is NOT pushed (the predicate need not hold for a returned row); the rows still come
+-- back correctly, just filtered above the join
+select id from two where match(body) against('hello') and (match(body) against('hello') > 0.0138 or id = 1) order by id;
+
+-- the index must still be used
+-- @separator:table
+-- @regex("Table Function on fulltext2_search", true)
+explain select id from two where match(body) against('hello') and match(body) against('hello') > 0.0125;
+
 -- ---------------- wrapped MATCH on the COVERED fast path -------------------------
 -- tryApplyCoveredFulltext2 drops the base-table JOIN and reads pk/score/include columns
 -- straight from the TVF, remapping only the projections it recognised as bare MATCHes -- a

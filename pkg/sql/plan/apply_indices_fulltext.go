@@ -14,13 +14,16 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -464,12 +467,33 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
 				DeepCopyExpr(fn.Args[1]), // mode (a constant)
 			}
+			// Push this stream's score bounds into the engine: fulltext2 scores documents
+			// itself, so it can drop out-of-range ones before they cross into the join. Taken
+			// from the predicates the lift moved above the join -- they stay there too, so the
+			// pushed (deliberately widened) range can only ever remove work, not rows.
+			var scoreRangeJSON string
+			if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
+				rb, rerr := json.Marshal(rng)
+				if rerr != nil {
+					return -1, nil, nil, nil, rerr
+				}
+				scoreRangeJSON = string(rb)
+			}
 			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING TVF (i==0). With
 			// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
 			// filtered stream constrains the whole result — the predicate need only ride the
 			// driving stream.
-			if i == 0 && ft2PredsJSON != "" {
-				exprs = append(exprs, makePlan2StringConstExprWithType(ft2PredsJSON))
+			// argVecs[3] is the INCLUDE/pk predicate JSON and argVecs[4] the score range;
+			// both optional, but positional, so an empty 3rd is passed when only 4 is needed.
+			preds := ""
+			if i == 0 {
+				preds = ft2PredsJSON
+			}
+			if preds != "" || scoreRangeJSON != "" {
+				exprs = append(exprs, makePlan2StringConstExprWithType(preds))
+			}
+			if scoreRangeJSON != "" {
+				exprs = append(exprs, makePlan2StringConstExprWithType(scoreRangeJSON))
 			}
 			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {
@@ -1755,6 +1779,135 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 		return out
 	}
 	return out
+}
+
+// fulltext2ScoreRangeFromFilters builds the relevance interval implied by the AND-reachable
+// `MATCH(...) <op> const` comparisons on ONE served match, for pushing into fulltext2_search.
+//
+// Only fulltext2 has an engine that can use it (the WAND search scores documents itself);
+// classic fulltext_index_scan has no equivalent, so callers only build this for fulltext2.
+//
+// Two rules keep it safe:
+//
+//   - AND-reachable only. Under an OR or a NOT the predicate does not have to hold for a
+//     returned row, so the engine must not drop anything on its account.
+//   - Each bound is widened OUTWARD by one float32 ULP. The SQL comparison is evaluated in
+//     double while the engine scores in float32, so a bound converted naively could round the
+//     wrong way and drop a row the SQL predicate keeps. The plan keeps its own Filter above
+//     the join, so a slightly wide range costs one comparison and never a row.
+//
+// Returns nil when nothing is pushable.
+func (builder *QueryBuilder) fulltext2ScoreRangeFromFilters(filters []*plan.Expr, matchFn *plan.Function) *fulltext2.ScoreRange {
+	var out *fulltext2.ScoreRange
+	setMin := func(v float64, inclusive bool) {
+		if out == nil {
+			out = &fulltext2.ScoreRange{}
+		}
+		f := float32(math.Nextafter(v, math.Inf(-1))) // widen downward
+		if !out.HasMin || f > out.Min {
+			out.Min, out.HasMin, out.MinInclusive = f, true, inclusive
+		}
+	}
+	setMax := func(v float64, inclusive bool) {
+		if out == nil {
+			out = &fulltext2.ScoreRange{}
+		}
+		f := float32(math.Nextafter(v, math.Inf(1))) // widen upward
+		if !out.HasMax || f < out.Max {
+			out.Max, out.HasMax, out.MaxInclusive = f, true, inclusive
+		}
+	}
+
+	var walk func(expr *plan.Expr)
+	walk = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return
+		}
+		if fn.Func.ObjName == "and" {
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
+			return
+		}
+		op := fn.Func.ObjName
+		switch op {
+		case ">", ">=", "<", "<=":
+		default:
+			return
+		}
+		if len(fn.Args) != 2 {
+			return
+		}
+		matchSide, constSide := fn.Args[0], fn.Args[1]
+		if monotoneWrappedFullTextMatch(matchSide) == nil {
+			matchSide, constSide = fn.Args[1], fn.Args[0]
+			switch op { // mirror the operator when the constant is on the left
+			case ">":
+				op = "<"
+			case ">=":
+				op = "<="
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			}
+		}
+		inner := monotoneWrappedFullTextMatch(matchSide)
+		if inner == nil {
+			return
+		}
+		// Only bounds on THIS match; another MATCH's score says nothing about this stream.
+		if !builder.equalsFullTextMatchFuncSameTable(inner.GetF(), matchFn) {
+			return
+		}
+		// A wrapper changes the value being compared (round(score,3) > 0.5 is not score > 0.5),
+		// so only push a bound taken directly off the score.
+		if matchSide != inner {
+			return
+		}
+		v, ok := constValueAsFloat(constSide)
+		if !ok {
+			return
+		}
+		switch op {
+		case ">":
+			setMin(v, false)
+		case ">=":
+			setMin(v, true)
+		case "<":
+			setMax(v, false)
+		case "<=":
+			setMax(v, true)
+		}
+	}
+	for _, f := range filters {
+		walk(f)
+	}
+	return out
+}
+
+// constValueAsFloat reads a numeric literal, negative values included (unlike
+// nonNegativeConstValue, which answers a different question).
+func constValueAsFloat(expr *plan.Expr) (float64, bool) {
+	lit := expr.GetLit()
+	if lit == nil {
+		return 0, false
+	}
+	switch t := lit.Value.(type) {
+	case *plan.Literal_I64Val:
+		return float64(t.I64Val), true
+	case *plan.Literal_U64Val:
+		return float64(t.U64Val), true
+	case *plan.Literal_Fval:
+		return float64(t.Fval), true
+	case *plan.Literal_Dval:
+		return t.Dval, true
+	}
+	return 0, false
 }
 
 // getWrappedFullTextMatches finds MATCHes that are nested inside a larger expression rather

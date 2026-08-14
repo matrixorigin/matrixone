@@ -210,3 +210,67 @@ func TestReplaceScoreFnInExprByPicksTheRightStream(t *testing.T) {
 	other := matchExpr(matchFn("other", 0, "body"))
 	require.NotNil(t, replaceScoreFnInExprBy(other, rewriter).GetF())
 }
+
+// TestFulltext2ScoreRangeFromFilters pins what may be pushed into the engine as a relevance
+// interval, and -- more importantly -- what may not.
+func TestFulltext2ScoreRangeFromFilters(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{ftScanNode(7)}}}
+	hello := matchFn("hello", 0, "body")
+	m := func() *plan.Expr { return matchExpr(matchFn("hello", 0, "body")) }
+	cst := func(v float64) *plan.Expr { return makePlan2Float64ConstExprWithType(v) }
+
+	// `score > 0.5`
+	r := builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn(">", m(), cst(0.5))}, hello)
+	require.NotNil(t, r)
+	require.True(t, r.HasMin)
+	require.False(t, r.MinInclusive)
+	require.False(t, r.HasMax)
+	require.LessOrEqual(t, r.Min, float32(0.5), "the bound is widened outward, never inward")
+
+	// `score >= 0.5` keeps the bound
+	r = builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn(">=", m(), cst(0.5))}, hello)
+	require.NotNil(t, r)
+	require.True(t, r.MinInclusive)
+
+	// `score < 0.5` is an upper bound -- pushable as a filter (it just cannot PRUNE)
+	r = builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn("<", m(), cst(0.5))}, hello)
+	require.NotNil(t, r)
+	require.True(t, r.HasMax)
+	require.False(t, r.HasMin)
+	require.GreaterOrEqual(t, r.Max, float32(0.5))
+
+	// reversed operand order: `0.5 < score` is `score > 0.5`
+	r = builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn("<", cst(0.5), m())}, hello)
+	require.NotNil(t, r)
+	require.True(t, r.HasMin)
+	require.False(t, r.HasMax)
+
+	// two AND-ed bounds collapse into one interval
+	r = builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{
+		scoreFn("and", scoreFn(">", m(), cst(0.2)), scoreFn("<=", m(), cst(0.8)))}, hello)
+	require.NotNil(t, r)
+	require.True(t, r.HasMin && r.HasMax)
+	require.True(t, r.MaxInclusive)
+
+	// the TIGHTEST of several bounds on the same side wins
+	r = builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{
+		scoreFn("and", scoreFn(">", m(), cst(0.2)), scoreFn(">", m(), cst(0.6)))}, hello)
+	require.NotNil(t, r)
+	require.Greater(t, r.Min, float32(0.5))
+
+	// NOT pushable ---------------------------------------------------------------
+	// under an OR the predicate need not hold for a returned row
+	require.Nil(t, builder.fulltext2ScoreRangeFromFilters(
+		[]*plan.Expr{scoreFn("or", scoreFn(">", m(), cst(0.5)), scoreLit())}, hello))
+	// a bound on a DIFFERENT match says nothing about this stream
+	require.Nil(t, builder.fulltext2ScoreRangeFromFilters(
+		[]*plan.Expr{scoreFn(">", matchExpr(matchFn("world", 0, "body")), cst(0.5))}, hello))
+	// a wrapper changes the compared value: round(score,3) > 0.5 is not score > 0.5
+	require.Nil(t, builder.fulltext2ScoreRangeFromFilters(
+		[]*plan.Expr{scoreFn(">", scoreFn("round", m(), scoreLit()), cst(0.5))}, hello))
+	// a non-constant right-hand side
+	require.Nil(t, builder.fulltext2ScoreRangeFromFilters(
+		[]*plan.Expr{scoreFn(">", m(), scoreFn("+", cst(1), cst(2)))}, hello))
+	// no score predicate at all
+	require.Nil(t, builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn(">", scoreLit(), cst(1))}, hello))
+}
