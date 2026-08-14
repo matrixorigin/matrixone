@@ -28,9 +28,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/version"
 )
 
-func hasBinaryPrepareParam(param pb.ReadParam) bool {
+func hasVersionedPrepareParamMetadata(param pb.ReadParam) bool {
 	for _, isBin := range param.Process.PrepareParams.IsBin {
 		if isBin {
+			return true
+		}
+	}
+	for _, binaryString := range param.Process.PrepareParams.IsBinaryString {
+		if binaryString {
 			return true
 		}
 	}
@@ -42,7 +47,7 @@ func (s *service) validateRemoteReadCompatibility(
 	shard pb.TableShard,
 	param pb.ReadParam,
 ) error {
-	if !hasBinaryPrepareParam(param) {
+	if !hasVersionedPrepareParamMetadata(param) {
 		return nil
 	}
 
@@ -67,7 +72,7 @@ func (s *service) validateRemoteReadCompatibility(
 	}
 	return moerr.NewInternalErrorf(
 		ctx,
-		"cannot send binary prepared parameters to shard replica %s with an incompatible or unknown commit",
+		"cannot send prepared-parameter metadata to shard replica %s with an incompatible or unknown commit",
 		target,
 	)
 }

@@ -66,9 +66,10 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
-	// wrapper must not return it to the AST pool. The zero value intentionally
-	// means owned so ordinary wrappers preserve their existing lifecycle.
+	// stmtBorrowed is true when another long-lived owner, such as PrepareStmt or
+	// the session plan cache, retains stmt. This wrapper must then not return it
+	// to the AST pool. The zero value intentionally means owned so ordinary
+	// wrappers preserve their existing lifecycle.
 	stmtBorrowed bool
 	uuid         uuid.UUID
 	//holds values of params in the PREPARE
@@ -360,7 +361,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				return nil, err
 			}
 			if stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = false
 			}
@@ -379,7 +380,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 			cwft.plan = plan
 			if !stmtOwned {
-				cwft.stmt.Free()
+				cwft.freeStmt()
 				cwft.stmt = stmt
 				cwft.stmtBorrowed = true
 			}
@@ -692,6 +693,34 @@ func initExecuteStmtParamWithResolver(
 	return initExecuteStmtParamWithResolverInSession(execCtx, ses, ses, cwft, execPlan, stmtName, resolve)
 }
 
+func binaryProtocolPrepareParamKind(
+	mysqlType defines.MysqlType,
+	isUnsigned bool,
+	value []byte,
+) vector.PrepareParamKind {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_TINY:
+		// The binary protocol has no usable Boolean parameter type. Go's
+		// database/sql MySQL driver sends bool values as signed TINY 0/1, while
+		// other clients can use TINY for integers. Preserve unsigned and other
+		// TINY values as integers and restore the driver's bool values.
+		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
+			return vector.PrepareParamBoolean
+		}
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
+		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
+		defines.MYSQL_TYPE_YEAR:
+		return vector.PrepareParamInteger
+	case defines.MYSQL_TYPE_FLOAT, defines.MYSQL_TYPE_DOUBLE:
+		return vector.PrepareParamFloat
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return vector.PrepareParamDecimal
+	default:
+		return vector.PrepareParamNone
+	}
+}
+
 func initExecuteStmtParamWithResolverInSession(
 	execCtx *ExecCtx,
 	owner *Session,
@@ -877,7 +906,25 @@ func initExecuteStmtParamWithResolverInSession(
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		paramCount := prepareStmt.params.Length()
+		var kinds []vector.PrepareParamKind
+		for i := 0; i < paramCount && i*2+1 < len(prepareStmt.ParamTypes); i++ {
+			mysqlType := defines.MysqlType(prepareStmt.ParamTypes[i*2])
+			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
+			kind := binaryProtocolPrepareParamKind(
+				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			if kind != vector.PrepareParamNone {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = kind
+			}
+		}
+		if kinds == nil {
+			cwft.proc.SetPrepareParams(prepareStmt.params)
+		} else {
+			cwft.proc.SetPrepareParamsWithMeta(prepareStmt.params, nil, kinds)
+		}
 		cwft.paramVals, err = preparedParamValues(cwft.proc)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
@@ -886,11 +933,11 @@ func initExecuteStmtParamWithResolverInSession(
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, paramKinds, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
+		cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -898,11 +945,11 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	}
 	// A cached prepared Compile already owns a materialized worker topology.
-	// Explicit scheduling intent must be evaluated for this execution, so it
-	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
-	// default cached topology dormant, though: prepared compiles already coexist
-	// with other statement compiles on the session process, and it may become
-	// reusable if a session-level scheduling override is later cleared.
+	// Explicit scheduling or Sirius intent must be evaluated for this execution,
+	// so neither can reuse a native topology compiled under prepare-time defaults.
+	// Keep that cached topology dormant: prepared compiles already coexist with
+	// other statement compiles on the session process, and the ordinary scheduling
+	// cache may become reusable if a session-level override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
@@ -912,9 +959,12 @@ func initExecuteStmtParamWithResolverInSession(
 		// PREPARE time. A procedure executes with a distinct background process.
 		retComp = nil
 	}
-	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
-		owner, originSQL, prepareStmt.schedulingSQLMode).Explicit {
-		retComp = nil
+	if retComp != nil {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			owner, originSQL, prepareStmt.schedulingSQLMode)
+		if executionIntent.Explicit || siriusStatementSelected(originSQL, prepareStmt.PrepareStmt) {
+			retComp = nil
+		}
 	}
 	executionStmt, owned, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
 	if err != nil {
@@ -1044,7 +1094,11 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		values[i] = plan2.ParamValue{
+			Value:            string(raw),
+			IsBin:            proc.GetPrepareParamIsBin(i),
+			PrepareParamKind: proc.GetPrepareParamKind(i),
+		}
 	}
 	return values, nil
 }
@@ -1052,7 +1106,13 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 func buildExecuteUserParams(
 	proc *process.Process,
 	args []*plan.Expr,
-) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+) (
+	params *vector.Vector,
+	paramVals []any,
+	paramIsBin []bool,
+	paramKinds []vector.PrepareParamKind,
+	err error,
+) {
 	params = vector.NewVec(types.T_text.ToType())
 	defer func() {
 		if err != nil {
@@ -1061,14 +1121,11 @@ func buildExecuteUserParams(
 	}()
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
+	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
 		var param any
 		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-		if err != nil {
-			return
-		}
-		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {
 			return
 		}
@@ -1079,7 +1136,24 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		resolveKind := proc.GetResolveVariablePrepareParamKindFunc()
+		if resolveKind != nil {
+			paramKinds[i], err = resolveKind(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		} else {
+			paramKinds[i] = prepareParamKindFromValue(param)
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
+		}
+		paramVals[i] = plan2.ParamValue{
+			Value:            param,
+			IsBin:            paramIsBin[i],
+			PrepareParamKind: paramKinds[i],
+		}
 	}
 	return
 }
@@ -1130,7 +1204,14 @@ func createCompile(
 
 	addr := currentCNPipelineAddress(ses)
 	pu := getPu(ses.GetService())
-	proc.ReplaceTopCtx(execCtx.reqCtx)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	crs := new(perfcounter.CounterSet)
+	var compileCtx context.Context
+	execCtx.reqCtx, compileCtx = compileStatementContexts(
+		execCtx.reqCtx, schedulingSQL, stmt, crs)
+	proc.ReplaceTopCtx(compileCtx)
 	proc.Base.FileService = pu.FileService
 
 	var tenant string
@@ -1145,8 +1226,6 @@ func createCompile(
 	if stats != nil {
 		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
 	}
-	crs := new(perfcounter.CounterSet)
-	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
 		if stats != nil {
 			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
@@ -1184,9 +1263,6 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
-	if schedulingSQL == "" {
-		schedulingSQL = originSQL
-	}
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
@@ -1203,12 +1279,30 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(execCtx.reqCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
 	if err != nil {
 		return
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func compileStatementContexts(
+	ctx context.Context,
+	sql string,
+	stmt tree.Statement,
+	crs *perfcounter.CounterSet,
+) (requestCtx, compileCtx context.Context) {
+	requestCtx = perfcounter.AttachCompilePlanMarkKey(ctx, crs)
+	if siriusStatementSelected(sql, stmt) {
+		return requestCtx, compile.WithSiriusOffload(requestCtx)
+	}
+	return requestCtx, requestCtx
+}
+
+func siriusStatementSelected(sql string, stmt tree.Statement) bool {
+	selected, _ := isSidecarQuery(sql)
+	return selected && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect

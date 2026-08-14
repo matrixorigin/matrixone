@@ -159,10 +159,75 @@ func TestSignedIntegerToBit64PreservesBitPattern(t *testing.T) {
 	}
 }
 
+func TestPreparedTypedTextToBit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	bit63 := types.New(types.T_bit, 63, 0)
+	bit3 := types.New(types.T_bit, 3, 0)
+
+	run := func(
+		name string,
+		kind vector.PrepareParamKind,
+		input []string,
+		bitType types.Type,
+		want []uint64,
+		wantError bool,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), input, nil),
+					NewFunctionTestInput(bitType, []uint64{}, nil),
+				},
+				NewFunctionTestResult(bitType, wantError, want, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	run("integer bit64", vector.PrepareParamInteger, []string{
+		"-9223372036854775808", "-6109877384019645241", "-1",
+		"5", "2024", "9223372036854775807", "18446744073709551615",
+	}, bit64, []uint64{
+		uint64(1) << 63, 12336866689689906375, math.MaxUint64,
+		5, 2024, math.MaxInt64, math.MaxUint64,
+	}, false)
+	run("float rounds", vector.PrepareParamFloat, []string{"5", "5.6"}, bit64, []uint64{5, 6}, false)
+	run("decimal truncates", vector.PrepareParamDecimal,
+		[]string{"5.9", "18446744073709551615.9"}, bit64,
+		[]uint64{5, math.MaxUint64}, false)
+	run("decimal signed zero", vector.PrepareParamDecimal,
+		[]string{"-0.0", "+0.0"}, bit64, []uint64{0, 0}, false)
+	run("boolean", vector.PrepareParamBoolean,
+		[]string{"true", "false"}, bit64, []uint64{1, 0}, false)
+	run("string bytes", vector.PrepareParamNone, []string{"5"}, bit64, []uint64{53}, false)
+	mixed := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"5", "5"}, nil),
+			NewFunctionTestInput(bit64, []uint64{}, nil),
+		},
+		NewFunctionTestResult(bit64, false, []uint64{5, 53}, nil), NewCast)
+	mixed.parameters[0].SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	succeed, info := mixed.Run()
+	require.True(t, succeed, info)
+	run("negative string rejected", vector.PrepareParamNone,
+		[]string{"-6109877384019645241"}, bit64, nil, true)
+	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)
+	run("integer width checked", vector.PrepareParamInteger, []string{"8"}, bit3, nil, true)
+	run("negative float rejected", vector.PrepareParamFloat, []string{"-1"}, bit64, nil, true)
+	run("negative decimal rejected", vector.PrepareParamDecimal, []string{"-1.5"}, bit64, nil, true)
+	run("malformed decimal rejected", vector.PrepareParamDecimal, []string{"5.9junk"}, bit64, nil, true)
+}
+
 func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetStmtProfile(&process.StmtProfile{})
 	proc.GetStmtProfile().SetStatementRuntimeProfile("Insert", "DML", true)
+	bit3 := types.New(types.T_bit, 3, 0)
 	bit4 := types.New(types.T_bit, 4, 0)
 	bit64 := types.New(types.T_bit, 64, 0)
 
@@ -190,6 +255,31 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	runBitCast("decimal64 saturates", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{31}, nil), bit4, 15)
 	runBitCast("decimal128 saturates", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 31}}, nil), bit4, 15)
 	runBitCast("decimal256 saturates", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 31}}, nil), bit4, 15)
+
+	runPreparedNumericBitCast := func(
+		name string,
+		kind vector.PrepareParamKind,
+		value string,
+		want uint64,
+	) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{value}, nil)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(bit3, []uint64{}, nil)},
+				NewFunctionTestResult(bit3, false, []uint64{want}, nil), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(kind)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	runPreparedNumericBitCast("prepared integer positive saturates", vector.PrepareParamInteger, "8", 7)
+	runPreparedNumericBitCast("prepared integer negative becomes zero", vector.PrepareParamInteger, "-1", 0)
+	runPreparedNumericBitCast("prepared unsigned maximum saturates", vector.PrepareParamInteger, "18446744073709551615", 7)
+	runPreparedNumericBitCast("prepared float rounds before saturation", vector.PrepareParamFloat, "7.6", 7)
+	runPreparedNumericBitCast("prepared float negative becomes zero", vector.PrepareParamFloat, "-1", 0)
+	runPreparedNumericBitCast("prepared decimal truncates before saturation", vector.PrepareParamDecimal, "8.9", 7)
 
 	runYearCast := func(name string, input FunctionTestInput) {
 		t.Helper()

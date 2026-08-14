@@ -370,7 +370,7 @@ func (n *Bitmap) RemoveRange(start, end uint64) {
 	count := 0
 	i, j := start>>6, (end-1)>>6
 	if i == j {
-		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) % 0x3F))
+		mask := (^uint64(0) << uint(start&0x3F)) & (^uint64(0) >> (uint(-end) & 0x3F))
 		count = bits.OnesCount64(n.data[i] & mask)
 		n.data[i] &= ^mask
 		n.count -= int64(count)
@@ -446,19 +446,24 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.logicalLen()) >= size {
 		return
 	}
-	newCap := (size + 63) / 64
+	requiredCap := (size + 63) / 64
 	n.setLogicalLen(int64(size))
-	if newCap > cap(n.data) {
+	if requiredCap > cap(n.data) {
 		if n.HasExternalStorage() {
 			panic("bitmap external storage capacity exceeded")
 		}
+		newCap := requiredCap
+		currentCap := cap(n.data)
+		if currentCap <= int(^uint(0)>>1)/2 {
+			newCap = max(requiredCap, max(1, currentCap*2))
+		}
 		data := make([]uint64, newCap)
 		copy(data, n.data)
-		n.data = data
+		n.data = data[:requiredCap]
 		return
 	}
-	if len(n.data) < newCap {
-		n.data = n.data[:newCap]
+	if len(n.data) < requiredCap {
+		n.data = n.data[:requiredCap]
 	}
 }
 
@@ -534,6 +539,12 @@ func (n *Bitmap) RemapOrdered(sels []int64, negate bool) {
 // RemapMaskOrdered is RemapOrdered for an ordered bitmap selection. Selection
 // bitmap iteration is monotonic, so the rewrite uses no row-scaled scratch.
 func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
+	n.RemapMaskOrderedWithOffset(sels, negate, 0)
+}
+
+// RemapMaskOrderedWithOffset applies an ordered bitmap selection after adding
+// offset to every selected source row, without materializing an index slice.
+func (n *Bitmap) RemapMaskOrderedWithOffset(sels *Bitmap, negate bool, offset uint64) {
 	if n == nil || sels == nil {
 		return
 	}
@@ -570,19 +581,19 @@ func (n *Bitmap) RemapMaskOrdered(sels *Bitmap, negate bool) {
 	iterator := sels.Iterator()
 	if !negate {
 		for iterator.HasNext() {
-			source := int64(iterator.Next())
+			source := int64(iterator.Next() + offset)
 			writeDestination(output, readSource(source))
 			output++
 		}
 	} else {
 		var selected int64 = -1
 		if iterator.HasNext() {
-			selected = int64(iterator.Next())
+			selected = int64(iterator.Next() + offset)
 		}
 		for source := int64(0); source < oldLength; source++ {
 			if source == selected {
 				if iterator.HasNext() {
-					selected = int64(iterator.Next())
+					selected = int64(iterator.Next() + offset)
 				} else {
 					selected = -1
 				}

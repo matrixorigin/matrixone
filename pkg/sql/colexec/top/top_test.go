@@ -237,6 +237,31 @@ func TestTopSpill(t *testing.T) {
 	}
 }
 
+func TestTopSpillPrepareParamMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src := batch.NewWithSize(1)
+	vec := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
+		vector.PrepareParamInteger, vector.PrepareParamNone,
+	})
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
+	src.Vecs[0] = vec
+	src.SetRowCount(2)
+	defer src.Clean(mp)
+	var encoded bytes.Buffer
+	withMetadata, err := src.MarshalBinaryWithPrepareParamKinds(&encoded, false)
+	require.NoError(t, err)
+	decoded := batch.NewWithSize(1)
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(withMetadata, mp))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
+	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+}
+
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 	limit := int64(topSpillThreshold + 1)
 	tc := newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int64.ToType()}, limit,

@@ -4303,46 +4303,191 @@ func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 	return r, nil
 }
 
+func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {
+	r, err := ReadFromFile(filePath, proc.GetFileService())
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
 // Too confused.
 func LoadFile(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
 	ivec := vector.GenerateFunctionStrParameter(ivecs[0])
-	Filepath, null := ivec.GetStrValue(0)
-	if null {
-		if err := rs.AppendBytes(nil, true); err != nil {
+
+	if ivecs[0].IsConst() {
+		filePath, isNull := ivec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
+		if err != nil {
 			return err
 		}
-		return nil
-	}
-	fs := proc.GetFileService()
-	r, err := ReadFromFile(string(Filepath), fs)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	ctx, err := io.ReadAll(r)
-	if err != nil {
-		return err
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
 	}
 
-	if len(ctx) > types.MaxBlobLen /*blob size*/ {
-		return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-	}
-	if len(ctx) == 0 {
-		if err = rs.AppendBytes(nil, true); err != nil {
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath, isNull := ivec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileContents(string(filePath), proc)
+		if err != nil {
 			return err
 		}
-		return nil
-	}
-
-	if err = rs.AppendBytes(ctx, false); err != nil {
-		return err
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byte, error) {
+	dl, err := datalink.NewDatalink(filePath, proc)
+	if err != nil {
+		return nil, err
+	}
+	size := dl.Size
+	if size < 0 {
+		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+		if err != nil {
+			return nil, err
+		}
+		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		if err != nil {
+			return nil, err
+		}
+		if dl.Offset > entry.Size {
+			return nil, moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+		}
+		size = entry.Size - dl.Offset
+	}
+	if size > int64(types.MaxBlobLen) {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	r, err := dl.NewReadCloser(proc)
+	if err != nil {
+		return nil, err
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(r, int64(types.MaxBlobLen)+1))
+	closeErr := r.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(contents) > types.MaxBlobLen {
+		return nil, moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+	}
+	return contents, nil
+}
+
 // LoadFileDatalink reads a file from the file service and returns the content as a blob.
 func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
+	if ivecs[0].IsConst() {
+		filePath, isNull := filePathVec.GetStrValue(0)
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
+		if err != nil {
+			return err
+		}
+		if len(contents) == 0 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResultWithSelection(rs, contents, length, selectList)
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		filePath, isNull := filePathVec.GetStrValue(i)
+		if isNull {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		contents, err := readLoadFileDatalinkContents(util.UnsafeBytesToString(filePath), proc)
+		if err != nil {
+			return err
+		}
+		if len(contents) == 0 {
+			err = rs.AppendBytes(nil, true)
+		} else {
+			err = rs.AppendBytes(contents, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadText reads a file via the datalink resolver and returns its EXTRACTED plain
+// text: a PDF/DOCX is parsed to text (GetPlainText), any other file is returned as-is.
+// Unlike load_file (raw bytes), this yields the same text the fulltext index build
+// extracts, so it is the datalink resolver used by fulltext2 CDC maintenance to keep
+// CDC parity with the synchronous build.
+func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 
@@ -4360,36 +4505,19 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return err
 		}
-		size := dl.Size
-		if size < 0 {
-			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-			if err != nil {
-				return err
-			}
-			entry, err := etlFS.StatFile(proc.Ctx, readPath)
-			if err != nil {
-				return err
-			}
-			if dl.Offset > entry.Size {
-				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
-			}
-			size = entry.Size - dl.Offset
-		}
-		if size > int64(types.MaxBlobLen) {
-			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
-		}
-		fileBytes, err := dl.GetBytes(proc)
+		fileBytes, err := dl.GetPlainText(proc)
 		if err != nil {
 			return err
 		}
-
+		if len(fileBytes) > types.MaxBlobLen {
+			return moerr.NewInternalError(proc.Ctx, "Data too long for blob")
+		}
 		if len(fileBytes) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		}
-
 		if err = rs.AppendBytes(fileBytes, false); err != nil {
 			return err
 		}
@@ -4593,6 +4721,7 @@ func DateToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
 	return opUnaryFixedToFixed[types.Datetime, types.Time](ivecs, result, proc, length, func(v types.Datetime) types.Time {
 		return v.ToTime(scale)
 	}, selectList)
@@ -4600,8 +4729,13 @@ func DatetimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 func TimestampToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	scale := ivecs[0].GetType().Scale
+	result.GetResultVector().SetTypeScale(scale)
+	loc := time.Local
+	if proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
 	return opUnaryFixedToFixed[types.Timestamp, types.Time](ivecs, result, proc, length, func(v types.Timestamp) types.Time {
-		return v.ToDatetime(time.Local).ToTime(scale)
+		return v.ToDatetime(loc).ToTime(scale)
 	}, selectList)
 }
 
@@ -4973,7 +5107,7 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -4989,13 +5123,13 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
 				// Invalid IP: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 			} else {
 				var resultBytes []byte
 				if ip4 := ip.To4(); ip4 != nil {
@@ -5090,7 +5224,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	if selectList != nil {
 		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 			return nil
 		}
 		if !selectList.ShouldEvalAllRow() {
@@ -5106,7 +5240,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if c1 {
 		v1, null1 := p1.GetStrValue(0)
 		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
+			rs.SetNullResult(uint64(length))
 		} else {
 			var resultStr string
 			if len(v1) == 4 {
@@ -5124,7 +5258,7 @@ func Inet6Ntoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				}
 			} else {
 				// Invalid length: return NULL for all rows
-				nulls.AddRange(rsNull, 0, uint64(length))
+				rs.SetNullResult(uint64(length))
 				return nil
 			}
 			rowCount := uint64(length)

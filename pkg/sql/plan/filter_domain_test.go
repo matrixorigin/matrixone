@@ -769,6 +769,52 @@ func stringConstValue(expr *planpb.Expr) (string, bool) {
 	return "", false
 }
 
+func markConstLiteralSerialized(t *testing.T, expr *planpb.Expr) {
+	t.Helper()
+
+	lit, _, ok := unwrapConstLiteral(expr)
+	require.True(t, ok)
+	lit.IsSerialized = true
+}
+
+func TestNormalizeColumnDomainIgnoresSerializedProvenance(t *testing.T) {
+	ctx, builder, _, colExpr := setupStringInDomainRewriteTest(t)
+
+	inExpr := makeStringInExpr(t, ctx, colExpr, "'", "other")
+	inValues := inExpr.GetF().Args[1].GetList().List
+	require.Len(t, inValues, 2)
+	markConstLiteralSerialized(t, inValues[0])
+
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		DeepCopyExpr(colExpr),
+		MakePlan2StringConstExprWithType("'"),
+	})
+	require.NoError(t, err)
+
+	filters := builder.normalizeColumnDomain([]*planpb.Expr{inExpr, eqExpr})
+	require.Len(t, filters, 1)
+	require.False(t, IsFalseExpr(filters[0]),
+		"diagnostic provenance changed an equal executable literal into an empty domain")
+	requireStringEqualValue(t, filters[0], "'")
+}
+
+func TestMergeInsInAndIgnoresSerializedProvenance(t *testing.T) {
+	ctx, builder, _, colExpr := setupStringInDomainRewriteTest(t)
+
+	left := makeStringInExpr(t, ctx, colExpr, "'", "left")
+	leftValues := left.GetF().Args[1].GetList().List
+	require.Len(t, leftValues, 2)
+	markConstLiteralSerialized(t, leftValues[0])
+	right := makeStringInExpr(t, ctx, colExpr, "'", "right")
+	andExpr := makeAndExpr(t, ctx, left, right)
+
+	merged, changed := builder.mergeInsInAnd(andExpr)
+	require.True(t, changed)
+	require.False(t, IsFalseExpr(merged),
+		"diagnostic provenance changed intersecting IN lists into an empty domain")
+	requireStringEqualValue(t, merged, "'")
+}
+
 func TestRewriteInDomainCastNotInUsesOuterStringDomain(t *testing.T) {
 	ctx, builder, tag, colExpr := setupStringInDomainRewriteTest(t)
 

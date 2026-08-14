@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 type releaseTrackingData struct {
@@ -44,6 +45,10 @@ type releaseTrackingData struct {
 
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
+}
+
+func (r *releaseTrackingData) Capacity() int64 {
+	return int64(cap(r.bytes))
 }
 
 func (r *releaseTrackingData) Bytes() []byte {
@@ -72,6 +77,7 @@ func (d *validatedVectorBytesProbe) Bytes() []byte {
 }
 
 func (d *validatedVectorBytesProbe) Size() int64            { return int64(len(d.backing)) }
+func (d *validatedVectorBytesProbe) Capacity() int64        { return int64(cap(d.backing)) }
 func (d *validatedVectorBytesProbe) Slice(int) fscache.Data { return d }
 func (d *validatedVectorBytesProbe) Retain()                {}
 func (d *validatedVectorBytesProbe) Release()               {}
@@ -105,6 +111,10 @@ func (p *partialReadErrorFS) ReadCache(context.Context, *fileservice.IOVector) e
 
 type trackingCacheDataAllocator struct {
 	data fscache.Data
+}
+
+func (t *trackingCacheDataAllocator) BackingSize(size int) int {
+	return size
 }
 
 type objectioRemoteCacheClient struct {
@@ -609,6 +619,52 @@ func TestCopyCachedVectorRowsMaterializesOnlySelectedRows(t *testing.T) {
 	widerType.Free(queryMP)
 	whole.Free(queryMP)
 	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestSearchCachedVectorTopNDoesNotCloneSealedBacking(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := vector.NewVec(types.T_array_float32.ToType())
+	for _, row := range [][]float32{{10, 10}, {1, 2}, {5, 5}} {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			types.ArrayToBytes(row),
+			false,
+			mp,
+		))
+	}
+	payload, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Free(mp)
+
+	encoded := append([]byte(nil), EncodeIOEntryHeader(&IOEntryHeader{
+		Type:    IOET_ColData,
+		Version: IOET_ColumnData_V2,
+	})...)
+	encoded = append(encoded, payload...)
+	cacheData, err := validateVectorCacheData(fileservice.NewBytes(encoded))
+	require.NoError(t, err)
+	defer cacheData.Release()
+
+	probe := &validatedVectorBytesProbe{
+		backing: cacheData.(validatedVectorCacheDataMarker).validatedVectorBackingForScope(),
+	}
+	top := &IndexReaderTopOp{
+		Typ:        types.T_array_float32,
+		NumVec:     types.ArrayToBytes([]float32{0, 0}),
+		MetricType: metric.Metric_L2Distance,
+		Limit:      2,
+		DistHeap:   make(Float64Heap, 0, 2),
+	}
+	sels, dists, err := SearchCachedVectorTopN(
+		context.Background(),
+		fileservice.IOEntry{CachedData: probe},
+		nil,
+		top,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, sels)
+	require.Equal(t, []float64{5, 50}, dists)
+	require.Zero(t, probe.bytesCalls.Load(), "scoped topn must not clone sealed backing")
 }
 
 func TestReadFilterSearchMatchesLegacyVarlenPredicates(t *testing.T) {

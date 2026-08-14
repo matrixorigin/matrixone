@@ -496,7 +496,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
 		expr = &plan.Expr{
-			Typ: b.ctx.groups[groupPos].Typ,
+			Typ: b.ctx.groupOutputType(groupPos),
 			Expr: &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
 					RelPos: b.ctx.groupTag,
@@ -2470,6 +2470,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "grouping") {
+		return b.bindGroupingFuncExpr(astExpr)
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -2478,6 +2481,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
 			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 		})
+	}
+	if (strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc)) &&
+		astExpr.WindowSpec != nil {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile window functions")
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
@@ -2497,26 +2505,69 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
+// bindGroupingFuncExpr binds GROUPING arguments directly to their registered
+// GROUP BY columns. A GROUPING argument must identify one complete GROUP BY
+// item; recursively binding a miss would incorrectly accept derived
+// expressions such as GROUPING(a+b) for GROUP BY a, b.
+func (b *baseBinder) bindGroupingFuncExpr(astExpr *tree.FuncExpr) (*plan.Expr, error) {
+	if b.ctx == nil || !b.ctx.groupingFuncAllowed {
+		return nil, moerr.NewInvalidGroupFuncUse(b.GetContext())
+	}
+
+	args := make([]*plan.Expr, len(astExpr.Exprs))
+	for i, rawArg := range astExpr.Exprs {
+		qualifiedArg, err := b.ctx.qualifyColumnNames(cloneTreeExpr(rawArg), NoAlias)
+		if err != nil {
+			return nil, err
+		}
+		colPos, ok := lookupGroupByAst(b.ctx, qualifiedArg, windowExprAstKey(qualifiedArg))
+		if !ok {
+			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+				"Argument #%d of GROUPING function is not in GROUP BY", i+1)
+		}
+		if colPos < 0 || int(colPos) >= len(b.ctx.groups) {
+			return nil, moerr.NewInternalErrorf(b.GetContext(),
+				"GROUPING argument position out of range: %d", colPos)
+		}
+		args[i] = GetColExpr(b.ctx.groups[colPos].Typ, b.ctx.groupTag, colPos)
+	}
+
+	return BindFuncExprImplByPlanExpr(b.GetContext(), "grouping", args)
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
 
-// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
-// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
-// transport and an explicit cast materializes the inferred computation type.
+func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
+	if isPreparedNumericAggregate(name, argCount) {
+		return nil, true
+	}
+	if argCount == 1 && strings.EqualFold(name, "ntile") {
+		typ := types.T_int64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	return nil, false
+}
+
+// bindPreparedNumericFuncExpr gives prepared numeric function arguments the
+// same static context as prepared arithmetic. SUM/AVG use the inferred numeric
+// domain, while NTILE requires an integer domain. ParamRef remains TEXT for
+// transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
-// SUM/AVG over string columns continues to be rejected by aggregate overload
-// resolution.
-func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+// string inputs continue to be rejected by function overload resolution.
+func (b *baseBinder) bindPreparedNumericFuncExpr(
 	name string,
 	astArgs []tree.Expr,
 	depth int32,
 ) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
+	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
-	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
 	}
@@ -3253,10 +3304,20 @@ between_fallback:
 }
 
 // validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
-// the offset must be a constant positive integer. Folding first keeps valid
-// constant expressions, such as 1 + 1, compatible with MySQL.
+// the offset must be a constant positive integer or a positional parameter.
+// Folding first keeps valid constant expressions, such as 1 + 1, compatible
+// with MySQL.
 func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if len(args) != 2 || proc == nil {
+	if len(args) != 2 {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+
+	if isDirectDynamicParam(args[1]) {
+		// Keep the marker intact so execution can validate both its source type
+		// and its value after binding.
+		return nil
+	}
+	if proc == nil {
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
@@ -3339,6 +3400,22 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateOrderedPercentileArgs enforces the scalar MVP contract for the
+// ordered-set percentile aggregates. The aggregate executor consumes the
+// percentile as compile-time configuration, while the first argument is the
+// value expression ordered by WITHIN GROUP.
+func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s requires a value and a percentile argument", name)
+	}
+	percentile := args[1]
+	if percentile == nil || isNullExpr(percentile) || !rule.IsConstant(percentile, false) {
+		return moerr.NewInvalidInputf(ctx,
+			"percentile argument of %s must be a non-null constant", name)
+	}
+	return nil
+}
+
 // bindMixedInListComparison applies MySQL's REAL comparison semantics for a
 // string left operand and a numeric IN-list value. It is deliberately limited
 // to IN/NOT IN fallback comparisons: applying it to every comparison would
@@ -3368,6 +3445,11 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, err
 		}
 	}
+	if name == NamePercentileCont || name == NamePercentileDisc {
+		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
 
 	if (name == "utc_time" || name == "utc_timestamp") && len(args) == 1 {
 		if _, err := utcFunctionFSPFromPlanExpr(ctx, name, args[0]); err != nil {
@@ -3378,6 +3460,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeDecimalParamComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
@@ -3434,13 +3519,29 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if err != nil {
 			return nil, err
 		}
+	case "uuid", "uuid_v7", "uuid_v1", "uuid_v6":
+		// uuid(interval 1 minute) generates an id whose embedded timestamp is
+		// the evaluation-time wall clock shifted by the interval; rewrite the
+		// INTERVAL expression to (count, unit) args like date_add does. The
+		// resulting (count, unit) overload is internal — reject direct
+		// multi-argument calls like uuid_v7(5, 3) so only the rewrite above
+		// can reach it.
+		if len(args) == 1 && args[0].Typ.Id == int32(types.T_interval) {
+			args, err = resetIntervalFunction(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
+		} else if len(args) > 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function needs zero or one arg", len(args))
+		}
 	case "mo_win_truncate":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
-		})
+		sourceType := makeTypeByPlan2Expr(args[0])
+		targetType := types.T_datetime.ToType()
+		function.SetTargetScaleFromSource(&sourceType, &targetType)
+		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 		if err != nil {
 			return nil, err
 		}
@@ -3800,11 +3901,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		name = "power"
 	}
 
+	if name == "convert" {
+		if err := bindConvertUsingCharset(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+
 	// get args(exprs) & types
 	argsLength := len(args)
 	argsType := make([]types.Type, argsLength)
 	for idx, expr := range args {
 		argsType[idx] = makeTypeByPlan2Expr(expr)
+	}
+	if err := normalizeNonConstantTemporalComparisonArgs(ctx, name, args, argsType); err != nil {
+		return nil, err
 	}
 
 	var funcID int64
@@ -4235,6 +4345,72 @@ func regexpOperandCharacterSet(expr *Expr) string {
 	return "utf8mb4_general_ci"
 }
 
+func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "convert function needs two args", len(args))
+	}
+
+	charsetLiteral := args[1].GetLit()
+	if charsetLiteral == nil || charsetLiteral.Isnull {
+		return moerr.NewInvalidInput(ctx, "CONVERT USING requires a constant character set")
+	}
+
+	var charset uint32
+	switch strings.ToLower(charsetLiteral.GetSval()) {
+	case "binary":
+		charset = uint32(types.CharsetBinary)
+	case "utf8", "utf8mb3", "utf8mb4":
+		charset = uint32(types.CharsetUTF8)
+	default:
+		return moerr.NewInvalidInputf(ctx, "unsupported character set '%s' for CONVERT USING", charsetLiteral.GetSval())
+	}
+
+	// The parser lowers the USING name to a synthetic string literal. Record the
+	// selected charset on that argument so the overload's return-type callback
+	// can carry it into the bound result without inspecting expression values.
+	args[1].Typ.Charset = charset
+	return nil
+}
+
+// normalizeNonConstantTemporalComparisonArgs keeps both sides of equality and
+// ordering keys in one physical domain when neither side is a runtime
+// constant. Hash joins, shuffle keys, and runtime filters consume comparison
+// operands as keys instead of invoking the scalar comparison function, so raw
+// DATETIME and TIMESTAMP encodings cannot safely remain cross-typed there.
+// Column-versus-runtime-constant predicates stay cross-typed so storage can
+// see the raw column and apply the timezone-aware pruning path.
+func normalizeNonConstantTemporalComparisonArgs(
+	ctx context.Context,
+	name string,
+	args []*Expr,
+	argsType []types.Type,
+) error {
+	switch name {
+	case "=", "<", "<=", ">", ">=", "<>":
+	default:
+		return nil
+	}
+	if len(args) != 2 || len(argsType) != 2 ||
+		!((argsType[0].Oid == types.T_datetime && argsType[1].Oid == types.T_timestamp) ||
+			(argsType[0].Oid == types.T_timestamp && argsType[1].Oid == types.T_datetime)) ||
+		isRuntimeConstExpr(args[0]) || isRuntimeConstExpr(args[1]) {
+		return nil
+	}
+
+	datetimeIndex, timestampIndex := 0, 1
+	if argsType[0].Oid == types.T_timestamp {
+		datetimeIndex, timestampIndex = 1, 0
+	}
+	targetType := argsType[timestampIndex]
+	casted, err := appendCastBeforeExpr(ctx, args[datetimeIndex], makePlan2Type(&targetType))
+	if err != nil {
+		return err
+	}
+	args[datetimeIndex] = casted
+	argsType[datetimeIndex] = targetType
+	return nil
+}
+
 func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
 	return moerr.NewInvalidInputf(ctx, "%s fractional seconds precision must be an integer literal between 0 and 6", strings.ToUpper(name))
 }
@@ -4579,6 +4755,34 @@ func integerMetadataWidth(oid types.T) int32 {
 	default:
 		return 0
 	}
+}
+
+// A direct prepared parameter in a binary comparison derives its type from
+// the other operand. Preserve that contract for DECIMAL before the generic
+// string/numeric cast rules see the parameter's transport type (TEXT). Real
+// string expressions continue through the ordinary MySQL coercion path.
+func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	for paramPos, peerPos := range []int{1, 0} {
+		if !isDirectDynamicParam(args[paramPos]) || !types.T(args[peerPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, args[paramPos], args[peerPos].Typ)
+		if err != nil {
+			return err
+		}
+		args[paramPos] = castExpr
+		return nil
+	}
+	return nil
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a
@@ -5384,9 +5588,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 		List: make([]*Expr, 2),
 	}
 	list.List[0] = intervalExpr
-	strType := &plan.Type{
-		Id: int32(types.T_char),
-	}
+	strType := makeGeneratedPlan2Type(types.T_char, 0, 0, false)
 	strExpr := &Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &Const{
@@ -5395,7 +5597,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 				},
 			},
 		},
-		Typ: *strType,
+		Typ: strType,
 	}
 	list.List[1] = strExpr
 	expr := &plan.Expr_List{

@@ -61,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex"
@@ -212,6 +213,20 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
+func sourceNodeForRemoteRun(source *Source) *plan.Node {
+	if source == nil || source.node == nil {
+		return nil
+	}
+	// pipeline.Source does not have wire fields for the execution-time filter
+	// lists. Carry them in a per-message node copy so the reusable plan node is
+	// not mutated and the remote ranges phase sees the same predicates.
+	node := *source.node
+	if source.BlockFilterList != nil {
+		node.BlockFilterList = source.BlockFilterList
+	}
+	return &node
+}
+
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
 // according to source scope.
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
@@ -265,7 +280,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
-			Node:                   s.DataSource.node,
+			Node:                   sourceNodeForRemoteRun(s.DataSource),
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -404,8 +419,10 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			RecvMsgList:           dsc.RecvMsgList,
 			MembershipFilterBytes: dsc.MembershipFilter,
 		}
-		// Extract IndexReaderParam from node for remote CN execution
 		if dsc.Node != nil {
+			if isRemote {
+				s.DataSource.BlockFilterList = plan2.DeepCopyExprList(dsc.Node.BlockFilterList)
+			}
 			s.DataSource.IndexReaderParam = dsc.Node.IndexReaderParam
 		}
 	}
@@ -652,6 +669,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Offset = t.OffsetExpr
 	case *order.Order:
 		in.OrderBy = t.OrderBySpec
+	case *partition.Partition:
+		in.OrderBy = t.OrderBySpecs
+		in.Limit = t.Limit
+		in.PartitionByCount = t.PartitionByCount
+		in.PartitionTopNPreReduce = t.PreReduce
 	case *product.Product:
 		relList, colList := getRelColList(t.Result)
 		in.Product = &pipeline.Product{
@@ -674,6 +696,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *filter.Filter:
 		in.Filters = t.FilterExprs
 		in.RuntimeFilters = t.RuntimeFilterExprs
+		in.FilterIsAssert = t.IsAssert
 
 	case *indexjoin.IndexJoin:
 		in.IndexJoin = &pipeline.IndexJoin{
@@ -695,6 +718,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *mergerecursive.MergeRecursive:
 	case *group.MergeGroup:
+		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
+			return ctxId, nil, err
+		}
 		in.Agg = &pipeline.Group{
 			SpillMem:       t.SpillMem,
 			Aggs:           convertToPipelineAggregates(t.Aggs),
@@ -1148,6 +1174,13 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := order.NewArgument()
 		arg.OrderBySpec = opr.OrderBy
 		op = arg
+	case vm.Partition:
+		arg := partition.NewArgument()
+		arg.OrderBySpecs = opr.OrderBy
+		arg.Limit = opr.Limit
+		arg.PartitionByCount = opr.PartitionByCount
+		arg.PreReduce = opr.PartitionTopNPreReduce
+		op = arg
 	case vm.Product:
 		t := opr.GetProduct()
 		arg := product.NewArgument()
@@ -1171,6 +1204,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := filter.NewArgument()
 		arg.FilterExprs = opr.Filters
 		arg.RuntimeFilterExprs = opr.RuntimeFilters
+		arg.IsAssert = opr.FilterIsAssert
 		op = arg
 	case vm.Top:
 		op = top.NewArgument().
@@ -1462,9 +1496,10 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = plan.Type{
-			Id:    int32(t.Oid),
-			Width: t.Width,
-			Scale: t.Scale,
+			Id:      int32(t.Oid),
+			Width:   t.Width,
+			Scale:   t.Scale,
+			Charset: uint32(t.Charset),
 		}
 	}
 	return result
@@ -1474,7 +1509,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.New(types.T(t.Id), t.Width, t.Scale)
+		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
 	}
 	return result
 }
@@ -1484,17 +1519,47 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
-		if agg.GetConfigType() != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			continue
+		if agg.GetAggID() == aggexec.AggIdOfPercentileCont ||
+			agg.GetAggID() == aggexec.AggIdOfPercentileDisc {
+			if proc == nil || !supportsRemoteOrderedSetAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered-set percentile remote execution requires MORPC protocol version 17",
+				)
+			}
 		}
-		if proc != nil && supportsRemoteOrderedAggregates(proc.GetService()) {
-			return nil
+		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"ordered aggregate remote execution requires MORPC protocol version 6",
+				)
+			}
 		}
-		return moerr.NewNotSupportedNoCtx(
-			"ordered aggregate remote execution requires MORPC protocol version 6",
-		)
+		if aggregateUsesCollationAwareTextMinMax(agg) &&
+			(proc == nil || !supportsRemoteTextCollationAggregates(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
+			)
+		}
 	}
 	return nil
+}
+
+func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil ||
+		(args[0].Typ.Charset != uint32(types.CharsetUTF8) &&
+			args[0].Typ.Charset != uint32(types.CharsetUTF8MB4Bin)) {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
@@ -1543,7 +1608,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryWithAnyMp(data, mp); err != nil {
+	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}

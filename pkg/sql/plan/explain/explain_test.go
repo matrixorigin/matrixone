@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
@@ -54,6 +56,71 @@ func TestGetNodeBasicInfoApplyType(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAssertConditionExplainLabel(t *testing.T) {
+	node := &plan2.Node{
+		NodeType:   plan2.Node_ASSERT,
+		FilterList: []*plan2.Expr{plan.MakePlan2BoolConstExprWithType(true)},
+	}
+	got, err := NewNodeDescriptionImpl(node).GetFilterConditionInfo(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "Assert Cond: ") {
+		t.Fatalf("expected Assert Cond label, got %q", got)
+	}
+	labels, err := NewMarshalNodeImpl(node).GetNodeLabels(
+		context.Background(),
+		&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 1 || labels[0].Name != Label_Assert {
+		t.Fatalf("expected one Assert label without duplicate Filter conditions, got %#v", labels)
+	}
+}
+
+func TestPartitionTopNExplain(t *testing.T) {
+	column := func(pos int32) *plan2.Expr {
+		return &plan2.Expr{
+			Typ:  plan2.Type{Id: int32(types.T_int64)},
+			Expr: &plan2.Expr_Col{Col: &plan2.ColRef{RelPos: 0, ColPos: pos, Name: fmt.Sprintf("c%d", pos)}},
+		}
+	}
+	node := &plan2.Node{
+		NodeType: plan2.Node_PARTITION,
+		OrderBy: []*plan2.OrderBySpec{
+			{Expr: column(0)},
+			{Expr: column(1), Flag: plan2.OrderBySpec_DESC},
+		},
+		Limit:            plan.MakePlan2Uint64ConstExprWithType(2),
+		PartitionByCount: 1,
+	}
+	opts := &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT}
+	description := NewNodeDescriptionImpl(node)
+	name, err := description.GetNodeBasicInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Equal(t, "Partition Top N", name)
+	lines, err := description.GetExtraInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Contains(t, lines[0], "Partition Key:")
+	require.Contains(t, lines[1], "Sort Key:")
+	require.Contains(t, lines, "Limit: 2")
+
+	marshal := NewMarshalNodeImpl(node)
+	jsonName, err := marshal.GetNodeName(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Partition Top N", jsonName)
+	title, err := marshal.GetNodeTitle(context.Background(), opts)
+	require.NoError(t, err)
+	require.Contains(t, title, "Partition Keys:")
+	require.Contains(t, title, "Sort Keys:")
+	require.Contains(t, title, "N: 2")
 }
 
 func TestSingleSql(t *testing.T) {
@@ -1012,5 +1079,56 @@ func TestExplainOrderedGroupConcat(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected invalid ordered group_concat argument index")
 		}
+	})
+}
+
+func TestExplainOrderedPercentile(t *testing.T) {
+	ctx := context.Background()
+	value := &plan2.Expr{
+		Typ:  plan2.Type{Id: int32(types.T_int64)},
+		Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+	}
+	percentile := plan.MakePlan2Float64ConstExprWithType(0.95)
+
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc byte
+		want string
+	}{
+		{name: "ascending continuous", fn: "percentile_cont", want: "percentile_cont(0.95) WITHIN GROUP (ORDER BY tw.v ASC)"},
+		{name: "descending discrete", fn: "percentile_disc", desc: 1, want: "percentile_disc(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registered, err := function.GetFunctionByName(ctx, tc.fn,
+				[]types.Type{types.T_int64.ToType(), types.T_float64.ToType()})
+			require.NoError(t, err)
+			fn := &plan2.Function{
+				Func: &plan2.ObjectRef{Obj: registered.GetEncodedOverloadID(), ObjName: tc.fn},
+				Args: []*plan2.Expr{value, percentile}, AggConfig: []byte{tc.desc},
+			}
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, explainOrderedPercentile(ctx, fn, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+
+			// Exercise the normal EXPLAIN dispatcher as well as the formatter
+			// helper. Ordered percentiles are STANDARD_FUNCTIONs with a special
+			// WITHIN GROUP rendering.
+			expr := &plan2.Expr{
+				Typ:  plan2.Type{Id: int32(types.T_float64)},
+				Expr: &plan2.Expr_F{F: fn},
+			}
+			buf.Reset()
+			require.NoError(t, describeExpr(ctx, expr, &ExplainOptions{}, buf))
+			require.Equal(t, tc.want, buf.String())
+		})
+	}
+
+	t.Run("invalid argument count", func(t *testing.T) {
+		err := explainOrderedPercentile(ctx, &plan2.Function{
+			Func: &plan2.ObjectRef{ObjName: "percentile_cont"},
+			Args: []*plan2.Expr{value},
+		}, &ExplainOptions{}, bytes.NewBuffer(nil))
+		require.Error(t, err)
 	})
 }

@@ -283,6 +283,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		DirectView:             node.DirectView,
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
+		FilterIsBarrier:        node.FilterIsBarrier,
+		PartitionByCount:       node.PartitionByCount,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -397,6 +399,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		AutoIncr:    typ.AutoIncr,
 		Table:       typ.Table,
 		Enumvalues:  typ.Enumvalues,
+		Charset:     typ.Charset,
 	}
 }
 
@@ -405,22 +408,24 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:        col.ColId,
-		Name:         col.Name,
-		OriginName:   col.OriginName,
-		Alg:          col.Alg,
-		Typ:          col.Typ,
-		Default:      DeepCopyDefault(col.Default),
-		Primary:      col.Primary,
-		Pkidx:        col.Pkidx,
-		Comment:      col.Comment,
-		OnUpdate:     DeepCopyOnUpdate(col.OnUpdate),
-		GeneratedCol: DeepCopyGeneratedCol(col.GeneratedCol),
-		ClusterBy:    col.ClusterBy,
-		Hidden:       col.Hidden,
-		Seqnum:       col.Seqnum,
-		TblName:      col.TblName,
-		DbName:       col.DbName,
+		ColId:         col.ColId,
+		Name:          col.Name,
+		OriginName:    col.OriginName,
+		Alg:           col.Alg,
+		Typ:           col.Typ,
+		Default:       DeepCopyDefault(col.Default),
+		Primary:       col.Primary,
+		Unique:        col.Unique,
+		Pkidx:         col.Pkidx,
+		Comment:       col.Comment,
+		OnUpdate:      DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol:  DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:     col.ClusterBy,
+		Hidden:        col.Hidden,
+		Seqnum:        col.Seqnum,
+		TblName:       col.TblName,
+		OriginTblName: col.OriginTblName,
+		DbName:        col.DbName,
 	}
 }
 
@@ -568,6 +573,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		AutoIncrEpoch:  table.AutoIncrEpoch,
+		DefaultCharset: table.DefaultCharset,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,
@@ -976,9 +982,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
-			Isnull: item.Lit.GetIsnull(),
-			IsBin:  item.Lit.GetIsBin(),
-			Src:    DeepCopyExpr(item.Lit.Src),
+			Isnull:       item.Lit.GetIsnull(),
+			IsBin:        item.Lit.GetIsBin(),
+			Src:          DeepCopyExpr(item.Lit.Src),
+			IsSerialized: item.Lit.GetIsSerialized(),
 		}
 
 		switch c := item.Lit.Value.(type) {
@@ -1139,8 +1146,9 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Vec:
 		newExpr.Expr = &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
-				Len:  item.Vec.Len,
-				Data: bytes.Clone(item.Vec.Data),
+				Len:          item.Vec.Len,
+				Data:         bytes.Clone(item.Vec.Data),
+				IsSerialized: item.Vec.IsSerialized,
 			},
 		}
 

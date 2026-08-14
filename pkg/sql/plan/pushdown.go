@@ -38,7 +38,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	if node.Limit != nil {
 		// can not push down over limit
-		cantPushdown = filters
+		cantPushdown = append(cantPushdown, filters...)
 		filters = nil
 	}
 
@@ -53,7 +53,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+			// A predicate with no column references is not safe below a global
+			// aggregate. If it evaluates to false, filtering the aggregate input
+			// still leaves the single global-aggregate output row alive. This can
+			// happen after set-operation columns are replaced by branch literals.
+			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
@@ -166,8 +172,25 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 	case plan.Node_FILTER:
 		// IsEnd filters are terminal assertions/action selectors. Moving their
 		// predicates below joins can change both assertion scope and marker layout.
+		// Barrier filters are cardinality-changing semantic boundaries over a
+		// final DML row image. Unlike ASSERT they discard rows, but have the same
+		// non-reorderability requirement.
 		if node.IsEnd {
-			return originalNodeID, filters
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
+		}
+		if node.FilterIsBarrier {
+			childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+			if len(cantPushdownChild) > 0 {
+				childID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{childID},
+					FilterList: cantPushdownChild,
+				}, nil)
+			}
+			node.Children[0] = childID
+			cantPushdown = append(cantPushdown, filters...)
+			return originalNodeID, cantPushdown
 		}
 		canPushdown = filters
 		if !node.RollupFilter {
@@ -190,7 +213,41 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			nodeID = childID
 		}
 
+	case plan.Node_ASSERT:
+		// ASSERT is a row-preserving semantic boundary. Its predicates describe
+		// the row image at this exact point in the DML pipeline, so neither the
+		// assertion nor filters from its parent may cross it.
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], nil, separateNonEquiConds)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{childID},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
+		node.Children[0] = childID
+		cantPushdown = append(cantPushdown, filters...)
+
 	case plan.Node_JOIN:
+		if node.JoinType == plan.Node_DEDUP && node.OnDuplicateAction == plan.Node_UPDATE {
+			// DEDUP UPDATE mutates columns from its right input into the final row
+			// image. A predicate above it must observe that image; pushing it to
+			// either child would evaluate pre-update values or change conflict
+			// detection.
+			for i, child := range node.Children {
+				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
+				if len(cantPushdownChild) > 0 {
+					childID = builder.appendNode(&plan.Node{
+						NodeType:   plan.Node_FILTER,
+						Children:   []int32{childID},
+						FilterList: cantPushdownChild,
+					}, nil)
+				}
+				node.Children[i] = childID
+			}
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		// Record middle: processing JOIN node
 		builder.optimizationHistory = append(builder.optimizationHistory,
 			fmt.Sprintf("pushdownFilters:middle (nodeID: %d, JOIN, filters: %d, onList: %d)", nodeID, len(filters), len(node.OnList)))
@@ -766,6 +823,16 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 		if child.NodeType == plan.Node_TABLE_SCAN {
 			child.Limit, child.Offset = node.Limit, node.Offset
 			node.Limit, node.Offset = nil, nil
+		} else if node.Offset == nil &&
+			child.NodeType == plan.Node_FUNCTION_SCAN &&
+			child.TableDef != nil && child.TableDef.TblFunc != nil &&
+			child.TableDef.TblFunc.Name == "mo_check_constraints" {
+			// CHECK_CONSTRAINTS is a source function whose rows have no
+			// ordering contract.  A plain LIMIT can therefore be evaluated
+			// by the producer, but OFFSET (or a sort above it) must remain
+			// outside so that the result semantics are unchanged.
+			child.Limit = node.Limit
+			node.Limit = nil
 		}
 	}
 }

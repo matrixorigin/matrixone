@@ -153,20 +153,218 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 
 // SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.setPrepareParams(prepareParams, nil, false)
+	proc.setPrepareParams(prepareParams, nil, nil, false)
 }
 
 // SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, false)
+	proc.setPrepareParams(prepareParams, isBin, nil, false)
+}
+
+// SetPrepareParamsWithMetadata borrows prepareParams and keeps literal numeric
+// metadata separate from binary-string metadata.
+func (proc *Process) SetPrepareParamsWithMetadata(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+) {
+	proc.setPrepareParams(prepareParams, isBin, binaryString, false)
+}
+
+// SetPrepareParamsWithMeta borrows prepareParams and carries per-parameter
+// string/binary and source conversion-kind provenance. The bool slice retains the
+// legacy binary section followed by three kind-bit sections, so existing remote
+// process serialization remains compatible without a protobuf change.
+func (proc *Process) SetPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	binaryString ...[]bool,
+) {
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, false)
 }
 
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, true)
+	proc.setPrepareParams(prepareParams, isBin, nil, true)
 }
 
-func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+// SetOwnedPrepareParamsWithMetadata transfers prepareParams to proc and keeps
+// literal numeric metadata separate from binary-string metadata.
+func (proc *Process) SetOwnedPrepareParamsWithMetadata(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+) {
+	proc.setPrepareParams(prepareParams, isBin, binaryString, true)
+}
+
+// SetOwnedPrepareParamsWithMeta transfers prepareParams to proc and preserves
+// the same metadata contract as SetPrepareParamsWithMeta.
+func (proc *Process) SetOwnedPrepareParamsWithMeta(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+	binaryString ...[]bool,
+) {
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, prepareParamMetadata(prepareParams, isBin, kinds), binary, true)
+}
+
+func prepareParamMetadata(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	kinds []vector.PrepareParamKind,
+) []bool {
+	paramCount := 0
+	if prepareParams != nil {
+		paramCount = prepareParams.Length()
+	}
+	if paramCount == 0 || (len(isBin) == 0 && len(kinds) == 0) {
+		return nil
+	}
+	hasMetadata := false
+	for i := 0; i < paramCount; i++ {
+		if (i < len(isBin) && isBin[i]) || (i < len(kinds) && kinds[i] != vector.PrepareParamNone) {
+			hasMetadata = true
+			break
+		}
+	}
+	if !hasMetadata {
+		return nil
+	}
+	metadata := make([]bool, paramCount*4)
+	copy(metadata[:paramCount], isBin)
+	for i := 0; i < paramCount && i < len(kinds); i++ {
+		metadata[paramCount+i] = kinds[i]&1 != 0
+		metadata[paramCount*2+i] = kinds[i]&2 != 0
+		metadata[paramCount*3+i] = kinds[i]&4 != 0
+	}
+	return metadata
+}
+
+// PrepareParamMetadataForRemote validates and adapts the packed prepare
+// parameter metadata at a process wire boundary. The first N entries are the
+// legacy binary flags; a complete extended payload has four N entries, with
+// the remaining three sections carrying PrepareParamKind bits. A receiver
+// below MORPCVersion12 may safely receive binary-only metadata, but must not
+// receive source-kind provenance that it would silently discard.
+func PrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []bool,
+) ([]bool, error) {
+	if paramCount < 0 {
+		return nil, moerr.NewInvalidInputNoCtx("negative prepare parameter count")
+	}
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("prepare parameter metadata without parameters")
+	}
+	if len(metadata) <= paramCount {
+		return append([]bool(nil), metadata...), nil
+	}
+	if len(metadata) != paramCount*4 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+
+	hasKind := false
+	for i := 0; i < paramCount; i++ {
+		kind := vector.PrepareParamNone
+		if metadata[paramCount+i] {
+			kind |= vector.PrepareParamInteger
+		}
+		if metadata[paramCount*2+i] {
+			kind |= vector.PrepareParamFloat
+		}
+		if metadata[paramCount*3+i] {
+			kind |= vector.PrepareParamBoolean
+		}
+		if kind != vector.PrepareParamNone {
+			if kind > vector.PrepareParamBoolean {
+				return nil, moerr.NewInvalidInputNoCtxf(
+					"invalid prepare parameter kind %d at parameter %d", kind, i)
+			}
+			hasKind = true
+		}
+	}
+
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion12 {
+		if hasKind {
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"prepared-parameter source provenance requires MORPC protocol version %d",
+				defines.MORPCVersion12)
+		}
+		return append([]bool(nil), metadata[:paramCount]...), nil
+	}
+	return append([]bool(nil), metadata...), nil
+}
+
+// BinaryStringPrepareParamMetadataForRemote validates the v18-only prepared
+// parameter binary-string field at both ends of the process wire boundary.
+func BinaryStringPrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []bool,
+) ([]bool, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount <= 0 || len(metadata) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid binary-string prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+	hasBinaryString := false
+	for _, binaryString := range metadata {
+		hasBinaryString = hasBinaryString || binaryString
+	}
+	if !hasBinaryString {
+		return nil, nil
+	}
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion18 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"binary string prepared parameters require MORPC protocol version %d",
+			defines.MORPCVersion18)
+	}
+	return append([]bool(nil), metadata...), nil
+}
+
+func prepareParamProtocolVersion(service string) int64 {
+	rt := runtime.ServiceRuntime(service)
+	if rt == nil {
+		return defines.MORPCMinVersion
+	}
+	v, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCMinVersion
+	}
+	switch version := v.(type) {
+	case int64:
+		return version
+	case int:
+		return int64(version)
+	case uint64:
+		return int64(version)
+	default:
+		return defines.MORPCMinVersion
+	}
+}
+
+func (proc *Process) setPrepareParams(
+	prepareParams *vector.Vector,
+	isBin, binaryString []bool,
+	owned bool,
+) {
 	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
 		owned = true
 	}
@@ -175,6 +373,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 	}
 	proc.Base.prepareParams = prepareParams
 	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsBinaryString = binaryString
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
 }
 
@@ -183,6 +382,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 type PrepareParamsState struct {
 	prepareParams *vector.Vector
 	isBin         []bool
+	binaryString  []bool
 	owned         bool
 }
 
@@ -193,10 +393,12 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	state := PrepareParamsState{
 		prepareParams: proc.Base.prepareParams,
 		isBin:         proc.Base.prepareParamsIsBin,
+		binaryString:  proc.Base.prepareParamsBinaryString,
 		owned:         proc.Base.prepareParamsOwned,
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsBinaryString = nil
 	proc.Base.prepareParamsOwned = false
 	return state
 }
@@ -205,13 +407,13 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // their ownership back to proc. It lets nested work use the parameters while
 // Process.Free releases only resources owned by that nested work.
 func (proc *Process) BorrowPrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, false)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, false)
 }
 
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.binaryString, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

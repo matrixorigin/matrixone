@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -67,6 +68,48 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+
+	assertFilter := filter.NewArgument()
+	defer assertFilter.Release()
+	assertFilter.IsAssert = true
+	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
+	defer duplicatedFilter.Release()
+	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestConstructRestrictForCheckConstraintNodes(t *testing.T) {
+	assertExpr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_check_constraint_assert"},
+	}}}
+	boolExpr := plan2.MakePlan2BoolConstExprWithType(true)
+	for _, testCase := range []struct {
+		node         *plan.Node
+		wantFastPath bool
+	}{
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{assertExpr}}, wantFastPath: true},
+		{node: &plan.Node{NodeType: plan.Node_ASSERT, FilterList: []*plan.Expr{boolExpr}}},
+		{node: &plan.Node{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{boolExpr}, FilterIsBarrier: true}},
+	} {
+		node := testCase.node
+		op := constructRestrict(node, plan2.DeepCopyExprList(node.FilterList))
+		require.Len(t, op.FilterExprs, len(node.FilterList))
+		require.False(t, op.IsEnd,
+			"CHECK operators must return their surviving batch to downstream DML")
+		require.Equal(t, testCase.wantFastPath, op.IsAssert)
+	}
+}
+
+func TestIdentityProjectionOfChild(t *testing.T) {
+	identity := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	}
+	child := []*plan.Expr{{}, {}}
+	require.True(t, isIdentityProjectionOfChild(identity, child))
+	require.False(t, isIdentityProjectionOfChild(identity[:1], child))
+	nonIdentity := plan2.DeepCopyExprList(identity)
+	nonIdentity[1].GetCol().ColPos = 0
+	require.False(t, isIdentityProjectionOfChild(nonIdentity, child))
 }
 
 func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
@@ -216,6 +259,68 @@ func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 
 	require.Equal(t, []*plan.Expr{valueArg, orderArg}, args)
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(planConfig, 5), config)
+}
+
+func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.95)
+	args, config := constructAggregateConfig(&plan.Function{
+		Func:      &plan.ObjectRef{ObjName: plan2.NamePercentileCont},
+		Args:      []*plan.Expr{value, percentile},
+		AggConfig: []byte{1},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0.95"), true), config)
+
+	args, config = constructAggregateConfig(&plan.Function{
+		Func:      &plan.ObjectRef{ObjName: plan2.NamePercentileDisc},
+		Args:      []*plan.Expr{value, plan2.MakePlan2Float64ConstExprWithType(0)},
+		AggConfig: []byte{0},
+	}, proc)
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
+}
+
+func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	percentile := plan2.MakePlan2Float64ConstExprWithType(0.5)
+	percentileColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+
+	for _, fn := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		t.Run(fn+" wrong argument count", func(t *testing.T) {
+			require.Panics(t, func() {
+				constructAggregateConfig(&plan.Function{
+					Func: &plan.ObjectRef{ObjName: fn},
+					Args: []*plan.Expr{value},
+				}, proc)
+			})
+		})
+		t.Run(fn+" nonconstant percentile", func(t *testing.T) {
+			require.Panics(t, func() {
+				constructAggregateConfig(&plan.Function{
+					Func: &plan.ObjectRef{ObjName: fn},
+					Args: []*plan.Expr{value, percentileColumn},
+				}, proc)
+			})
+		})
+	}
+
+	args, config := constructAggregateConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NamePercentileCont},
+		Args: []*plan.Expr{value, percentile},
+	}, proc)
+	require.Equal(t, []*plan.Expr{value}, args)
+	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false), config)
 }
 
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
@@ -800,6 +905,43 @@ func TestGetPercentileConfig(t *testing.T) {
 		require.Equal(t, "1", string(cfg))
 	})
 
+	for _, tc := range []struct {
+		name   string
+		newVec func() (*vector.Vector, error)
+		want   string
+	}{
+		{name: "bit", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_bit.ToType(), uint64(1), 1, mp)
+		}, want: "1"},
+		{name: "int8", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_int8.ToType(), int8(0), 1, mp)
+		}, want: "0"},
+		{name: "int16", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_int16.ToType(), int16(1), 1, mp)
+		}, want: "1"},
+		{name: "uint8", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint8.ToType(), uint8(1), 1, mp)
+		}, want: "1"},
+		{name: "uint16", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint16.ToType(), uint16(1), 1, mp)
+		}, want: "1"},
+		{name: "uint32", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint32.ToType(), uint32(1), 1, mp)
+		}, want: "1"},
+		{name: "uint64", newVec: func() (*vector.Vector, error) {
+			return vector.NewConstFixed(types.T_uint64.ToType(), uint64(1), 1, mp)
+		}, want: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec, err := tc.newVec()
+			require.NoError(t, err)
+			defer vec.Free(mp)
+			cfg, err := getPercentileConfig(vec)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(cfg))
+		})
+	}
+
 	t.Run("decimal64 preserves exact text", func(t *testing.T) {
 		typ := types.New(types.T_decimal64, 10, 6)
 		value, err := types.ParseDecimal64("0.123456", typ.Width, typ.Scale)
@@ -894,6 +1036,23 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 	}
 	require.NoError(t, validateApproxPercentileExpr(literal))
 	require.Error(t, validateApproxPercentileExpr(parameter))
+}
+
+func TestValidateOrderedPercentileExpr(t *testing.T) {
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	literal := plan2.MakePlan2Float64ConstExprWithType(0.5)
+
+	require.Error(t, validateOrderedPercentileExpr(nil, plan2.NamePercentileCont))
+	require.Error(t, validateOrderedPercentileExpr(column, plan2.NamePercentileCont))
+	require.Error(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
+	require.NoError(t, validateOrderedPercentileExpr(literal, plan2.NamePercentileCont))
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {

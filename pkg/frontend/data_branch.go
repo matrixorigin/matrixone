@@ -562,7 +562,7 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, nil); err != nil {
 		return
 	}
 
@@ -1165,7 +1165,9 @@ func getTableStuff(
 			continue
 		}
 
-		t := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+		t := types.NewWithCharset(
+			types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset),
+		)
 
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
@@ -1702,6 +1704,7 @@ func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
 		left.Width == right.Width &&
 		left.Scale == right.Scale &&
 		left.Enumvalues == right.Enumvalues &&
+		left.Charset == right.Charset &&
 		left.NotNullable == right.NotNullable &&
 		left.AutoIncr == right.AutoIncr
 }

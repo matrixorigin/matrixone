@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"hash/fnv"
 	"math"
 
@@ -80,6 +81,7 @@ const (
 	tagCol
 	tagFn
 	tagList
+	tagVec
 	tagOther
 )
 
@@ -92,6 +94,7 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	writeUint32(h, uint32(expr.Typ.Id))
 	writeUint32(h, uint32(expr.Typ.Width))
 	writeUint32(h, uint32(expr.Typ.Scale))
+	writeUint32(h, expr.Typ.Charset)
 
 	switch v := expr.Expr.(type) {
 	case *plan.Expr_Lit:
@@ -128,6 +131,13 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 				hashExprInto(h, e)
 			}
 		}
+	case *plan.Expr_Vec:
+		writeByte(h, tagVec)
+		if v.Vec != nil {
+			writeUint32(h, uint32(v.Vec.Len))
+			writeUint64(h, uint64(len(v.Vec.Data)))
+			_, _ = h.Write(v.Vec.Data)
+		}
 	default:
 		// Uncommon variants (Sub, Vec, Max, ...) — fall back to the proto
 		// binary marshaller so the bucket is still correct, just slower.
@@ -136,6 +146,18 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 			_, _ = h.Write(b)
 		}
 	}
+}
+
+// literalWithoutDiagnosticProvenance returns a shallow copy only when a
+// diagnostic-only field must be removed before deriving executable identity.
+// Keep all value-bearing fields, including IsBin and Src, intact.
+func literalWithoutDiagnosticProvenance(lit *plan.Literal) *plan.Literal {
+	if lit == nil || !lit.IsSerialized {
+		return lit
+	}
+	literalCopy := *lit
+	literalCopy.IsSerialized = false
+	return &literalCopy
 }
 
 func hashLitInto(h writeByter, lit *plan.Literal) {
@@ -217,7 +239,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 	default:
 		// Uncommon literal variants — fall back to marshal.
 		writeByte(h, 0xff)
-		if b, err := lit.Marshal(); err == nil {
+		if b, err := literalWithoutDiagnosticProvenance(lit).Marshal(); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
@@ -233,7 +255,8 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width || a.Typ.Scale != b.Typ.Scale {
+	if a.Typ.Id != b.Typ.Id || a.Typ.Width != b.Typ.Width ||
+		a.Typ.Scale != b.Typ.Scale || a.Typ.Charset != b.Typ.Charset {
 		return false
 	}
 	switch av := a.Expr.(type) {
@@ -289,6 +312,17 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 			}
 		}
 		return true
+	case *plan.Expr_Vec:
+		bv, ok := b.Expr.(*plan.Expr_Vec)
+		if !ok {
+			return false
+		}
+		if av.Vec == nil || bv.Vec == nil {
+			return av.Vec == bv.Vec
+		}
+		// IsSerialized is diagnostic provenance and must not affect execution
+		// identity, just like Literal.IsSerialized.
+		return av.Vec.Len == bv.Vec.Len && bytes.Equal(av.Vec.Data, bv.Vec.Data)
 	default:
 		// Fallback: compare proto bytes.
 		ab, aerr := a.Marshal()
@@ -378,8 +412,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Jsonval == bv.Jsonval
 	default:
 		// Uncommon literal variant — binary fallback.
-		ab, aerr := a.Marshal()
-		bb, berr := b.Marshal()
+		ab, aerr := literalWithoutDiagnosticProvenance(a).Marshal()
+		bb, berr := literalWithoutDiagnosticProvenance(b).Marshal()
 		if aerr != nil || berr != nil {
 			return false
 		}

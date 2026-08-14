@@ -1875,7 +1875,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "varbinary length stays in bytes",
 			typ:       types.New(types.T_varbinary, 128, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    128,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1883,7 +1883,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "binary length stays in bytes",
 			typ:       types.New(types.T_binary, 128, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_STRING,
 			charset:   charsetBinary,
 			length:    128,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1912,7 +1912,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "unknown varbinary width stays unbounded",
 			typ:       types.New(types.T_varbinary, -1, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    math.MaxUint32,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1920,7 +1920,7 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		{
 			name:      "zero varbinary width stays zero",
 			typ:       types.New(types.T_varbinary, 0, 0),
-			mysqlType: defines.MYSQL_TYPE_VARCHAR,
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetBinary,
 			length:    0,
 			flags:     uint16(defines.BINARY_FLAG),
@@ -1970,6 +1970,100 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	}
 }
 
+func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		col  *plan2.ColDef
+		want uint16
+	}{
+		{
+			name: "primary and auto increment",
+			col: &plan2.ColDef{
+				Name: "id",
+				Typ: plan2.Type{
+					Id:          int32(types.T_int32),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+				NotNull: true,
+				Primary: true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.PRI_KEY_FLAG | defines.AUTO_INCREMENT_FLAG),
+		},
+		{
+			name: "unique",
+			col: &plan2.ColDef{
+				Name:    "uk",
+				Typ:     plan2.Type{Id: int32(types.T_int32), NotNullable: true},
+				NotNull: true,
+				Unique:  true,
+			},
+			want: uint16(defines.NOT_NULL_FLAG | defines.UNIQUE_KEY_FLAG),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := colDef2MysqlColumn(context.Background(), tc.col)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, col.Flag())
+
+			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+			packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+			pos := HeaderOffset
+			for range 6 {
+				_, next, ok := proto.readStringLenEnc(packet, pos)
+				require.True(t, ok)
+				pos = next
+			}
+			_, pos, ok := proto.io.ReadUint8(packet, pos)
+			require.True(t, ok)
+			flagsPos := pos + 2 + 4 + 1
+			flags, _, ok := proto.io.ReadUint16(packet, flagsPos)
+			require.True(t, ok)
+			require.Equal(t, tc.want, flags)
+		})
+	}
+}
+
+func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
+	col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:          "display_name",
+		OriginName:    "source_name",
+		TblName:       "table_alias",
+		OriginTblName: "source_table",
+		DbName:        "source_db",
+		Typ:           plan2.Type{Id: int32(types.T_int32)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "source_db", col.Schema())
+	require.Equal(t, "table_alias", col.Table())
+	require.Equal(t, "source_table", col.OrgTable())
+	require.Equal(t, "display_name", col.Name())
+	require.Equal(t, "source_name", col.OrgName())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(col, int(COM_QUERY))
+	pos := HeaderOffset
+	fields := make([]string, 0, 6)
+	for range 6 {
+		field, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		fields = append(fields, string(field))
+		pos = next
+	}
+	require.Equal(t, []string{
+		"def", "source_db", "table_alias", "source_table", "display_name", "source_name",
+	}, fields)
+
+	legacy, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:    "name",
+		TblName: "table",
+		Typ:     plan2.Type{Id: int32(types.T_int32)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "table", legacy.Table())
+	require.Equal(t, "table", legacy.OrgTable())
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -2010,6 +2104,73 @@ func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 			setMysqlColumnTypeMetadata(col, tt.typ)
 
 			require.Equal(t, tt.decimals, col.Decimal())
+		})
+	}
+}
+
+func Test_setMysqlColumnTypeInfoPreservesTextCollation(t *testing.T) {
+	testCases := []struct {
+		name        string
+		typ         types.Type
+		wantCharset uint16
+	}{
+		{
+			name:        "varchar utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "char utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_char, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "text utf8mb4_bin",
+			typ:         types.NewWithCharset(types.T_text, 32, 0, types.CharsetUTF8MB4Bin),
+			wantCharset: uint16(utf8mb4BinCollationID),
+		},
+		{
+			name:        "packed binary varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetBinary),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "varbinary",
+			typ:         types.New(types.T_varbinary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "binary",
+			typ:         types.New(types.T_binary, 32, 0),
+			wantCharset: charsetBinary,
+		},
+		{
+			name:        "varchar utf8mb4 general ci",
+			typ:         types.New(types.T_varchar, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "char utf8mb4 general ci",
+			typ:         types.New(types.T_char, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "text utf8mb4 general ci",
+			typ:         types.New(types.T_text, 32, 0),
+			wantCharset: uint16(Utf8mb4CollationID),
+		},
+		{
+			name:        "legacy varchar",
+			typ:         types.NewWithCharset(types.T_varchar, 32, 0, types.CharsetLegacy),
+			wantCharset: charsetVarchar,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(context.Background(), tc.typ, col))
+			require.Equal(t, tc.wantCharset, col.Charset())
 		})
 	}
 }

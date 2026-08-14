@@ -123,6 +123,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		tableDef := dmlCtx.tableDefs[i]
+		if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+			return 0, err
+		}
 		colOffsets[i] = int32(len(selectList))
 		useColInPartExpr := make(map[string]bool)
 
@@ -428,6 +431,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					IsNewUpdate: true,
 				},
 			}, bindCtx)
+		}
+	}
+
+	for i, tableDef := range dmlCtx.tableDefs {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
+			continue
+		}
+		// resolveSingleTable accepts only TableName/AliasedTableExpr here. Joined
+		// UPDATE targets (including nullable outer-join sides) are routed to
+		// buildTableUpdate, whose per-target row-id filter runs before its CHECK.
+		// Therefore every row reaching this modern path is target-eligible and no
+		// extra row-id predicate is needed on this hot path.
+		alias := dmlCtx.aliases[i]
+		lastNodeID, err = appendCheckConstraintPlanWithColLookup(
+			builder,
+			bindCtx,
+			tableDef,
+			lastNodeID,
+			selectNodeTag,
+			func(colName string) (int32, bool) {
+				qualifiedName := alias + "." + colName
+				if colPos, updated := newColName2Idx[qualifiedName]; updated {
+					return colPos, true
+				}
+				colPos, found := oldColName2Idx[qualifiedName]
+				return colPos, found
+			},
+			stmt.Ignore,
+		)
+		if err != nil {
+			return 0, err
 		}
 	}
 
@@ -1332,7 +1366,7 @@ func classifyIrregularIndexesForUpdate(
 		if desc.AlwaysAsync {
 			continue
 		}
-		async, err := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+		async, err := catalog.IndexParamAsync(idxDef.IndexAlgoParams)
 		if err != nil {
 			return nil, false, err
 		}

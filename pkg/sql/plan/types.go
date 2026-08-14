@@ -250,6 +250,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -410,12 +415,17 @@ type aliasItem struct {
 	astExpr tree.Expr
 }
 
+type orderResolutionMetadata struct {
+	bindAsts          []tree.Expr
+	semanticKeysByTag map[int32][]string
+}
+
 type BindContext struct {
 	binder Binder
 
-	// outputColumnProvenance records planner-local lineage overrides by output
-	// position. An explicit None prevents later transparent-boundary code from
-	// rediscovering a source after a semantic boundary has cleared it.
+	// outputColumnProvenance records planner-local source or pure-NULL identity
+	// by output position. An explicit None prevents later transparent-boundary
+	// code from rediscovering metadata after a semantic boundary has cleared it.
 	outputColumnProvenance map[int32]OutputColumnProvenance
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
@@ -447,9 +457,24 @@ type BindContext struct {
 	explicitSliding              bool
 	isDistinct                   bool
 	normalizeGroupingSetDistinct bool
-	isCorrelated                 bool
-	hasSingleRow                 bool
-	isGroupingSet                bool
+	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
+	// the tail of a grouping-set branch select list. They are qualified after
+	// FROM binding with source-column-first ORDER BY semantics.
+	groupingSetOrderHiddenCount int
+	// groupingSetOrderAliases carries the original select-list expressions for
+	// generated hidden ORDER BY projections. Unlike normal branch projections,
+	// those expressions use source-column-first alias fallback semantics.
+	groupingSetOrderAliases map[string][]tree.Expr
+	// groupingSetOrderSourceProbes resolves names whose presence cannot be known
+	// until the generated branch has bound its FROM scope.
+	groupingSetOrderSourceProbes map[string]*tree.GroupingSetOrderSourceProbe
+	// preserveOrderSemanticKeys retains source-scope projection identities for
+	// a grouping-set branch whose UNION output otherwise loses that identity.
+	preserveOrderSemanticKeys bool
+	isCorrelated              bool
+	hasSingleRow              bool
+	isGroupingSet             bool
+	groupingFuncAllowed       bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -474,18 +499,25 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst      map[string]int32
-	groupByParamAst map[string]int32
-	aggregateByAst  map[string]int32
-	sampleByAst     map[string]int32
-	windowByAst     map[string]int32
-	projectByExpr   map[string]int32
-	timeByAst       map[string]int32
-	whereFilters    []*plan.Expr
+	groupByAst          map[string]int32
+	groupByCanonicalAst map[string]int32
+	groupByParamAst     map[string]int32
+	aggregateByAst      map[string]int32
+	sampleByAst         map[string]int32
+	windowByAst         map[string]int32
+	projectByExpr       map[string]int32
+	timeByAst           map[string]int32
+	whereFilters        []*plan.Expr
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+	// projectSemanticKeys is populated only when preserveOrderSemanticKeys is
+	// set, keeping the ordinary-query projection path allocation-free.
+	projectSemanticKeys []string
+	// orderResolution is allocated only for generated ROLLUP/CUBE window
+	// boundaries that must preserve output AST categories and bound identity.
+	orderResolution *orderResolutionMetadata
 
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
@@ -538,6 +570,24 @@ type BindContext struct {
 	groupingFlag []bool
 
 	remapOption *tree.RewriteOption
+}
+
+// groupOutputType describes a group key after aggregation. A grouping-set
+// branch emits a synthetic NULL for every inactive key, independent of the
+// source expression's nullability.
+func (bc *BindContext) groupOutputType(groupPos int32) Type {
+	typ := bc.groups[groupPos].Typ
+	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
+	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+		typ.NotNullable = false
+	}
+	return typ
 }
 
 type SelectField struct {
@@ -714,8 +764,8 @@ type Binding struct {
 	// mysqlSpecialCanonicalTypes is aligned with cols and propagates the
 	// post-semantic canonical-value contract through transparent bindings.
 	mysqlSpecialCanonicalTypes []*plan.Type
-	// outputColumnProvenance is aligned with cols and carries planner-local,
-	// single-source output lineage. It is never serialized into the plan.
+	// outputColumnProvenance is aligned with cols and carries planner-local
+	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
 	refCnts                []uint
 	// lower case

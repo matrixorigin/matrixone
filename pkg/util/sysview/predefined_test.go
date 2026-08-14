@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
@@ -53,6 +54,42 @@ func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.False(t, strings.Contains(InformationSchemaStatisticsDDL, "NULL AS `INDEX_TYPE`"))
 }
 
+func TestInformationSchemaTableConstraintsDDL_ContainsCheckConstraints(t *testing.T) {
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "UNION ALL")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "FROM mo_check_constraints() cc")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, "cc.table_name AS TABLE_NAME")
+	assert.Contains(t, InformationSchemaTableConstraintsDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
+func TestInformationSchemaTableConstraintsLegacyDDL_DoesNotUseCheckConstraints(t *testing.T) {
+	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "UNION ALL")
+	assert.NotContains(t, InformationSchemaTableConstraintsLegacyDDL, "mo_check_constraints()")
+	assert.Contains(t, InformationSchemaTableConstraintsLegacyDDL, catalog.NonTemporaryTableSQLPredicate("tbl"))
+	statements, err := mysql.Parse(context.Background(), InformationSchemaTableConstraintsLegacyDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
+func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
+	legacy := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion15)
+	assert.NotContains(t, legacy, InformationSchemaCheckConstraintsDDL)
+	assert.NotContains(t, legacy, InformationSchemaTableConstraintsDDL)
+	assert.Contains(t, legacy, InformationSchemaTableConstraintsLegacyDDL)
+	for _, sql := range legacy {
+		assert.NotContains(t, sql, "mo_check_constraints()")
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion16)
+	assert.Equal(t, InitInformationSchemaSysTables, latest)
+}
+
 func TestInformationSchemaStatisticsDDL_RestrictsCatalogJoins(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`account_id` = `tbl`.`account_id`"))
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`tcl`.`att_database` = `tbl`.`reldatabase`"))
@@ -64,6 +101,16 @@ func TestInformationSchemaColumnsDDL_UsesConnectorCompatibleDataType(t *testing.
 	assert.Contains(t, InformationSchemaColumnsDDL, "lower(case when length(mc.attr_enum) > 0 then")
 	assert.Contains(t, InformationSchemaColumnsDDL, "case when upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT'")
 	assert.Contains(t, InformationSchemaColumnsDDL, "else split_part(mo_show_visible_bin(mc.atttyp,2), ' ', 1) end) end) as DATA_TYPE")
+}
+
+func TestInformationSchemaColumnsDDL_HidesInternalColumns(t *testing.T) {
+	assert.Contains(t, InformationSchemaColumnsDDL, "mc.att_is_hidden = 0")
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaColumnsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
 }
 
 func TestInformationSchemaKeyColumnUsageDDL_ProjectsForeignKeyMappings(t *testing.T) {
@@ -96,6 +143,27 @@ func TestInformationSchemaReferentialConstraintsDDL_UsesMySQLDefaultAction(t *te
 
 func TestInformationSchemaReferentialConstraintsDDL_Parses(t *testing.T) {
 	statements, err := mysql.Parse(context.Background(), InformationSchemaReferentialConstraintsDDL, 1)
+	assert.NoError(t, err)
+	for _, statement := range statements {
+		statement.Free()
+	}
+}
+
+func TestInformationSchemaCheckConstraintsDDL(t *testing.T) {
+	assert.True(t, strings.HasPrefix(
+		InformationSchemaCheckConstraintsDDL,
+		"CREATE VIEW information_schema.CHECK_CONSTRAINTS AS"))
+	assert.Contains(t, InformationSchemaCheckConstraintsDDL, "mo_check_constraints()")
+	for _, column := range []string{
+		"CONSTRAINT_CATALOG",
+		"CONSTRAINT_SCHEMA",
+		"CONSTRAINT_NAME",
+		"CHECK_CLAUSE",
+	} {
+		assert.Contains(t, InformationSchemaCheckConstraintsDDL, column)
+	}
+
+	statements, err := mysql.Parse(context.Background(), InformationSchemaCheckConstraintsDDL, 1)
 	assert.NoError(t, err)
 	for _, statement := range statements {
 		statement.Free()

@@ -6,8 +6,9 @@
 --   * bf16 / float16 — lossless narrowing cast on the entry projection.
 -- Every async index is built and maintained entirely by the CDC consumer (the
 -- first iteration runs ALTER ... REINDEX ... FORCE_SYNC, later inserts/updates
--- ride the delta path). Three shared sleep(30) windows let the 10s-tick consumer
--- settle for all indexes at once.
+-- ride the delta path). Each index is waited independently through its first
+-- deterministic search in every phase; readiness of one index says nothing
+-- about the other three consumers.
 --
 -- The queries are `ORDER BY l2_distance(v, q) LIMIT k` with NO secondary sort key,
 -- so the ivfflat index pushdown fires (the ivf_search table function), actually
@@ -32,8 +33,30 @@ create table qf(a int primary key, v vecf32(4));
 insert into qf values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index xf using ivfflat on qf(v) lists=2 op_type 'vector_l2_ops' quantization 'float16' ASYNC;
 
+-- Resolve each index's active-version payload tables once. A nearest-neighbor
+-- query can look correct while only one centroid list has landed, so build and
+-- insert readiness must require the complete expected row count for every index.
+set @qi8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qi8') limit 1);
+set @qi8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xi8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qi8') limit 1);
+set @qu8_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qu8') limit 1);
+set @qu8_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xu8' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qu8') limit 1);
+set @qbf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qbf') limit 1);
+set @qbf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xbf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qbf') limit 1);
+set @qf_entries = (select index_table_name from mo_catalog.mo_indexes where name = 'xf' and algo = 'ivfflat' and algo_table_type = 'entries' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qf') limit 1);
+set @qf_metadata = (select index_table_name from mo_catalog.mo_indexes where name = 'xf' and algo = 'ivfflat' and algo_table_type = 'metadata' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'qf') limit 1);
+set @wait_quant_entries_sql = concat(
+    'select ',
+    '(select count(*) from `', database(), '`.`', @qi8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qi8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qi8_ready, ',
+    '(select count(*) from `', database(), '`.`', @qu8_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qu8_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qu8_ready, ',
+    '(select count(*) from `', database(), '`.`', @qbf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qbf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qbf_ready, ',
+    '(select count(*) from `', database(), '`.`', @qf_entries, '` where `__mo_index_centroid_fk_version` = (select cast(`__mo_index_val` as bigint) from `', database(), '`.`', @qf_metadata, '` where `__mo_index_key` = ''version'')) = @expected_ivf_entries as qf_ready'
+);
+prepare wait_quant_entries from @wait_quant_entries_sql;
+
 -- 1) initial async build (CDC reindex InitSQL). Low cluster -> 1,2,3 ; high -> 6,5,4.
-select sleep(30);
+set @expected_ivf_entries = 6;
+-- @wait_expect(2, 30)
+execute wait_quant_entries;
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 select a from qi8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -50,7 +73,9 @@ insert into qi8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qu8 values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qbf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
 insert into qf values (7,'[2,2,2,2]'),(8,'[53,53,53,53]');
-select sleep(30);
+set @expected_ivf_entries = 8;
+-- @wait_expect(2, 30)
+execute wait_quant_entries;
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
 select a from qi8 order by l2_distance(v,'[54,54,54,54]') limit 3;
 select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
@@ -69,12 +94,16 @@ update qi8 set v = '[55,55,55,55]' where a = 1;
 update qu8 set v = '[55,55,55,55]' where a = 1;
 update qbf set v = '[55,55,55,55]' where a = 1;
 update qf set v = '[55,55,55,55]' where a = 1;
-select sleep(30);
+-- @wait_expect(2, 30)
 select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
+-- @wait_expect(2, 30)
 select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
 
+deallocate prepare wait_quant_entries;
 drop table qi8;
 drop table qu8;
 drop table qbf;

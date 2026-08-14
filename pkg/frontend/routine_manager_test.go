@@ -59,6 +59,33 @@ func newTestRoutineManager(t *testing.T, ctx context.Context) *RoutineManager {
 	return rm
 }
 
+func TestRoutineManagerGetConnIDUsesConnectTimeout(t *testing.T) {
+	const connectTimeout = 17 * time.Second
+	var observed time.Duration
+	client := newMockHAKeeperClient()
+	client.allocateIDByKey = func(ctx context.Context, key string) (uint64, error) {
+		require.Equal(t, ConnIDAllocKey, key)
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		observed = time.Until(deadline)
+		return 0, context.DeadlineExceeded
+	}
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	sv.ConnectTimeout.Duration = connectTimeout
+	rm := &RoutineManager{
+		ctx: context.Background(),
+		pu: &config.ParameterUnit{
+			SV:             sv,
+			HAKeeperClient: client,
+		},
+	}
+
+	_, err := rm.getConnID()
+	require.Error(t, err)
+	require.InDelta(t, connectTimeout, observed, float64(time.Second))
+}
+
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer serverConn.Close()
@@ -1121,15 +1148,21 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	var legacyTxnIDs int
 	for _, txnID := range lockService.unlockedTxnIDs {
 		txnIDText := string(txnID)
-		require.NotContains(t, txnIDText, "1010")
 		parts := strings.Split(txnIDText, "\x00")
 		switch len(parts) {
 		case 4:
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			connID, err := strconv.ParseUint(parts[3], 10, 64)
 			require.NoError(t, err)
 			require.Equal(t, uint64(1009), connID)
 			currentTxnIDs++
 		case 3:
+			// Legacy IDs have no connection-ID field. Do not search the full
+			// string for "1010": the owner includes a random UUID that may
+			// legitimately contain those digits.
+			require.Equal(t, "mo-user-level-lock", parts[0])
+			require.Equal(t, "disconnect_cleanup", parts[2])
 			legacyTxnIDs++
 		default:
 			require.Failf(t, "unexpected user lock txnID format", "txnID=%q", txnIDText)

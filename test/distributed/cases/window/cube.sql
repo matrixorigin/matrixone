@@ -95,3 +95,16 @@ order by
 drop table sales_data;
 -- @bvt:issue
 drop database cube_test;
+
+drop database if exists ctas_grouping_roundtrip;
+create database ctas_grouping_roundtrip;
+use ctas_grouping_roundtrip;
+create table ctas_source (g int, h int);
+insert into ctas_source values (1, 10), (1, 20), (2, 10), (null, 10);
+create table cube_ctas as select coalesce(g, -1) as g, coalesce(h, -1) as h, count(*) as c from ctas_source group by cube(g, h);
+select count(*) as cube_rows from cube_ctas;
+select concat(g, ':', h, ':', c) as cube_row from cube_ctas order by g, h, c;
+create table grouping_sets_ctas as select coalesce(g, -1) as g, coalesce(h, -1) as h, count(*) as c from ctas_source group by grouping sets ((g, h), (g), ());
+select count(*) as grouping_sets_rows from grouping_sets_ctas;
+select concat(g, ':', h, ':', c) as grouping_sets_row from grouping_sets_ctas order by g, h, c;
+drop database ctas_grouping_roundtrip;

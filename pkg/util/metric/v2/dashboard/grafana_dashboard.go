@@ -361,7 +361,11 @@ func (c *DashboardCreator) getHistogramWithExtraBy(
 		legend := fmt.Sprintf("P%.2f%%", percent*100)
 		if len(extraBy) > 0 {
 			query = fmt.Sprintf("histogram_quantile(%f, sum(rate(%s[$interval])) by (le, %s))", percent, metric, extraBy)
-			legend = fmt.Sprintf("{{ "+extraBy+" }}(P%.2f%%)", percent*100)
+			var labels strings.Builder
+			for _, label := range strings.Split(extraBy, ",") {
+				fmt.Fprintf(&labels, "{{ %s }} ", strings.TrimSpace(label))
+			}
+			legend = fmt.Sprintf("%s(P%.2f%%)", strings.TrimSpace(labels.String()), percent*100)
 		}
 		queries = append(queries, query)
 		legends = append(legends, legend)

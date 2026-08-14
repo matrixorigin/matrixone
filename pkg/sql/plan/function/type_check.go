@@ -201,6 +201,12 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		} else {
 			castType[i] = ov.args[i].ToType()
 			SetTargetScaleFromSource(&inputs[i], &castType[i])
+			if isCollatedTextType(inputs[i].Oid) && isCollatedTextType(castType[i].Oid) {
+				// CHAR/VARCHAR/TEXT conversions change the storage shape, not the
+				// collation. Retaining it here prevents an implicit overload cast
+				// from erasing metadata before a derived-string return callback runs.
+				castType[i].Charset = inputs[i].Charset
+			}
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
@@ -242,6 +248,10 @@ func regexpStringReturnType(operandIndexes ...int) func([]types.Type) types.Type
 		}
 		return types.T_varchar.ToType()
 	}
+}
+
+func isCollatedTextType(oid types.T) bool {
+	return oid == types.T_char || oid == types.T_varchar || oid == types.T_text
 }
 
 // a fixed type match method without any type convert. (const null exception)

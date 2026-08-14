@@ -1002,6 +1002,99 @@ func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestHashJoinTracksBuildMatchesWhenFullOuterIsNotRightOriented(t *testing.T) {
+	type joinedRow struct {
+		left      int32
+		right     int32
+		leftNull  bool
+		rightNull bool
+	}
+
+	want := []joinedRow{
+		{left: 1, rightNull: true},
+		{left: 2, right: 2},
+		{left: 4, rightNull: true},
+		{leftNull: true, right: 3},
+	}
+
+	for _, test := range []struct {
+		name        string
+		hashOnPK    bool
+		useResidual bool
+	}{
+		{name: "non-unique build without residual"},
+		{name: "non-unique build with residual", useResidual: true},
+		{name: "unique build without residual", hashOnPK: true},
+		{name: "unique build with residual", hashOnPK: true, useResidual: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			typ := types.T_int32.ToType()
+			tc := newTestCase(t,
+				[]bool{true},
+				[]types.Type{typ},
+				[]colexec.ResultPos{
+					colexec.NewResultPos(0, 0),
+					colexec.NewResultPos(1, 0),
+				},
+				[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}},
+			)
+			defer func() {
+				tc.arg.Reset(tc.proc, false, nil)
+				tc.barg.Reset(tc.proc, false, nil)
+				tc.arg.Free(tc.proc, false, nil)
+				tc.barg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				tc.cancel()
+				require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+			}()
+			tc.arg.JoinType = plan.Node_OUTER
+			tc.arg.IsRightJoin = false
+			tc.arg.HashOnPK = test.hashOnPK
+			tc.barg.HashOnPK = test.hashOnPK
+			if !test.useResidual {
+				tc.arg.NonEqCond = nil
+			}
+
+			resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, []int32{1, 2, 4}))
+			resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, []int32{2, 3}))
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			require.NoError(t, tc.barg.Prepare(tc.proc))
+			buildResult, err := vm.Exec(tc.barg, tc.proc)
+			require.NoError(t, err)
+			require.Nil(t, buildResult.Batch)
+
+			var got []joinedRow
+			for {
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				if result.Batch != nil {
+					left := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0])
+					right := vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1])
+					for row := 0; row < result.Batch.RowCount(); row++ {
+						joined := joinedRow{
+							leftNull:  result.Batch.Vecs[0].GetNulls().Contains(uint64(row)),
+							rightNull: result.Batch.Vecs[1].GetNulls().Contains(uint64(row)),
+						}
+						if !joined.leftNull {
+							joined.left = left[row]
+						}
+						if !joined.rightNull {
+							joined.right = right[row]
+						}
+						got = append(got, joined)
+					}
+				}
+				if result.Status == vm.ExecStop {
+					break
+				}
+			}
+
+			require.ElementsMatch(t, want, got)
+		})
+	}
+}
+
 func makeInt32Batch(proc *process.Process, values []int32) *batch.Batch {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())

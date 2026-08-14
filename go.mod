@@ -22,6 +22,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.1
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.2.6
+	github.com/blevesearch/vellum v1.2.0
 	github.com/buger/jsonparser v1.1.1
 	github.com/bytedance/sonic v1.15.2
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
@@ -83,9 +84,10 @@ require (
 	github.com/segmentio/encoding v0.4.0
 	github.com/shirou/gopsutil/v3 v3.23.12
 	github.com/smartystreets/goconvey v1.7.2
-	github.com/spf13/cobra v1.8.0
+	github.com/spf13/cobra v1.10.2
 	github.com/spkg/bom v1.0.0
 	github.com/stretchr/testify v1.11.1
+	github.com/substrait-io/substrait-protobuf/go v0.78.0
 	github.com/syncthing/notify v0.0.0-20250528144937-c7027d4f7465
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.55
 	github.com/ti-mo/conntrack v0.5.1
@@ -138,6 +140,8 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
+	github.com/blevesearch/mmap-go v1.2.0 // indirect
+	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
@@ -231,7 +235,7 @@ require (
 	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/smartystreets/assertions v1.13.1 // indirect
-	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834 // indirect
 	github.com/tetratelabs/wazero v1.8.1-0.20240916092830-1353ca24fef0 // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
@@ -269,7 +273,7 @@ replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0
 
 replace (
 	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20260811155919-8edc32ac370a
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20260706084232-ea0aa61b062b
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376

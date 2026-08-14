@@ -41,11 +41,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -110,6 +113,48 @@ type closeRecordingTraceService struct {
 func (s *closeRecordingTraceService) Close() {
 	close(s.closed)
 	s.Service.Close()
+}
+
+type closeOnlyIncrService struct {
+	incrservice.AutoIncrementService
+	onClose  func()
+	onReload func(context.Context, uint64) error
+}
+
+func (s closeOnlyIncrService) Close() {
+	s.onClose()
+}
+
+func (s closeOnlyIncrService) Reload(ctx context.Context, tableID uint64) error {
+	return s.onReload(ctx, tableID)
+}
+
+type closeOnlyTxnClient struct {
+	client.TxnClient
+	onClose func() error
+}
+
+func (c closeOnlyTxnClient) Close() error {
+	return c.onClose()
+}
+
+type closeRecordingQueryService struct {
+	queryservice.QueryService
+	handlers map[querypb.CmdMethod]func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error
+	closed   chan struct{}
+}
+
+func (s *closeRecordingQueryService) AddHandleFunc(
+	method querypb.CmdMethod,
+	handler func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error,
+	_ bool,
+) {
+	s.handlers[method] = handler
+}
+
+func (s *closeRecordingQueryService) Close() error {
+	close(s.closed)
+	return nil
 }
 
 func (s closeOnlyRPCServer) RegisterRequestHandler(
@@ -687,6 +732,178 @@ func TestServiceCloseWaitsForTraceProducers(t *testing.T) {
 	)
 }
 
+func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+
+			incrCloseStarted := make(chan struct{})
+			releaseIncrClose := make(chan struct{})
+			txnClientClosed := make(chan struct{})
+			s := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-incr-close-order"),
+				mo:                 closeErrorMOServer{},
+				cancelMoServerFunc: func() {},
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+				incrservice: closeOnlyIncrService{onClose: func() {
+					close(incrCloseStarted)
+					<-releaseIncrClose
+				}},
+				_txnClient: closeOnlyTxnClient{onClose: func() error {
+					close(txnClientClosed)
+					return nil
+				}},
+			}
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+
+			select {
+			case <-incrCloseStarted:
+			case <-time.After(time.Second):
+				t.Fatal("auto-increment service close did not start")
+			}
+			txnClientClosedEarly := false
+			select {
+			case <-txnClientClosed:
+				txnClientClosedEarly = true
+			default:
+			}
+
+			close(releaseIncrClose)
+			require.NoError(t, <-closeDone)
+			require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
+			select {
+			case <-txnClientClosed:
+			default:
+				t.Fatal("transaction client was not closed")
+			}
+		},
+	)
+}
+
+func TestServiceCloseDrainsQueryHandlersBeforeDependencies(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+
+			reloadStarted := make(chan struct{})
+			releaseReload := make(chan struct{})
+			incrServiceClosed := make(chan struct{})
+			txnClientClosed := make(chan struct{})
+			var reloadCalls atomic.Int32
+			queryService := &closeRecordingQueryService{
+				handlers: make(map[querypb.CmdMethod]func(context.Context, *querypb.Request, *querypb.Response, *morpc.Buffer) error),
+				closed:   make(chan struct{}),
+			}
+			s := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-query-close-order"),
+				mo:                 closeErrorMOServer{},
+				cancelMoServerFunc: func() {},
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+				queryService:       queryService,
+				incrservice: closeOnlyIncrService{
+					onClose: func() {
+						close(incrServiceClosed)
+					},
+					onReload: func(context.Context, uint64) error {
+						if reloadCalls.Add(1) == 1 {
+							close(reloadStarted)
+							<-releaseReload
+						}
+						return nil
+					},
+				},
+				_txnClient: closeOnlyTxnClient{onClose: func() error {
+					close(txnClientClosed)
+					return nil
+				}},
+			}
+			s.initQueryCommandHandler()
+			reloadHandler := queryService.handlers[querypb.CmdMethod_ReloadAutoIncrementCache]
+			require.NotNil(t, reloadHandler)
+
+			reloadDone := make(chan error, 1)
+			go func() {
+				reloadDone <- reloadHandler(
+					context.Background(),
+					&querypb.Request{ReloadAutoIncrementCache: &querypb.ReloadAutoIncrementCacheRequest{TableID: 1}},
+					&querypb.Response{},
+					nil,
+				)
+			}()
+			<-reloadStarted
+
+			closeDone := make(chan error, 1)
+			go func() {
+				closeDone <- s.Close()
+			}()
+			dependencyClosedEarly := false
+			select {
+			case <-queryService.closed:
+			case <-incrServiceClosed:
+				dependencyClosedEarly = true
+				select {
+				case <-queryService.closed:
+				case <-time.After(time.Second):
+					t.Fatal("query service close did not start")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("query service close did not start")
+			}
+
+			lateErr := reloadHandler(
+				context.Background(),
+				&querypb.Request{ReloadAutoIncrementCache: &querypb.ReloadAutoIncrementCacheRequest{TableID: 2}},
+				&querypb.Response{},
+				nil,
+			)
+			lateRequestRejected := moerr.IsMoErrCode(lateErr, moerr.ErrServiceUnavailable)
+			reloadCallCount := reloadCalls.Load()
+			dependencyClosedWhileActive := false
+			select {
+			case <-incrServiceClosed:
+				dependencyClosedWhileActive = true
+			default:
+			}
+
+			close(releaseReload)
+			require.NoError(t, <-reloadDone)
+			require.NoError(t, <-closeDone)
+			require.False(t, dependencyClosedEarly, "auto-increment service closed before query ingress drained")
+			require.True(t, lateRequestRejected, "query request admitted after shutdown started")
+			require.Equal(t, int32(1), reloadCallCount)
+			require.False(t, dependencyClosedWhileActive, "auto-increment service closed while a query handler was active")
+			select {
+			case <-incrServiceClosed:
+			default:
+				t.Fatal("auto-increment service was not closed")
+			}
+			select {
+			case <-txnClientClosed:
+			default:
+				t.Fatal("transaction client was not closed")
+			}
+		},
+	)
+}
+
 func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 	moruntime.RunTest(t.Name(), func(moruntime.Runtime) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -770,9 +987,9 @@ func TestPipelineAdmissionRejectsRequestAlreadyReadDuringClose(t *testing.T) {
 		}
 
 		require.NoError(t, s.closePipelineAdmission())
+		close(allowAdmission)
 		require.NoError(t, rpcServer.Close())
 		require.NoError(t, s.waitPipelineHandlers())
-		close(allowAdmission)
 
 		select {
 		case response := <-receiveC:

@@ -1,0 +1,57 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_review;
+create database ft2_review;
+use ft2_review;
+create table b3 (id bigint primary key, body text not null, score int, doc_id int);
+insert into b3 values (1,'quick brown fox',111,7),(2,'lazy fox sleeps',222,8),(3,'quick fox',333,9);
+create fulltext2 index b3idx on b3 (body) include (score, doc_id);
+select id, score from b3 where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  score[4,32,0]  𝄀
+1  ¦  111  𝄀
+2  ¦  222  𝄀
+3  ¦  333
+select id, doc_id from b3 where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  doc_id[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  8  𝄀
+3  ¦  9
+select id, score, doc_id from b3 where match(body) against('fox') order by id;
+➤ id[-5,64,0]  ¦  score[4,32,0]  ¦  doc_id[4,32,0]  𝄀
+1  ¦  111  ¦  7  𝄀
+2  ¦  222  ¦  8  𝄀
+3  ¦  333  ¦  9
+select id, score, doc_id from b3 where match(body) against('fox') and score > 150 order by id limit 5;
+➤ id[-5,64,0]  ¦  score[4,32,0]  ¦  doc_id[4,32,0]  𝄀
+2  ¦  222  ¦  8  𝄀
+3  ¦  333  ¦  9
+create table b2 (bk bit(16) primary key, body text not null, prio int);
+insert into b2 values (5,'quick brown fox',10),(6,'lazy fox sleeps',20),(7,'quick fox',30);
+create fulltext2 index b2idx on b2 (body) include (prio);
+select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') and bk = 7 order by k;
+➤ k[-5,64,0]  ¦  prio[4,32,0]  𝄀
+7  ¦  30
+select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') and bk in (5,7) order by k;
+invalid argument operator in, bad value [BIT BIT]
+select cast(bk as unsigned) as k, prio from b2 where match(body) against('fox') and bk > 5 order by k;
+➤ k[-5,64,0]  ¦  prio[4,32,0]  𝄀
+6  ¦  20  𝄀
+7  ¦  30
+create table b1 (id bigint primary key, body text not null);
+insert into b1 values (1,'quick brown fox'),(2,'lazy fox sleeps'),(3,'quick fox');
+create fulltext2 index b1idx on b1 (body);
+prepare pb1 from 'select id from b1 where match(body) against(?) order by id limit 5';
+set @q = 'fox';
+execute pb1 using @q;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+set @q = null;
+execute pb1 using @q;
+➤ id[-5,64,0]
+set @q = 'lazy';
+execute pb1 using @q;
+➤ id[-5,64,0]  𝄀
+2
+deallocate prepare pb1;
+drop database ft2_review;

@@ -21,10 +21,51 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/stretchr/testify/require"
 )
+
+type rollbackCleanupErrorStore struct {
+	NoopTxnStore
+	err error
+}
+
+func (store *rollbackCleanupErrorStore) Close() error {
+	return store.err
+}
+
+func TestAsyncRollbackCleanupPreservesPrimaryError(t *testing.T) {
+	cleanupErr := errors.New("injected rollback cleanup failure")
+	store := &rollbackCleanupErrorStore{err: cleanupErr}
+	txn := NewTxn(nil, store, []byte("rollback-cleanup"), types.BuildTS(1, 0), types.TS{})
+	primaryErr := moerr.NewTxnWWConflictNoCtx(0, "")
+	txn.SetError(primaryErr)
+	txn.Lock()
+	require.NoError(t, txn.ToRollbackingLocked(types.BuildTS(2, 0)))
+	txn.Unlock()
+	txn.Add(1)
+
+	applyErr := txn.ApplyRollback()
+	require.NoError(t, applyErr, "cleanup must remain secondary to the transaction error")
+	require.Same(t, primaryErr, txn.DoneApply(applyErr, true))
+	require.Same(t, primaryErr, txn.GetError())
+	require.True(t, moerr.IsMoErrCode(txn.GetError(), moerr.ErrTxnWWConflict))
+}
+
+func TestExplicitRollbackReturnsCleanupError(t *testing.T) {
+	cleanupErr := errors.New("injected explicit rollback cleanup failure")
+	txn := NewTxn(
+		nil,
+		&rollbackCleanupErrorStore{err: cleanupErr},
+		[]byte("explicit-rollback-cleanup"),
+		types.BuildTS(1, 0),
+		types.TS{},
+	)
+
+	require.ErrorIs(t, txn.ApplyRollback(), cleanupErr)
+}
 
 func TestTxnWaiterCancelAndReuse(t *testing.T) {
 	var waiter txnWaiter

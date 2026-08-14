@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -76,6 +77,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// createQuery from the materialized new-row image. HNSW/CAGRA/IVF-PQ are cron-
 	// maintained and ride the modern path with no inline sub-plan.
 	tableDef := dmlCtx.tableDefs[0]
+	if err := validateTableRegularIndexPrefixMetadata(tableDef); err != nil {
+		return 0, err
+	}
 	if stmt.HasReturning() {
 		if err := validateReturningTarget(builder, tableDef, dmlCtx.objRefs[0]); err != nil {
 			return 0, err
@@ -604,7 +608,7 @@ func (builder *QueryBuilder) deletePkColExpr(relPos int32) *plan.Expr {
 // (the join key is the integer PK, never the vector), so it is robust to the
 // materialized layout and never copies the base vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex) error {
-	async, err := catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -692,7 +696,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 // the IVF delete: join the index table on doc_id == old/final PK and project only
 // the index row_id + fake pk into the output.
 func (builder *QueryBuilder) buildIrregularFulltextDeleteByPk(bindCtx *BindContext, indexdef *plan.IndexDef) error {
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -1176,6 +1180,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
 			if !partsEqual(pkeyNames, referencedNames) {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
@@ -1257,6 +1264,9 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					}
 				}
 			} else {
+				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
+					return 0, nil, err
+				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
 					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
@@ -2841,6 +2851,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			Children:    []int32{lastNodeID},
 			BindingTags: []int32{selectTag},
 		}, bindCtx)
+		if onDupAction == plan.Node_UPDATE {
+			lastNodeID, err = appendCheckConstraintPlan(
+				builder,
+				bindCtx,
+				tableDef,
+				lastNodeID,
+				selectTag,
+				colName2Idx,
+				false,
+			)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		// ON DUPLICATE KEY UPDATE: materialize the final merged image (this PROJECT)
 		// so the main plan, the irregular-index maintenance, and the row-scoped
@@ -3037,7 +3061,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE {
+	if onDupAction != plan.Node_IGNORE && onDupAction != plan.Node_UPDATE {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,

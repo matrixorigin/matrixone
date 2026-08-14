@@ -326,6 +326,7 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 		expr.vec.CleanOnlyData()
 	}
 	expr.folded = false
+	expr.foldedNull = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {

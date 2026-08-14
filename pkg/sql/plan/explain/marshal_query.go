@@ -105,6 +105,9 @@ func (m MarshalNodeImpl) GetStats() models.Stats {
 
 func (m MarshalNodeImpl) GetNodeName(ctx context.Context) (string, error) {
 	// Get the Node Name
+	if m.node.NodeType == plan.Node_PARTITION && m.node.Limit != nil && m.node.PartitionByCount > 0 {
+		return "Partition Top N", nil
+	}
 	if value, ok := nodeTypeToNameMap[m.node.NodeType]; ok {
 		return value, nil
 	} else {
@@ -155,7 +158,7 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		if err != nil {
 			return "", err
 		}
-	case plan.Node_FILTER:
+	case plan.Node_FILTER, plan.Node_ASSERT:
 		//"title" : "(D_0.D_MONTH_SEQ >= 1189) AND (D_0.D_MONTH_SEQ <= 1200)",
 		exprs := NewExprListDescribeImpl(m.node.FilterList)
 		err = exprs.GetDescription(ctx, options, buf)
@@ -192,8 +195,6 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 		return "cte_scan", nil
 	case plan.Node_LOCK_OP:
 		return "lock_op", nil
-	case plan.Node_ASSERT:
-		return "assert", nil
 	case plan.Node_BROADCAST:
 		return "broadcast", nil
 	case plan.Node_SPLIT:
@@ -205,6 +206,23 @@ func (m MarshalNodeImpl) GetNodeTitle(ctx context.Context, options *ExplainOptio
 	case plan.Node_FILL:
 		return "fill", nil
 	case plan.Node_PARTITION:
+		if m.node.Limit != nil && m.node.PartitionByCount > 0 && int(m.node.PartitionByCount) < len(m.node.OrderBy) {
+			buf.WriteString("Partition Keys: ")
+			partitionKeys := NewOrderByDescribeImpl(m.node.OrderBy[:m.node.PartitionByCount])
+			if err = partitionKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; Sort Keys: ")
+			orderKeys := NewOrderByDescribeImpl(m.node.OrderBy[m.node.PartitionByCount:])
+			if err = orderKeys.GetDescription(ctx, options, buf); err != nil {
+				return "", err
+			}
+			buf.WriteString("; N: ")
+			if err = describeExpr(ctx, m.node.Limit, options, buf); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(buf.String()), nil
+		}
 		return "partition", nil
 	case plan.Node_FUNCTION_SCAN:
 		//"title" : "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL.DATE_DIM",
@@ -586,9 +604,13 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Value: []string{},
 		})
 	case plan.Node_ASSERT:
+		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
+		if err != nil {
+			return nil, err
+		}
 		labels = append(labels, models.Label{
 			Name:  Label_Assert,
-			Value: []string{},
+			Value: value,
 		})
 	case plan.Node_FUZZY_FILTER:
 		labels = append(labels, models.Label{
@@ -665,7 +687,7 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 	}
 
 	// 2. handle shared label information for all nodes, such as filter conditions
-	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER {
+	if len(m.node.FilterList) > 0 && m.node.NodeType != plan.Node_FILTER && m.node.NodeType != plan.Node_ASSERT {
 		value, err := GetExprsLabelValue(ctx, m.node.FilterList, options)
 		if err != nil {
 			return nil, err

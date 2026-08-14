@@ -415,47 +415,49 @@ func (exec *ntileWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		return moerr.NewInternalErrorNoCtx("ntile requires vectors")
 	}
 
-	// vectors[0] is the os (order sequence) vector
-	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
-	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
-
 	// If vectors[1] exists, it's the bucket count parameter
 	if len(vectors) > 1 && exec.bucketCounts[groupIndex] == 0 {
 		bucketVec := vectors[1]
-		if !bucketVec.IsNull(uint64(row)) {
-			var bucketCount int64
-			switch bucketVec.GetType().Oid {
-			case types.T_int64:
-				bucketCount = vector.MustFixedColWithTypeCheck[int64](bucketVec)[row]
-			case types.T_int32:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int32](bucketVec)[row])
-			case types.T_int16:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int16](bucketVec)[row])
-			case types.T_int8:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[int8](bucketVec)[row])
-			case types.T_uint64:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint64](bucketVec)[row])
-			case types.T_uint32:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint32](bucketVec)[row])
-			case types.T_uint16:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint16](bucketVec)[row])
-			case types.T_uint8:
-				bucketCount = int64(vector.MustFixedColWithTypeCheck[uint8](bucketVec)[row])
-			default:
-				return moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
-			}
-
-			if bucketCount <= 0 {
-				return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
-			}
-			exec.bucketCounts[groupIndex] = bucketCount
+		if bucketVec.IsNull(uint64(row)) {
+			return moerr.NewInvalidInputNoCtx("ntile bucket count cannot be NULL")
 		}
+
+		var bucketCount int64
+		switch bucketVec.GetType().Oid {
+		case types.T_int64:
+			bucketCount = vector.MustFixedColWithTypeCheck[int64](bucketVec)[row]
+		case types.T_int32:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int32](bucketVec)[row])
+		case types.T_int16:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int16](bucketVec)[row])
+		case types.T_int8:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[int8](bucketVec)[row])
+		case types.T_uint64:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint64](bucketVec)[row])
+		case types.T_uint32:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint32](bucketVec)[row])
+		case types.T_uint16:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint16](bucketVec)[row])
+		case types.T_uint8:
+			bucketCount = int64(vector.MustFixedColWithTypeCheck[uint8](bucketVec)[row])
+		default:
+			return moerr.NewInternalErrorNoCtx("ntile bucket count must be integer type")
+		}
+
+		if bucketCount <= 0 {
+			return moerr.NewInternalErrorNoCtx("ntile bucket count must be positive")
+		}
+		exec.bucketCounts[groupIndex] = bucketCount
 	}
 
 	// Default to 1 bucket if not set
 	if exec.bucketCounts[groupIndex] == 0 {
 		exec.bucketCounts[groupIndex] = 1
 	}
+
+	// vectors[0] is the os (order sequence) vector
+	value := vector.MustFixedColWithTypeCheck[int64](vectors[0])[row]
+	exec.groups[groupIndex] = append(exec.groups[groupIndex], value)
 
 	return nil
 }
@@ -774,8 +776,10 @@ type valueWindowExec struct {
 
 // valueEntry stores a single value from the window frame
 type valueEntry struct {
-	isNull bool
-	data   []byte
+	isNull       bool
+	binaryString bool
+	data         []byte
+	kind         vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -809,6 +813,8 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	if !entry.isNull {
+		entry.kind = vec.GetPrepareParamKindAt(row)
+		entry.binaryString = vec.GetBinaryStringMetadataAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -893,10 +899,10 @@ func (exec *valueWindowExec) Free() {
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
 	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
-	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	// valueEntry{two bools, data []byte, kind byte} occupies 40 bytes after alignment.
 	const sliceHeaderSize = 24
 	const ptrSize = 8
-	const entrySize = 32
+	const entrySize = 40
 	const intSize = 8
 
 	size += int64(cap(exec.frameValues)) * sliceHeaderSize
@@ -955,7 +961,7 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1008,7 +1014,7 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1043,7 +1049,7 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 				return nil, err
 			}
 		} else {
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1077,7 +1083,7 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 				return nil, err
 			}
 		} else {
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1091,6 +1097,17 @@ func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 	// For now, we default to n=1 (same as FIRST_VALUE)
 	// TODO: properly handle the n parameter from the function arguments
 	return exec.flushFirstValue()
+}
+
+func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valueEntry) error {
+	row := result.Length()
+	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+		return err
+	}
+	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+		return err
+	}
+	return result.SetIsBinaryStringAt(row, entry.binaryString, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

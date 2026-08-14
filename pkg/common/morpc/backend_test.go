@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -69,6 +70,37 @@ func TestSend(t *testing.T) {
 			resp, err := f.Get()
 			assert.NoError(t, err)
 			assert.Equal(t, req, resp)
+		},
+	)
+}
+
+func TestBackendRequestLifecycleMetricsEndToEnd(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			startedBefore := testutil.ToFloat64(b.metrics.requestStartedCounter)
+			completedBefore := requestCompletedCount(b.metrics)
+			successBefore := testutil.ToFloat64(
+				b.metrics.requestCompletedCounters[requestOutcomeSuccess])
+			durationBefore, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			f, err := b.Send(ctx, newTestMessage(1))
+			require.NoError(t, err)
+			resp, err := f.Get()
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			f.Close()
+
+			require.Equal(t, startedBefore+1, testutil.ToFloat64(b.metrics.requestStartedCounter))
+			require.Equal(t, completedBefore+1, requestCompletedCount(b.metrics))
+			require.Equal(t, successBefore+1, testutil.ToFloat64(
+				b.metrics.requestCompletedCounters[requestOutcomeSuccess]))
+			durationCount, _ := observerHistogram(t, b.metrics.requestDurationHistogram)
+			require.Equal(t, durationBefore+1, durationCount)
 		},
 	)
 }
@@ -129,6 +161,299 @@ func TestSendFailureKeepsRequestOwnership(t *testing.T) {
 	require.Nil(t, future)
 	require.Zero(t, released.Load(),
 		"a request that was not enqueued remains owned by the caller")
+}
+
+func TestBackendMetricsAggregateAcrossBackends(t *testing.T) {
+	m := newMetrics(t.Name())
+	newBackend := func() *remoteBackend {
+		rb := &remoteBackend{
+			metrics:    m,
+			codec:      newTestCodec(),
+			writeC:     make(chan *Future, 8),
+			waitWriteC: make(chan struct{}, 1),
+		}
+		rb.options.busySize = 2
+		rb.stateMu.state = stateRunning
+		rb.mu.futures = make(map[uint64]*Future)
+		return rb
+	}
+	rb1 := newBackend()
+	rb2 := newBackend()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	newQueuedFuture := func(id uint64) *Future {
+		f := newFuture(nil)
+		f.init(newTestRPCMessage(ctx, id))
+		return f
+	}
+
+	require.NoError(t, rb1.doSend(newQueuedFuture(1)))
+	require.NoError(t, rb1.doSend(newQueuedFuture(2)))
+	require.NoError(t, rb2.doSend(newQueuedFuture(3)))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(3), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(m.busyGauge),
+		"busy is the count of busy backends, not the last backend's boolean")
+
+	require.Len(t, rb1.fetchN(nil, 1), 1)
+	require.Equal(t, float64(2), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+	require.Len(t, rb1.fetchN(nil, 8), 1)
+	require.Len(t, rb2.fetchN(nil, 8), 1)
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+}
+
+func TestBackendQueueMetricsReturnToZeroOnCloseDrain(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics:    m,
+		codec:      newTestCodec(),
+		writeC:     make(chan *Future, 8),
+		waitWriteC: make(chan struct{}, 1),
+	}
+	rb.options.busySize = 1
+	rb.stateMu.state = stateRunning
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	for id := uint64(1); id <= 3; id++ {
+		f := newFuture(nil)
+		f.init(newTestRPCMessage(ctx, id))
+		f.ref()
+		require.NoError(t, rb.doSend(f))
+	}
+	require.Equal(t, float64(3), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(1), testutil.ToFloat64(m.busyGauge))
+
+	rb.makeAllWritesDoneWithClosed()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+}
+
+func TestBackendQueueMetricsConcurrentProducersAndConsumer(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics:    m,
+		codec:      newTestCodec(),
+		writeC:     make(chan *Future, 32),
+		waitWriteC: make(chan struct{}, 1),
+	}
+	rb.options.busySize = 16
+	rb.stateMu.state = stateRunning
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const producers = 8
+	const perProducer = 128
+	const total = producers * perProducer
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		for range total {
+			select {
+			case <-ctx.Done():
+				return
+			case <-rb.writeC:
+				rb.changeQueueDepth(-1)
+				rb.notifyWaitWrite()
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errorsC := make(chan error, total)
+	for producer := range producers {
+		wg.Add(1)
+		go func(producer int) {
+			defer wg.Done()
+			for offset := range perProducer {
+				id := uint64(producer*perProducer + offset + 1)
+				f := newFuture(nil)
+				f.init(newTestRPCMessage(ctx, id))
+				if err := rb.doSend(f); err != nil {
+					errorsC <- err
+					return
+				}
+			}
+		}(producer)
+	}
+	wg.Wait()
+	close(errorsC)
+	for err := range errorsC {
+		require.NoError(t, err)
+	}
+	select {
+	case <-consumerDone:
+	case <-ctx.Done():
+		t.Fatal("queue consumer did not drain all produced Futures")
+	}
+
+	require.Equal(t, float64(0), testutil.ToFloat64(m.sendingQueueSizeGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.writeQueueLengthGauge))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.busyGauge))
+}
+
+func TestActiveFutureMetricAggregatesAndDeletesExactlyOnce(t *testing.T) {
+	m := newMetrics(t.Name())
+	newBackend := func() *remoteBackend {
+		rb := &remoteBackend{metrics: m}
+		rb.mu.futures = make(map[uint64]*Future)
+		return rb
+	}
+	rb1 := newBackend()
+	rb2 := newBackend()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	f1 := newFuture(nil)
+	f1.init(newTestRPCMessage(ctx, 1))
+	f2 := newFuture(nil)
+	f2.init(newTestRPCMessage(ctx, 2))
+	rb1.addFuture(f1)
+	rb2.addFuture(f2)
+	require.Equal(t, float64(2), testutil.ToFloat64(m.activeRequestsGauge))
+
+	rb1.mu.Lock()
+	require.True(t, rb1.deleteFutureLocked(1))
+	require.False(t, rb1.deleteFutureLocked(1))
+	rb1.mu.Unlock()
+	require.Equal(t, float64(1), testutil.ToFloat64(m.activeRequestsGauge))
+	rb2.clean()
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
+}
+
+func TestSnapshotGaugeDeltasAggregateAcrossOwners(t *testing.T) {
+	clientMetrics1 := newMetrics(t.Name() + "-client")
+	clientMetrics2 := newMetrics(t.Name() + "-client")
+	clientMetrics1.setBackendPoolSize(2)
+	clientMetrics2.setBackendPoolSize(3)
+	require.Equal(t, float64(5), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+	clientMetrics1.setBackendPoolSize(1)
+	require.Equal(t, float64(4), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+	clientMetrics1.setBackendPoolSize(0)
+	clientMetrics2.setBackendPoolSize(0)
+	require.Equal(t, float64(0), testutil.ToFloat64(clientMetrics1.poolSizeGauge))
+
+	serverMetrics1 := newServerMetrics(t.Name() + "-server")
+	serverMetrics2 := newServerMetrics(t.Name() + "-server")
+	server1 := &server{metrics: serverMetrics1, sessions: &sync.Map{}}
+	server2 := &server{metrics: serverMetrics2, sessions: &sync.Map{}}
+	server1Sessions := []*clientSession{{}, {}}
+	server2Sessions := []*clientSession{{}, {}, {}}
+	for id, session := range server1Sessions {
+		server1.loadOrStoreClientSession(uint64(id), session)
+	}
+	for id, session := range server2Sessions {
+		server2.loadOrStoreClientSession(uint64(id), session)
+	}
+	require.Equal(t, float64(5), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+	require.True(t, server1.deleteClientSession(0, server1Sessions[0]))
+	require.Equal(t, float64(4), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+	require.True(t, server1.deleteClientSession(1, server1Sessions[1]))
+	for id, session := range server2Sessions {
+		require.True(t, server2.deleteClientSession(uint64(id), session))
+	}
+	require.Equal(t, float64(0), testutil.ToFloat64(serverMetrics1.sessionSizeGauge))
+}
+
+func TestRequestDoneCloseAndPoolReuseRace(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics: m,
+		logger:  zap.NewNop(),
+	}
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	rb.pool.futures = &sync.Pool{New: func() any {
+		return newFuture(rb.releaseFuture)
+	}}
+	const generations = 256
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+
+	for generation := 1; generation <= generations; generation++ {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		id := uint64(generation)
+		f := rb.newFuture()
+		f.init(newTestRPCMessage(ctx, id))
+		f.enableRequestMetrics(m)
+		rb.addFuture(f)
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			f.messageSent(nil)
+		}()
+		go func() {
+			defer wg.Done()
+			f.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			rb.requestDone(ctx, id, RPCMessage{Message: newTestMessage(id)}, nil, nil)
+		}()
+		wg.Wait()
+		cancel()
+
+		rb.mu.RLock()
+		require.Empty(t, rb.mu.futures)
+		rb.mu.RUnlock()
+	}
+
+	require.Equal(t, startedBefore+generations, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+generations, requestCompletedCount(m))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
+}
+
+func TestFailAllWaitingCloseAndPoolReuseRace(t *testing.T) {
+	m := newMetrics(t.Name())
+	rb := &remoteBackend{
+		metrics: m,
+		remote:  "test-remote",
+	}
+	rb.mu.futures = make(map[uint64]*Future)
+	rb.mu.activeStreams = make(map[uint64]*stream)
+	rb.pool.futures = &sync.Pool{New: func() any {
+		return newFuture(rb.releaseFuture)
+	}}
+	const generations = 256
+	startedBefore := testutil.ToFloat64(m.requestStartedCounter)
+	completedBefore := requestCompletedCount(m)
+
+	for generation := 1; generation <= generations; generation++ {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		id := uint64(generation)
+		f := rb.newFuture()
+		f.init(newTestRPCMessage(ctx, id))
+		f.enableRequestMetrics(m)
+		rb.addFuture(f)
+		f.messageSent(nil)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			f.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			rb.makeAllWaitingFutureFailed(backendClosed)
+		}()
+		wg.Wait()
+		cancel()
+
+		rb.mu.RLock()
+		require.Empty(t, rb.mu.futures)
+		rb.mu.RUnlock()
+	}
+
+	require.Equal(t, startedBefore+generations, testutil.ToFloat64(m.requestStartedCounter))
+	require.Equal(t, completedBefore+generations, requestCompletedCount(m))
+	require.Equal(t, float64(0), testutil.ToFloat64(m.activeRequestsGauge))
 }
 
 func TestSuccessfulSendReleasesOwnedRequest(t *testing.T) {
@@ -550,11 +875,29 @@ func TestDataProgressPendingSetIsBounded(t *testing.T) {
 	require.False(t, rb.livenessMu.overflow)
 }
 
-func TestFailedLivenessProbeResetsDataConnection(t *testing.T) {
-	probed := make(chan struct{}, 1)
+func TestTimedOutLivenessProbePreservesSlowDataResponse(t *testing.T) {
+	requestReceived := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	probeStarted := make(chan struct{})
+	var requestOnce sync.Once
+	var probeOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+	t.Cleanup(release)
+
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			return nil
+		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			requestOnce.Do(func() { close(requestReceived) })
+			select {
+			case <-releaseResponse:
+			case <-time.After(time.Second):
+				return context.DeadlineExceeded
+			}
+			return conn.Write(RPCMessage{
+				Ctx:     request.Ctx,
+				Message: newTestMessage(request.Message.GetID()),
+			}, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -562,19 +905,33 @@ func TestFailedLivenessProbeResetsDataConnection(t *testing.T) {
 			f, err := b.Send(ctx, newTestMessage(1))
 			require.NoError(t, err)
 			defer f.Close()
-			_, err = f.Get()
-			require.Error(t, err)
-			require.NotErrorIs(t, err, context.DeadlineExceeded)
+
 			select {
-			case <-probed:
-			default:
+			case <-requestReceived:
+			case <-ctx.Done():
+				t.Fatal("request did not reach server")
+			}
+			select {
+			case <-probeStarted:
+			case <-ctx.Done():
 				t.Fatal("failed liveness probe did not run")
 			}
+
+			require.False(t, b.admissionAvailable(),
+				"an inconclusive probe must still seal the inactive data generation")
+			_, err = b.Send(ctx, newTestMessage(2))
+			require.ErrorIs(t, err, backendDraining)
+
+			release()
+			_, err = f.Get()
+			require.NoError(t, err,
+				"a timed-out control transport must not discard a valid slow data response")
 		},
 		WithBackendReadTimeout(20*time.Millisecond),
-		WithBackendLivenessProbe(func(context.Context, string) error {
-			probed <- struct{}{}
-			return errors.New("control transport unavailable")
+		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
+			probeOnce.Do(func() { close(probeStarted) })
+			<-ctx.Done()
+			return ctx.Err()
 		}),
 	)
 }
@@ -1151,6 +1508,35 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			assert.NoError(t, st.Send(context.TODO(), req))
 		},
 	)
+}
+
+func TestStreamSendFailureReleasesAndReusesFuture(t *testing.T) {
+	var releases atomic.Int32
+	var futures sync.Pool
+	futures.New = func() any {
+		return newFuture(func(f *Future) {
+			f.reset()
+			releases.Add(1)
+			futures.Put(f)
+		})
+	}
+	sendErr := errors.New("send rejected before enqueue")
+	s := newStream(
+		nil,
+		make(chan Message, 1),
+		func() *Future { return futures.Get().(*Future) },
+		func(*Future) error { return sendErr },
+		func(*stream) {},
+		func() {},
+	)
+	s.init(1, false)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	for range 2 {
+		require.ErrorIs(t, s.Send(ctx, newTestMessage(1)), sendErr)
+	}
+	require.Equal(t, int32(2), releases.Load())
 }
 
 func TestStreamClosedByConnReset(t *testing.T) {
@@ -2075,7 +2461,7 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 
 	options = append(
 		options,
-		WithBackendMetrics(newMetrics("")),
+		WithBackendMetrics(newMetrics(t.Name())),
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
 	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
