@@ -896,6 +896,7 @@ const (
 	castModeExplicit
 	castModeAssignment
 	castModeAssignmentIgnore
+	castModeComparison
 )
 
 func (m castMode) strictStringWidth() bool {
@@ -904,6 +905,15 @@ func (m castMode) strictStringWidth() bool {
 
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeNormal, false)
+}
+
+// NewComparisonCast canonicalizes representation-only CHAR padding for
+// comparison operands. Keep this separate from ordinary and explicit casts:
+// PAD_CHAR_TO_FULL_LENGTH makes that padding observable to SQL expressions,
+// including CAST(CHAR AS VARCHAR), while comparisons and hash keys still use
+// PAD SPACE semantics.
+func NewComparisonCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return newCast(parameters, result, proc, length, selectList, castModeComparison, false)
 }
 
 func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2693,7 +2703,7 @@ func strTypeToOthers(proc *process.Process,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToStr(ctx, proc, source, rs, length, toType,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong, mode == castModeComparison)
 	case types.T_array_float32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float32](ctx, source, rs, length, toType)
@@ -7968,10 +7978,12 @@ func strToStr(
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool,
+	comparisonCast bool) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
-	trimCharPadding := from.GetSourceVector().GetType().Oid == types.T_char && toType.Oid == types.T_varchar
+	trimCharPadding := comparisonCast &&
+		from.GetSourceVector().GetType().Oid == types.T_char && toType.Oid == types.T_varchar
 	var i uint64
 	var l = uint64(length)
 	// Here cast using cast(data_type as binary[(n)]).

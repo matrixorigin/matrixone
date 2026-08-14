@@ -46,6 +46,36 @@ func TestExplicitCastUsesDedicatedOverload(t *testing.T) {
 	require.Equal(t, int32(1), explicitOverload)
 }
 
+func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+	}{
+		{name: "="},
+		{name: "<=>"},
+		{name: "!="},
+		{name: "<>"},
+		{name: "<"},
+		{name: "<="},
+		{name: ">"},
+		{name: ">="},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			left := makePlan2StringConstExprWithType("MO      ")
+			leftType := types.New(types.T_char, 8, 0)
+			left.Typ = makePlan2Type(&leftType)
+			args := []*Expr{left, makePlan2StringConstExprWithType("MO")}
+			comparison, err := BindFuncExprImplByPlanExpr(ctx, test.name, args)
+			require.NoError(t, err)
+			leftCast := comparison.GetF().GetArgs()[0].GetF()
+			require.NotNil(t, leftCast)
+			require.Equal(t, "cast", leftCast.GetFunc().GetObjName())
+			_, overload := function.DecodeOverloadID(leftCast.GetFunc().GetObj())
+			require.Equal(t, int32(2), overload)
+		})
+	}
+}
+
 func TestUseExplicitCastOverload(t *testing.T) {
 	tests := []struct {
 		name string

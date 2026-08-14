@@ -39,7 +39,12 @@ func TestCharEqualityIgnoresRepresentationPadding(t *testing.T) {
 		want []bool
 	}{
 		{name: "equal", fn: equalFn, want: []bool{true, false}},
+		{name: "null safe equal", fn: nullSafeEqualFn, want: []bool{true, false}},
 		{name: "not equal", fn: notEqualFn, want: []bool{false, true}},
+		{name: "greater than", fn: greatThanFn, want: []bool{false, false}},
+		{name: "greater equal", fn: greatEqualFn, want: []bool{true, false}},
+		{name: "less than", fn: lessThanFn, want: []bool{false, true}},
+		{name: "less equal", fn: lessEqualFn, want: []bool{true, true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expect := NewFunctionTestResult(types.T_bool.ToType(), false, test.want, nil)

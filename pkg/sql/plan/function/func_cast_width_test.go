@@ -43,7 +43,7 @@ func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, inpu
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim); err != nil {
+	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim, false); err != nil {
 		return "", false, err
 	}
 	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
