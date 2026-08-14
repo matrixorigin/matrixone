@@ -72,7 +72,7 @@ func TestRemoteAsofJoinProtocolGate(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
 	require.ErrorContains(t, err, "protocol version 18")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion18)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
 	arg.JoinType = plan.Node_ASOF_LEFT
 	_, _, err = convertToPipelineInstruction(arg, proc, &scopeContext{}, 1)
 	require.NoError(t, err)

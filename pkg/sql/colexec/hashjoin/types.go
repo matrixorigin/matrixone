@@ -198,6 +198,7 @@ func (hashJoin *HashJoin) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if hashJoin.ctr.mp != nil || hashJoin.ctr.spillEngine != nil ||
+		len(hashJoin.ctr.asofIndexValues) != 0 ||
 		len(hashJoin.ctr.eqCondExecs) != 0 ||
 		hashJoin.ctr.nonEqCondExec != nil ||
 		hashJoin.ctr.rightRowsMatched != nil ||
@@ -273,6 +274,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 		hashJoin.Mailbox.SealAndDrain(proc.Mp())
 	}
 	ctr.cleanBucketBatches(proc)
+	ctr.cleanAsofIndexes(proc)
 	ctr.cleanEqCondExecutors()
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()

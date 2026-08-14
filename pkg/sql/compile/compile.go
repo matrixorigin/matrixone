@@ -5510,7 +5510,7 @@ func supportsRemoteAsofJoin(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion18
+	return ok && protocolVersion >= defines.MORPCVersion20
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

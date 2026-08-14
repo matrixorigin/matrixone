@@ -894,11 +894,6 @@ func (ctr *container) findAsofPredecessor(
 		ctr.asofIndexes = make(map[uint64][]int32)
 	}
 	ordered, ok := ctr.asofIndexes[groupKey]
-	if ok && !ctr.asofIndexValid(hashJoin, ordered) {
-		ctr.cleanAsofIndexes(proc)
-		ctr.asofIndexes = make(map[uint64][]int32)
-		ok = false
-	}
 	if !ok {
 		var err error
 		ordered, err = mpool.MakeSliceAccounted[int32](
@@ -959,21 +954,6 @@ func (ctr *container) findAsofPredecessor(
 		return -1, false, evalErr
 	}
 	return candidate, qualified, nil
-}
-
-func (ctr *container) asofIndexValid(hashJoin *HashJoin, ordered []int32) bool {
-	for _, row := range ordered {
-		batchIdx := int64(row / colexec.DefaultBatchSize)
-		rowIdx := int64(row % colexec.DefaultBatchSize)
-		if batchIdx < 0 || batchIdx >= int64(len(ctr.rightBats)) {
-			return false
-		}
-		vec := ctr.rightBats[batchIdx].Vecs[hashJoin.AsofRightCol]
-		if rowIdx < 0 || rowIdx >= int64(vec.Length()) {
-			return false
-		}
-	}
-	return true
 }
 
 func asofTemporalMetadata(expr *plan.Expr) (leftCol int, strict bool) {
