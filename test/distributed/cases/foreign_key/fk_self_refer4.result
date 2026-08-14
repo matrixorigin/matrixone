@@ -106,7 +106,7 @@ internal error: Can't DROP 'fk2'; check that column/key exists
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 Duplicate foreign key constraint name 'fk1'
 alter table t1 drop foreign key fk1, drop foreign key fk1, drop foreign key fk1;
-internal error: Can't DROP 'fk1'; check that column/key exists
+Can't DROP 'fk1'; check that column/key exists
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 Duplicate foreign key constraint name 'fk1'
 alter table t1 add constraint fk1 foreign key (b) references t1(a), add constraint fk1 foreign key (b) references t1(a);
