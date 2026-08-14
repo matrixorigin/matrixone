@@ -92,6 +92,37 @@ remain caller-owned inputs and must be recorded when relevant:
 
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.
 
+### End-to-end (BVT) runs
+
+Two preconditions, both learned by wasting a run without them:
+
+1. **Wait for `ISCP-Task Start` in `mo-service.log` before starting a suite.** The server
+   answers `select 1` well before the query service is registered, and DDL issued in that
+   window fails with `internal error: cannot find query address for CN <uuid>`. One
+   `pessimistic_transaction/vector` run started too early reported **51** failures; after
+   waiting, **1** — the other 50 were the gap, not the code.
+
+   ```bash
+   until grep -q "ISCP-Task Start" mo-service.log; do sleep 2; done
+   ```
+
+2. **Start from a clean instance** (`pkill -x mo-service; rm -rf mo-data`) before a suite
+   whose cases count global objects. `show pitr`, `show snapshots` and
+   `select count(*) from mo_catalog.mo_snapshots` list *everything*, so a PITR or snapshot
+   left by earlier manual work — or by an earlier suite — fails cases that are correct.
+   The same run showed snapshot 200 failures / pitr 73 dirty versus 0 / 0 clean.
+
+Re-run a suspicious failure on a clean instance before reporting it. A suite that fails only
+after other suites is an ordering artifact, not a regression.
+
+### Verifying planner rewrites
+
+`set global plan_verifier = 1` turns on `pkg/planverify`: structural invariant checks that
+run on the plan right after the rewrites build it (a predicate on a field the executor
+ignores, a keyless SORT, an unresolvable column reference, a broken node graph). A violation
+fails the query, so a whole BVT run under it is the cheapest way to shake out a rewrite that
+produces a malformed-but-silent plan. Default is 0; keep it off outside test runs.
+
 ## Operator / Pipeline Rules
 
 Read [references/operator-pipeline.md](references/operator-pipeline.md) before changing these paths.
@@ -129,6 +160,10 @@ owning validation. Do not run an unrelated Go package merely to fill a box.
   behavior-level validation for the changed contract pass (for example shell
   syntax + script tests, Make dry-run + target test, or Docker check + relevant build)
 □ at least one real dependent consumer is validated when the change crosses an ownership boundary
+□ lint/test package sets are DERIVED FROM THE DIFF, not recalled:
+  `git diff --name-only <base>...HEAD -- 'pkg/**/*.go' | xargs -n1 dirname | sort -u`
+  (a hand-listed set drifts from the diff; a `golangci-lint` run reported clean this way
+  missed an unused symbol in a package the author forgot they had touched)
 □ git diff --stat -> inspected, no unintended files
 □ all evidence is newer than the last semantic edit/rebase and has a real exit code
 ```

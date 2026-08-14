@@ -5,6 +5,27 @@ description: Pre-push self-review gate for MatrixOne changes — systematic firs
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
 
+## Developer authority and blocker calibration
+
+These rules apply to Codex, Claude, and every other compatible reviewing agent.
+
+- A developer's explicit, recorded decision is authoritative for the reviewed
+  change: accept it, capture its rationale in the decision log, and do not
+  re-raise it as a finding. Revisit it only when the developer asks, or when
+  materially new evidence proves that the stated assumptions no longer hold;
+  present that evidence as a question, not as an override.
+- **Blocking** is exceptional. Mark a finding blocking only when it has a
+  concrete, demonstrated path to a merge-bar failure: correctness breakage,
+  data loss/corruption, security exposure, hang/deadlock, resource leak with
+  material impact, incompatibility, or required validation that is genuinely
+  missing. State the failing inputs/state and consequence.
+- A plausible concern, preference, maintainability improvement, micro-nit,
+  unproven risk, or item already accepted by the developer is **non-blocking**
+  (or omitted). Do not turn every observation into a blocker: if everything is
+  blocking, the label has lost its meaning.
+- When uncertain, classify non-blocking and ask for the developer's decision;
+  never use a blocking label merely to force attention or another review round.
+
 ## Resource Map
 
 | Change shape | Read |
@@ -42,9 +63,9 @@ Then execute (do not shortcut):
    absence must not block the gate.
 2. On results, apply **§3** (trace each finding's functional closure to its terminal
    node; personally spot-check any *cluster of refutations* — a verifier can repeat
-   one wrong call) and **§5** (severity LAST, calibrated to the merge bar;
-   decision-log every won't-fix/known-gap with its reason; no finding without a
-   concrete failure).
+   one wrong call) and **§5** (developer decisions are authoritative; severity LAST,
+   calibrated to the merge bar; decision-log every won't-fix/known-gap with its
+   reason; no finding without a concrete failure).
 3. Present a converged, ranked findings list, each with a **fix-or-decision-log
    recommendation** — not another review round.
 
@@ -152,14 +173,18 @@ G4 line-reread, G5 calibrate-last) before keeping any finding.
 
 ## 5. Convergence discipline — this is what actually breaks the loop
 
-1. **Calibrate to the merge bar.** Flag only what would block merge or cause a
-   real defect (correctness, data loss, leak, hang, incompatibility). Style /
-   micro-nits: fix silently or skip — never loop on them. (Assign severity LAST,
-   per unhappy-path-audit G5.)
-2. **Keep a decision log.** Record every intentional design choice and every
-   "won't fix / acceptable" item (with the why). Re-reviews and PR reviewers
-   re-surface these constantly; a written decision lets you dismiss them in one
-   line instead of re-litigating. (This is the #1 loop cause after unproven findings.)
+1. **Calibrate to the merge bar.** Blocking means a concrete, demonstrated
+   merge-bar failure—not merely a concern. Flag only real defects
+   (correctness, data loss, material leak, hang, incompatibility, security) or
+   genuinely required missing validation; state the failure path. Style /
+   micro-nits: fix silently or skip — never loop on them. When unsure, use
+   non-blocking. (Assign severity LAST, per unhappy-path-audit G5.)
+2. **Keep a decision log and respect it.** Record every intentional design
+   choice and every "won't fix / acceptable" item (with the why). A developer's
+   explicit decision closes that item for this review: do not re-raise or relabel
+   it blocking unless materially new evidence invalidates its stated assumption.
+   Re-reviews and PR reviewers re-surface these constantly; a written decision
+   lets you dismiss them in one line instead of re-litigating.
 3. **Verify before flagging.** No finding survives without a concrete failure
    (§2) that passed the 5 gates (§4).
 4. **One thorough pass beats many incremental.** The whole point: exhaust §1–§4
