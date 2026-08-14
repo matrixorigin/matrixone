@@ -4295,23 +4295,23 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
-	// Index defs added by EARLIER ADD actions in this same ALTER statement, so a later
-	// action's fulltext engine-conflict (⑤) and duplicate-name checks can see them. This
-	// is kept SEPARATE from tableDef.Indexes on purpose: tableDef is the plan's execution
-	// TableDef, and its Indexes drive the pre-create index-table lock loop in the executor
-	// (compile/ddl.go). A not-yet-created hidden table appended there is locked before
-	// HandleCreateIndex builds it → "no such table". So accumulate here, never in tableDef.
-	var addedIdxDefs []*plan.IndexDef
-	currentIndexNames := make(map[string]bool, len(tableDef.Indexes))
-	for _, indexDef := range tableDef.Indexes {
+	// Planning must consume ALTER actions in statement order without mutating
+	// tableDef: tableDef is also shipped to execution, where its original index
+	// list drives pre-DDL locking. currentTableDef is the planner-owned evolving
+	// schema used by every subsequent existence and semantic check.
+	currentTableDef := DeepCopyTableDef(tableDef, true)
+	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
+	for _, indexDef := range currentTableDef.Indexes {
 		currentIndexNames[strings.ToLower(indexDef.IndexName)] = true
 	}
-	droppedForeignKeys := make(map[string]struct{})
-	for _, option := range stmt.Options {
-		if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropForeignKey {
-			droppedForeignKeys[string(drop.Name)] = struct{}{}
+	currentForeignKeyNames := make(map[string]bool, len(currentTableDef.Fkeys))
+	for _, foreignKey := range currentTableDef.Fkeys {
+		if foreignKey.Name != "" {
+			currentForeignKeyNames[foreignKey.Name] = true
 		}
 	}
+	droppedIndexNames := make(map[string]bool)
+	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
@@ -4327,13 +4327,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 			alterTableDrop.Name = constraintName
 			name_not_found := true
+			sequentiallyDropped := false
 			switch opt.Typ {
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
-				// check index
-				for _, indexdef := range tableDef.Indexes {
+				for _, indexdef := range currentTableDef.Indexes {
 					if constraintName == indexdef.IndexName {
-						if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, constraintName, droppedForeignKeys); err != nil {
+						if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
 							return nil, err
 						}
 						name_not_found = false
@@ -4342,10 +4342,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				if !name_not_found {
 					delete(currentIndexNames, strings.ToLower(constraintName))
+					droppedIndexNames[constraintName] = true
+					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+						return indexDef.IndexName == constraintName
+					})
+				} else {
+					sequentiallyDropped = droppedIndexNames[constraintName]
 				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
-				for _, fk := range tableDef.Fkeys {
+				for _, fk := range currentTableDef.Fkeys {
 					if fk.Name == constraintName {
 						name_not_found = false
 						updateSqls = append(
@@ -4359,6 +4365,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						break
 					}
 				}
+				if !name_not_found {
+					delete(currentForeignKeyNames, constraintName)
+					droppedForeignKeyNames[constraintName] = true
+					currentTableDef.Fkeys = RemoveIf(currentTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
+						return fk.Name == constraintName
+					})
+				} else {
+					sequentiallyDropped = droppedForeignKeyNames[constraintName]
+				}
 			default:
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
@@ -4367,6 +4382,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				)
 			}
 			if name_not_found {
+				if sequentiallyDropped {
+					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), constraintName)
+				}
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't DROP '%s'; check that column/key exists",
@@ -4386,11 +4404,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
+				if currentForeignKeyNames[def.ConstraintSymbol] {
+					return nil, moerr.NewErrDuplicateKeyName(ctx.GetContext(), def.ConstraintSymbol)
+				}
+				currentForeignKeyNames[def.ConstraintSymbol] = true
 
-				fkData, err := getForeignKeyData(ctx, databaseName, tableDef, def)
+				fkData, err := getForeignKeyData(ctx, databaseName, currentTableDef, def)
 				if err != nil {
 					return nil, err
 				}
+				currentTableDef.Fkeys = append(currentTableDef.Fkeys, fkData.Def)
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
 						AddFk: &plan.AlterTableAddFk{
@@ -4488,6 +4511,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				); err != nil {
 					return nil, err
 				}
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4528,31 +4552,17 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				// The engine-conflict check (⑤) must see earlier-added indexes too, so pass
-				// tableDef.Indexes + addedIdxDefs as the "existing" set — WITHOUT mutating
-				// tableDef.Indexes (see addedIdxDefs's declaration: doing so makes the
-				// executor lock the new index's not-yet-created hidden table).
-				existed := tableDef.Indexes
-				if len(addedIdxDefs) > 0 {
-					existed = append(append([]*plan.IndexDef{}, tableDef.Indexes...), addedIdxDefs...)
-				}
 				if err := buildFullTextIndexTable(
 					indexInfo,
 					[]*tree.FullTextIndex{def},
 					colMap,
-					existed,
+					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
-
-				// Make this action's new index visible to LATER ADD actions in the SAME
-				// ALTER statement (their ⑤ conflict + duplicate-name checks above), but keep
-				// it OUT of tableDef.Indexes so the executor doesn't lock its hidden table
-				// before HandleCreateIndex creates it (`ALTER … ADD FULLTEXT ft1(a), ADD
-				// FULLTEXT2 ft2(a)` is still rejected via addedIdxDefs).
-				addedIdxDefs = append(addedIdxDefs, indexInfo.TableDef.Indexes...)
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4599,12 +4609,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					indexInfo,
 					[]*tree.Index{def},
 					colMap,
-					tableDef.Indexes,
+					currentTableDef.Indexes,
 					oriPriKeyName,
 					ctx,
 				); err != nil {
 					return nil, err
 				}
+				currentTableDef.Indexes = append(currentTableDef.Indexes, indexInfo.TableDef.Indexes...)
 
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddIndex{
@@ -4633,7 +4644,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break
@@ -4667,7 +4678,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break
@@ -4718,7 +4729,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 			name_not_found := true
 			// check index
-			for _, indexdef := range tableDef.Indexes {
+			for _, indexdef := range currentTableDef.Indexes {
 				if constraintName == indexdef.IndexName {
 					name_not_found = false
 					break

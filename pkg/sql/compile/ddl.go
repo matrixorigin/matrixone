@@ -571,6 +571,14 @@ func validateAlterForeignKeyNameActions(
 	return nil
 }
 
+func foreignKeyParentIDs(fkeys []*plan.ForeignKeyDef) map[uint64]struct{} {
+	parents := make(map[uint64]struct{}, len(fkeys))
+	for _, fkey := range fkeys {
+		parents[fkey.ForeignTbl] = struct{}{}
+	}
+	return parents
+}
+
 func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -731,15 +739,15 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
+	initialForeignKeyParents := foreignKeyParentIDs(oTableDef.Fkeys)
+
 	var hasUpdateConstraints bool
 	var hasDefReplace bool
-
-	removeRefChildTbls := make(map[string]uint64)
-	var addRefChildTbls []uint64
-	var newFkeys []*plan.ForeignKeyDef
-
-	var addIndex []*plan.IndexDef
-	var dropIndexMap = make(map[string]bool)
+	// New foreign keys are stored before pre-existing ones for compatibility
+	// with the constraint ordering produced by earlier versions. Within that
+	// prefix, preserve the ALTER action order while still allowing later DROP
+	// actions to consume an earlier ADD.
+	addedForeignKeyCount := 0
 	var alterIndex *plan.IndexDef
 
 	reqs := make([]*api.AlterTableReq, 0)
@@ -757,13 +765,18 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			switch alterTableDrop.Typ {
 			case plan.AlterTableDrop_FOREIGN_KEY:
 				hasUpdateConstraints = true
-				oTableDef.Fkeys = plan2.RemoveIf(oTableDef.Fkeys, func(fk *plan.ForeignKeyDef) bool {
-					if fk.Name == constraintName {
-						removeRefChildTbls[constraintName] = fk.ForeignTbl
-						return true
+				for i, fk := range oTableDef.Fkeys {
+					if fk.Name != constraintName {
+						continue
 					}
-					return false
-				})
+					copy(oTableDef.Fkeys[i:], oTableDef.Fkeys[i+1:])
+					oTableDef.Fkeys[len(oTableDef.Fkeys)-1] = nil
+					oTableDef.Fkeys = oTableDef.Fkeys[:len(oTableDef.Fkeys)-1]
+					if i < addedForeignKeyCount {
+						addedForeignKeyCount--
+					}
+					break
+				}
 			case plan.AlterTableDrop_INDEX:
 				hasUpdateConstraints = true
 				var notDroppedIndex []*plan.IndexDef
@@ -776,8 +789,6 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 				for idx, indexdef := range oTableDef.Indexes {
 					if indexdef.IndexName == constraintName {
-						dropIndexMap[indexdef.IndexName] = true
-
 						//1. drop index table
 						if indexdef.TableExist {
 							if err := c.runSqlWithOptions(
@@ -821,8 +832,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			}
 		case *plan.AlterTable_Action_AddFk:
 			hasUpdateConstraints = true
-			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
-			newFkeys = append(newFkeys, act.AddFk.Fkey)
+			oTableDef.Fkeys = append(oTableDef.Fkeys, nil)
+			copy(oTableDef.Fkeys[addedForeignKeyCount+1:], oTableDef.Fkeys[addedForeignKeyCount:])
+			oTableDef.Fkeys[addedForeignKeyCount] = act.AddFk.Fkey
+			addedForeignKeyCount++
 
 		case *plan.AlterTable_Action_AddIndex:
 			hasUpdateConstraints = true
@@ -860,6 +873,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			//     		 -> centroids -> indexDef
 			//     		 -> entries   -> indexDef
 			multiTableIndexes := make(map[string]*MultiTableIndex)
+			newIndexParts := make(map[string]struct{}, len(indexTableDef.Indexes))
 			for _, indexDef := range indexTableDef.Indexes {
 
 				// Check for duplicate index names
@@ -867,9 +881,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				// but have different IndexAlgoTableType (metadata, centroids, entries).
 				// We need to check both IndexName and IndexAlgoTableType for duplicates.
 				isDuplicate := false
-				for i := range addIndex {
-					if indexDef.IndexName == addIndex[i].IndexName &&
-						indexDef.IndexAlgoTableType == addIndex[i].IndexAlgoTableType {
+				for i := range oTableDef.Indexes {
+					if indexDef.IndexName == oTableDef.Indexes[i].IndexName &&
+						indexDef.IndexAlgoTableType == oTableDef.Indexes[i].IndexAlgoTableType {
 						isDuplicate = true
 						break
 					}
@@ -877,8 +891,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				if isDuplicate {
 					return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
 				}
-				addIndex = append(addIndex, indexDef)
-
+				partKey := indexDef.IndexName + "\x00" + indexDef.IndexAlgoTableType
+				if _, exists := newIndexParts[partKey]; exists {
+					return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
+				}
+				newIndexParts[partKey] = struct{}{}
 				if indexDef.Unique {
 					// 1. Unique Index related logic
 					err = s.handleUniqueIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
@@ -932,6 +949,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					return err
 				}
 			}
+			oTableDef.Indexes = append(oTableDef.Indexes, indexTableDef.Indexes...)
 		case *plan.AlterTable_Action_AlterIndex:
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterIndex
@@ -1190,48 +1208,26 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	}
 
 	// reset origin table's constraint
+	for _, fkey := range oTableDef.Fkeys {
+		// For compatibility, regenerate constraint names written by older
+		// versions before names became mandatory.
+		if len(fkey.Name) == 0 {
+			fkey.Name = plan2.GenConstraintName()
+		}
+	}
 	originHasFkDef := false
 	originHasIndexDef := false
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
-			for _, fkey := range t.Fkeys {
-				//For compatibility, regenerate constraint name for the constraint with empty name.
-				if len(fkey.Name) == 0 {
-					fkey.Name = plan2.GenConstraintName()
-					newFkeys = append(newFkeys, fkey)
-				} else if _, ok := removeRefChildTbls[fkey.Name]; !ok {
-					newFkeys = append(newFkeys, fkey)
-				}
-			}
-			t.Fkeys = newFkeys
+			t.Fkeys = oTableDef.Fkeys
 			originHasFkDef = true
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.RefChildTableDef:
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.IndexDef:
 			originHasIndexDef = true
-			// NOTE: using map and remainingIndexes slice here to avoid "Modifying a Slice During Iteration".
-			var remainingIndexes []*plan.IndexDef
-			for _, idx := range t.Indexes {
-				if !dropIndexMap[idx.IndexName] {
-					remainingIndexes = append(remainingIndexes, idx)
-				}
-			}
-			t.Indexes = remainingIndexes
-
-			t.Indexes = append(t.Indexes, addIndex...)
-			if alterIndex != nil {
-				for i, idx := range t.Indexes {
-					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].Visible = alterIndex.Visible
-						// NOTE: algo param is same for all the indexDefs of the same indexName.
-						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
-						// so we don't need multiple `alterIndex`.
-						t.Indexes[i].IndexAlgoParams = alterIndex.IndexAlgoParams
-					}
-				}
-			}
+			t.Indexes = oTableDef.Indexes
 			newCt.Cts = append(newCt.Cts, t)
 		case *engine.PrimaryKeyDef:
 			newCt.Cts = append(newCt.Cts, t)
@@ -1241,12 +1237,12 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	}
 	if !originHasFkDef {
 		newCt.Cts = append(newCt.Cts, &engine.ForeignKeyDef{
-			Fkeys: newFkeys,
+			Fkeys: oTableDef.Fkeys,
 		})
 	}
-	if !originHasIndexDef && addIndex != nil {
+	if !originHasIndexDef && len(oTableDef.Indexes) > 0 {
 		newCt.Cts = append(newCt.Cts, &engine.IndexDef{
-			Indexes: addIndex,
+			Indexes: oTableDef.Indexes,
 		})
 	}
 
@@ -1303,9 +1299,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
-	// remove refChildTbls for drop foreign key clause
-	//remove the child table id -- tblId from the parent table -- fkTblId
-	for _, fkTblId := range removeRefChildTbls {
+	finalForeignKeyParents := foreignKeyParentIDs(oTableDef.Fkeys)
+	// Update parent ref-child metadata from the initial and final schemas, not
+	// from intermediate ADD/DROP actions. Replacements that end at the same
+	// parent are a no-op, while ADD->DROP leaves no stale child reference.
+	for fkTblId := range initialForeignKeyParents {
+		if _, stillReferenced := finalForeignKeyParents[fkTblId]; stillReferenced {
+			continue
+		}
 		var fkRelation engine.Relation
 		if fkTblId == 0 {
 			//fk self refer
@@ -1323,9 +1324,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 
-	// append refChildTbls for add foreign key clause
-	//add the child table id -- tblId into the parent table -- fkTblId
-	for _, fkTblId := range addRefChildTbls {
+	for fkTblId := range finalForeignKeyParents {
+		if _, alreadyReferenced := initialForeignKeyParents[fkTblId]; alreadyReferenced {
+			continue
+		}
 		if fkTblId == 0 {
 			//fk self refer
 			err = AddChildTblIdToParentTable(c.proc.Ctx, rel, fkTblId)

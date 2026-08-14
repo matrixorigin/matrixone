@@ -172,4 +172,31 @@ alter table t1 add constraint `fk1` foreign key (b) references t1(a);
 --no error
 alter table t1 drop constraint fk1;
 
+-- ordered FK action state: accepted statements must materialize their final state
+drop table if exists seq_fk;
+create table seq_fk(a int primary key, b int, constraint fk_seq foreign key (b) references seq_fk(a));
+
+-- DROP -> ADD -> DROP leaves the constraint absent
+alter table seq_fk drop foreign key fk_seq,
+    add constraint fk_seq foreign key (b) references seq_fk(a),
+    drop foreign key fk_seq;
+show create table seq_fk;
+
+-- ADD -> DROP is valid against the state produced by the preceding action
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a),
+    drop foreign key fk_seq;
+show create table seq_fk;
+
+-- a repeated DROP fails atomically and leaves the original constraint present
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a);
+alter table seq_fk drop foreign key fk_seq, drop foreign key fk_seq;
+show create table seq_fk;
+
+-- multiple ADD actions keep their statement order in the materialized schema
+alter table seq_fk drop foreign key fk_seq,
+    add constraint fk_first foreign key (b) references seq_fk(a),
+    add constraint fk_second foreign key (b) references seq_fk(a);
+show create table seq_fk;
+drop table seq_fk;
+
 drop database if exists fk_self_refer4;

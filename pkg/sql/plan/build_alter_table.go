@@ -806,11 +806,8 @@ func isInplaceColumnDefinition(
 ) (ok bool, err error) {
 	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
-		// Algorithm selection runs before COPY applies the ALTER actions. A
-		// missing column can therefore be one added by an earlier action in the
-		// same statement. Choose COPY and let its sequential planner validate the
-		// evolving table definition.
-		return false, nil
+		return false, moerr.NewBadFieldError(
+			ctx, column.Name.ColNameOrigin(), tableDef.Name)
 	}
 
 	ok, err = positionMatched(ctx, position, tableDef, oCol)

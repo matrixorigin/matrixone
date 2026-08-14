@@ -446,9 +446,14 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 		})
 	}
 
-	_, err := buildSingleStmt(NewMockOptimizer(false), t,
-		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT`)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError))
+	for _, sql := range []string{
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT`,
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=INPLACE`,
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=COPY`,
+	} {
+		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), sql)
+	}
 }
 
 func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
@@ -480,7 +485,7 @@ func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
 	}
 }
 
-func TestAlterTableInplaceRejectsReplacementBeforeDrop(t *testing.T) {
+func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
 		IndexName:  "idx",
@@ -492,6 +497,83 @@ func TestAlterTableInplaceRejectsReplacementBeforeDrop(t *testing.T) {
 	_, err := buildSingleStmt(mock, t,
 		"ALTER TABLE t1 ADD INDEX idx(b), DROP INDEX idx")
 	require.Error(t, err)
+}
+
+func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+			IndexName:  "idx",
+			Parts:      []string{"a"},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		}}
+		return mock
+	}
+
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD INDEX fresh_idx(b), DROP INDEX fresh_idx`,
+		`ALTER TABLE t1 DROP INDEX idx, ADD INDEX idx(b), DROP INDEX idx`,
+	} {
+		logicPlan, err := buildSingleStmt(newMock(), t, sql)
+		require.NoError(t, err, sql)
+		require.Equal(t, plan.AlterTable_INPLACE,
+			logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+	}
+
+	_, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 DROP INDEX idx, DROP INDEX idx`)
+	require.ErrorContains(t, err, "Can't DROP 'idx'")
+}
+
+func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
+		mock.ctxt.tables["t1"].Fkeys = []*plan.ForeignKeyDef{{
+			Name:       "fk_x",
+			Cols:       []uint64{1},
+			ForeignTbl: 0,
+		}}
+		return mock
+	}
+
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD CONSTRAINT fk_new FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY fk_new`,
+		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, ADD CONSTRAINT fk_x FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY fk_x`,
+	} {
+		logicPlan, err := buildSingleStmt(newMock(), t, sql)
+		require.NoError(t, err, sql)
+		require.Equal(t, plan.AlterTable_INPLACE,
+			logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+	}
+
+	_, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, DROP FOREIGN KEY fk_x`)
+	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
+}
+
+func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+		if name == "experimental_fulltext2_index" {
+			return int64(1), nil
+		}
+		return nil, nil
+	}
+	mock.ctxt.tables["t1"].Cols[1].Typ.Id = int32(types.T_text)
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+		IndexName:  "ft",
+		Parts:      []string{"b"},
+		IndexAlgo:  catalog.MOIndexFullTextAlgo.ToString(),
+		TableExist: true,
+	}}
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		`ALTER TABLE t1 DROP INDEX ft, ADD FULLTEXT2 ft(b)`)
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_INPLACE,
+		logicPlan.GetDdl().GetAlterTable().AlgorithmType)
 }
 
 func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
@@ -830,7 +912,7 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 				},
 			},
 			wantOk:  false,
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "different type",

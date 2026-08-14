@@ -135,6 +135,14 @@ func TestValidateAlterForeignKeyNameActionsUsesSequentialState(t *testing.T) {
 		context.Background(), nil,
 		[]*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x"), addFK("fk_x")},
 	))
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), nil,
+		[]*plan2.AlterTable_Action{addFK("fk_x"), dropFK("fk_x")},
+	))
+	require.NoError(t, validateAlterForeignKeyNameActions(
+		context.Background(), existing,
+		[]*plan2.AlterTable_Action{dropFK("fk_x"), addFK("fk_x"), dropFK("fk_x")},
+	))
 
 	for _, tc := range []struct {
 		name    string

@@ -114,4 +114,30 @@ Duplicate foreign key constraint name 'fk1'
 alter table t1 add constraint `fk1` foreign key (b) references t1(a);
 Duplicate foreign key constraint name 'fk1'
 alter table t1 drop constraint fk1;
+drop table if exists seq_fk;
+create table seq_fk(a int primary key, b int, constraint fk_seq foreign key (b) references seq_fk(a));
+alter table seq_fk drop foreign key fk_seq,
+add constraint fk_seq foreign key (b) references seq_fk(a),
+drop foreign key fk_seq;
+show create table seq_fk;
+Table    Create Table
+seq_fk    CREATE TABLE `seq_fk` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a),
+drop foreign key fk_seq;
+show create table seq_fk;
+Table    Create Table
+seq_fk    CREATE TABLE `seq_fk` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a);
+alter table seq_fk drop foreign key fk_seq, drop foreign key fk_seq;
+Can't DROP 'fk_seq'; check that column/key exists
+show create table seq_fk;
+Table    Create Table
+seq_fk    CREATE TABLE `seq_fk` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `fk_seq` FOREIGN KEY (`b`) REFERENCES `seq_fk` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+alter table seq_fk drop foreign key fk_seq,
+add constraint fk_first foreign key (b) references seq_fk(a),
+add constraint fk_second foreign key (b) references seq_fk(a);
+show create table seq_fk;
+Table    Create Table
+seq_fk    CREATE TABLE `seq_fk` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  CONSTRAINT `fk_first` FOREIGN KEY (`b`) REFERENCES `seq_fk` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `fk_second` FOREIGN KEY (`b`) REFERENCES `seq_fk` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+drop table seq_fk;
 drop database if exists fk_self_refer4;
