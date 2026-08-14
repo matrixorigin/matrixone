@@ -1005,7 +1005,12 @@ func TestHAKeeperClientSendLogHeartbeat(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
-func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAKeeperClient)) {
+type notHAKeeperTestCase struct {
+	name string
+	run  func(*testing.T, *managedHAKeeperClient)
+}
+
+func testNotHAKeeperErrorIsHandled(t *testing.T, cases []notHAKeeperTestCase) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := DefaultConfig()
 	cfg1.UUID = uuid.New().String()
@@ -1061,91 +1066,111 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service2.ID()
 	assert.NoError(t, service2.store.startHAKeeperReplica(1, peers, false))
-	// manually construct a HAKeeper client that is connected to service1
-	pool := &sync.Pool{}
-	pool.New = func() interface{} {
-		return &RPCRequest{pool: pool}
+	require.Eventually(t, func() bool {
+		isLeader, _, err := service2.store.isLeaderHAKeeper()
+		return err == nil && isLeader
+	}, 10*time.Second, 10*time.Millisecond,
+		"service2 did not become HAKeeper leader")
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			// Each operation starts from a fresh client generation connected to
+			// service1, which deliberately is not the HAKeeper. The two services
+			// are immutable shared fixture state; client generations remain isolated.
+			pool := &sync.Pool{}
+			pool.New = func() interface{} {
+				return &RPCRequest{pool: pool}
+			}
+			respPool := &sync.Pool{}
+			respPool.New = func() interface{} {
+				return &RPCResponse{pool: respPool}
+			}
+			cfg := HAKeeperClientConfig{
+				ServiceAddresses: []string{
+					cfg1.LogServiceServiceAddr(),
+					cfg2.LogServiceServiceAddr(),
+				},
+			}
+			c := &hakeeperClient{
+				cfg:      cfg,
+				pool:     pool,
+				respPool: respPool,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			cc, err := getRPCClient(
+				ctx,
+				"",
+				cfg1.LogServiceServiceAddr(),
+				c.respPool,
+				defaultMaxMessageSize,
+				false,
+				0,
+			)
+			require.NoError(t, err)
+			c.addr = cfg1.LogServiceServiceAddr()
+			c.client = cc
+			client := &managedHAKeeperClient{cfg: cfg}
+			client.mu.client = c
+			defer func() {
+				require.NoError(t, client.Close())
+			}()
+			testCase.run(t, client)
+		})
 	}
-	respPool := &sync.Pool{}
-	respPool.New = func() interface{} {
-		return &RPCResponse{pool: respPool}
-	}
-	cfg := HAKeeperClientConfig{
-		ServiceAddresses: []string{cfg1.LogServiceServiceAddr(), cfg2.LogServiceServiceAddr()},
-	}
-	c := &hakeeperClient{
-		cfg:      cfg,
-		pool:     pool,
-		respPool: respPool,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	cc, err := getRPCClient(
-		ctx,
-		"",
-		cfg1.LogServiceServiceAddr(),
-		c.respPool,
-		defaultMaxMessageSize,
-		false,
-		0,
-	)
-	require.NoError(t, err)
-	c.addr = cfg1.LogServiceServiceAddr()
-	c.client = cc
-	client := &managedHAKeeperClient{cfg: cfg}
-	client.mu.client = c
-	defer func() {
-		require.NoError(t, client.Close())
-	}()
-	fn(t, client)
 }
 
-func TestGetClusterDetailsWhenNotConnectedToHAKeeper(t *testing.T) {
-	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.mu.client
+func TestNotHAKeeperErrorIsHandled(t *testing.T) {
+	checkGenerationReplaced := func(
+		t *testing.T,
+		c *managedHAKeeperClient,
+		call func(context.Context) error,
+	) {
+		oldClient := c.getCurrentClient()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := c.GetClusterDetails(ctx)
-		require.NoError(t, err)
-		require.True(t, oldc != c.mu.client)
+		require.NoError(t, call(ctx))
+		require.NotSame(t, oldClient, c.getCurrentClient())
 	}
-	testNotHAKeeperErrorIsHandled(t, fn)
-}
 
-func TestSendCNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
-	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.mu.client
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
-		require.NoError(t, err)
-		require.True(t, oldc != c.mu.client)
-	}
-	testNotHAKeeperErrorIsHandled(t, fn)
-}
-
-func TestSendTNHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
-	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.mu.client
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := c.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{})
-		require.NoError(t, err)
-		require.True(t, oldc != c.mu.client)
-	}
-	testNotHAKeeperErrorIsHandled(t, fn)
-}
-
-func TestSendLogHeartbeatWhenNotConnectedToHAKeeper(t *testing.T) {
-	fn := func(t *testing.T, c *managedHAKeeperClient) {
-		oldc := c.mu.client
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := c.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
-		require.NoError(t, err)
-		require.True(t, oldc != c.mu.client)
-	}
-	testNotHAKeeperErrorIsHandled(t, fn)
+	testNotHAKeeperErrorIsHandled(t, []notHAKeeperTestCase{
+		{
+			name: "get_cluster_details",
+			run: func(t *testing.T, c *managedHAKeeperClient) {
+				checkGenerationReplaced(t, c, func(ctx context.Context) error {
+					_, err := c.GetClusterDetails(ctx)
+					return err
+				})
+			},
+		},
+		{
+			name: "send_cn_heartbeat",
+			run: func(t *testing.T, c *managedHAKeeperClient) {
+				checkGenerationReplaced(t, c, func(ctx context.Context) error {
+					_, err := c.SendCNHeartbeat(ctx, pb.CNStoreHeartbeat{})
+					return err
+				})
+			},
+		},
+		{
+			name: "send_tn_heartbeat",
+			run: func(t *testing.T, c *managedHAKeeperClient) {
+				checkGenerationReplaced(t, c, func(ctx context.Context) error {
+					_, err := c.SendTNHeartbeat(ctx, pb.TNStoreHeartbeat{})
+					return err
+				})
+			},
+		},
+		{
+			name: "send_log_heartbeat",
+			run: func(t *testing.T, c *managedHAKeeperClient) {
+				checkGenerationReplaced(t, c, func(ctx context.Context) error {
+					_, err := c.SendLogHeartbeat(ctx, pb.LogStoreHeartbeat{})
+					return err
+				})
+			},
+		},
+	})
 }
 
 func TestHAKeeperClientUpdateCNLabel(t *testing.T) {

@@ -55,41 +55,8 @@ func TestDataBranchPick(t *testing.T) {
 			t.Log("pick with DELETE propagation")
 			runPickWithDelete(t, ctx, sqlDB)
 
-			t.Log("pick conflict SKIP")
-			runPickConflictSkip(t, ctx, sqlDB)
-
-			t.Log("pick conflict ACCEPT")
-			runPickConflictAccept(t, ctx, sqlDB)
-
-			t.Log("pick conflict FAIL")
-			runPickConflictFail(t, ctx, sqlDB)
-
-			t.Log("pick update/update conflict SKIP")
-			runPickConflictSkipUpdateUpdate(t, ctx, sqlDB)
-
-			t.Log("pick update/update conflict ACCEPT")
-			runPickConflictAcceptUpdateUpdate(t, ctx, sqlDB)
-
-			t.Log("pick update/update conflict FAIL")
-			runPickConflictFailUpdateUpdate(t, ctx, sqlDB)
-
-			t.Log("pick update/delete conflict SKIP")
-			runPickConflictSkipUpdateDelete(t, ctx, sqlDB)
-
-			t.Log("pick update/delete conflict ACCEPT")
-			runPickConflictAcceptUpdateDelete(t, ctx, sqlDB)
-
-			t.Log("pick update/delete conflict FAIL")
-			runPickConflictFailUpdateDelete(t, ctx, sqlDB)
-
-			t.Log("pick delete/update conflict SKIP")
-			runPickConflictSkipDeleteUpdate(t, ctx, sqlDB)
-
-			t.Log("pick delete/update conflict ACCEPT")
-			runPickConflictAcceptDeleteUpdate(t, ctx, sqlDB)
-
-			t.Log("pick delete/update conflict FAIL")
-			runPickConflictFailDeleteUpdate(t, ctx, sqlDB)
+			t.Log("pick conflict matrix")
+			runPickConflictMatrix(t, ctx, sqlDB)
 
 			t.Log("pick with subquery KEYS")
 			runPickSubqueryKeys(t, ctx, sqlDB)
@@ -291,288 +258,126 @@ func runPickWithDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	require.Equal(t, []int{1, 3, 5, 6}, pks)
 }
 
-// runPickConflictSkip: overlapping INSERT, SKIP keeps dst value.
-func runPickConflictSkip(t *testing.T, parentCtx context.Context, db *sql.DB) {
+// runPickConflictMatrix covers four conflict shapes against all three policies.
+// The cases share only their immutable LCA table; every source/destination pair
+// has unique names, so the matrix keeps independent state without paying for 12
+// database create/drop lifecycles.
+func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+	// The parent already provides the suite's 360-second hang guard. Reuse it
+	// for the whole matrix rather than giving 12 cases a tighter aggregate
+	// deadline than they had as independent tests on slower CI runners.
+	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
 	_, cleanup := pickDB(t, ctx, db)
 	defer cleanup()
 
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	// Both branches insert key 3 with different values
-	execSQLDB(t, ctx, db, "insert into src values (3,300)")
-	execSQLDB(t, ctx, db, "insert into dst values (3,999)")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(3) when conflict skip")
-
-	// dst should keep its own value (999) for key 3
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=3").Scan(&b))
-	require.Equal(t, 999, b)
-}
-
-// runPickConflictAccept: overlapping INSERT, ACCEPT takes src value.
-func runPickConflictAccept(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "insert into src values (3,300)")
-	execSQLDB(t, ctx, db, "insert into dst values (3,999)")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(3) when conflict accept")
-
-	// dst should accept src's value (300) for key 3
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=3").Scan(&b))
-	require.Equal(t, 300, b)
-}
-
-// runPickConflictFail: overlapping INSERT, FAIL raises error.
-func runPickConflictFail(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "insert into src values (3,300)")
-	execSQLDB(t, ctx, db, "insert into dst values (3,999)")
-
-	errMsg := execExpectError(t, ctx, db,
-		"data branch pick src into dst keys(3) when conflict fail")
-	require.Contains(t, strings.ToLower(errMsg), "conflict")
-
-	// dst should still have its original value (unchanged since FAIL aborts)
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=3").Scan(&b))
-	require.Equal(t, 999, b)
-}
-
-func runPickConflictSkipUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
-
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
-	require.Equal(t, 999, b)
-}
-
-func runPickConflictAcceptUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
-
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
-	require.Equal(t, 111, b)
-}
-
-func runPickConflictFailUpdateUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	errMsg := execExpectError(t, ctx, db,
-		"data branch pick src into dst keys(1) when conflict fail")
-	require.Contains(t, strings.ToLower(errMsg), "conflict")
-
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
-	require.Equal(t, 999, b)
-}
-
-// runPickConflictSkipUpdateDelete: src updates a row while dst deletes it.
-func runPickConflictSkipUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "delete from dst where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
-
-	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
-}
-
-func runPickConflictAcceptUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "delete from dst where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
-
-	require.Equal(t, 1, queryRowCount(t, ctx, db, "select count(*) from dst where a=1 and b=111"))
-}
-
-// runPickConflictFailUpdateDelete: update/delete conflicts must not degrade to ACCEPT.
-func runPickConflictFailUpdateDelete(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "update src set b=111 where a=1")
-	execSQLDB(t, ctx, db, "delete from dst where a=1")
-
-	errMsg := execExpectError(t, ctx, db,
-		"data branch pick src into dst keys(1) when conflict fail")
-	require.Contains(t, strings.ToLower(errMsg), "conflict")
-	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
-}
-
-func runPickConflictSkipDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "delete from src where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict skip")
-
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
-	require.Equal(t, 999, b)
-}
-
-func runPickConflictAcceptDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "delete from src where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	execSQLDB(t, ctx, db, "data branch pick src into dst keys(1) when conflict accept")
-
-	require.Equal(t, 0, queryRowCount(t, ctx, db, "select count(*) from dst where a=1"))
-}
-
-func runPickConflictFailDeleteUpdate(t *testing.T, parentCtx context.Context, db *sql.DB) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
-	defer cancel()
-
-	_, cleanup := pickDB(t, ctx, db)
-	defer cleanup()
-
-	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
-	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20)")
-	execSQLDB(t, ctx, db, "data branch create table src from base")
-	execSQLDB(t, ctx, db, "data branch create table dst from base")
-
-	execSQLDB(t, ctx, db, "delete from src where a=1")
-	execSQLDB(t, ctx, db, "update dst set b=999 where a=1")
-
-	errMsg := execExpectError(t, ctx, db,
-		"data branch pick src into dst keys(1) when conflict fail")
-	require.Contains(t, strings.ToLower(errMsg), "conflict")
-
-	var b int
-	require.NoError(t, db.QueryRowContext(ctx, "select b from dst where a=1").Scan(&b))
-	require.Equal(t, 999, b)
+	execSQLDB(t, ctx, db, "create table conflict_base (a int primary key, b int)")
+	execSQLDB(t, ctx, db, "insert into conflict_base values (1,10),(2,20)")
+
+	type conflictShape struct {
+		name        string
+		key         int
+		srcMutation string
+		dstMutation string
+		verify      func(*testing.T, context.Context, *sql.DB, string, string)
+	}
+
+	shapes := []conflictShape{
+		{
+			name:        "insert_insert",
+			key:         3,
+			srcMutation: "insert into %s values (3,300)",
+			dstMutation: "insert into %s values (3,999)",
+			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
+				expected := 999
+				if policy == "accept" {
+					expected = 300
+				}
+				var b int
+				require.NoError(t, db.QueryRowContext(ctx,
+					fmt.Sprintf("select b from %s where a=3", dst)).Scan(&b))
+				require.Equal(t, expected, b)
+			},
+		},
+		{
+			name:        "update_update",
+			key:         1,
+			srcMutation: "update %s set b=111 where a=1",
+			dstMutation: "update %s set b=999 where a=1",
+			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
+				expected := 999
+				if policy == "accept" {
+					expected = 111
+				}
+				var b int
+				require.NoError(t, db.QueryRowContext(ctx,
+					fmt.Sprintf("select b from %s where a=1", dst)).Scan(&b))
+				require.Equal(t, expected, b)
+			},
+		},
+		{
+			name:        "update_delete",
+			key:         1,
+			srcMutation: "update %s set b=111 where a=1",
+			dstMutation: "delete from %s where a=1",
+			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
+				if policy == "accept" {
+					require.Equal(t, 1, queryRowCount(t, ctx, db,
+						fmt.Sprintf("select count(*) from %s where a=1 and b=111", dst)))
+					return
+				}
+				require.Equal(t, 0, queryRowCount(t, ctx, db,
+					fmt.Sprintf("select count(*) from %s where a=1", dst)))
+			},
+		},
+		{
+			name:        "delete_update",
+			key:         1,
+			srcMutation: "delete from %s where a=1",
+			dstMutation: "update %s set b=999 where a=1",
+			verify: func(t *testing.T, ctx context.Context, db *sql.DB, dst, policy string) {
+				if policy == "accept" {
+					require.Equal(t, 0, queryRowCount(t, ctx, db,
+						fmt.Sprintf("select count(*) from %s where a=1", dst)))
+					return
+				}
+				require.Equal(t, 1, queryRowCount(t, ctx, db,
+					fmt.Sprintf("select count(*) from %s where a=1 and b=999", dst)))
+			},
+		},
+	}
+
+	for _, shape := range shapes {
+		shape := shape
+		t.Run(shape.name, func(t *testing.T) {
+			for _, policy := range []string{"skip", "accept", "fail"} {
+				policy := policy
+				t.Run(policy, func(t *testing.T) {
+					src := fmt.Sprintf("src_%s_%s", shape.name, policy)
+					dst := fmt.Sprintf("dst_%s_%s", shape.name, policy)
+					execSQLDB(t, ctx, db, fmt.Sprintf(
+						"data branch create table %s from conflict_base", src))
+					execSQLDB(t, ctx, db, fmt.Sprintf(
+						"data branch create table %s from conflict_base", dst))
+					execSQLDB(t, ctx, db, fmt.Sprintf(shape.srcMutation, src))
+					execSQLDB(t, ctx, db, fmt.Sprintf(shape.dstMutation, dst))
+
+					stmt := fmt.Sprintf(
+						"data branch pick %s into %s keys(%d) when conflict %s",
+						src, dst, shape.key, policy)
+					if policy == "fail" {
+						errMsg := execExpectError(t, ctx, db, stmt)
+						require.Contains(t, strings.ToLower(errMsg), "conflict")
+					} else {
+						execSQLDB(t, ctx, db, stmt)
+					}
+					shape.verify(t, ctx, db, dst, policy)
+				})
+			}
+		})
+	}
 }
 
 // runPickSubqueryKeys: use a SELECT subquery to specify which PKs to pick.
@@ -587,9 +392,8 @@ func runPickSubqueryKeys(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	execSQLDB(t, ctx, db, "create table base (a int primary key, b int)")
 	execSQLDB(t, ctx, db, "insert into base values (1,10),(2,20),(3,30)")
 	execSQLDB(t, ctx, db, "data branch create table src from base")
-	for i := 4; i <= 20; i++ {
-		execSQLDB(t, ctx, db, fmt.Sprintf("insert into src values (%d,%d)", i, i*10))
-	}
+	execSQLDB(t, ctx, db,
+		"insert into src select result, result * 10 from generate_series(4,20) g")
 
 	// Create a helper table with the keys we want to pick
 	execSQLDB(t, ctx, db, "create table pick_keys (k int)")
