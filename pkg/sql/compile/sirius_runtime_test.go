@@ -196,7 +196,8 @@ func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 	}
 	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}
 	c := &Compile{proc: proc}
-	require.NoError(t, c.materializeSQLSelectLimit(queryPlan))
+	materialization, err := c.materializeSQLSelectLimit(queryPlan)
+	require.NoError(t, err)
 	require.False(t, query.ApplySqlSelectLimit)
 	require.Equal(t, uint64(3), query.Nodes[0].Limit.GetLit().GetU64Val())
 
@@ -209,4 +210,8 @@ func TestSQLSelectLimitIsMaterializedBeforeSiriusExport(t *testing.T) {
 	fetch := offloadedPlan.Relations[0].GetRoot().Input.GetFetch()
 	require.NotNil(t, fetch)
 	require.Equal(t, int64(3), fetch.GetCount())
+
+	materialization.restore()
+	require.True(t, query.ApplySqlSelectLimit)
+	require.Nil(t, query.Nodes[0].Limit)
 }

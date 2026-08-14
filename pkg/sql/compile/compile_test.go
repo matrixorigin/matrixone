@@ -267,6 +267,55 @@ func TestSQLSelectLimitOperatorSelection(t *testing.T) {
 	}
 }
 
+func TestSQLSelectLimitIsResolvedForEachCachedPlanReuse(t *testing.T) {
+	tests := []struct {
+		name   string
+		limits []uint64
+	}{
+		{name: "finite to finite", limits: []uint64{2, 4}},
+		{name: "unlimited to finite", limits: []uint64{^uint64(0), 3}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.ApplySQLSelectLimit = true
+			limitIndex := 0
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == plan2.SQLSelectLimitVariable {
+					return tc.limits[limitIndex], nil
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+			t.Cleanup(proc.Free)
+
+			query := &plan.Query{
+				StmtType:            plan.Query_SELECT,
+				ApplySqlSelectLimit: true,
+				Steps:               []int32{0},
+				Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+			}
+			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+			compiler := &Compile{proc: proc}
+
+			for i, want := range tc.limits {
+				limitIndex = i
+				materialization, err := compiler.materializeSQLSelectLimit(queryPlan)
+				require.NoError(t, err)
+				require.False(t, query.ApplySqlSelectLimit)
+				if want == ^uint64(0) {
+					require.Nil(t, query.Nodes[0].Limit)
+				} else {
+					require.Equal(t, want, query.Nodes[0].Limit.GetLit().GetU64Val())
+				}
+				materialization.restore()
+				require.True(t, query.ApplySqlSelectLimit)
+				require.Nil(t, query.Nodes[0].Limit)
+			}
+		})
+	}
+}
+
 type sqlSelectLimitReleaseOperator struct {
 	*colexec.MockOperator
 	released bool

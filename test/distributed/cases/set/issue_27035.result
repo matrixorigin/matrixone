@@ -10,6 +10,32 @@ id
 1
 2
 3
+set @@sql_select_limit = 2;
+select id from sql_select_limit_27035 order by id;
+id
+1
+2
+set @@sql_select_limit = 4;
+select id from sql_select_limit_27035 order by id;
+id
+1
+2
+3
+4
+set @@sql_select_limit = default;
+select id + 0 as id from sql_select_limit_27035 order by id;
+id
+1
+2
+3
+4
+5
+set @@sql_select_limit = 3;
+select id + 0 as id from sql_select_limit_27035 order by id;
+id
+1
+2
+3
 select id from sql_select_limit_27035 order by id limit 5;
 id
 1

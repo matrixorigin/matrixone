@@ -9,6 +9,18 @@ insert into sql_select_limit_27035 values (1), (2), (3), (4), (5);
 set @@sql_select_limit = 3;
 select id from sql_select_limit_27035 order by id;
 
+-- A transparent cached plan must resolve a changed finite value again.
+set @@sql_select_limit = 2;
+select id from sql_select_limit_27035 order by id;
+set @@sql_select_limit = 4;
+select id from sql_select_limit_27035 order by id;
+
+-- A plan first cached under the unlimited default must become finite later.
+set @@sql_select_limit = default;
+select id + 0 as id from sql_select_limit_27035 order by id;
+set @@sql_select_limit = 3;
+select id + 0 as id from sql_select_limit_27035 order by id;
+
 -- An explicit LIMIT takes precedence, even when it is less restrictive.
 select id from sql_select_limit_27035 order by id limit 5;
 

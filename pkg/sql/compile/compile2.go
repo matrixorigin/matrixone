@@ -147,8 +147,12 @@ func (c *Compile) Compile(
 	// but before Sirius can export the logical plan. This preserves optimizer
 	// estimates while ensuring both native and offloaded execution see the same
 	// finite top-level LIMIT.
-	if err = c.materializeSQLSelectLimit(queryPlan); err != nil {
-		return err
+	materialization, materializeErr := c.materializeSQLSelectLimit(queryPlan)
+	if materializeErr != nil {
+		return materializeErr
+	}
+	if materialization.query != nil {
+		defer materialization.restore()
 	}
 	if offloaded, offloadErr := c.tryCompileSiriusRead(execTopContext, queryPlan); offloadErr != nil {
 		return offloadErr
