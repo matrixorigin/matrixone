@@ -1833,15 +1833,36 @@ func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 		FROM nation
 		GROUP BY name`,
 		`
-		SELECT n_regionkey
-		FROM nation
-		GROUP BY n_regionkey
-		HAVING EXISTS (
-			SELECT n_name
-			FROM nation2
-			GROUP BY n_name
-			HAVING COUNT(*) > nation.n_regionkey
-		)`,
+			SELECT n_regionkey
+			FROM nation
+			GROUP BY n_regionkey
+			HAVING EXISTS (
+				SELECT n_name
+				FROM nation2
+				GROUP BY n_name
+				HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT n_nationkey,
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			GROUP BY n_nationkey`,
+		`
+			SELECT n_name,
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			WHERE n_regionkey = 1
+			GROUP BY n_name`,
 	}
 
 	for _, sql := range sqls {
@@ -1873,15 +1894,32 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 		FROM nation
 		ORDER BY nation.n_regionkey`,
 		`
-		SELECT nation.n_regionkey,
-		       EXISTS (
-		           SELECT n_nationkey
-		           FROM nation2
-		           GROUP BY n_nationkey
-		           HAVING n_nationkey >= nation.n_regionkey
-		       ) AS ex
-		FROM nation
-		ORDER BY nation.n_regionkey`,
+			SELECT nation.n_regionkey,
+			       EXISTS (
+			           SELECT n_nationkey
+			           FROM nation2
+			           GROUP BY n_nationkey
+			           HAVING n_nationkey >= nation.n_regionkey
+			       ) AS ex
+			FROM nation
+			ORDER BY nation.n_regionkey`,
+		`
+			SELECT n_regionkey
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT MAX(EXISTS (
+			    SELECT n_nationkey
+			    FROM nation2
+			    GROUP BY n_nationkey
+			    HAVING n_nationkey >= nation.n_regionkey
+			))
+			FROM nation`,
 	}
 
 	for _, sql := range sqls {

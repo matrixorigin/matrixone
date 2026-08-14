@@ -151,6 +151,16 @@ select p.id, exists (select corr_key from child_agg group by corr_key having cor
 2  ¦  1  𝄀
 3  ¦  1  𝄀
 4  ¦  1
+select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p group by p.id order by p.id;
+➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select p.id from parent_agg p having exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) order by p.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
 select sum(p.id), exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p;
 -- @regex("must appear in the GROUP BY clause", true)
 must appear in the GROUP BY clause

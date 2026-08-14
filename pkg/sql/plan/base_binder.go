@@ -579,10 +579,14 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			}
 		} else {
+			corrRelPos, corrColPos := relPos, colPos
+			if aggRelPos, aggColPos, ok := b.correlatedFullGroupByAggregateRef(relPos, colPos, col, typ); ok {
+				corrRelPos, corrColPos = aggRelPos, aggColPos
+			}
 			expr.Expr = &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
-					RelPos: relPos,
-					ColPos: colPos,
+					RelPos: corrRelPos,
+					ColPos: corrColPos,
 					Depth:  depth,
 				},
 			}
@@ -629,6 +633,40 @@ func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col st
 	return 0, false
 }
 
+func (b *baseBinder) correlatedFullGroupByAggregateRef(relPos, colPos int32, col string, typ *plan.Type) (int32, int32, bool) {
+	if b == nil || b.ctx == nil || b.builder == nil || typ == nil || !b.builder.mysqlFullGroupByCompat {
+		return 0, 0, false
+	}
+	if len(b.ctx.groups) == 0 && len(b.ctx.times) == 0 {
+		return 0, 0, false
+	}
+	if groupByContainsColumn(b.ctx, relPos, colPos) {
+		return 0, 0, false
+	}
+	binding := b.ctx.bindingByTag[relPos]
+	if binding == nil || !b.builder.mysqlFullGroupByAllowsColumn(b.ctx, binding, colPos) {
+		return 0, 0, false
+	}
+
+	source := &plan.Expr{
+		Typ: *typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+				Name:   col,
+			},
+		},
+	}
+	agg, err := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{source})
+	if err != nil {
+		return 0, 0, false
+	}
+	aggPos := int32(len(b.ctx.aggregates))
+	b.ctx.aggregates = append(b.ctx.aggregates, agg)
+	return b.ctx.aggregateTag, aggPos, true
+}
+
 func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
 	ctx := b.corrColRefTargetContext(corr)
 	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
@@ -638,18 +676,29 @@ func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
 	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
 }
 
-func (b *baseBinder) corrColRefTargetsUngroupedQuery(corr *plan.CorrColRef) bool {
-	ctx := b.corrColRefTargetContext(corr)
-	if ctx == nil {
+func (b *baseBinder) corrColRefAllowedByCurrentQuery(corr *plan.CorrColRef) bool {
+	return b.corrColRefAllowedByQueryContext(b.ctx, corr)
+}
+
+func (b *baseBinder) corrColRefAllowedByTargetQuery(corr *plan.CorrColRef) bool {
+	return b.corrColRefAllowedByQueryContext(b.corrColRefTargetContext(corr), corr)
+}
+
+func (b *baseBinder) corrColRefAllowedByQueryContext(ctx *BindContext, corr *plan.CorrColRef) bool {
+	if ctx == nil || corr == nil {
 		return false
 	}
-	if _, ok := ctx.bindingByTag[corr.RelPos]; !ok {
+	if ctx.aggregateTag > 0 && corr.RelPos == ctx.aggregateTag {
+		return true
+	}
+	binding, ok := ctx.bindingByTag[corr.RelPos]
+	if !ok || binding == nil {
 		return false
 	}
-	return len(ctx.groups) == 0 &&
-		len(ctx.aggregates) == 0 &&
-		len(ctx.times) == 0 &&
-		!ctx.hasSelectListAggregate
+	if len(ctx.groups) == 0 && len(ctx.times) == 0 {
+		return true
+	}
+	return b.builder.mysqlFullGroupByAllowsColumn(ctx, binding, corr.ColPos)
 }
 
 func (b *baseBinder) corrColRefTargetContext(corr *plan.CorrColRef) *BindContext {

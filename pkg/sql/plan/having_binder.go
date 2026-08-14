@@ -141,8 +141,9 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
 			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
 				b.corrColRefTargetsGroup(corr.Corr) ||
-				b.corrColRefTargetsUngroupedQuery(corr.Corr) {
+				b.corrColRefAllowedByTargetQuery(corr.Corr) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)

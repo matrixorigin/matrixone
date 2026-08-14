@@ -60,6 +60,8 @@ set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) as ex from parent_agg p order by p.id;
 select p.id, exists (select 1 from child_agg c having count(*) >= p.id) as ex from parent_agg p order by p.id;
 select p.id, exists (select corr_key from child_agg group by corr_key having corr_key >= p.id) as ex from parent_agg p order by p.id;
+select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p group by p.id order by p.id;
+select p.id from parent_agg p having exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) order by p.id;
 -- @regex("must appear in the GROUP BY clause",true)
 select sum(p.id), exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p;
 -- @regex("must appear in the GROUP BY clause",true)
