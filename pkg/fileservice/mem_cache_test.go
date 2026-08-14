@@ -49,6 +49,21 @@ func (a *reclaimTrackingAllocator) Reclaim() error {
 	return nil
 }
 
+type blockingCacheDataReservation struct {
+	cacheDataReservation
+	committed chan struct{}
+	unblock   chan struct{}
+	once      sync.Once
+}
+
+func (r *blockingCacheDataReservation) commit() {
+	r.cacheDataReservation.commit()
+	r.once.Do(func() {
+		close(r.committed)
+	})
+	<-r.unblock
+}
+
 func TestMemCacheLeak(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
@@ -239,6 +254,76 @@ func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
 	second.Release()
 	first.release()
 	require.Equal(t, int64(0), cache.reservedBytes)
+}
+
+func TestMemCacheCommitsReservationAfterFIFOUsageIsCharged(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const capacity = 1 << 20
+	const request = 700 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(context.Background())
+	backing := cache.BackingSize(request)
+	require.LessOrEqual(t, backing, capacity)
+
+	first := cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear).(*Bytes)
+	require.NotNil(t, first.reservation)
+	reservation := &blockingCacheDataReservation{
+		cacheDataReservation: first.reservation,
+		committed:            make(chan struct{}),
+		unblock:              make(chan struct{}),
+	}
+	first.reservation = reservation
+
+	vector := &IOVector{
+		FilePath: "shared:/reservation-handoff",
+		Entries: []IOEntry{{
+			Size:       request,
+			CachedData: first,
+		}},
+	}
+	defer vector.Release()
+
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- cache.Update(ctx, vector, false)
+	}()
+
+	var unblockOnce sync.Once
+	unblock := func() {
+		unblockOnce.Do(func() {
+			close(reservation.unblock)
+		})
+	}
+	defer func() {
+		unblock()
+		require.NoError(t, <-updateDone)
+	}()
+
+	select {
+	case <-reservation.committed:
+	case <-ctx.Done():
+		t.Fatal("cache reservation was not committed")
+	}
+
+	// The reservation hook runs after the FIFO has charged either used or
+	// pending bytes. Cancel the second allocation context to prevent this test
+	// from evicting the first item while checking the handoff boundary.
+	require.Equal(t, int64(backing), cache.cache.Used())
+	require.Equal(t, int64(0), cache.reservedBytes)
+	secondCtx, cancelSecond := context.WithCancel(ctx)
+	cancelSecond()
+	second := cache.AllocateCacheDataWithHint(secondCtx, request, malloc.NoClear)
+	defer second.Release()
+	admission, ok := second.(fscache.DataCacheAdmission)
+	require.True(t, ok)
+	require.False(t, admission.CacheAdmissionAllowed(cache.allocator.owner))
+
+	stats, err := cache.arenaAllocator.Stats()
+	require.NoError(t, err)
+	require.LessOrEqual(t, stats.Allocated, uint64(capacity))
 }
 
 func TestMemCacheOversizedDataBypassesAdmission(t *testing.T) {

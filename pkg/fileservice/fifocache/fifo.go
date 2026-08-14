@@ -231,12 +231,15 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) (inse
 		if c.postSet != nil {
 			c.postSet(ctx, key, value, size, item.seq)
 		}
+		// enqueue either transfers the item into used bytes or charges it to
+		// pendingBytes before it returns. Complete the prepared set only after
+		// that transfer so a reservation cannot be released in an unaccounted
+		// allocation window.
+		c.enqueue(item, ghostItemSet)
 		if finishSet != nil {
 			finishSet(true)
 			finished = true
 		}
-		// item inserted, enqueue
-		c.enqueue(item, ghostItemSet)
 		c.Evict(ctx, nil, 0)
 		return true, false
 	} else if finishSet != nil {
