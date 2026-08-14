@@ -7787,7 +7787,23 @@ func isTimeWindowBoundaryExpr(ctx *BindContext, expr *plan.Expr) bool {
 	if col == nil || col.RelPos != ctx.timeTag {
 		return false
 	}
-	return col.Name == TimeWindowStart || col.Name == TimeWindowEnd
+	if col.Name == TimeWindowStart || col.Name == TimeWindowEnd {
+		return true
+	}
+
+	// Repeated references to a time-window boundary are resolved through
+	// timeByAst and makeTimeWindowProjectionExpr. That projection carries only
+	// the time-tag/column position, not the boundary name. Resolve the carrier
+	// back through ctx.times so duplicate `_wstart`/`_wend` expressions receive
+	// the same type as their first occurrence. Other time-window aggregates are
+	// function expressions in ctx.times and therefore remain unaffected.
+	if col.ColPos < 0 || int(col.ColPos) >= len(ctx.times) {
+		return false
+	}
+	carrier := ctx.times[col.ColPos]
+	carrierCol := carrier.GetCol()
+	return carrierCol != nil &&
+		(carrierCol.Name == TimeWindowStart || carrierCol.Name == TimeWindowEnd)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set
