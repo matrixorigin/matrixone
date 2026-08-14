@@ -92,10 +92,11 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 		result, err := txn.Exec(fmt.Sprintf(
 			"update %s.%s set source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
 				"where target_relation_id=0 and dependency_ordinal=0 "+
-				"and source_relation_kind in ('%s','%s')",
+				"and source_relation_kind in ('%s','%s','%s')",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateRequired,
-			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan), executor.StatementOption{})
+			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan,
+			catalog.ViewRefreshStatusActivated), executor.StatementOption{})
 		if err != nil {
 			return err
 		}
@@ -797,6 +798,7 @@ func discoverLegacyViewPage(
 		return 1, nil
 	}
 	if cursor.status != catalog.ViewRefreshStatusLegacyScan &&
+		cursor.status != catalog.ViewRefreshStatusActivated &&
 		cursor.status != catalog.ViewRefreshStatusRevalidateScan {
 		return 0, moerr.NewInternalErrorf(
 			proc.Ctx, "invalid legacy View scan state %q", cursor.status)
@@ -929,7 +931,12 @@ func nextLegacyViewScanCursor(
 		cursor.accountID = 0
 		cursor.databaseName = ""
 		cursor.relationName = ""
-		cursor.status = catalog.ViewRefreshStatusLegacyScan
+		if cursor.status == catalog.ViewRefreshStatusRevalidateScan ||
+			cursor.status == catalog.ViewRefreshStatusActivated {
+			cursor.status = catalog.ViewRefreshStatusActivated
+		} else {
+			cursor.status = catalog.ViewRefreshStatusLegacyScan
+		}
 		return cursor, true
 	}
 	last := candidates[len(candidates)-1]

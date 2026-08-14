@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -1493,6 +1494,23 @@ func builtInCurrentAccountID(_ []*vector.Vector, result vector.FunctionResultWra
 	}
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(accountId, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInViewMetadataRefreshEnabled(
+	_ []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	_ *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[bool](result)
+	enabled := clusterservice.AllKnownCNsSupportViewMetadataRefresh(proc.GetService())
+	for i := 0; i < length; i++ {
+		if err := rs.Append(enabled, false); err != nil {
 			return err
 		}
 	}

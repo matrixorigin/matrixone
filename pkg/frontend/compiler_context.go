@@ -659,10 +659,8 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	if slices.Contains(catalog.SystemDatabases, strings.ToLower(databaseName)) {
 		return nil
 	}
-	if !clusterservice.AllKnownCNsSupportViewMetadataRefresh(tcc.GetSession().GetService()) {
-		return nil
-	}
-	stale, err := tcc.hasNonCurrentViewMetadata(ownerAccountID, relationID)
+	globallyEnabled := clusterservice.AllKnownCNsSupportViewMetadataRefresh(tcc.GetSession().GetService())
+	stale, err := tcc.hasNonCurrentViewMetadata(ownerAccountID, relationID, globallyEnabled)
 	if err != nil {
 		return err
 	}
@@ -672,18 +670,25 @@ func (tcc *TxnCompilerContext) EnsureViewMetadataCurrent(
 	return nil
 }
 
-func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(ownerAccountID uint32, relationID uint64) (bool, error) {
+func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(
+	ownerAccountID uint32,
+	relationID uint64,
+	globallyEnabled bool,
+) (bool, error) {
 	v, ok := moruntime.ServiceRuntime(tcc.GetSession().GetService()).
 		GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return false, moerr.NewInternalError(tcc.GetContext(), "internal SQL executor is unavailable")
 	}
 	result, err := v.(executor.SQLExecutor).Exec(tcc.GetContext(), fmt.Sprintf(
-		"select r.status,(select d.source_relation_kind from %s.%s d where d.account_id=%d "+
-			"and d.target_relation_id=0 and d.dependency_ordinal=0 limit 1) from %s.%s r "+
-			"where r.account_id=%d and r.target_relation_id=%d limit 1",
-		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, ownerAccountID,
+		"select (select r.status from %s.%s r where r.account_id=%d and r.target_relation_id=%d limit 1),"+
+			"(select d.source_relation_kind from %s.%s d where d.account_id=%d "+
+			"and d.target_relation_id=0 and d.dependency_ordinal=0 limit 1),"+
+			"(select g.source_relation_kind from %s.%s g where g.account_id=0 "+
+			"and g.target_relation_id=0 and g.dependency_ordinal=0 limit 1)",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, ownerAccountID, relationID,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, ownerAccountID,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 	),
 		executor.Options{}.WithDisableIncrStatement().WithTxn(tcc.GetTxnHandler().GetTxn()).
 			WithAccountID(catalog.System_Account))
@@ -691,21 +696,40 @@ func (tcc *TxnCompilerContext) hasNonCurrentViewMetadata(ownerAccountID uint32, 
 		return false, err
 	}
 	defer result.Close()
-	found, status, markerStatus := false, "", ""
+	found, status, markerStatus, globalStatus := false, "", "", ""
 	result.ReadRows(func(rows int, columns []*vector.Vector) bool {
 		if rows > 0 {
-			found = true
-			status = columns[0].GetStringAt(0)
+			if !columns[0].IsNull(0) {
+				found = true
+				status = columns[0].GetStringAt(0)
+			}
 			if !columns[1].IsNull(0) {
 				markerStatus = columns[1].GetStringAt(0)
+			}
+			if !columns[2].IsNull(0) {
+				globalStatus = columns[2].GetStringAt(0)
 			}
 		}
 		return false
 	})
-	return !viewMetadataStatusIsCurrent(found, status, markerStatus), nil
+	return !viewMetadataStatusIsCurrent(found, status, markerStatus, globalStatus, globallyEnabled), nil
 }
 
-func viewMetadataStatusIsCurrent(found bool, status, markerStatus string) bool {
+func viewMetadataStatusIsCurrent(
+	found bool,
+	status string,
+	markerStatus string,
+	globalStatus string,
+	globallyEnabled bool,
+) bool {
+	if globalStatus == catalog.ViewRefreshStatusRevalidateRequired ||
+		globalStatus == catalog.ViewRefreshStatusRevalidateScan ||
+		(!globallyEnabled && globalStatus == catalog.ViewRefreshStatusActivated) {
+		return false
+	}
+	if !globallyEnabled {
+		return true
+	}
 	return found && status == catalog.ViewRefreshStatusCurrent &&
 		markerStatus != catalog.ViewRefreshStatusRevalidateScan &&
 		markerStatus != catalog.ViewRefreshStatusRevalidateRequired

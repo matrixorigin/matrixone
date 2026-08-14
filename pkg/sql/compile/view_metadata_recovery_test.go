@@ -369,7 +369,11 @@ func TestNextLegacyViewScanCursorIsMonotonicAndWraps(t *testing.T) {
 	require.Equal(t, catalog.ViewRefreshStatusRevalidateScan, revalidated.status)
 	revalidated, ok = nextLegacyViewScanCursor(revalidated, nil)
 	require.True(t, ok)
-	require.Equal(t, catalog.ViewRefreshStatusLegacyScan, revalidated.status)
+	require.Equal(t, catalog.ViewRefreshStatusActivated, revalidated.status)
+
+	activated, ok := nextLegacyViewScanCursor(revalidated, nil)
+	require.True(t, ok)
+	require.Equal(t, catalog.ViewRefreshStatusActivated, activated.status)
 
 	done, ok := nextLegacyViewScanCursor(next, nil)
 	require.True(t, ok)
@@ -758,7 +762,7 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		require.Equal(t, 1, count)
 		require.Len(t, exec.sqls, 4)
 		require.Contains(t, exec.sqls[2], "account_id=0")
-		require.Contains(t, exec.sqls[2], "source_relation_kind='LEGACY_SCAN'")
+		require.Contains(t, exec.sqls[2], "source_relation_kind='ACTIVATED'")
 		require.Contains(t, exec.sqls[3], "account_id<>0")
 		require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_SCAN'")
 	})
@@ -801,7 +805,7 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[3],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[3],
-		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN')")
+		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
 	require.NotContains(t, exec.sqls[3], "where account_id=0")
 	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[4])
 	require.Contains(t, exec.sqls[5], "select a.account_id")

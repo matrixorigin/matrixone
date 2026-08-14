@@ -23,21 +23,36 @@ import (
 )
 
 func TestViewMetadataStatusRequiresPersistedCurrentRow(t *testing.T) {
-	require.False(t, viewMetadataStatusIsCurrent(false, "", ""))
+	require.False(t, viewMetadataStatusIsCurrent(false, "", "", "", true))
 	for _, status := range []string{
 		catalog.ViewRefreshStatusPending,
 		catalog.ViewRefreshStatusDiscovering,
 		catalog.ViewRefreshStatusRunning,
 		catalog.ViewRefreshStatusInvalid,
 	} {
-		require.False(t, viewMetadataStatusIsCurrent(true, status, ""), status)
+		require.False(t, viewMetadataStatusIsCurrent(true, status, "", "", true), status)
 	}
 	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
-		catalog.ViewRefreshStatusRevalidateRequired))
+		catalog.ViewRefreshStatusRevalidateRequired, "", true))
 	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
-		catalog.ViewRefreshStatusRevalidateScan))
+		catalog.ViewRefreshStatusRevalidateScan, "", true))
 	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
-		catalog.ViewRefreshStatusLegacyScan))
+		catalog.ViewRefreshStatusLegacyScan, "", true))
+}
+
+func TestViewMetadataStatusFailsClosedBeforeDisabledBarrierTick(t *testing.T) {
+	require.True(t, viewMetadataStatusIsCurrent(false, "", "", catalog.ViewRefreshStatusLegacyScan, false))
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "",
+		catalog.ViewRefreshStatusActivated, false))
+	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "",
+		catalog.ViewRefreshStatusActivated, true))
+	for _, status := range []string{
+		catalog.ViewRefreshStatusRevalidateRequired,
+		catalog.ViewRefreshStatusRevalidateScan,
+	} {
+		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, true))
+		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, false))
+	}
 }
 
 func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {

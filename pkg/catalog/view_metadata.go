@@ -20,6 +20,7 @@ const ViewRefreshStatusDiscovering = "DISCOVERING"
 const ViewRefreshStatusRunning = "RUNNING"
 const ViewRefreshStatusInvalid = "INVALID"
 const ViewRefreshStatusLegacyScan = "LEGACY_SCAN"
+const ViewRefreshStatusActivated = "ACTIVATED"
 const ViewRefreshStatusRevalidateRequired = "REVALIDATE_REQUIRED"
 const ViewRefreshStatusRevalidateScan = "REVALIDATE_SCAN"
 

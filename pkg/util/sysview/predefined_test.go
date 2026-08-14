@@ -136,6 +136,8 @@ func TestInformationSchemaColumnsDDLRequiresCurrentViewMetadata(t *testing.T) {
 		"gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0"))
 	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
 		"gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')"))
+	assert.Equal(t, 2, strings.Count(InformationSchemaColumnsDDL,
+		"gd.source_relation_kind='ACTIVATED' and not mo_view_meta_enabled()"))
 	assert.Contains(t, InformationSchemaColumnsDDL,
 		"mt.reldatabase in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
 }
