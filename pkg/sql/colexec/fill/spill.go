@@ -1094,9 +1094,11 @@ func (ctr *container) appendSpillSource(
 	if err != nil {
 		return err
 	}
-	linear := ap.FillType == plan.Node_LINEAR
-	defer releaseBorrowedSpillBatch(borrowed, ap.ColLen, linear, proc.Mp())
-	if linear {
+	linearMarkers := false
+	defer func() {
+		releaseBorrowedSpillBatch(borrowed, ap.ColLen, linearMarkers, proc.Mp())
+	}()
+	if ap.FillType == plan.Node_LINEAR {
 		// Distance markers precede the original-NULL marker block so the
 		// latter remains the final ColLen vectors in every spilled record.
 		if err = addLinearDistanceMarkers(
@@ -1104,6 +1106,7 @@ func (ctr *container) appendSpillSource(
 		); err != nil {
 			return err
 		}
+		linearMarkers = true
 	}
 	if err = ctr.spill.scanSegment(ap, borrowed, proc); err != nil {
 		return err

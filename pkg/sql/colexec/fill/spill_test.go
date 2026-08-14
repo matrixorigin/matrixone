@@ -145,6 +145,47 @@ func TestFillSpillBorrowedMarkerFailurePreservesSource(t *testing.T) {
 	require.Zero(t, sourceMP.CurrNB())
 }
 
+func TestFillSpillLinearMarkerFailurePreservesSource(t *testing.T) {
+	const rows = 600_000
+	sourceMP := mpool.MustNewZero()
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, source.Vecs[0].PreExtend(rows, sourceMP))
+	source.Vecs[0].SetLength(rows)
+	vector.MustFixedColWithTypeCheck[int64](source.Vecs[0])[0] = 7
+	source.SetRowCount(rows)
+
+	markerMP := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(mpool.MB)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerFill,
+		fillAllocationSiteRetainedData,
+		fillAllocationSiteRetainedArea,
+		fillAllocationSiteRetainedNulls,
+		fillAllocationSiteRetainedGrouping,
+	)
+	require.NoError(t, err)
+	borrowed, err := makeBorrowedSpillBatch(source, 1, markerMP, selection)
+	require.NoError(t, err)
+	linearMarkers := false
+	err = addLinearDistanceMarkers(borrowed, 1, markerMP, selection)
+	require.Error(t, err)
+	releaseBorrowedSpillBatch(borrowed, 1, linearMarkers, markerMP)
+
+	require.Equal(t, rows, source.Vecs[0].Length())
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](source.Vecs[0], 0))
+	require.Zero(t, markerMP.CurrNB())
+	require.Zero(t, account.Seal().Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	source.Clean(sourceMP)
+	require.Zero(t, sourceMP.CurrNB())
+}
+
 func TestFillSpillReverseReadRejectsCorruptAndTruncatedRecords(t *testing.T) {
 	tests := []struct {
 		name   string
