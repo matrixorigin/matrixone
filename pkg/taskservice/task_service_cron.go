@@ -239,6 +239,10 @@ const (
 )
 
 func (j *cronJob) doRun() {
+	j.doRunWithRetryBackoff(cronTaskTriggerRetryBackoff)
+}
+
+func (j *cronJob) doRunWithRetryBackoff(retryBackoff time.Duration) {
 	now := time.Now()
 	cronTasks, err := j.s.QueryCronTask(context.Background(), WithCronTaskId(EQ, j.task.ID))
 	if err != nil {
@@ -280,7 +284,7 @@ func (j *cronJob) doRun() {
 				zap.Int("attempt", attempt),
 				zap.Int("max-retries", cronTaskTriggerMaxRetries),
 				zap.Error(err))
-			time.Sleep(cronTaskTriggerRetryBackoff * time.Duration(attempt))
+			time.Sleep(retryBackoff * time.Duration(attempt))
 		} else {
 			j.s.rt.Logger().Error("trigger cron task failed after retries",
 				zap.String("cron-task", j.task.DebugString()),

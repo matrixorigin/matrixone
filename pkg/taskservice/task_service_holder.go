@@ -679,18 +679,16 @@ func (s *refreshableTaskStorage) refreshTask(ctx context.Context) {
 
 func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.mu.store != nil {
-		_ = s.mu.store.Close()
-	}
-
 	if s.mu.closed {
+		s.mu.Unlock()
 		return
 	}
 	if lastAddress != "" && lastAddress != s.mu.lastAddress {
+		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
+
 	connectAddress, err := s.addressFactory(ctx, true)
 	if err != nil {
 		s.rt.Logger().Error(
@@ -700,7 +698,6 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 		return
 	}
 
-	s.mu.lastAddress = connectAddress
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.trying",
 		zap.String("address", connectAddress),
@@ -713,7 +710,40 @@ func (s *refreshableTaskStorage) refresh(ctx context.Context, lastAddress string
 			zap.Error(err))
 		return
 	}
+	if store == nil {
+		s.rt.Logger().Error(
+			"taskservice.holder.refresh.failed",
+			zap.String("address", connectAddress),
+			zap.Error(ErrNotReady))
+		return
+	}
+
+	// Creating a replacement can block on DNS, dialing, or credentials. Recheck
+	// the generation after that work so an old refresh cannot replace or close a
+	// newer store, and a concurrent Close cannot publish a fresh resource.
+	s.mu.Lock()
+	if s.mu.closed || ctx.Err() != nil ||
+		(lastAddress != "" && lastAddress != s.mu.lastAddress) {
+		current := s.mu.store
+		s.mu.Unlock()
+		if store != current {
+			_ = store.Close()
+		}
+		return
+	}
+	previous := s.mu.store
 	s.mu.store = store
+	s.mu.lastAddress = connectAddress
+	s.mu.Unlock()
+
+	if previous != nil && previous != store {
+		if err := previous.Close(); err != nil {
+			s.rt.Logger().Error(
+				"taskservice.holder.refresh.close-previous.failed",
+				zap.String("address", connectAddress),
+				zap.Error(err))
+		}
+	}
 	s.rt.Logger().Debug(
 		"taskservice.holder.refresh.completed",
 		zap.String("sql-address", connectAddress),

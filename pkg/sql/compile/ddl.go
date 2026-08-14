@@ -933,8 +933,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			for i, indexdef := range oTableDef.Indexes {
 				if indexdef.IndexName == constraintName {
 					alterIndex = indexdef
-					alterIndex.Visible = tableAlterIndex.Visible
-					oTableDef.Indexes[i].Visible = tableAlterIndex.Visible
+					catalog.SetIndexVisibility(alterIndex, tableAlterIndex.Visible)
+					catalog.SetIndexVisibility(oTableDef.Indexes[i], tableAlterIndex.Visible)
 					// update the index visibility in mo_catalog.mo_indexes.
 					// Escape the index name the same as the AUTO_UPDATE / REINDEX
 					// branches: it is user-supplied and a backticked identifier may
@@ -1218,7 +1218,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if alterIndex != nil {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
-						t.Indexes[i].Visible = alterIndex.Visible
+						catalog.SetIndexVisibility(t.Indexes[i], alterIndex.Visible)
 						// NOTE: algo param is same for all the indexDefs of the same indexName.
 						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
 						// so we don't need multiple `alterIndex`.
@@ -1408,12 +1408,12 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			}
 		}()
 
-		realName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, aliasName)
+		realName := physicalTemporaryTableName(c.proc, dbName, aliasName)
 		qry.TableDef.Name = realName
 		indexNameMap := make(map[string]string, len(qry.IndexTables))
 		for _, def := range qry.IndexTables {
 			orig := def.Name
-			newName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, orig)
+			newName := physicalTemporaryTableName(c.proc, dbName, orig)
 			def.Name = newName
 			def.TableType = catalog.SystemTemporaryTable
 			def.IsTemporary = true
@@ -2111,6 +2111,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		rollbackTempAlias = false
 	}
 	return nil
+}
+
+func physicalTemporaryTableName(proc *process.Process, dbName, alias string) string {
+	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
@@ -4092,6 +4096,27 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		return s.Run(c)
 	}
 	dbName, tblName := clonePlan.GetDstDatabaseName(), clonePlan.GetDstTableName()
+	if clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTemporary() {
+		session := c.proc.GetSession()
+		if session == nil {
+			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table clone")
+		}
+		physicalName, ok := session.GetTempTable(dbName, tblName)
+		if !ok {
+			return moerr.NewInternalErrorf(c.proc.Ctx,
+				"temporary table clone destination %s.%s is not registered", dbName, tblName)
+		}
+		dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		dstRelation, err := dbSource.Relation(c.proc.Ctx, physicalName, nil)
+		if err != nil {
+			return err
+		}
+		tableDef = dstRelation.GetTableDef(c.proc.Ctx)
+		tblName = physicalName
+	}
 	logutil.Infof("[RestoreTable] BEGIN %s.%s", dbName, tblName)
 
 	// 1. drop the CDC tasks CreateTable registered, before cloning data.
