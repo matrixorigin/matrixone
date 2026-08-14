@@ -233,10 +233,9 @@ func (j *cronJob) Run() {
 	j.doRun()
 }
 
-const (
-	cronTaskTriggerMaxRetries   = 3
-	cronTaskTriggerRetryBackoff = time.Second * 2
-)
+const cronTaskTriggerMaxRetries = 3
+
+var cronTaskTriggerRetryBackoff = time.Second * 2
 
 func (j *cronJob) doRun() {
 	now := time.Now()

@@ -2511,6 +2511,13 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 
 	t.Run("ok", func(t *testing.T) {
 		fn := func(t *testing.T, s *Service) {
+			peers := map[uint64]dragonboat.Target{100: s.ID()}
+			require.NoError(t, s.store.startReplica(1, 100, peers, false))
+			require.Eventually(t, func() bool {
+				_, _, ok, err := s.store.nh.GetLeaderID(1)
+				return err == nil && ok
+			}, time.Second, 10*time.Millisecond)
+
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			req := pb.Request{

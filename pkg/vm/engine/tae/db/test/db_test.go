@@ -203,9 +203,12 @@ func TestCancelableJob(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, jobs.JobCount())
 
-	testutils.WaitExpect(5000, func() bool {
-		return v1.Load() > 5 && v2.Load() > 5
-	})
+	require.Eventually(t, func() bool {
+		return v2.Load() > 5
+	}, time.Second, time.Millisecond)
+	// The duplicate job1 registration above must not replace or start the
+	// rejected callback.
+	assert.Zero(t, v1.Load())
 
 	jobs.Reset()
 	assert.Equal(t, 0, jobs.JobCount())

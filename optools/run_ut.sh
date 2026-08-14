@@ -306,7 +306,9 @@ function run_tests(){
         if ! resource_heavy_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/backup \
             ./pkg/fileservice \
-            ./pkg/sql/plan/function); then
+            ./pkg/sql/plan/function \
+            ./pkg/vm/engine/test \
+            ./pkg/vm/engine/tae/db/test); then
             logger "ERR" "Failed to resolve resource-heavy race-test packages"
             UT_TEST_STATUS=1
             return 0

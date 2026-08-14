@@ -166,7 +166,7 @@ func testFileWithChecksum(
 		ctx := context.Background()
 		fileWithChecksum := NewFileWithChecksum(ctx, underlying, blockContentSize, nil)
 
-		check := func(data []byte) {
+		checkContent := func(data []byte) {
 			// check content
 			pos, err := fileWithChecksum.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
@@ -174,14 +174,17 @@ func testFileWithChecksum(
 			content, err := io.ReadAll(fileWithChecksum)
 			assert.Nil(t, err)
 			assert.Equal(t, data, content)
+		}
 
+		checkReaderContract := func(data []byte) {
+			checkContent(data)
 			// seek
 			n, err := fileWithChecksum.Seek(0, io.SeekEnd)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(len(data)), n)
 
 			// iotest
-			pos, err = fileWithChecksum.Seek(0, io.SeekStart)
+			pos, err := fileWithChecksum.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(0), pos)
 			err = iotest.TestReader(fileWithChecksum, data)
@@ -211,7 +214,7 @@ func testFileWithChecksum(
 		}
 		assert.Equal(t, expectedSize, int(underlyingSize))
 
-		check(data)
+		checkReaderContract(data)
 
 		for j := 0; j < len(data); j++ {
 
@@ -233,7 +236,11 @@ func testFileWithChecksum(
 			assert.Nil(t, err)
 			assert.Equal(t, data[j:], content)
 
-			check(data)
+			// Verify that the suffix write changed exactly the requested range.
+			// Reader conformance and SeekEnd are orthogonal to the mutation
+			// offset, so they are checked once per length above rather than for
+			// every offset in this exhaustive matrix.
+			checkContent(data)
 
 		}
 
