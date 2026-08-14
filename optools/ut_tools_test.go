@@ -119,3 +119,143 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 	}
 	assertAttempts(t, counter, arguments, 3)
 }
+
+func writeScopeFixture(t *testing.T, root, name, contents string) {
+	t.Helper()
+
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListEmbeddedClusterTestPackagesFollowsTransitiveTestDeps(t *testing.T) {
+	toolsPath, err := filepath.Abs("ut_tools.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	fixtures := map[string]string{
+		"go.mod": `module example.com/cluster-scope
+
+go 1.24
+`,
+		"pkg/embed/embed.go": `package embed
+
+const Enabled = true
+`,
+		"pkg/embed/embed_test.go": `package embed
+
+import "testing"
+
+func TestEmbed(t *testing.T) {}
+`,
+		"pkg/helper/helper.go": `package helper
+
+import "example.com/cluster-scope/pkg/embed"
+
+var Enabled = embed.Enabled
+`,
+		"pkg/owner/owner.go": `package owner
+`,
+		"pkg/owner/owner_test.go": `package owner
+
+import (
+	_ "example.com/cluster-scope/pkg/helper"
+	"testing"
+)
+
+func TestOwner(t *testing.T) {}
+`,
+		"pkg/light/light.go": `package light
+`,
+		"pkg/light/light_test.go": `package light
+
+import "testing"
+
+func TestLight(t *testing.T) {}
+`,
+	}
+	for name, contents := range fixtures {
+		writeScopeFixture(t, root, name, contents)
+	}
+
+	cmd := exec.Command("bash", "-c",
+		`source "$1"; list_embedded_cluster_test_packages ./...`,
+		"bash", toolsPath)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GOWORK=off",
+		"GOFLAGS=-mod=readonly",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("discover embedded cluster packages: %v\n%s", err, output)
+	}
+
+	expected := strings.Join([]string{
+		"example.com/cluster-scope/pkg/embed",
+		"example.com/cluster-scope/pkg/owner",
+	}, "\n")
+	if actual := strings.TrimSpace(string(output)); actual != expected {
+		t.Fatalf("unexpected embedded cluster packages:\n%s\nexpected:\n%s", actual, expected)
+	}
+
+	cmd = exec.Command("bash", "-c",
+		`source "$1"; list_embedded_cluster_test_packages ./pkg/owner ./pkg/light`,
+		"bash", toolsPath)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GOWORK=off",
+		"GOFLAGS=-mod=readonly",
+	)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("discover partial embedded cluster scope: %v\n%s", err, output)
+	}
+	if actual := strings.TrimSpace(string(output)); actual != "example.com/cluster-scope/pkg/owner" {
+		t.Fatalf("partial scope included an unrequested package: %s", actual)
+	}
+}
+
+func TestListEmbeddedClusterTestPackagesPreservesGoListFailure(t *testing.T) {
+	toolsPath, err := filepath.Abs("ut_tools.bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := filepath.Join(t.TempDir(), "attempts")
+	arguments := filepath.Join(t.TempDir(), "arguments")
+	mockGoDir := writeMockGo(t)
+	cmd := exec.Command("bash", "-c",
+		`source "$1"; list_embedded_cluster_test_packages ./...`,
+		"bash", toolsPath)
+	cmd.Env = append(os.Environ(),
+		"PATH="+mockGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"MOCK_GO_COUNTER="+counter,
+		"MOCK_GO_ARGS="+arguments,
+		"MOCK_GO_SUCCEED_AFTER=2",
+		"MOCK_GO_FAILURE_STATUS=42",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected go list failure, got success: %s", output)
+	}
+	exitError, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("unexpected command error: %v", err)
+	}
+	if exitError.ExitCode() != 42 {
+		t.Fatalf("expected status 42, got %d: %s", exitError.ExitCode(), output)
+	}
+	attempts, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(attempts)) != "1" {
+		t.Fatalf("expected one go list attempt, got %q", attempts)
+	}
+}

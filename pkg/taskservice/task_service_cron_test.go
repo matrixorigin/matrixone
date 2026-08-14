@@ -63,12 +63,6 @@ func TestRetryScheduleCronTask(t *testing.T) {
 // This simulates a persistent database failure where the cron task cannot be triggered
 // even after all retry attempts.
 func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
-	oldRetryBackoff := cronTaskTriggerRetryBackoff
-	cronTaskTriggerRetryBackoff = time.Millisecond
-	t.Cleanup(func() {
-		cronTaskTriggerRetryBackoff = oldRetryBackoff
-	})
-
 	runScheduleCronTaskTest(t, func(store *memTaskStorage, s *taskService, ctx context.Context) {
 		var failCount atomic.Int32
 		store.preUpdateCron = func() error {
@@ -79,15 +73,16 @@ func TestRetryScheduleCronTaskAllFailed(t *testing.T) {
 
 		assert.NoError(t, s.CreateCronTask(ctx, newTestTaskMetadata("t1"), "*/1 * * * * *"))
 
-		s.StartScheduleCronTask()
-		t.Cleanup(s.StopScheduleCronTask)
+		cronTasks, err := s.QueryCronTask(ctx)
+		require.NoError(t, err)
+		require.Len(t, cronTasks, 1)
+		job, err := newCronJob(cronTasks[0], s)
+		require.NoError(t, err)
 
-		// Wait for the cron job to trigger and exhaust all retries. The retry
-		// count is the observable contract; an extra wall-clock delay is not.
-		require.Eventually(t, func() bool {
-			return failCount.Load() >= int32(cronTaskTriggerMaxRetries)
-		}, 5*time.Second, 10*time.Millisecond)
-		s.StopScheduleCronTask()
+		// Exercise one trigger synchronously so another scheduler tick cannot
+		// race the exact retry-count assertion. Backoff duration is orthogonal
+		// to retry behavior and is zero only for this focused test.
+		job.doRunWithRetryBackoff(0)
 		require.Equal(t, int32(cronTaskTriggerMaxRetries), failCount.Load())
 
 		// Verify that no async task was created due to persistent failure

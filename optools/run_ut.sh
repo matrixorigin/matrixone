@@ -292,16 +292,22 @@ function run_tests(){
             return 0
         fi
 
-        if ! cluster_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/embed \
-            ./pkg/tests/dml \
-            ./pkg/tests/shard \
-            ./pkg/tests/partition \
-            ./pkg/tests/txnexecutor); then
-            logger "ERR" "Failed to resolve embedded-cluster race-test packages"
+        # Derive cluster owners from each race test binary's complete dependency
+        # graph. This also catches packages that start a cluster through a test
+        # helper, without relying on an incomplete directory allowlist.
+        if ! cluster_test_scope=$(list_embedded_cluster_test_packages ${test_scope}); then
+            logger "ERR" "Failed to discover embedded-cluster race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
+
+        # Group precedence is exclusive > embedded cluster > resource heavy >
+        # light. Keep every package in exactly one group even when its test
+        # dependencies evolve.
+        cluster_test_scope=$(remove_packages_from_scope \
+            "${cluster_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope})
 
         if ! resource_heavy_test_scope=$(go list ${GO_MODULE_MODE} \
             ./pkg/backup \
@@ -313,6 +319,11 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
+        resource_heavy_test_scope=$(remove_packages_from_scope \
+            "${resource_heavy_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${cluster_test_scope})
 
         light_test_scope=$(remove_packages_from_scope \
             "${test_scope}" \
@@ -340,9 +351,9 @@ function run_tests(){
             fi
         done
 
-        # These packages each own an embedded cluster process with substantial
-        # race-detector memory. Process-local cluster admission cannot coordinate
-        # separate go test binaries, so keep the package processes serial.
+        # These packages link embedded clusters with substantial race-detector
+        # memory. Run their complete package processes in an isolated serial
+        # stage; the runner-wide cluster lease remains the lifecycle backstop.
         logger "INF" "Run embedded-cluster race-test packages serially"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
         cluster_status=$?

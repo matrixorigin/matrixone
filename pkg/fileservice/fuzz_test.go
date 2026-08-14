@@ -211,11 +211,13 @@ func TestFuzzingDiskS3(t *testing.T) {
 				wg.Add(1)
 				go func(worker int) {
 					defer wg.Done()
-					<-start
-					base := operationSeed + uint64(worker*opsPerWorker)
-					for i := 0; i < opsPerWorker; i++ {
-						op(t, base+uint64(i))
-					}
+					t.Run(fmt.Sprintf("worker-%d", worker), func(t *testing.T) {
+						<-start
+						base := operationSeed + uint64(worker*opsPerWorker)
+						for i := 0; i < opsPerWorker; i++ {
+							op(t, base+uint64(i))
+						}
+					})
 				}(worker)
 			}
 			close(start)

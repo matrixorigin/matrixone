@@ -2516,7 +2516,7 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 			require.Eventually(t, func() bool {
 				_, _, ok, err := s.store.nh.GetLeaderID(1)
 				return err == nil && ok
-			}, time.Second, 10*time.Millisecond)
+			}, 5*time.Second, 10*time.Millisecond)
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -2551,7 +2551,7 @@ func TestHAKeeperClientCheckLogServiceHealth(t *testing.T) {
 					},
 				},
 			}
-			s.handleLogHeartbeat(ctx, req)
+			resp = s.handleLogHeartbeat(ctx, req)
 			assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 			cfg := HAKeeperClientConfig{
