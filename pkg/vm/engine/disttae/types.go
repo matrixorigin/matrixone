@@ -650,7 +650,11 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	}
 	// A statement boundary may spill any active memory payload. The workspace
 	// journal, rather than a physical slice position, preserves rollback ownership.
-	if err := txn.dumpBatchLocked(ctx, workspaceDumpAll(false)); err != nil {
+	dumpScope := workspaceDumpAll(false)
+	if commit {
+		dumpScope = workspaceDumpCommitBoundary()
+	}
+	if err := txn.dumpBatchLocked(ctx, dumpScope); err != nil {
 		return err
 	}
 	if !txn.op.Txn().IsRCIsolation() {
@@ -812,6 +816,16 @@ func (txn *Transaction) Adjust(mark client.WorkspaceWriteMark) error {
 }
 
 func (txn *Transaction) traceWorkspaceLocked(commit bool) error {
+	traceService := trace.GetService(txn.proc.GetService())
+	if !traceService.Enabled(trace.FeatureTraceTxnWorkspace) {
+		// Workspace tracing is disabled by default. Do not materialize and pin
+		// every active mutation only for TxnAdjustWorkspace to discard the
+		// snapshot at its own feature gate. Keep adjustCount advancing so a
+		// trace enabled later in the same transaction observes the same
+		// statement index sequence as before.
+		txn.adjustCount++
+		return nil
+	}
 	entries, err := txn.workspace.commitEntries()
 	if err != nil {
 		return err
@@ -822,7 +836,7 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) error {
 		index = -1
 	}
 	idx := 0
-	trace.GetService(txn.proc.GetService()).TxnAdjustWorkspace(
+	traceService.TxnAdjustWorkspace(
 		txn.op,
 		index,
 		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
@@ -1116,6 +1130,10 @@ type Entry struct {
 	// that this mutation has no transaction-local primary-key duplicate check;
 	// enabled descriptors always name one exact vector in bat.
 	pkCheck workspacePKCheck
+	// pkIndex is independent of duplicate checking. It identifies the encoded
+	// primary-key vector used by current-state point reads, including hidden
+	// composite primary keys that are deliberately excluded from pkCheck.
+	pkIndex workspacePKIndex
 }
 
 // workspacePKCheck is the immutable duplicate-check contract attached to a
@@ -1123,6 +1141,15 @@ type Entry struct {
 // must either publish an exact vector position or fail the write before the
 // mutation becomes visible.
 type workspacePKCheck struct {
+	vectorPos int
+	enabled   bool
+}
+
+// workspacePKIndex is the immutable read-index contract attached to an
+// in-memory INSERT. Its zero value means that the mutation cannot participate
+// in an authoritative point-read index; TableOverlay records that incomplete
+// coverage explicitly instead of interpreting an index miss as absence.
+type workspacePKIndex struct {
 	vectorPos int
 	enabled   bool
 }

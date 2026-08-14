@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -76,6 +77,72 @@ func mustMutationSelections(
 func closeWorkspaceForTest(t *testing.T, txn *Transaction) {
 	t.Helper()
 	require.NoError(t, txn.workspace.close(txn.proc.Mp()))
+}
+
+func TestWorkspaceMutationOwnersInlineAndPromotion(t *testing.T) {
+	var owners workspaceMutationOwners
+	first := workspaceMutationID(11)
+	second := workspaceMutationID(22)
+
+	require.Zero(t, owners.len())
+	owners.add(first)
+	owners.add(first)
+	require.Equal(t, 1, owners.len())
+	require.Nil(t, owners.multiple)
+	require.Equal(t, first, owners.singleID)
+	require.Equal(t, uint32(2), owners.singleCount)
+
+	owners.add(second)
+	require.Equal(t, 2, owners.len())
+	require.Equal(t, map[workspaceMutationID]uint32{
+		first:  2,
+		second: 1,
+	}, owners.multiple)
+
+	require.True(t, owners.remove(first))
+	require.Equal(t, map[workspaceMutationID]uint32{
+		first:  1,
+		second: 1,
+	}, owners.multiple)
+	require.True(t, owners.remove(first))
+	require.Nil(t, owners.multiple)
+	require.Equal(t, second, owners.singleID)
+	require.Equal(t, uint32(1), owners.singleCount)
+
+	require.False(t, owners.remove(first))
+	require.True(t, owners.remove(second))
+	require.Zero(t, owners.len())
+	require.Zero(t, owners.singleID)
+	require.Zero(t, owners.singleCount)
+}
+
+func encodedWorkspaceKeysForTest(
+	t *testing.T,
+	vec *vector.Vector,
+) [][]byte {
+	t.Helper()
+	packer := types.NewPacker()
+	defer packer.Close()
+	keys := readutil.EncodePrimaryKeyVector(vec, packer)
+	cloned := make([][]byte, len(keys))
+	for idx := range keys {
+		cloned[idx] = slices.Clone(keys[idx])
+	}
+	return cloned
+}
+
+func newWorkspaceDeleteBatchForTest(
+	t *testing.T,
+	proc *process.Process,
+	rows []types.Rowid,
+) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{catalog.Row_ID})
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], rows, nil, proc.Mp()))
+	bat.SetRowCount(len(rows))
+	return bat
 }
 
 func newWorkspaceObjectBatchForTest(
@@ -156,6 +223,55 @@ func TestTxnWorkspaceDumpScopeRejectsInvalidKind(t *testing.T) {
 	workspace := newTxnWorkspace()
 	_, err := workspace.entriesForDumpScope(workspaceDumpScope{})
 	require.ErrorContains(t, err, "scope is invalid")
+}
+
+func TestTxnWorkspaceDumpScopeUsesIncrementalInsertUsage(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+
+	first := newInt64BatchForTest(
+		t, proc, []string{"pk"}, []int64{11, 12})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		bat: first,
+	})
+	_, err := workspace.advanceStatement()
+	require.NoError(t, err)
+
+	second := newInt64BatchForTest(
+		t, proc, []string{"pk"}, []int64{21})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		bat: second,
+	})
+	// Catalog entries are retained in total usage but are not eligible for an
+	// INSERT spill. File-backed entries have already left memory and are also
+	// excluded from this counter.
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2,
+		tableId: catalog.MO_TABLES_ID,
+		bat:     newInt64BatchForTest(t, proc, []string{"pk"}, []int64{31}),
+	})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 100,
+		fileName: "already-spilled", bat: newInt64BatchForTest(
+			t, proc, []string{"pk"}, []int64{41}),
+	})
+
+	all, err := workspace.inMemoryInsertBytesForDumpScope(
+		workspaceDumpAll(false))
+	require.NoError(t, err)
+	require.Equal(t, uint64(first.Size()+second.Size()), all)
+
+	current, err := workspace.inMemoryInsertBytesForDumpScope(
+		workspaceDumpCurrentAttempt())
+	require.NoError(t, err)
+	require.Equal(t, uint64(second.Size()), current)
+
+	_, err = workspace.inMemoryInsertBytesForDumpScope(workspaceDumpScope{})
+	require.ErrorContains(t, err, "scope is invalid")
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
 }
 
 func TestTxnWorkspaceCommitOrderCoversEntireStatement(t *testing.T) {
@@ -548,6 +664,286 @@ func TestTxnWorkspacePKCandidateIndexSelectsOnlyRelevantMutations(t *testing.T) 
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
+func TestTxnWorkspacePointInsertIndexTracksCurrentPayload(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	first := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11, 22})
+	id := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: first, pkCheck: workspacePKCheck{vectorPos: 0, enabled: true},
+		pkIndex: workspacePKIndex{vectorPos: 0, enabled: true},
+	})
+	keys := encodedWorkspaceKeysForTest(t, first.Vecs[0])
+	historical := workspace.currentReadView()
+
+	entries, indexed, err := workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, keys[0])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, id, entries.entries[0].workspaceMutationID)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, keys...)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	// Both keys belong to one mutation; a multi-key lookup must pin and return
+	// that payload exactly once.
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, id, entries.entries[0].workspaceMutationID)
+	entries.Close()
+
+	// A logical delete must remove only the selected row from the access index.
+	require.NoError(t, workspace.replaceSelections(id, []int64{0}))
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, keys[0])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, keys[1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+
+	// The point index retains the access facts needed to find the immutable
+	// payload generation visible to a statement ReadView.
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		historical, 1, 2, 10, keys[0])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, id, entries.entries[0].workspaceMutationID)
+	require.Empty(t, entries.entries[0].selections)
+	entries.Close()
+
+	replacement := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{33})
+	replacementKey := encodedWorkspaceKeysForTest(t, replacement.Vecs[0])[0]
+	require.NoError(t, workspace.replaceMemory(id, first, replacement, nil))
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, keys[1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, replacementKey)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+	// A key introduced after the statement view must not resolve merely because
+	// the owning mutation already existed in that view.
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		historical, 1, 2, 10, replacementKey)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+
+	require.NoError(t, workspace.retireMutations([]workspaceMutationID{id}))
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, replacementKey)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	// Retirement affects later readers only. The still-live statement view
+	// continues to resolve the payload generation it published against.
+	entries, indexed, err = workspace.tablePointInsertEntries(
+		historical, 1, 2, 10, keys[0])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspacePointInsertIndexRejectsIncompleteCoverage(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	indexed := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: indexed, pkIndex: workspacePKIndex{vectorPos: 0, enabled: true},
+	})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"other"}, []int64{22}),
+	})
+
+	key := encodedWorkspaceKeysForTest(t, indexed.Vecs[0])[0]
+	entries, complete, err := workspace.tablePointInsertEntries(
+		workspace.currentReadView(), 1, 2, 10, key)
+	require.NoError(t, err)
+	require.False(t, complete)
+	require.Nil(t, entries)
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceInsertRowIDIndexTracksCurrentPayload(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	first := newInsertBatchWithRowIDForTest(t, proc, []int64{11, 22})
+	firstRowIDs := slices.Clone(
+		vector.MustFixedColWithTypeCheck[types.Rowid](first.Vecs[0]))
+	id := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10, bat: first,
+	})
+	historical := workspace.currentReadView()
+
+	entries, indexed, err := workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, firstRowIDs[:1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, id, entries.entries[0].workspaceMutationID)
+	entries.Close()
+
+	// Selection publication and the RowID index are one workspace transition:
+	// the removed row must stop resolving while its sibling remains visible.
+	require.NoError(t, workspace.addMutationSelections(id, []int64{0}))
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, firstRowIDs[:1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, firstRowIDs[1:])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+
+	// Historical RowID access resolves the payload generation that existed when
+	// the statement ReadView was published.
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		historical, 1, 2, 10, firstRowIDs[:1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, id, entries.entries[0].workspaceMutationID)
+	require.Empty(t, entries.entries[0].selections)
+	entries.Close()
+
+	replacement := newInsertBatchWithRowIDForTest(t, proc, []int64{33})
+	replacementRowID := vector.MustFixedColWithTypeCheck[types.Rowid](
+		replacement.Vecs[0])[0]
+	require.NoError(t, workspace.replaceMemory(id, first, replacement, nil))
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, firstRowIDs)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, []types.Rowid{replacementRowID})
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		historical, 1, 2, 10, []types.Rowid{replacementRowID})
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+
+	require.NoError(t, workspace.retireMutations([]workspaceMutationID{id}))
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, []types.Rowid{replacementRowID})
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, entries.entries)
+	entries.Close()
+	entries, indexed, err = workspace.tablePointInsertEntriesByRowIDs(
+		historical, 1, 2, 10, firstRowIDs[:1])
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, entries.entries, 1)
+	entries.Close()
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceInsertRowIDIndexRejectsIncompleteCoverage(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11}),
+	})
+
+	entries, indexed, err := workspace.tablePointInsertEntriesByRowIDs(
+		workspace.currentReadView(), 1, 2, 10, []types.Rowid{types.RandomRowid()})
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, entries)
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceMemoryDeleteIndexTracksCurrentPayload(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	objectID := types.NewObjectid()
+	blockID := types.NewBlockidWithObjectID(&objectID, 1)
+	otherBlockID := types.NewBlockidWithObjectID(&objectID, 2)
+	rows := []types.Rowid{
+		types.NewRowid(&blockID, 1),
+		types.NewRowid(&blockID, 3),
+		types.NewRowid(&otherBlockID, 2),
+	}
+	deleteBatch := newWorkspaceDeleteBatchForTest(t, proc, rows)
+	id := workspace.append(Entry{
+		typ: DELETE, accountId: 1, databaseId: 2, tableId: 10,
+		bat: deleteBatch,
+	})
+	historical := workspace.currentReadView()
+
+	deleted, indexed, err := workspace.tableMemoryDeleteOffsets(
+		workspace.currentReadView(), 1, 2, 10, blockID, []int64{0, 1, 2, 3})
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, []int64{1, 3}, deleted)
+	deleted, indexed, err = workspace.tableMemoryDeleteOffsets(
+		workspace.currentReadView(), 1, 2, 10, blockID, nil)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, []int64{1, 3}, deleted)
+	deleted, indexed, err = workspace.tableMemoryDeleteOffsets(
+		workspace.currentReadView(), 1, 2, 10, blockID, []int64{})
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, deleted)
+
+	require.NoError(t, workspace.replaceSelections(id, []int64{0}))
+	deleted, indexed, err = workspace.tableMemoryDeleteOffsets(
+		workspace.currentReadView(), 1, 2, 10, blockID, nil)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, []int64{3}, deleted)
+	deleted, indexed, err = workspace.tableMemoryDeleteOffsets(
+		historical, 1, 2, 10, blockID, nil)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, deleted)
+
+	require.NoError(t, workspace.retireMutations([]workspaceMutationID{id}))
+	deleted, indexed, err = workspace.tableMemoryDeleteOffsets(
+		workspace.currentReadView(), 1, 2, 10, blockID, nil)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, deleted)
+	require.NoError(t, workspace.validateUsage())
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
 func TestTxnWorkspaceCompactionIndexSelectsOnlyInsertDeleteMutations(t *testing.T) {
 	proc := testutil.NewProc(t)
 	workspace := newTxnWorkspace()
@@ -570,8 +966,10 @@ func TestTxnWorkspaceCompactionIndexSelectsOnlyInsertDeleteMutations(t *testing.
 			t, proc, []string{"pk"}, []int64{44}),
 	})
 
-	entries, err := workspace.compactionCandidateEntries()
+	plan, err := workspace.beginCompactionPlan(0)
 	require.NoError(t, err)
+	require.Equal(t, uint64(3), plan.newInputs)
+	entries := plan.entries
 	// Catalog mutations precede user-table mutations in protocol order. The
 	// two INSERTs retain their publication order inside the INSERT class.
 	require.Equal(t,
@@ -582,11 +980,13 @@ func TestTxnWorkspaceCompactionIndexSelectsOnlyInsertDeleteMutations(t *testing.
 			entries.entries[2].workspaceMutationID,
 		},
 	)
-	entries.Close()
+	plan.Close()
 
 	require.NoError(t, workspace.retireMutations([]workspaceMutationID{deleteID}))
-	entries, err = workspace.compactionCandidateEntries()
+	plan, err = workspace.beginCompactionPlan(0)
 	require.NoError(t, err)
+	require.Equal(t, uint64(3), plan.newInputs)
+	entries = plan.entries
 	require.Equal(t,
 		[]workspaceMutationID{insertID, objectInsertID},
 		[]workspaceMutationID{
@@ -594,7 +994,91 @@ func TestTxnWorkspaceCompactionIndexSelectsOnlyInsertDeleteMutations(t *testing.
 			entries.entries[1].workspaceMutationID,
 		},
 	)
-	entries.Close()
+	plan.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceCompactionPlanDoesNotRescanEvaluatedHistory(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	firstID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11}),
+	})
+	secondID := workspace.append(Entry{
+		typ: DELETE, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{12}),
+	})
+
+	firstPlan, err := workspace.beginCompactionPlan(0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), firstPlan.newInputs)
+	require.Equal(t,
+		[]workspaceMutationID{secondID, firstID},
+		firstPlan.mutationIDs,
+	)
+
+	// A payload change after the snapshot is newer compaction input. Completing
+	// the old plan may consume secondID, but must leave firstID pending.
+	require.NoError(t, workspace.replaceSelections(firstID, []int64{0}))
+	workspace.completeCompactionPlan(firstPlan, map[workspaceMutationID]struct{}{
+		secondID: {},
+	})
+	firstPlan.Close()
+	requeuedPlan, err := workspace.beginCompactionPlan(0)
+	require.NoError(t, err)
+	require.Equal(t, []workspaceMutationID{firstID}, requeuedPlan.mutationIDs)
+	workspace.completeCompactionPlan(requeuedPlan, map[workspaceMutationID]struct{}{
+		firstID: {},
+	})
+	requeuedPlan.Close()
+
+	thirdID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{13}),
+	})
+	secondPlan, err := workspace.beginCompactionPlan(0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), secondPlan.newInputs)
+	require.Equal(t, []workspaceMutationID{thirdID}, secondPlan.mutationIDs)
+	secondPlan.Close()
+
+	// Completing an older snapshot must not consume work published after that
+	// snapshot.
+	workspace.completeCompactionPlan(firstPlan, map[workspaceMutationID]struct{}{
+		secondID: {},
+	})
+	thirdPlan, err := workspace.beginCompactionPlan(0)
+	require.NoError(t, err)
+	require.Equal(t, []workspaceMutationID{thirdID}, thirdPlan.mutationIDs)
+	thirdPlan.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceCompactionPlanDefersBeforePinningPendingPayloads(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	for value := int64(1); value <= 3; value++ {
+		workspace.append(Entry{
+			typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+			bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{value}),
+		})
+	}
+
+	plan, err := workspace.beginCompactionPlan(4)
+	require.NoError(t, err)
+	require.Nil(t, plan)
+
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 10,
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{4}),
+	})
+	plan, err = workspace.beginCompactionPlan(4)
+	require.NoError(t, err)
+	require.NotNil(t, plan)
+	require.Equal(t, uint64(4), plan.newInputs)
+	require.Len(t, plan.entries.entries, 4)
+	plan.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
@@ -676,6 +1160,72 @@ func TestTxnWorkspaceObjectReferenceIndexTracksLiveMutations(t *testing.T) {
 	require.NoError(t, workspace.retireMutation(firstID))
 	require.Empty(t,
 		workspace.liveObjectReferences([]string{objectName}, nil))
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceObjectStatsUseCurrentTableOverlay(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	beforeObjects := workspace.currentReadView()
+	firstObjectID := types.Objectid{1, 2, 3}
+	secondObjectID := types.Objectid{4, 5, 6}
+	tombstoneObjectID := types.Objectid{7, 8, 9}
+
+	firstID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		bat: newWorkspaceObjectBatchForTest(t, proc, firstObjectID),
+	})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		bat: newWorkspaceObjectBatchForTest(t, proc, secondObjectID),
+	})
+	workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 4,
+		bat: newWorkspaceObjectBatchForTest(t, proc, types.Objectid{10}),
+	})
+	deleteID := workspace.append(Entry{
+		typ: DELETE, accountId: 1, databaseId: 2, tableId: 3,
+		fileName: "tombstone-object",
+		bat:      newWorkspaceObjectBatchForTest(t, proc, tombstoneObjectID),
+	})
+
+	objects, indexed, err := workspace.tableObjectStats(
+		workspace.currentReadView(), 1, 2, 3, INSERT)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, objects, 2)
+	require.Equal(t, firstObjectID, *objects[0].ObjectName().ObjectId())
+	require.Equal(t, secondObjectID, *objects[1].ObjectName().ObjectId())
+
+	tombstones, indexed, err := workspace.tableObjectStats(
+		workspace.currentReadView(), 1, 2, 3, DELETE)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, tombstones, 1)
+	require.Equal(t, tombstoneObjectID, *tombstones[0].ObjectName().ObjectId())
+
+	// Current-state indexes cannot answer a historical statement view. The
+	// caller must retain the immutable journal path for that visibility domain.
+	objects, indexed, err = workspace.tableObjectStats(
+		beforeObjects, 1, 2, 3, INSERT)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Empty(t, objects)
+
+	require.NoError(t, workspace.retireMutations(
+		[]workspaceMutationID{firstID, deleteID}))
+	objects, indexed, err = workspace.tableObjectStats(
+		workspace.currentReadView(), 1, 2, 3, INSERT)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Len(t, objects, 1)
+	require.Equal(t, secondObjectID, *objects[0].ObjectName().ObjectId())
+	tombstones, indexed, err = workspace.tableObjectStats(
+		workspace.currentReadView(), 1, 2, 3, DELETE)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, tombstones)
+	require.NoError(t, workspace.validateUsage())
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
@@ -1850,6 +2400,100 @@ func TestTxnWorkspaceSpillPublishesOneAtomicRevision(t *testing.T) {
 	attempt.Close()
 	oldEntries.Close()
 	newEntries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceTerminalSpillCoalescesCompletedStatements(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	firstBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11})
+	firstID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		databaseName: "db", tableName: "tbl", bat: firstBat,
+	})
+	_, err := workspace.advanceStatement()
+	require.NoError(t, err)
+	secondBat := newInt64BatchForTest(t, proc, []string{"pk"}, []int64{22})
+	secondID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		databaseName: "db", tableName: "tbl", bat: secondBat,
+	})
+
+	ordinary, err := workspace.beginSpill(
+		[]workspaceMutationID{firstID, secondID})
+	require.NoError(t, err)
+	require.Len(t, groupWorkspaceSpillSources(ordinary), 2)
+	ordinary.Close()
+
+	terminal, err := workspace.beginTerminalSpill(
+		[]workspaceMutationID{firstID, secondID})
+	require.NoError(t, err)
+	groups := groupWorkspaceSpillSources(terminal)
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0].sources, 2)
+	require.Zero(t, groups[0].key.statementID)
+	require.Zero(t, groups[0].key.attemptID)
+
+	objectBat := newInt64BatchForTest(
+		t, proc, []string{"object"}, []int64{33})
+	objectIDs, err := workspace.commitSpill(terminal, []workspaceSpillObject{{
+		sourceMutationIDs: []workspaceMutationID{firstID, secondID},
+		entry: Entry{
+			typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+			databaseName: "db", tableName: "tbl",
+			fileName: "object", bat: objectBat,
+		},
+	}})
+	require.NoError(t, err)
+	require.Len(t, objectIDs, 1)
+	terminal.Close()
+
+	workspace.mu.RLock()
+	require.Equal(t, uint64(1), workspace.mutations[objectIDs[0]].statementID)
+	require.Equal(t, uint64(1), workspace.mutations[objectIDs[0]].attemptID)
+	require.Contains(t, workspace.journal.current.mutations, objectIDs[0])
+	workspace.mu.RUnlock()
+	_, err = workspace.rollbackCurrentAttempt()
+	require.ErrorContains(t, err,
+		"statement rollback cannot run after commit preparation")
+
+	entries, err := workspace.tableEntries(
+		workspace.currentReadView(), 1, 2, 3)
+	require.NoError(t, err)
+	require.Len(t, entries.entries, 1)
+	require.Equal(t, "object", entries.entries[0].fileName)
+	require.Same(t, objectBat, entries.entries[0].bat)
+	entries.Close()
+	require.NoError(t, workspace.close(proc.Mp()))
+}
+
+func TestTxnWorkspaceTerminalSpillRejectsChangedBoundary(t *testing.T) {
+	proc := testutil.NewProc(t)
+	workspace := newTxnWorkspace()
+	sourceID := workspace.append(Entry{
+		typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+		databaseName: "db", tableName: "tbl",
+		bat: newInt64BatchForTest(t, proc, []string{"pk"}, []int64{11}),
+	})
+	attempt, err := workspace.beginTerminalSpill(
+		[]workspaceMutationID{sourceID})
+	require.NoError(t, err)
+	_, err = workspace.advanceStatement()
+	require.NoError(t, err)
+	objectBat := newInt64BatchForTest(
+		t, proc, []string{"object"}, []int64{22})
+	_, err = workspace.commitSpill(attempt, []workspaceSpillObject{{
+		sourceMutationIDs: []workspaceMutationID{sourceID},
+		entry: Entry{
+			typ: INSERT, accountId: 1, databaseId: 2, tableId: 3,
+			databaseName: "db", tableName: "tbl",
+			fileName: "object", bat: objectBat,
+		},
+	}})
+	require.ErrorContains(t, err,
+		"terminal spill boundary changed before publication")
+	objectBat.Clean(proc.Mp())
+	attempt.Close()
 	require.NoError(t, workspace.close(proc.Mp()))
 }
 
@@ -3198,14 +3842,15 @@ func BenchmarkTxnWorkspaceCurrentStateIgnoresRetiredHistory(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for idx := 0; idx < b.N; idx++ {
-					entries, err := workspace.compactionCandidateEntries()
+					plan, err := workspace.beginCompactionPlan(0)
 					if err != nil {
 						b.Fatal(err)
 					}
+					entries := plan.entries
 					if len(entries.entries) != 1 {
 						b.Fatalf("expected one active entry, got %d", len(entries.entries))
 					}
-					entries.Close()
+					plan.Close()
 				}
 			})
 

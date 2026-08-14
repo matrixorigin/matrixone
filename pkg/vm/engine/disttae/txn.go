@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
-	"math"
 	"runtime"
 	"slices"
 	"strings"
@@ -129,31 +128,75 @@ func (txn *Transaction) removeDroppedTableMutationsLocked() error {
 }
 
 type workspaceCompactionKey struct {
-	typ         int
-	accountID   uint32
-	databaseID  uint64
-	tableID     uint64
-	statementID uint64
-	attemptID   uint64
+	typ        int
+	accountID  uint32
+	databaseID uint64
+	tableID    uint64
+}
+
+// Wait for enough new physical inputs to build a useful immutable payload.
+// Planning every few statements repeatedly scans the same small tail and, if
+// the output is requeued, copies old rows again. One half-block interval keeps
+// the unsealed tail bounded while allowing every row to move into at most one
+// compacted payload.
+const workspaceCompactionInputInterval = objectio.BlockMaxRows / 2
+
+// workspaceCompactionSealRows is the minimum size of an immutable compacted
+// payload. Smaller compatible inputs remain pending until they can form a
+// half-full block. Compacted outputs are never requeued, so the physical work
+// is linear in the number of logical rows rather than logarithmic in the
+// transaction size.
+const workspaceCompactionSealRows = objectio.BlockMaxRows / 2
+
+func sameWorkspaceMemoryCompactionGroup(
+	left, right *workspaceEntryView,
+) bool {
+	if left == nil || right == nil || left.bat == nil || right.bat == nil ||
+		!sameWorkspaceSpillGroup(left.Entry, right.Entry) ||
+		!slices.Equal(left.bat.Attrs, right.bat.Attrs) ||
+		len(left.bat.Vecs) != len(right.bat.Vecs) {
+		return false
+	}
+	for idx := range left.bat.Vecs {
+		if left.bat.Vecs[idx] == nil || right.bat.Vecs[idx] == nil ||
+			!left.bat.Vecs[idx].GetType().Eq(*right.bat.Vecs[idx].GetType()) {
+			return false
+		}
+	}
+	return true
 }
 
 func (txn *Transaction) compactWorkspaceMemoryBatchesLocked(ctx context.Context) error {
-	entries, err := txn.workspace.compactionCandidateEntries()
+	plan, err := txn.workspace.beginCompactionPlan(workspaceCompactionInputInterval)
 	if err != nil {
 		return err
 	}
-	defer entries.Close()
+	if plan == nil {
+		return nil
+	}
+	defer plan.Close()
+	entries := plan.entries
+	evaluated := make(map[workspaceMutationID]struct{}, len(entries.entries))
 
 	insertCandidates := make([]int, 0)
 	deleteCandidates := make([]int, 0)
 	for idx := range entries.entries {
 		entry := &entries.entries[idx]
+		// The open attempt is the only statement that can still be retried or
+		// rolled back independently. Leave it pending until the boundary has
+		// advanced; completed attempts have released that logical ownership and
+		// may share one physical payload.
+		if entry.statementID == plan.currentAttempt.statementID &&
+			entry.attemptID == plan.currentAttempt.attemptID {
+			continue
+		}
 		if entry.bat == nil || entry.bat.IsEmpty() || len(entry.selections) != 0 ||
 			len(entry.bat.Attrs) == 0 ||
 			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo ||
 			entry.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats ||
 			entry.databaseId == catalog.MO_CATALOG_ID ||
-			entry.bat.RowCount() >= objectio.BlockMaxRows/2 {
+			entry.bat.RowCount() >= workspaceCompactionSealRows {
+			evaluated[entry.workspaceMutationID] = struct{}{}
 			continue
 		}
 		switch entry.typ {
@@ -163,10 +206,6 @@ func (txn *Transaction) compactWorkspaceMemoryBatchesLocked(ctx context.Context)
 			deleteCandidates = append(deleteCandidates, idx)
 		}
 	}
-	if len(insertCandidates)+len(deleteCandidates) < 30 {
-		return nil
-	}
-
 	compactions := make([]workspaceMutationCompaction, 0)
 	planned := make(map[workspaceMutationID]struct{})
 	cleanup := func() {
@@ -175,101 +214,126 @@ func (txn *Transaction) compactWorkspaceMemoryBatchesLocked(ctx context.Context)
 		}
 	}
 	buildMerges := func(candidates []int) error {
-		consumed := make(map[int]struct{}, len(candidates))
-		for pos, entryIdx := range candidates {
-			if _, ok := consumed[entryIdx]; ok {
-				continue
-			}
-			dst := &entries.entries[entryIdx]
+		// Build stable physical groups in one pass. Statement ownership is not a
+		// physical compatibility property: every candidate here belongs to a
+		// completed attempt and can no longer be rolled back independently.
+		groups := make(map[workspaceCompactionKey][][]int)
+		groupOrder := make([]workspaceCompactionKey, 0)
+		for _, entryIdx := range candidates {
+			entry := &entries.entries[entryIdx]
 			key := workspaceCompactionKey{
-				typ:         dst.typ,
-				accountID:   dst.accountId,
-				databaseID:  dst.databaseId,
-				tableID:     dst.tableId,
-				statementID: dst.statementID,
-				attemptID:   dst.attemptID,
+				typ:        entry.typ,
+				accountID:  entry.accountId,
+				databaseID: entry.databaseId,
+				tableID:    entry.tableId,
 			}
-			sources := make([]int, 0)
-			rows := dst.bat.RowCount()
-			for _, sourceIdx := range candidates[pos+1:] {
-				if _, ok := consumed[sourceIdx]; ok {
-					continue
-				}
-				source := &entries.entries[sourceIdx]
-				sourceKey := workspaceCompactionKey{
-					typ:         source.typ,
-					accountID:   source.accountId,
-					databaseID:  source.databaseId,
-					tableID:     source.tableId,
-					statementID: source.statementID,
-					attemptID:   source.attemptID,
-				}
-				if sourceKey != key || rows+source.bat.RowCount() > objectio.BlockMaxRows {
-					continue
-				}
-				sources = append(sources, sourceIdx)
-				consumed[sourceIdx] = struct{}{}
-				rows += source.bat.RowCount()
-				if rows == objectio.BlockMaxRows {
+			if _, exists := groups[key]; !exists {
+				groupOrder = append(groupOrder, key)
+			}
+			physicalGroups := groups[key]
+			matched := false
+			for groupIdx := range physicalGroups {
+				first := &entries.entries[physicalGroups[groupIdx][0]]
+				if sameWorkspaceMemoryCompactionGroup(
+					first, &entries.entries[entryIdx],
+				) {
+					physicalGroups[groupIdx] = append(
+						physicalGroups[groupIdx], entryIdx)
+					matched = true
 					break
 				}
 			}
-			if len(sources) == 0 {
-				continue
+			if !matched {
+				physicalGroups = append(physicalGroups, []int{entryIdx})
 			}
+			groups[key] = physicalGroups
+		}
 
-			newBat, dupErr := dst.bat.Dup(txn.proc.Mp())
-			if dupErr != nil {
-				return dupErr
-			}
-			compaction := workspaceMutationCompaction{
-				dstMutationID:  dst.workspaceMutationID,
-				dstOldBat:      dst.bat,
-				dstNewBat:      newBat,
-				srcMutationIDs: make([]workspaceMutationID, 0, len(sources)),
-				srcOldBats:     make([]*batch.Batch, 0, len(sources)),
-			}
-			for _, sourceIdx := range sources {
-				source := &entries.entries[sourceIdx]
-				if _, appendErr := newBat.Append(ctx, txn.proc.Mp(), source.bat); appendErr != nil {
-					newBat.Clean(txn.proc.Mp())
-					return appendErr
-				}
-				compaction.srcMutationIDs = append(
-					compaction.srcMutationIDs, source.workspaceMutationID)
-				compaction.srcOldBats = append(compaction.srcOldBats, source.bat)
-				planned[source.workspaceMutationID] = struct{}{}
-			}
-			if dst.typ == INSERT {
-				rowIDVector, allocErr := txn.batchAllocNewRowIds(newBat.RowCount())
-				if allocErr != nil {
-					if rowIDVector != nil {
-						rowIDVector.Free(txn.proc.Mp())
+		for _, key := range groupOrder {
+			for _, group := range groups[key] {
+				for pos := 0; pos < len(group); {
+					start := pos
+					rows := 0
+					for pos < len(group) &&
+						rows+entries.entries[group[pos]].bat.RowCount() <= objectio.BlockMaxRows {
+						rows += entries.entries[group[pos]].bat.RowCount()
+						pos++
 					}
-					newBat.Clean(txn.proc.Mp())
-					return allocErr
-				}
-				rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVector)
-				for row := range newBat.RowCount() {
-					if setErr := vector.SetFixedAtWithTypeCheck[objectio.Rowid](
-						newBat.Vecs[0], row, rowIDs[row]); setErr != nil {
-						rowIDVector.Free(txn.proc.Mp())
-						newBat.Clean(txn.proc.Mp())
-						return setErr
+					if rows < workspaceCompactionSealRows {
+						// The remaining compatible tail stays pending. A later plan
+						// can seal it together with newly completed statements.
+						break
 					}
-				}
-				rowIDVector.Free(txn.proc.Mp())
-			} else if newBat.RowCount() > 1 {
-				var sortBuf []int64
-				var shuffleBuf []byte
-				if sortErr := mergeutil.SortColumnsByIndexWithBuf(
-					newBat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); sortErr != nil {
-					newBat.Clean(txn.proc.Mp())
-					return sortErr
+					if pos-start < 2 {
+						// A single half-full payload is already sealed and should have
+						// been filtered above. Keep this guard fail-safe for future
+						// candidate rules without rewriting its generation.
+						evaluated[entries.entries[group[start]].workspaceMutationID] = struct{}{}
+						continue
+					}
+
+					entryIdx := group[start]
+					dst := &entries.entries[entryIdx]
+					sources := group[start+1 : pos]
+
+					newBat, dupErr := dst.bat.Dup(txn.proc.Mp())
+					if dupErr != nil {
+						return dupErr
+					}
+					compaction := workspaceMutationCompaction{
+						dstMutationID:  dst.workspaceMutationID,
+						dstOldBat:      dst.bat,
+						dstNewBat:      newBat,
+						srcMutationIDs: make([]workspaceMutationID, 0, len(sources)),
+						srcOldBats:     make([]*batch.Batch, 0, len(sources)),
+					}
+					for _, sourceIdx := range sources {
+						source := &entries.entries[sourceIdx]
+						if _, appendErr := newBat.Append(ctx, txn.proc.Mp(), source.bat); appendErr != nil {
+							newBat.Clean(txn.proc.Mp())
+							return appendErr
+						}
+						compaction.srcMutationIDs = append(
+							compaction.srcMutationIDs, source.workspaceMutationID)
+						compaction.srcOldBats = append(compaction.srcOldBats, source.bat)
+						planned[source.workspaceMutationID] = struct{}{}
+					}
+					if dst.typ == INSERT {
+						rowIDVector, allocErr := txn.batchAllocNewRowIds(newBat.RowCount())
+						if allocErr != nil {
+							if rowIDVector != nil {
+								rowIDVector.Free(txn.proc.Mp())
+							}
+							newBat.Clean(txn.proc.Mp())
+							return allocErr
+						}
+						rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVector)
+						for row := range newBat.RowCount() {
+							if setErr := vector.SetFixedAtWithTypeCheck[objectio.Rowid](
+								newBat.Vecs[0], row, rowIDs[row]); setErr != nil {
+								rowIDVector.Free(txn.proc.Mp())
+								newBat.Clean(txn.proc.Mp())
+								return setErr
+							}
+						}
+						rowIDVector.Free(txn.proc.Mp())
+					} else if newBat.RowCount() > 1 {
+						var sortBuf []int64
+						var shuffleBuf []byte
+						if sortErr := mergeutil.SortColumnsByIndexWithBuf(
+							newBat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); sortErr != nil {
+							newBat.Clean(txn.proc.Mp())
+							return sortErr
+						}
+					}
+					planned[dst.workspaceMutationID] = struct{}{}
+					evaluated[dst.workspaceMutationID] = struct{}{}
+					for _, sourceIdx := range sources {
+						evaluated[entries.entries[sourceIdx].workspaceMutationID] = struct{}{}
+					}
+					compactions = append(compactions, compaction)
 				}
 			}
-			planned[dst.workspaceMutationID] = struct{}{}
-			compactions = append(compactions, compaction)
 		}
 		return nil
 	}
@@ -282,42 +346,11 @@ func (txn *Transaction) compactWorkspaceMemoryBatchesLocked(ctx context.Context)
 		return err
 	}
 
-	// Preserve the existing contract that once small-batch compaction is
-	// triggered, every remaining DELETE batch is ordered by row-id. A
-	// destination-only compaction is a copy-on-write sort at the same revision.
-	for idx := range entries.entries {
-		entry := &entries.entries[idx]
-		if entry.typ != DELETE || entry.bat == nil || len(entry.selections) != 0 ||
-			entry.bat.RowCount() <= 1 {
-			continue
-		}
-		if _, ok := planned[entry.workspaceMutationID]; ok {
-			continue
-		}
-		newBat, dupErr := entry.bat.Dup(txn.proc.Mp())
-		if dupErr != nil {
-			cleanup()
-			return dupErr
-		}
-		var sortBuf []int64
-		var shuffleBuf []byte
-		if sortErr := mergeutil.SortColumnsByIndexWithBuf(
-			newBat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); sortErr != nil {
-			newBat.Clean(txn.proc.Mp())
-			cleanup()
-			return sortErr
-		}
-		compactions = append(compactions, workspaceMutationCompaction{
-			dstMutationID: entry.workspaceMutationID,
-			dstOldBat:     entry.bat,
-			dstNewBat:     newBat,
-		})
-	}
-
 	if err = txn.workspace.compactMemoryMany(compactions); err != nil {
 		cleanup()
 		return err
 	}
+	txn.workspace.completeCompactionPlan(plan, evaluated)
 	return nil
 }
 
@@ -417,11 +450,12 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 	txn.readOnly.Store(false)
 
 	var pkCheck workspacePKCheck
+	var pkIndex workspacePKIndex
 	if typ == INSERT || typ == DELETE {
-		// resolvePKCheckForWrite may reach Engine.Database, which can craft an
+		// resolveWorkspacePKMetadataForWrite may reach Engine.Database, which can craft an
 		// internal SQL on the current txn and reenter txn.Lock while capturing its
 		// read view. Resolve the PK position before taking txn.Lock.
-		pkCheck, err = txn.resolvePKCheckForWrite(
+		pkCheck, pkIndex, err = txn.resolveWorkspacePKMetadataForWrite(
 			ctx,
 			typ,
 			accountId,
@@ -436,6 +470,9 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		if typ == INSERT && pkCheck.enabled {
 			// WriteBatch prepends rowid at attr 0 for inserts after this metadata lookup.
 			pkCheck.vectorPos++
+		}
+		if typ == INSERT && pkIndex.enabled {
+			pkIndex.vectorPos++
 		}
 	}
 
@@ -541,6 +578,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		autoIncrEpochKnown: autoIncrEpochKnown,
 		note:               note,
 		pkCheck:            pkCheck,
+		pkIndex:            pkIndex,
 	}
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
@@ -823,32 +861,6 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 	return nil
 }
 
-// scanInMemInsertSize sums the in-memory INSERT payloads selected by one
-// logical workspace scope. Selection is based on stable mutation identity,
-// never on a physical mutation position.
-func (txn *Transaction) scanInMemInsertSize(scope workspaceDumpScope) (uint64, error) {
-	entries, err := txn.workspace.entriesForDumpScope(scope)
-	if err != nil {
-		return 0, err
-	}
-	defer entries.Close()
-
-	var size uint64
-	for idx := range entries.entries {
-		entry := &entries.entries[idx]
-		if entry.isCatalog() {
-			continue
-		}
-		if entry.bat == nil || entry.bat.RowCount() == 0 {
-			continue
-		}
-		if entry.typ == INSERT && entry.fileName == "" {
-			size += uint64(entry.bat.Size())
-		}
-	}
-	return size, nil
-}
-
 // dumpBatchLocked spills mutations selected by scope when the configured
 // workspace thresholds require it. A commit scope uses the commit thresholds
 // and may spill tombstones; an all-but-non-commit scope is used at statement
@@ -876,7 +888,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, scope workspaceDump
 	if !scope.commit && !forceFlush {
 		forceDump := false
 		var err error
-		size, err = txn.scanInMemInsertSize(scope)
+		size, err = txn.workspace.inMemoryInsertBytesForDumpScope(scope)
 		if err != nil {
 			return err
 		}
@@ -1135,77 +1147,98 @@ func (txn *Transaction) getTable(
 	return tbl, nil
 }
 
-func (txn *Transaction) resolvePKCheckForWrite(
+func (txn *Transaction) resolveWorkspacePKMetadataForWrite(
 	ctx context.Context,
 	typ int,
 	accountId uint32,
 	databaseName, tableName string,
 	tableId uint64,
 	bat *batch.Batch,
-) (workspacePKCheck, error) {
+) (workspacePKCheck, workspacePKIndex, error) {
 	if bat == nil || bat.RowCount() == 0 {
-		return workspacePKCheck{}, nil
+		return workspacePKCheck{}, workspacePKIndex{}, nil
 	}
 
 	if typ != INSERT && typ != DELETE {
-		return workspacePKCheck{}, nil
+		return workspacePKCheck{}, workspacePKIndex{}, nil
 	}
 
 	if tableId == catalog.MO_TABLES_ID ||
 		tableId == catalog.MO_COLUMNS_ID ||
 		tableId == catalog.MO_DATABASE_ID {
-		return workspacePKCheck{}, nil
+		return workspacePKCheck{}, workspacePKIndex{}, nil
 	}
 	if txn.engine == nil {
-		return workspacePKCheck{}, moerr.NewInternalErrorNoCtx(
+		return workspacePKCheck{}, workspacePKIndex{}, moerr.NewInternalErrorNoCtx(
 			"cannot resolve workspace PK descriptor without transaction engine")
 	}
 
 	tbl, err := txn.getTable(ctx, accountId, databaseName, tableName)
 	if err != nil {
-		return workspacePKCheck{}, err
+		return workspacePKCheck{}, workspacePKIndex{}, err
 	}
 	tableDef := tbl.GetTableDef(defines.AttachAccountId(ctx, accountId))
 	if tableDef == nil {
-		return workspacePKCheck{}, moerr.NewInternalErrorNoCtxf(
+		return workspacePKCheck{}, workspacePKIndex{}, moerr.NewInternalErrorNoCtxf(
 			"cannot resolve workspace PK descriptor: table definition is nil for %s.%s",
 			databaseName, tableName)
 	}
 	if tableDef.Pkey == nil {
-		return workspacePKCheck{}, nil
+		return workspacePKCheck{}, workspacePKIndex{}, nil
 	}
 
 	pkName := tableDef.Pkey.PkeyColName
-	if pkName == "" ||
-		pkName == catalog.FakePrimaryKeyColName ||
-		pkName == catalog.CPrimaryKeyColName {
-		return workspacePKCheck{}, nil
+	if pkName == "" {
+		return workspacePKCheck{}, workspacePKIndex{}, nil
 	}
+	isDuplicateCheckKey := pkName != catalog.FakePrimaryKeyColName &&
+		pkName != catalog.CPrimaryKeyColName
 
 	if typ == DELETE {
+		if !isDuplicateCheckKey {
+			return workspacePKCheck{}, workspacePKIndex{}, nil
+		}
 		if len(bat.Vecs) < 2 {
 			logutil.Warnf("delete has no pk vector, database:%s, table:%s", databaseName, tableName)
-			return workspacePKCheck{}, moerr.NewInternalErrorNoCtxf(
+			return workspacePKCheck{}, workspacePKIndex{}, moerr.NewInternalErrorNoCtxf(
 				"delete batch for primary-key table %s.%s has no primary-key vector",
 				databaseName, tableName)
 		}
-		return workspacePKCheck{vectorPos: 1, enabled: true}, nil
+		return workspacePKCheck{vectorPos: 1, enabled: true}, workspacePKIndex{}, nil
 	}
 
+	pkVectorPos := -1
 	for i, attr := range bat.Attrs {
 		if attr == pkName {
-			return workspacePKCheck{vectorPos: i, enabled: true}, nil
+			pkVectorPos = i
+			break
 		}
 	}
-	for i, attr := range bat.Attrs {
-		if strings.EqualFold(attr, pkName) {
-			return workspacePKCheck{vectorPos: i, enabled: true}, nil
+	if pkVectorPos == -1 {
+		for i, attr := range bat.Attrs {
+			if strings.EqualFold(attr, pkName) {
+				pkVectorPos = i
+				break
+			}
 		}
+	}
+	if pkVectorPos == -1 {
+		// Hidden or fake primary-key vectors are not part of the duplicate-check
+		// contract. If an internal write does not carry one, publish it as
+		// explicitly unindexed so point reads use the complete semantic view.
+		if !isDuplicateCheckKey {
+			return workspacePKCheck{}, workspacePKIndex{}, nil
+		}
+		return workspacePKCheck{}, workspacePKIndex{}, moerr.NewInternalErrorNoCtxf(
+			"primary-key column %s not found in write batch for %s.%s: attrs %v",
+			pkName, databaseName, tableName, bat.Attrs)
 	}
 
-	return workspacePKCheck{}, moerr.NewInternalErrorNoCtxf(
-		"primary-key column %s not found in write batch for %s.%s: attrs %v",
-		pkName, databaseName, tableName, bat.Attrs)
+	index := workspacePKIndex{vectorPos: pkVectorPos, enabled: true}
+	if !isDuplicateCheckKey {
+		return workspacePKCheck{}, index, nil
+	}
+	return workspacePKCheck{vectorPos: pkVectorPos, enabled: true}, index, nil
 }
 
 func (txn *Transaction) WriteFileLocked(
@@ -1496,10 +1529,7 @@ func (txn *Transaction) deleteBatch(
 
 	var (
 		mp             = make(map[types.Rowid]uint8)
-		deleteBlkId    = make(map[types.Blockid]bool)
 		rowids         = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
-		min1           = uint32(math.MaxUint32)
-		max1           = uint32(0)
 		cnRowIdOffsets = make([]int64, 0, len(rowids))
 	)
 	server := colexec.MustGetServer(txn.engine.service)
@@ -1507,7 +1537,6 @@ func (txn *Transaction) deleteBatch(
 	for i, rowid := range rowids {
 
 		blkid := rowid.CloneBlockID()
-		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
@@ -1523,14 +1552,6 @@ func (txn *Transaction) deleteBatch(
 			continue
 		}
 
-		if rowOffset < (min1) {
-			min1 = rowOffset
-		}
-
-		if rowOffset > max1 {
-			max1 = rowOffset
-		}
-		// update workspace
 	}
 	// cn rowId antiShrink
 	bat.Shrink(cnRowIdOffsets, true)
@@ -1543,9 +1564,6 @@ func (txn *Transaction) deleteBatch(
 		databaseId,
 		tableId,
 		sels,
-		deleteBlkId,
-		min1,
-		max1,
 		mp,
 	)
 
@@ -1583,20 +1601,35 @@ func (txn *Transaction) deleteTableWrites(
 	databaseId uint64,
 	tableId uint64,
 	sels []int64,
-	deleteBlkId map[types.Blockid]bool,
-	min, max uint32,
 	mp map[types.Rowid]uint8,
 ) {
 	txn.Lock()
 	defer txn.Unlock()
-	entries, err := txn.workspace.tableEntries(
-		txn.workspace.currentReadView(),
+	view := txn.workspace.currentReadView()
+	rowIDs := make([]types.Rowid, 0, len(mp))
+	for rowID := range mp {
+		rowIDs = append(rowIDs, rowID)
+	}
+	entries, indexed, err := txn.workspace.tablePointInsertEntriesByRowIDs(
+		view,
 		accountID,
 		databaseId,
 		tableId,
+		rowIDs,
 	)
 	if err != nil {
 		panic(err)
+	}
+	if !indexed {
+		// An incomplete index is an explicit compatibility boundary for legacy
+		// in-memory INSERT shapes that do not carry RowIDs. Preserve their
+		// established visibility semantics rather than treating an index miss as
+		// proof that the row is committed.
+		entries, err = txn.workspace.tableEntries(
+			view, accountID, databaseId, tableId)
+		if err != nil {
+			panic(err)
+		}
 	}
 	defer entries.Close()
 
@@ -1625,16 +1658,6 @@ func (txn *Transaction) deleteTableWrites(
 			continue
 		}
 
-		// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
-		// so if e.bat is not to be deleted,skip it.
-		if !deleteBlkId[rowids[0].CloneBlockID()] {
-			continue
-		}
-		min2 := rowids[0].GetRowOffset()
-		max2 := rowids[len(rowids)-1].GetRowOffset()
-		if min > max2 || max < min2 {
-			continue
-		}
 		for k, v := range rowids {
 			if _, ok := mp[v]; ok {
 				// if the v will be deleted, then add its index into the sels.
@@ -1791,6 +1814,7 @@ func workspaceObjectEntryFrom(source Entry, fileName string, bat *batch.Batch) E
 	source.fileName = fileName
 	source.bat = bat
 	source.pkCheck = workspacePKCheck{}
+	source.pkIndex = workspacePKIndex{}
 	return source
 }
 

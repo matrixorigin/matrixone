@@ -243,17 +243,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		}
 	}
 
-	var entrySets []*workspaceEntrySet
+	var sources []*LocalDisttaeDataSource
 	defer func() {
-		for _, entries := range entrySets {
-			entries.Close()
+		for _, source := range sources {
+			source.Close()
 		}
 	}()
 	newDataSource := func(view client.WorkspaceReadView) *LocalDisttaeDataSource {
 		entries, err := txn.workspace.tableEntries(view, 0, 0, 0)
 		require.NoError(t, err)
-		entrySets = append(entrySets, entries)
-		return &LocalDisttaeDataSource{
+		source := &LocalDisttaeDataSource{
 			fs:               fs,
 			ctx:              ctx,
 			table:            &txnTbl,
@@ -261,11 +260,17 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 			readView:         view,
 			workspaceEntries: entries,
 		}
+		sources = append(sources, source)
+		return source
 	}
 	ls := newDataSource(txn.workspace.currentReadView())
 	oldLS := newDataSource(firstView)
-	require.Len(t, oldLS.workspaceTombstoneObjectsLocked(), 1)
-	require.Len(t, ls.workspaceTombstoneObjectsLocked(), 3)
+	oldObjects, err := oldLS.workspaceTombstoneObjectsLocked()
+	require.NoError(t, err)
+	require.Len(t, oldObjects, 1)
+	objects, err := ls.workspaceTombstoneObjectsLocked()
+	require.NoError(t, err)
+	require.Len(t, objects, 3)
 
 	deletedMask := objectio.GetReusableBitmap()
 	defer deletedMask.Release()
@@ -322,7 +327,6 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	readView := txn.workspace.currentReadView()
 	workspaceEntries, err := txn.workspace.tableEntries(readView, 0, 11, 23)
 	require.NoError(t, err)
-	defer workspaceEntries.Close()
 
 	// query t2 table
 	ls := &LocalDisttaeDataSource{
@@ -338,6 +342,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 		},
 		memPKFilter: &readutil.MemPKFilter{},
 	}
+	defer ls.Close()
 
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
@@ -381,7 +386,6 @@ func TestLocalDatasourceFiltersSelectedWorkspaceInsertRows(t *testing.T) {
 	readView := txn.workspace.currentReadView()
 	workspaceEntries, err := txn.workspace.tableEntries(readView, 0, 11, 22)
 	require.NoError(t, err)
-	defer workspaceEntries.Close()
 
 	ls := &LocalDisttaeDataSource{
 		ctx:              ctx,
@@ -393,6 +397,7 @@ func TestLocalDatasourceFiltersSelectedWorkspaceInsertRows(t *testing.T) {
 		},
 		memPKFilter: &readutil.MemPKFilter{},
 	}
+	defer ls.Close()
 	outBatch := batch.NewWithSize(1)
 	outBatch.Vecs[0] = vector.NewVec(types.T_int32.ToType())
 	defer outBatch.Clean(m)
@@ -451,7 +456,6 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 	readView := txn.workspace.currentReadView()
 	workspaceEntries, err := txn.workspace.tableEntries(readView, 0, 11, 22)
 	require.NoError(t, err)
-	defer workspaceEntries.Close()
 
 	ls := &LocalDisttaeDataSource{
 		ctx:              ctx,
@@ -465,23 +469,35 @@ func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testi
 			tableId: 22,
 		},
 	}
+	defer ls.Close()
 
-	entries := ls.workspaceDeleteEntriesLocked()
+	entries, err := ls.workspaceDeleteEntriesLocked()
+	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	for _, entry := range entries {
 		require.True(t, entry.sorted)
 		require.True(t, slices.IsSortedFunc(entry.rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 	}
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	blkEntries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.NoError(t, err)
 	require.Len(t, blkEntries, 1)
 	require.Equal(t, []types.Rowid{types.NewRowid(&blk, 1), types.NewRowid(&blk, 3)}, blkEntries[0].rowIds)
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	blk2Entries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.NoError(t, err)
 	require.Len(t, blk2Entries, 1)
 	require.Equal(t, rows2, blk2Entries[0].rowIds)
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk3))
-	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil))
-	require.Equal(t, []int64{4}, ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil))
-	require.Equal(t, []int64{1, 4}, ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil))
+	blk3Entries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk3)
+	require.NoError(t, err)
+	require.Empty(t, blk3Entries)
+	left, err := ls.applyWorkspaceEntryDeletes(&blk, []int64{1, 3, 4}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{4}, left)
+	left, err = ls.applyWorkspaceEntryDeletes(&blk2, []int64{2, 4}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{4}, left)
+	left, err = ls.applyWorkspaceEntryDeletes(&blk3, []int64{1, 4}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 4}, left)
 
 	original := vector.MustFixedColNoTypeCheck[types.Rowid](delVec)
 	require.Equal(t, rows1, original)
@@ -526,7 +542,6 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 	readView := txn.workspace.currentReadView()
 	workspaceEntries, err := txn.workspace.tableEntries(readView, 0, 11, 22)
 	require.NoError(t, err)
-	defer workspaceEntries.Close()
 
 	ls := &LocalDisttaeDataSource{
 		ctx:              ctx,
@@ -540,21 +555,25 @@ func TestLocalDatasourceWorkspaceDeleteEntriesMergesLargeDeleteSet(t *testing.T)
 			tableId: 22,
 		},
 	}
+	defer ls.Close()
 
-	entries := ls.workspaceDeleteEntriesLocked()
+	entries, err := ls.workspaceDeleteEntriesLocked()
+	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.True(t, entries[0].sorted)
 	require.Len(t, entries[0].rowIds, mergeWorkspaceDeleteEntriesThreshold+1)
 	require.True(t, slices.IsSortedFunc(entries[0].rowIds, func(a, b types.Rowid) int { return a.Compare(&b) }))
 
-	blkEntries := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	blkEntries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.NoError(t, err)
 	require.Len(t, blkEntries, 1)
 	require.True(t, blkEntries[0].sorted)
 	for _, rowID := range blkEntries[0].rowIds {
 		require.Equal(t, blk, *rowID.BorrowBlockID())
 	}
 
-	blk2Entries := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	blk2Entries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.NoError(t, err)
 	require.Len(t, blk2Entries, 1)
 	require.True(t, blk2Entries[0].sorted)
 	for _, rowID := range blk2Entries[0].rowIds {
@@ -597,9 +616,14 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenReadViewChange
 			tableId: 22,
 		},
 	}
+	defer ls.Close()
 
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
-	require.Empty(t, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
+	blkEntries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.NoError(t, err)
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, blkEntries)
+	blk2Entries, err := ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.NoError(t, err)
+	require.Empty(t, blk2Entries)
 	require.Equal(t, firstView, ls.workspaceDeletes.readView)
 	require.NotNil(t, ls.workspaceDeletes.byBlock)
 
@@ -613,14 +637,19 @@ func TestLocalDatasourceWorkspaceDeleteEntriesInvalidatesCacheWhenReadViewChange
 	ls.workspaceEntries.Close()
 	ls.workspaceEntries = secondEntries
 	ls.readView = secondView
-	entries := ls.workspaceDeleteEntriesLocked()
+	entries, err := ls.workspaceDeleteEntriesLocked()
+	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	require.Equal(t, secondView, ls.workspaceDeletes.readView)
 	// Changing ReadView must invalidate the block index built for the previous
 	// workspace generation, otherwise later deletes can be silently skipped.
 	require.Nil(t, ls.workspaceDeletes.byBlock)
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk2))
-	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, ls.workspaceDeleteEntriesForBlockLocked(&blk))
+	blk2Entries, err = ls.workspaceDeleteEntriesForBlockLocked(&blk2)
+	require.NoError(t, err)
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row2}, sorted: true}}, blk2Entries)
+	blkEntries, err = ls.workspaceDeleteEntriesForBlockLocked(&blk)
+	require.NoError(t, err)
+	require.Equal(t, []workspaceDeleteEntry{{rowIds: []types.Rowid{row}, sorted: true}}, blkEntries)
 }
 
 func newWorkspaceDeleteBatch(t *testing.T, rows []types.Rowid) *batch.Batch {

@@ -625,6 +625,30 @@ func (tbl *txnTable) workspaceEntries(
 	)
 }
 
+func (tbl *txnTable) workspacePointInsertEntries(
+	view client.WorkspaceReadView,
+	encodedKeys [][]byte,
+) (*workspaceEntrySet, bool, error) {
+	return tbl.getTxn().workspace.tablePointInsertEntries(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId, encodedKeys...)
+}
+
+func (tbl *txnTable) workspaceMemoryDeleteOffsets(
+	view client.WorkspaceReadView,
+	blockID objectio.Blockid,
+	candidates []int64,
+) ([]int64, bool, error) {
+	return tbl.getTxn().workspace.tableMemoryDeleteOffsets(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId, blockID, candidates)
+}
+
+func (tbl *txnTable) workspaceTombstoneObjects(
+	view client.WorkspaceReadView,
+) ([]objectio.ObjectStats, bool, error) {
+	return tbl.getTxn().workspace.tableTombstoneObjects(
+		view, tbl.accountId, tbl.db.databaseId, tbl.tableId)
+}
+
 func (tbl *txnTable) currentWorkspaceReadView() client.WorkspaceReadView {
 	// The relation's transaction owns the workspace whose local mutations are
 	// visible here. A snapshot operator owns an isolated read-only workspace;
@@ -1403,28 +1427,40 @@ func (tbl *txnTable) collectUnCommittedObjStats(
 	readView client.WorkspaceReadView,
 	typ int,
 ) ([]objectio.ObjectStats, map[objectio.ObjectNameShort]struct{}, error) {
-	var unCommittedObjects []objectio.ObjectStats
-	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
-
-	err := tbl.getTxn().ForEachTableMutation(
+	unCommittedObjects, indexed, err := tbl.getTxn().workspace.tableObjectStats(
 		readView,
 		tbl.accountId,
 		tbl.db.databaseId,
 		tbl.tableId,
-		func(entry workspaceEntryView) {
-			if entry.typ != typ ||
-				entry.bat == nil ||
-				entry.bat.IsEmpty() {
-				return
-			}
-
-			entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
-				unCommittedObjects = append(unCommittedObjects, stats)
-				unCommittedObjNames[*stats.ObjectShortName()] = struct{}{}
-			})
-		})
+		typ,
+	)
 	if err != nil {
 		return nil, nil, err
+	}
+	unCommittedObjNames := make(map[objectio.ObjectNameShort]struct{})
+	if !indexed {
+		err = tbl.getTxn().ForEachTableMutation(
+			readView,
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+			func(entry workspaceEntryView) {
+				if entry.typ != typ ||
+					entry.bat == nil ||
+					entry.bat.IsEmpty() {
+					return
+				}
+
+				entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+					unCommittedObjects = append(unCommittedObjects, stats)
+				})
+			})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	for idx := range unCommittedObjects {
+		unCommittedObjNames[*unCommittedObjects[idx].ObjectShortName()] = struct{}{}
 	}
 
 	return unCommittedObjects, unCommittedObjNames, nil

@@ -292,11 +292,7 @@ func (l Lock) GetLockMode() pb.LockMode {
 // IterHolders iter lock holders, if holders is empty means the last holder is closed
 // and the lock is waiting first waiter to get this lock.
 func (l Lock) IterHolders(fn func(holder pb.WaitTxn) bool) {
-	for _, txn := range l.holders.txns {
-		if !fn(txn) {
-			return
-		}
-	}
+	l.holders.iter(fn)
 }
 
 // IterHolders iter which txn is waiting for this lock
@@ -329,20 +325,36 @@ func (l Lock) String() string {
 }
 
 func newHolders() *holders {
-	return &holders{
-		txns: map[string]pb.WaitTxn{},
-	}
+	return &holders{}
 }
 
 func (h *holders) add(txn pb.WaitTxn) {
-	h.txns[util.UnsafeBytesToString(txn.TxnID)] = txn
+	if h.multiple != nil {
+		h.multiple[util.UnsafeBytesToString(txn.TxnID)] = txn
+		return
+	}
+	if !h.hasSingle {
+		h.single = txn
+		h.hasSingle = true
+		return
+	}
+	if bytes.Equal(h.single.TxnID, txn.TxnID) {
+		h.single = txn
+		return
+	}
+	h.multiple = make(map[string]pb.WaitTxn, 2)
+	h.multiple[util.UnsafeBytesToString(h.single.TxnID)] = h.single
+	h.multiple[util.UnsafeBytesToString(txn.TxnID)] = txn
+	h.single = pb.WaitTxn{}
+	h.hasSingle = false
 }
 
 func (h *holders) String() string {
 	var buf bytes.Buffer
-	for _, txn := range h.txns {
+	h.iter(func(txn pb.WaitTxn) bool {
 		buf.WriteString(fmt.Sprintf("%x ", txn.TxnID))
-	}
+		return true
+	})
 	return strings.TrimSpace(buf.String())
 }
 
@@ -350,39 +362,85 @@ func (h *holders) size() int {
 	if h == nil {
 		return 0
 	}
-	return len(h.txns)
+	if h.multiple != nil {
+		return len(h.multiple)
+	}
+	if h.hasSingle {
+		return 1
+	}
+	return 0
 }
 
 func (h *holders) contains(txnID []byte) bool {
-	_, ok := h.txns[util.UnsafeBytesToString(txnID)]
-	return ok
+	if h.multiple != nil {
+		_, ok := h.multiple[util.UnsafeBytesToString(txnID)]
+		return ok
+	}
+	return h.hasSingle && bytes.Equal(h.single.TxnID, txnID)
 }
 
 func (h *holders) remove(txnID []byte) {
-	delete(h.txns, util.UnsafeBytesToString(txnID))
+	if h.multiple == nil {
+		if h.hasSingle && bytes.Equal(h.single.TxnID, txnID) {
+			h.single = pb.WaitTxn{}
+			h.hasSingle = false
+		}
+		return
+	}
+	delete(h.multiple, util.UnsafeBytesToString(txnID))
+	if len(h.multiple) == 1 {
+		for _, txn := range h.multiple {
+			h.single = txn
+			h.hasSingle = true
+		}
+		h.multiple = nil
+	}
 }
 
 func (h *holders) replace(
 	from []byte,
 	to pb.WaitTxn) {
+	if h.multiple == nil {
+		if !h.hasSingle || !bytes.Equal(h.single.TxnID, from) {
+			panic("BUG: missing holder")
+		}
+		h.single = to
+		return
+	}
 	fromKey := util.UnsafeBytesToString(from)
-	if _, ok := h.txns[fromKey]; !ok {
+	if _, ok := h.multiple[fromKey]; !ok {
 		panic("BUG: missing holder")
 	}
-	delete(h.txns, fromKey)
-	h.txns[util.UnsafeBytesToString(to.TxnID)] = to
+	delete(h.multiple, fromKey)
+	h.multiple[util.UnsafeBytesToString(to.TxnID)] = to
 }
 
 func (h *holders) clear() {
-	for k := range h.txns {
-		delete(h.txns, k)
-	}
+	h.single = pb.WaitTxn{}
+	h.hasSingle = false
+	// Do not retain a potentially large shared-holder map through the pool.
+	h.multiple = nil
 }
 
 func (h *holders) getTxnSlice() []pb.WaitTxn {
-	values := make([]pb.WaitTxn, 0, len(h.txns))
-	for _, v := range h.txns {
-		values = append(values, v)
-	}
+	values := make([]pb.WaitTxn, 0, h.size())
+	h.iter(func(txn pb.WaitTxn) bool {
+		values = append(values, txn)
+		return true
+	})
 	return values
+}
+
+func (h *holders) iter(fn func(pb.WaitTxn) bool) {
+	if h.multiple != nil {
+		for _, txn := range h.multiple {
+			if !fn(txn) {
+				return
+			}
+		}
+		return
+	}
+	if h.hasSingle {
+		fn(h.single)
+	}
 }

@@ -33,12 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -67,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -2440,7 +2439,8 @@ func TestScopeGetRelDataError(t *testing.T) {
 // mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
 type mockRelationForMembershipFilter struct {
 	engine.Relation
-	capturedHint engine.FilterHint
+	capturedHint      engine.FilterHint
+	buildReadersCalls int
 }
 
 func (m *mockRelationForMembershipFilter) BuildReaders(
@@ -2454,305 +2454,82 @@ func (m *mockRelationForMembershipFilter) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
+	m.buildReadersCalls++
 	m.capturedHint = filterHint
 	return []engine.Reader{}, nil
 }
 
-type mockReaderForParallelOrderBy struct {
-	orderByCalls int
-	orderBy      []*plan.OrderBySpec
-}
-
-func (m *mockReaderForParallelOrderBy) Close() error {
-	return nil
-}
-
-func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
-	return true, nil
-}
-
-func (m *mockReaderForParallelOrderBy) SetOrderBy(orderBy []*plan.OrderBySpec) {
-	m.orderByCalls++
-	m.orderBy = orderBy
-}
-
-func (m *mockReaderForParallelOrderBy) GetOrderBy() []*plan.OrderBySpec {
-	return m.orderBy
-}
-
-func (m *mockReaderForParallelOrderBy) SetIndexParam(*plan.IndexReaderParam) {}
-
-func (m *mockReaderForParallelOrderBy) SetFilterZM(objectio.ZoneMap) {}
-
-type mockRelationForParallelOrderBy struct {
-	engine.Relation
-	readers []engine.Reader
-}
-
-func (m *mockRelationForParallelOrderBy) BuildReaders(
+func (m *mockRelationForMembershipFilter) Ranges(
 	context.Context,
-	any,
-	*plan.Expr,
-	engine.RelData,
-	int,
-	client.WorkspaceReadView,
-	bool,
-	engine.TombstoneApplyPolicy,
-	engine.FilterHint,
-) ([]engine.Reader, error) {
-	return m.readers, nil
+	engine.RangesParam,
+) (engine.RelData, error) {
+	return readutil.BuildEmptyRelData(), nil
 }
 
-func TestBuildReadersMembershipFilterHint(t *testing.T) {
-	t.Run("MembershipFilter set when node is IVFFLAT Entries and context has membership filter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
+func TestBuildReadersStaticFalseReturnsEmptyReaders(t *testing.T) {
+	c := NewMockCompile(t)
+	relation := &mockRelationForMembershipFilter{}
+	scope := &Scope{
+		Proc: c.proc,
+		DataSource: &Source{
+			Rel:                relation,
+			FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
+		},
+		NodeInfo: engine.Node{Mcpu: 2},
+	}
 
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr: nil,
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		// Use MakeFalseExpr to make emptyScan = true, skipping getRelData
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-		s.DataSource.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when node is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel:                mockRel,
-				node:               nil, // node is nil
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableDef is nil", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: nil, // TableDef is nil
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, // different type
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context has no IvfMembershipFilter", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		// No IvfMembershipFilter in context
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is not []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, "not a byte slice")
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
-
-	t.Run("MembershipFilter not set when context value is empty []byte", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, []byte{}) // empty byte slice
-		proc.Ctx = ctx
-
-		mockRel := &mockRelationForMembershipFilter{}
-		s := &Scope{
-			Proc: proc,
-			DataSource: &Source{
-				Rel: mockRel,
-				node: &plan.Node{
-					TableDef: &plan.TableDef{
-						TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-					},
-				},
-				FilterExpr:         nil,
-				FilterList:         []*plan.Expr{},
-				RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
-			},
-			NodeInfo: engine.Node{
-				Mcpu: 1,
-			},
-		}
-
-		c := NewMockCompile(t)
-		c.proc = proc
-		s.DataSource.FilterList = []*plan.Expr{plan2.MakeFalseExpr()}
-
-		readers, err := s.buildReaders(c)
-		require.NoError(t, err)
-		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
-	})
+	readers, err := scope.buildReaders(c)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	for _, reader := range readers {
+		require.IsType(t, &readutil.EmptyReader{}, reader)
+	}
+	require.Zero(t, relation.buildReadersCalls)
 }
 
-func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
+func TestBuildReadersRuntimeFilterDropReturnsEmptyReaders(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+	spec := plan2.MakeRuntimeFilter(
+		101, false, 1,
+		plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0),
+		false,
+	)
+	relation := &mockRelationForMembershipFilter{}
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{
+			Rel:                relation,
+			RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec},
+		},
+		NodeInfo: engine.Node{Mcpu: 2},
+	}
+	c := &Compile{proc: proc}
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_DROP,
+	}, board)
+
+	readers, err := scope.buildReaders(c)
+	require.NoError(t, err)
+	require.Len(t, readers, 2)
+	for _, reader := range readers {
+		require.IsType(t, &readutil.EmptyReader{}, reader)
+	}
+	require.Zero(t, relation.buildReadersCalls)
+}
+
+func TestBuildScanParallelRunUsesEmptyReadersForFalseFilter(t *testing.T) {
 	c := NewMockCompile(t)
 	scope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.Projection})
-
-	orderBy := []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
-	reader1 := &mockReaderForParallelOrderBy{}
-	reader2 := &mockReaderForParallelOrderBy{}
-
+	relation := &mockRelationForMembershipFilter{}
 	scope.DataSource = &Source{
-		Rel:                &mockRelationForParallelOrderBy{readers: []engine.Reader{reader1, reader2}},
+		Rel:                relation,
 		FilterList:         []*plan.Expr{plan2.MakeFalseExpr()},
-		FilterExpr:         nil,
-		OrderBy:            orderBy,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
 		RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{},
 	}
 	scope.NodeInfo = engine.Node{Mcpu: 2}
@@ -2761,11 +2538,10 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, mergeScope)
 	require.Len(t, mergeScope.PreScopes, 2)
-
-	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
-		require.Equal(t, 1, reader.orderByCalls)
-		require.Equal(t, orderBy, reader.orderBy)
+	for _, preScope := range mergeScope.PreScopes {
+		require.IsType(t, &readutil.EmptyReader{}, preScope.DataSource.R)
 	}
+	require.Zero(t, relation.buildReadersCalls)
 }
 
 func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {

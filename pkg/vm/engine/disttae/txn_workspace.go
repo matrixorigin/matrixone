@@ -27,10 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
 
@@ -74,10 +76,11 @@ func compareWorkspaceCommitOrder(a, b workspaceCommitOrder) int {
 // PayloadStore: every COW, spill, compaction and rollback changes the active
 // mutation set here atomically.
 type workspaceUsage struct {
-	totalBytes          uint64
-	inMemoryInsertBytes uint64
-	inMemoryInsertRows  int
-	inMemoryDeleteRows  int
+	totalBytes               uint64
+	inMemoryInsertBytes      uint64
+	spillEligibleInsertBytes uint64
+	inMemoryInsertRows       int
+	inMemoryDeleteRows       int
 }
 
 func usageOfWorkspaceEntry(entry Entry, bat *batch.Batch) workspaceUsage {
@@ -85,7 +88,17 @@ func usageOfWorkspaceEntry(entry Entry, bat *batch.Batch) workspaceUsage {
 		return workspaceUsage{}
 	}
 	usage := workspaceUsage{totalBytes: uint64(bat.Size())}
-	if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
+	if entry.fileName != "" {
+		return usage
+	}
+	if entry.typ == INSERT && !entry.isCatalog() {
+		// Keep the spill-selection accounting identical to the historical
+		// scope scan. MO_TABLES_LOGICAL_ID_INDEX is excluded from ordinary
+		// transaction-size accounting by IsSystemTable, but it is not one of
+		// the three catalog entries that dumpInsertBatchLocked skips.
+		usage.spillEligibleInsertBytes = usage.totalBytes
+	}
+	if catalog.IsSystemTable(entry.tableId) {
 		return usage
 	}
 	switch entry.typ {
@@ -101,6 +114,7 @@ func usageOfWorkspaceEntry(entry Entry, bat *batch.Batch) workspaceUsage {
 func (u *workspaceUsage) add(other workspaceUsage) {
 	u.totalBytes += other.totalBytes
 	u.inMemoryInsertBytes += other.inMemoryInsertBytes
+	u.spillEligibleInsertBytes += other.spillEligibleInsertBytes
 	u.inMemoryInsertRows += other.inMemoryInsertRows
 	u.inMemoryDeleteRows += other.inMemoryDeleteRows
 }
@@ -108,12 +122,14 @@ func (u *workspaceUsage) add(other workspaceUsage) {
 func (u *workspaceUsage) sub(other workspaceUsage) {
 	if u.totalBytes < other.totalBytes ||
 		u.inMemoryInsertBytes < other.inMemoryInsertBytes ||
+		u.spillEligibleInsertBytes < other.spillEligibleInsertBytes ||
 		u.inMemoryInsertRows < other.inMemoryInsertRows ||
 		u.inMemoryDeleteRows < other.inMemoryDeleteRows {
 		panic("workspace usage underflow")
 	}
 	u.totalBytes -= other.totalBytes
 	u.inMemoryInsertBytes -= other.inMemoryInsertBytes
+	u.spillEligibleInsertBytes -= other.spillEligibleInsertBytes
 	u.inMemoryInsertRows -= other.inMemoryInsertRows
 	u.inMemoryDeleteRows -= other.inMemoryDeleteRows
 }
@@ -123,18 +139,124 @@ func (u *workspaceUsage) sub(other workspaceUsage) {
 // The global mutation registry is the authority for active and revision
 // visibility; tableOverlay contains only derived, table-local indexes.
 type workspaceMutation struct {
-	id              workspaceMutationID
-	statementID     uint64
-	attemptID       uint64
-	createdRevision uint64
-	retiredRevision uint64
-	commitOrder     workspaceCommitOrder
-	active          bool
-	entry           Entry
-	payloadID       workspacePayloadID
-	objectIDs       []types.Objectid
-	objectNames     []string
-	blockMeta       bool
+	id                        workspaceMutationID
+	statementID               uint64
+	attemptID                 uint64
+	createdRevision           uint64
+	retiredRevision           uint64
+	compactionInputGeneration uint64
+	commitOrder               workspaceCommitOrder
+	active                    bool
+	entry                     Entry
+	payloadID                 workspacePayloadID
+	objectIDs                 []types.Objectid
+	objectNames               []string
+	blockMeta                 bool
+	// pkKeys and rowIDs are immutable row-level access facts derived from the
+	// current payload generation. indexedRows records which rows are present in
+	// the current TableOverlay indexes after applying payload selections.
+	pkKeys             []string
+	rowIDs             []objectio.Rowid
+	indexedRows        []bool
+	memoryInsert       bool
+	pkIndexComplete    bool
+	rowIDIndexComplete bool
+	// accessIndexRevision is the first revision described by pkKeys, rowIDs,
+	// indexedRows and the completeness flags above. Physical generation
+	// replacement advances it while retaining the preceding access facts in
+	// the statement-history indexes.
+	accessIndexRevision uint64
+}
+
+type workspaceAccessIndexInterval struct {
+	mutationID workspaceMutationID
+	start      uint64
+	end        uint64
+}
+
+func (i workspaceAccessIndexInterval) contains(revision uint64) bool {
+	return i.start <= revision && revision < i.end
+}
+
+// workspaceMutationOwners stores the overwhelmingly common single-owner
+// point-index entry inline. A secondary map is allocated only when one key is
+// genuinely owned by multiple logical mutations. This keeps TableOverlay's
+// exact duplicate/rollback semantics without paying for one Go map per unique
+// primary key or RowID in large transactions.
+type workspaceMutationOwners struct {
+	singleID    workspaceMutationID
+	singleCount uint32
+	multiple    map[workspaceMutationID]uint32
+}
+
+func (o workspaceMutationOwners) len() int {
+	if o.multiple != nil {
+		return len(o.multiple)
+	}
+	if o.singleCount != 0 {
+		return 1
+	}
+	return 0
+}
+
+func (o *workspaceMutationOwners) add(id workspaceMutationID) {
+	if o.multiple != nil {
+		o.multiple[id]++
+		return
+	}
+	if o.singleCount == 0 || o.singleID == id {
+		o.singleID = id
+		o.singleCount++
+		return
+	}
+	o.multiple = map[workspaceMutationID]uint32{
+		o.singleID: o.singleCount,
+		id:         1,
+	}
+	o.singleID = 0
+	o.singleCount = 0
+}
+
+func (o *workspaceMutationOwners) remove(id workspaceMutationID) bool {
+	if o.multiple == nil {
+		if o.singleID != id || o.singleCount == 0 {
+			return false
+		}
+		o.singleCount--
+		if o.singleCount == 0 {
+			o.singleID = 0
+		}
+		return true
+	}
+	count := o.multiple[id]
+	if count == 0 {
+		return false
+	}
+	if count > 1 {
+		o.multiple[id] = count - 1
+		return true
+	}
+	delete(o.multiple, id)
+	if len(o.multiple) == 1 {
+		for remainingID, remainingCount := range o.multiple {
+			o.singleID = remainingID
+			o.singleCount = remainingCount
+		}
+		o.multiple = nil
+	}
+	return true
+}
+
+func (o workspaceMutationOwners) forEach(fn func(workspaceMutationID, uint32)) {
+	if o.multiple != nil {
+		for id, count := range o.multiple {
+			fn(id, count)
+		}
+		return
+	}
+	if o.singleCount != 0 {
+		fn(o.singleID, o.singleCount)
+	}
 }
 
 // orderedMutationSet is the sole mutable owner of one active mutation index.
@@ -145,6 +267,28 @@ type workspaceMutation struct {
 type orderedMutationSet struct {
 	byID    map[workspaceMutationID]*workspaceMutation
 	byOrder *btree.BTreeG[*workspaceMutation]
+}
+
+// workspaceCompactionPlan pins the not-yet-evaluated active mutations that
+// existed when planning started. newInputs is the number of physical-input
+// changes published since the last successfully completed plan. It is a
+// scheduling watermark, not an active-mutation count: a long transaction must
+// not re-plan old tails at every later statement boundary merely because its
+// total write set once crossed the compaction threshold.
+type workspaceCompactionPlan struct {
+	entries          *workspaceEntrySet
+	mutationIDs      []workspaceMutationID
+	inputGenerations []uint64
+	inputGeneration  uint64
+	newInputs        uint64
+	currentAttempt   statementAttemptKey
+}
+
+func (p *workspaceCompactionPlan) Close() {
+	if p == nil || p.entries == nil {
+		return
+	}
+	p.entries.Close()
 }
 
 func newOrderedMutationSet() *orderedMutationSet {
@@ -226,6 +370,14 @@ type workspaceMutationIndexData struct {
 	// by Objectid, so both indexes are derived once from the same publication.
 	objectNames []string
 	blockMeta   bool
+	pkKeys      []string
+	rowIDs      []objectio.Rowid
+	// memoryInsert identifies payloads whose rows participate in local
+	// read-your-writes. The completeness flags prove that every row in that
+	// payload has the corresponding immutable point-access fact.
+	memoryInsert       bool
+	pkIndexComplete    bool
+	rowIDIndexComplete bool
 }
 
 type workspaceOverlayKey struct {
@@ -248,7 +400,35 @@ type tableOverlay struct {
 	activeMutations             *orderedMutationSet
 	activeMemoryDeleteMutations map[workspaceMutationID]struct{}
 	activeObjectDeleteMutations map[workspaceMutationID]struct{}
-	activePendingObjectDeletes  map[workspaceObjectDeleteID]struct{}
+	// activeInsertPKMutations resolves an encoded primary key directly to the
+	// active in-memory INSERT mutations that can contain it. The nested count
+	// preserves correctness when one mutation contains duplicate encoded keys.
+	activeInsertPKMutations map[string]workspaceMutationOwners
+	// historicalInsertPKMutations retains point-access facts removed from the
+	// current index while a statement ReadView can still observe their payload
+	// generation. It is statement-scoped and cleared by EndStatement, so exact
+	// lookups never have to scan transaction-wide mutations merely because the
+	// workspace advanced after the ReadView was published.
+	historicalInsertPKMutations map[string][]workspaceAccessIndexInterval
+	// activeUnindexedMemoryInserts is the explicit completeness boundary of the
+	// point index. A key miss is authoritative only while this set is empty.
+	activeUnindexedMemoryInserts     map[workspaceMutationID]struct{}
+	historicalUnindexedMemoryInserts []workspaceAccessIndexInterval
+	// activeInsertRowIDMutations resolves DELETEs of transaction-local rows
+	// directly to their owning INSERT mutations. This prevents each UPDATE
+	// from reopening every earlier INSERT payload in the transaction.
+	activeInsertRowIDMutations     map[objectio.Rowid]workspaceMutationOwners
+	historicalInsertRowIDMutations map[objectio.Rowid][]workspaceAccessIndexInterval
+	// activeUnindexedMemoryInsertRowIDs is the completeness proof for the
+	// RowID point index. A current-view lookup is authoritative only when this
+	// set is empty.
+	activeUnindexedMemoryInsertRowIDs     map[workspaceMutationID]struct{}
+	historicalUnindexedMemoryInsertRowIDs []workspaceAccessIndexInterval
+	// activeMemoryDeletes resolves a committed block row directly to the active
+	// in-memory DELETE mutations. Counts preserve overlapping logical deletes
+	// and make mutation retirement and selection rollback exact.
+	activeMemoryDeletes        map[objectio.Blockid]map[uint32]uint32
+	activePendingObjectDeletes map[workspaceObjectDeleteID]struct{}
 	// activeUncommittedObjects is the current logical owner of each
 	// transaction-local object. Immutable mutation records still retain the
 	// publication history needed by read views; object-delete compaction only
@@ -336,9 +516,16 @@ func newTableOverlay() *tableOverlay {
 		activeMutations: newOrderedMutationSet(),
 		activeUncommittedObjects: make(
 			map[types.Objectid]map[workspaceMutationID]struct{}),
-		activeMemoryDeleteMutations: make(map[workspaceMutationID]struct{}),
-		activeObjectDeleteMutations: make(map[workspaceMutationID]struct{}),
-		activePendingObjectDeletes:  make(map[workspaceObjectDeleteID]struct{}),
+		activeMemoryDeleteMutations:       make(map[workspaceMutationID]struct{}),
+		activeObjectDeleteMutations:       make(map[workspaceMutationID]struct{}),
+		activeInsertPKMutations:           make(map[string]workspaceMutationOwners),
+		historicalInsertPKMutations:       make(map[string][]workspaceAccessIndexInterval),
+		activeUnindexedMemoryInserts:      make(map[workspaceMutationID]struct{}),
+		activeInsertRowIDMutations:        make(map[objectio.Rowid]workspaceMutationOwners),
+		historicalInsertRowIDMutations:    make(map[objectio.Rowid][]workspaceAccessIndexInterval),
+		activeUnindexedMemoryInsertRowIDs: make(map[workspaceMutationID]struct{}),
+		activeMemoryDeletes:               make(map[objectio.Blockid]map[uint32]uint32),
+		activePendingObjectDeletes:        make(map[workspaceObjectDeleteID]struct{}),
 	}
 }
 
@@ -477,6 +664,8 @@ func (r *workspaceRollback) Close() {
 type workspaceSpillAttempt struct {
 	workspace *txnWorkspace
 	sources   []workspaceSpillSource
+	owner     statementAttemptKey
+	terminal  bool
 	committed bool
 	closed    bool
 }
@@ -820,6 +1009,24 @@ func (j *statementJournal) replaceMutationsValidated(
 	if owner != j.current.key() {
 		return
 	}
+	for _, sourceID := range sourceIDs {
+		delete(j.current.mutations, sourceID)
+	}
+	for _, targetID := range targetIDs {
+		j.current.mutations[targetID] = struct{}{}
+	}
+}
+
+// replaceTerminalMutationsValidated attaches the materialized commit
+// representation to the final open attempt. Sources may belong to completed
+// attempts, which deliberately no longer own statement rollback state. The
+// caller must validate that the final boundary is still open before invoking
+// this helper; adding targets to the final attempt keeps rollback ownership
+// internally consistent until transaction commit completes.
+func (j *statementJournal) replaceTerminalMutationsValidated(
+	sourceIDs []workspaceMutationID,
+	targetIDs []workspaceMutationID,
+) {
 	for _, sourceID := range sourceIDs {
 		delete(j.current.mutations, sourceID)
 	}
@@ -1179,24 +1386,27 @@ type txnWorkspace struct {
 	revision                uint64
 	minimumReadableRevision uint64
 
-	nextMutationID     workspaceMutationID
-	nextObjectDeleteID workspaceObjectDeleteID
+	nextMutationID                workspaceMutationID
+	nextObjectDeleteID            workspaceObjectDeleteID
+	nextCompactionInputGeneration uint64
+	completedCompactionGeneration uint64
 	// commitEpoch is the protocol-order boundary last published by an ordinary
 	// Compile. Internal SQL captures CurrentReadView and therefore inherits the
 	// caller's epoch. This is deliberately independent of StatementID: one
 	// frontend statement can advance attempt ownership before its Compile and
 	// can execute several internal SQL write scopes that must still be ordered
 	// as one TN precommit suffix.
-	commitEpoch          uint64
-	activeMutations      *orderedMutationSet
-	activePKCandidates   *orderedMutationSet
-	activeCompactions    *orderedMutationSet
-	activeBlockMeta      *orderedMutationSet
-	activeObjectDeletes  map[workspaceObjectDeleteID]struct{}
-	retiredMutationIDs   map[workspaceMutationID]struct{}
-	retiredObjectDeletes map[workspaceObjectDeleteID]struct{}
-	published            client.WorkspaceReadView
-	journal              statementJournal
+	commitEpoch           uint64
+	activeMutations       *orderedMutationSet
+	activePKCandidates    *orderedMutationSet
+	activeCompactionCount int
+	pendingCompactions    *orderedMutationSet
+	activeBlockMeta       *orderedMutationSet
+	activeObjectDeletes   map[workspaceObjectDeleteID]struct{}
+	retiredMutationIDs    map[workspaceMutationID]struct{}
+	retiredObjectDeletes  map[workspaceObjectDeleteID]struct{}
+	published             client.WorkspaceReadView
+	journal               statementJournal
 
 	mutations     map[workspaceMutationID]*workspaceMutation
 	objectDeletes map[workspaceObjectDeleteID]*workspaceObjectDelete
@@ -1210,6 +1420,13 @@ type txnWorkspace struct {
 	ddl                    workspaceDDLCatalog
 	payloads               *workspacePayloadStore
 	usage                  workspaceUsage
+	// commitStarted closes the statement-retry protocol before terminal spill
+	// may combine mutations owned by different completed statements. Commit
+	// preparation may still publish internal mutations (for example transferred
+	// tombstones), and transaction rollback still consumes the complete active
+	// workspace. Only statement-local rollback and ordinary spill are invalid
+	// after this boundary.
+	commitStarted bool
 }
 
 func newTxnWorkspace() *txnWorkspace {
@@ -1220,7 +1437,7 @@ func newTxnWorkspace() *txnWorkspace {
 		mutations:            make(map[workspaceMutationID]*workspaceMutation),
 		activeMutations:      newOrderedMutationSet(),
 		activePKCandidates:   newOrderedMutationSet(),
-		activeCompactions:    newOrderedMutationSet(),
+		pendingCompactions:   newOrderedMutationSet(),
 		activeBlockMeta:      newOrderedMutationSet(),
 		retiredMutationIDs:   make(map[workspaceMutationID]struct{}),
 		objectDeletes:        make(map[workspaceObjectDeleteID]*workspaceObjectDelete),
@@ -1565,12 +1782,71 @@ func classifyWorkspaceMutation(
 	bat *batch.Batch,
 ) workspaceMutationIndexData {
 	objectIDs, objectNames := workspaceObjectReferences(entry, bat)
-	return workspaceMutationIndexData{
+	data := workspaceMutationIndexData{
 		objectIDs:   objectIDs,
 		objectNames: objectNames,
 		blockMeta: entry.typ == INSERT && bat != nil && !bat.IsEmpty() &&
 			len(bat.Attrs) != 0 && bat.Attrs[0] == catalog.BlockMeta_BlockInfo,
 	}
+	data.memoryInsert = entry.typ == INSERT && entry.fileName == "" &&
+		bat != nil && !bat.IsEmpty() && !data.blockMeta
+	if bat == nil || bat.IsEmpty() || entry.fileName != "" {
+		return data
+	}
+	if entry.typ == INSERT && entry.pkIndex.enabled {
+		// The access index is derived state, not the owner of PK descriptor
+		// validation. Keep malformed descriptors unindexed so the existing
+		// transaction invariant check can return its contractual error instead of
+		// changing append into a new panic boundary.
+		if entry.pkIndex.vectorPos >= 0 && entry.pkIndex.vectorPos < len(bat.Vecs) {
+			packer := types.NewPacker()
+			keys := readutil.EncodePrimaryKeyVector(
+				bat.Vecs[entry.pkIndex.vectorPos], packer)
+			data.pkKeys = make([]string, len(keys))
+			for row := range keys {
+				// EncodePrimaryKeyVector returns Packer-backed slices. Store immutable
+				// strings before the packer is reset or released.
+				data.pkKeys[row] = string(slices.Clone(keys[row]))
+			}
+			packer.Close()
+			data.pkIndexComplete = len(data.pkKeys) == bat.RowCount()
+		}
+	}
+	if entry.typ == INSERT && data.memoryInsert &&
+		len(bat.Vecs) != 0 && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		data.rowIDs = slices.Clone(
+			vector.MustFixedColNoTypeCheck[objectio.Rowid](bat.Vecs[0]))
+		data.rowIDIndexComplete = len(data.rowIDs) == bat.RowCount()
+	}
+	if entry.typ == DELETE && bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		data.rowIDs = slices.Clone(
+			vector.MustFixedColNoTypeCheck[objectio.Rowid](bat.Vecs[0]))
+	}
+	return data
+}
+
+func visibleWorkspaceRows(rowCount int, selections []int64) []bool {
+	// nil is the canonical zero-allocation representation of "all rows are
+	// indexed". Selection-bearing generations materialize the bitmap because
+	// retirement must remove exactly the rows published into TableOverlay.
+	if len(selections) == 0 {
+		return nil
+	}
+	visible := make([]bool, rowCount)
+	for row := range rowCount {
+		visible[row] = true
+	}
+	for _, row := range selections {
+		if row >= 0 && row < int64(rowCount) {
+			visible[row] = false
+		}
+	}
+	return visible
+}
+
+func workspaceRowIndexed(indexedRows []bool, row int) bool {
+	return len(indexedRows) == 0 ||
+		(row < len(indexedRows) && indexedRows[row])
 }
 
 func (w *txnWorkspace) publishReadView() client.WorkspaceReadView {
@@ -1652,17 +1928,22 @@ func (w *txnWorkspace) validateUsage() error {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	type expectedActiveOverlay struct {
-		mutations    map[workspaceMutationID]struct{}
-		pkCandidate  map[workspaceMutationID]struct{}
-		compaction   map[workspaceMutationID]struct{}
-		blockMeta    map[workspaceMutationID]struct{}
-		memoryDelete map[workspaceMutationID]struct{}
-		objectDelete map[workspaceMutationID]struct{}
+		mutations            map[workspaceMutationID]struct{}
+		pkCandidate          map[workspaceMutationID]struct{}
+		compaction           map[workspaceMutationID]struct{}
+		blockMeta            map[workspaceMutationID]struct{}
+		memoryDelete         map[workspaceMutationID]struct{}
+		objectDelete         map[workspaceMutationID]struct{}
+		insertPK             map[string]map[workspaceMutationID]uint32
+		unindexedInsert      map[workspaceMutationID]struct{}
+		insertRowID          map[objectio.Rowid]map[workspaceMutationID]uint32
+		unindexedInsertRowID map[workspaceMutationID]struct{}
+		memoryRows           map[objectio.Blockid]map[uint32]uint32
 	}
 	actual := workspaceUsage{}
 	expectedActiveMutations := make(map[workspaceMutationID]struct{})
 	expectedPKCandidates := make(map[workspaceMutationID]struct{})
-	expectedCompactions := make(map[workspaceMutationID]struct{})
+	expectedCompactionCount := 0
 	expectedBlockMeta := make(map[workspaceMutationID]struct{})
 	expectedActiveOverlays := make(map[workspaceOverlayKey]*expectedActiveOverlay)
 	expectedObjectOwners := make(
@@ -1689,12 +1970,17 @@ func (w *txnWorkspace) validateUsage() error {
 		expectedOverlay := expectedActiveOverlays[key]
 		if expectedOverlay == nil {
 			expectedOverlay = &expectedActiveOverlay{
-				mutations:    make(map[workspaceMutationID]struct{}),
-				pkCandidate:  make(map[workspaceMutationID]struct{}),
-				compaction:   make(map[workspaceMutationID]struct{}),
-				blockMeta:    make(map[workspaceMutationID]struct{}),
-				memoryDelete: make(map[workspaceMutationID]struct{}),
-				objectDelete: make(map[workspaceMutationID]struct{}),
+				mutations:            make(map[workspaceMutationID]struct{}),
+				pkCandidate:          make(map[workspaceMutationID]struct{}),
+				compaction:           make(map[workspaceMutationID]struct{}),
+				blockMeta:            make(map[workspaceMutationID]struct{}),
+				memoryDelete:         make(map[workspaceMutationID]struct{}),
+				objectDelete:         make(map[workspaceMutationID]struct{}),
+				insertPK:             make(map[string]map[workspaceMutationID]uint32),
+				unindexedInsert:      make(map[workspaceMutationID]struct{}),
+				insertRowID:          make(map[objectio.Rowid]map[workspaceMutationID]uint32),
+				unindexedInsertRowID: make(map[workspaceMutationID]struct{}),
+				memoryRows:           make(map[objectio.Blockid]map[uint32]uint32),
 			}
 			expectedActiveOverlays[key] = expectedOverlay
 		}
@@ -1705,7 +1991,7 @@ func (w *txnWorkspace) validateUsage() error {
 		}
 		if mutation.entry.typ == INSERT || mutation.entry.typ == DELETE {
 			expectedOverlay.compaction[id] = struct{}{}
-			expectedCompactions[id] = struct{}{}
+			expectedCompactionCount++
 		}
 		if mutation.blockMeta {
 			expectedOverlay.blockMeta[id] = struct{}{}
@@ -1716,6 +2002,61 @@ func (w *txnWorkspace) validateUsage() error {
 				expectedOverlay.memoryDelete[id] = struct{}{}
 			} else {
 				expectedOverlay.objectDelete[id] = struct{}{}
+			}
+		}
+		selections, err := w.payloads.currentSelections(mutation.payloadID)
+		if err != nil {
+			return err
+		}
+		visible := visibleWorkspaceRows(
+			max(len(mutation.pkKeys), len(mutation.rowIDs)), selections)
+		if !slices.Equal(mutation.indexedRows, visible) {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace mutation access-index visibility mismatch")
+		}
+		if mutation.entry.typ == INSERT {
+			if mutation.memoryInsert && !mutation.pkIndexComplete {
+				expectedOverlay.unindexedInsert[id] = struct{}{}
+			}
+			if mutation.memoryInsert && !mutation.rowIDIndexComplete {
+				expectedOverlay.unindexedInsertRowID[id] = struct{}{}
+			}
+			for row, pk := range mutation.pkKeys {
+				if !workspaceRowIndexed(visible, row) {
+					continue
+				}
+				owners := expectedOverlay.insertPK[pk]
+				if owners == nil {
+					owners = make(map[workspaceMutationID]uint32)
+					expectedOverlay.insertPK[pk] = owners
+				}
+				owners[id]++
+			}
+			for row, rowID := range mutation.rowIDs {
+				if !workspaceRowIndexed(visible, row) {
+					continue
+				}
+				owners := expectedOverlay.insertRowID[rowID]
+				if owners == nil {
+					owners = make(map[workspaceMutationID]uint32)
+					expectedOverlay.insertRowID[rowID] = owners
+				}
+				owners[id]++
+			}
+		}
+		if mutation.entry.typ == DELETE && mutation.entry.fileName == "" {
+			for row := range mutation.rowIDs {
+				if !workspaceRowIndexed(visible, row) {
+					continue
+				}
+				rowID := &mutation.rowIDs[row]
+				blockID := rowID.CloneBlockID()
+				offsets := expectedOverlay.memoryRows[blockID]
+				if offsets == nil {
+					offsets = make(map[uint32]uint32)
+					expectedOverlay.memoryRows[blockID] = offsets
+				}
+				offsets[rowID.GetRowOffset()]++
 			}
 		}
 		for _, objectID := range mutation.objectIDs {
@@ -1762,33 +2103,106 @@ func (w *txnWorkspace) validateUsage() error {
 		}
 		return true
 	}
+	countMapsEqual := func(
+		actualMap map[uint32]uint32,
+		expectedMap map[uint32]uint32,
+	) bool {
+		if len(actualMap) != len(expectedMap) {
+			return false
+		}
+		for key, count := range actualMap {
+			if expectedMap[key] != count {
+				return false
+			}
+		}
+		return true
+	}
+	ownerMapsEqual := func(
+		actualMap workspaceMutationOwners,
+		expectedMap map[workspaceMutationID]uint32,
+	) bool {
+		if actualMap.len() != len(expectedMap) {
+			return false
+		}
+		equal := true
+		actualMap.forEach(func(id workspaceMutationID, count uint32) {
+			if expectedMap[id] != count {
+				equal = false
+			}
+		})
+		return equal
+	}
 	if !w.activeMutations.equalIDs(expectedActiveMutations) {
 		return moerr.NewInternalErrorNoCtx(
 			"workspace active mutation index mismatch")
 	}
 	if !w.activePKCandidates.equalIDs(expectedPKCandidates) ||
-		!w.activeCompactions.equalIDs(expectedCompactions) ||
+		w.activeCompactionCount != expectedCompactionCount ||
 		!w.activeBlockMeta.equalIDs(expectedBlockMeta) {
 		return moerr.NewInternalErrorNoCtx(
 			"workspace active secondary index mismatch")
+	}
+	for id, mutation := range w.pendingCompactions.byID {
+		if mutation == nil || w.mutations[id] != mutation || !mutation.active ||
+			(mutation.entry.typ != INSERT && mutation.entry.typ != DELETE) {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace pending compaction index mismatch")
+		}
 	}
 	for key, overlay := range w.overlays {
 		expectedOverlay := expectedActiveOverlays[key]
 		if expectedOverlay == nil {
 			expectedOverlay = &expectedActiveOverlay{
-				mutations:    map[workspaceMutationID]struct{}{},
-				pkCandidate:  map[workspaceMutationID]struct{}{},
-				compaction:   map[workspaceMutationID]struct{}{},
-				blockMeta:    map[workspaceMutationID]struct{}{},
-				memoryDelete: map[workspaceMutationID]struct{}{},
-				objectDelete: map[workspaceMutationID]struct{}{},
+				mutations:            map[workspaceMutationID]struct{}{},
+				pkCandidate:          map[workspaceMutationID]struct{}{},
+				compaction:           map[workspaceMutationID]struct{}{},
+				blockMeta:            map[workspaceMutationID]struct{}{},
+				memoryDelete:         map[workspaceMutationID]struct{}{},
+				objectDelete:         map[workspaceMutationID]struct{}{},
+				insertPK:             map[string]map[workspaceMutationID]uint32{},
+				unindexedInsert:      map[workspaceMutationID]struct{}{},
+				insertRowID:          map[objectio.Rowid]map[workspaceMutationID]uint32{},
+				unindexedInsertRowID: map[workspaceMutationID]struct{}{},
+				memoryRows:           map[objectio.Blockid]map[uint32]uint32{},
 			}
 		}
 		if !overlay.activeMutations.equalIDs(expectedOverlay.mutations) ||
 			!setsEqual(overlay.activeMemoryDeleteMutations, expectedOverlay.memoryDelete) ||
-			!setsEqual(overlay.activeObjectDeleteMutations, expectedOverlay.objectDelete) {
+			!setsEqual(overlay.activeObjectDeleteMutations, expectedOverlay.objectDelete) ||
+			!setsEqual(overlay.activeUnindexedMemoryInserts, expectedOverlay.unindexedInsert) ||
+			!setsEqual(overlay.activeUnindexedMemoryInsertRowIDs, expectedOverlay.unindexedInsertRowID) {
 			return moerr.NewInternalErrorNoCtx(
 				"workspace active overlay secondary index mismatch")
+		}
+		if len(overlay.activeInsertPKMutations) != len(expectedOverlay.insertPK) {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace primary-key access index size mismatch")
+		}
+		for pk, owners := range overlay.activeInsertPKMutations {
+			if !ownerMapsEqual(owners, expectedOverlay.insertPK[pk]) {
+				return moerr.NewInternalErrorNoCtx(
+					"workspace primary-key access index mismatch")
+			}
+		}
+		if len(overlay.activeInsertRowIDMutations) != len(expectedOverlay.insertRowID) {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace insert-rowid access index size mismatch")
+		}
+		for rowID, owners := range overlay.activeInsertRowIDMutations {
+			if !ownerMapsEqual(owners, expectedOverlay.insertRowID[rowID]) {
+				return moerr.NewInternalErrorNoCtx(
+					"workspace insert-rowid access index mismatch")
+			}
+		}
+		if len(overlay.activeMemoryDeletes) != len(expectedOverlay.memoryRows) {
+			return moerr.NewInternalErrorNoCtx(
+				"workspace row-delete access index size mismatch")
+		}
+		for blockID, offsets := range overlay.activeMemoryDeletes {
+			if !countMapsEqual(offsets, expectedOverlay.memoryRows[blockID]) {
+				return moerr.NewInternalErrorNoCtx(
+					"workspace row-delete access index mismatch")
+			}
 		}
 		expectedObjects := expectedObjectOwners[key]
 		if len(overlay.activeUncommittedObjects) != len(expectedObjects) {
@@ -1986,6 +2400,10 @@ func (w *txnWorkspace) reclaimRetiredMetadataLocked() {
 		overlay.retiredMutations = nil
 		overlay.retiredPKCandidateMutations = nil
 		overlay.retiredObjectDeletes = nil
+		clear(overlay.historicalInsertPKMutations)
+		overlay.historicalUnindexedMemoryInserts = nil
+		clear(overlay.historicalInsertRowIDMutations)
+		overlay.historicalUnindexedMemoryInsertRowIDs = nil
 	}
 }
 
@@ -2467,17 +2885,23 @@ func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 	entry.workspaceMutationID = w.nextMutationID
 
 	m := &workspaceMutation{
-		id:              w.nextMutationID,
-		statementID:     statementID,
-		attemptID:       attemptID,
-		createdRevision: revision,
-		commitOrder:     slices.Clone(commitOrder),
-		active:          true,
-		entry:           entry,
-		payloadID:       payloadID,
-		objectIDs:       slices.Clone(indexData.objectIDs),
-		objectNames:     slices.Clone(indexData.objectNames),
-		blockMeta:       indexData.blockMeta,
+		id:                  w.nextMutationID,
+		statementID:         statementID,
+		attemptID:           attemptID,
+		createdRevision:     revision,
+		commitOrder:         slices.Clone(commitOrder),
+		active:              true,
+		entry:               entry,
+		payloadID:           payloadID,
+		objectIDs:           slices.Clone(indexData.objectIDs),
+		objectNames:         slices.Clone(indexData.objectNames),
+		blockMeta:           indexData.blockMeta,
+		pkKeys:              slices.Clone(indexData.pkKeys),
+		rowIDs:              slices.Clone(indexData.rowIDs),
+		memoryInsert:        indexData.memoryInsert,
+		pkIndexComplete:     indexData.pkIndexComplete,
+		rowIDIndexComplete:  indexData.rowIDIndexComplete,
+		accessIndexRevision: revision,
 	}
 	w.mutations[m.id] = m
 	w.activeMutations.add(m)
@@ -2488,11 +2912,17 @@ func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 	}
 	overlay := w.tableOverlayLocked(key)
 	overlay.activeMutations.add(m)
+	selections, err := w.payloads.currentSelections(payloadID)
+	if err != nil {
+		panic(err)
+	}
+	w.addMutationAccessIndexesLocked(overlay, m, selections)
 	if entry.pkCheck.enabled {
 		w.activePKCandidates.add(m)
 	}
 	if entry.typ == INSERT || entry.typ == DELETE {
-		w.activeCompactions.add(m)
+		w.activeCompactionCount++
+		w.queueCompactionLocked(m)
 	}
 	if indexData.blockMeta {
 		w.activeBlockMeta.add(m)
@@ -2523,6 +2953,218 @@ func (w *txnWorkspace) publishMutationAtCommitOrderLocked(
 	return m.id
 }
 
+func (w *txnWorkspace) addMutationAccessIndexesLocked(
+	overlay *tableOverlay,
+	mutation *workspaceMutation,
+	selections []int64,
+) {
+	rowCount := max(len(mutation.pkKeys), len(mutation.rowIDs))
+	mutation.indexedRows = visibleWorkspaceRows(rowCount, selections)
+	if mutation.entry.typ == INSERT {
+		if mutation.memoryInsert && !mutation.pkIndexComplete {
+			overlay.activeUnindexedMemoryInserts[mutation.id] = struct{}{}
+		}
+		for row, key := range mutation.pkKeys {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			owners := overlay.activeInsertPKMutations[key]
+			owners.add(mutation.id)
+			overlay.activeInsertPKMutations[key] = owners
+		}
+		if mutation.memoryInsert && !mutation.rowIDIndexComplete {
+			overlay.activeUnindexedMemoryInsertRowIDs[mutation.id] = struct{}{}
+		}
+		for row, rowID := range mutation.rowIDs {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			owners := overlay.activeInsertRowIDMutations[rowID]
+			owners.add(mutation.id)
+			overlay.activeInsertRowIDMutations[rowID] = owners
+		}
+	}
+	if mutation.entry.typ == DELETE && mutation.entry.fileName == "" {
+		for row := range mutation.rowIDs {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			rowID := &mutation.rowIDs[row]
+			blockID := rowID.CloneBlockID()
+			offsets := overlay.activeMemoryDeletes[blockID]
+			if offsets == nil {
+				offsets = make(map[uint32]uint32)
+				overlay.activeMemoryDeletes[blockID] = offsets
+			}
+			offsets[rowID.GetRowOffset()]++
+		}
+	}
+}
+
+func (w *txnWorkspace) removeMutationAccessIndexesLocked(
+	overlay *tableOverlay,
+	mutation *workspaceMutation,
+) {
+	if mutation.entry.typ == INSERT {
+		delete(overlay.activeUnindexedMemoryInserts, mutation.id)
+		delete(overlay.activeUnindexedMemoryInsertRowIDs, mutation.id)
+		for row, key := range mutation.pkKeys {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			owners := overlay.activeInsertPKMutations[key]
+			if !owners.remove(mutation.id) {
+				panic("workspace primary-key access index is inconsistent")
+			}
+			if owners.len() == 0 {
+				delete(overlay.activeInsertPKMutations, key)
+			} else {
+				overlay.activeInsertPKMutations[key] = owners
+			}
+		}
+		for row, rowID := range mutation.rowIDs {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			owners := overlay.activeInsertRowIDMutations[rowID]
+			if !owners.remove(mutation.id) {
+				panic("workspace insert-rowid access index is inconsistent")
+			}
+			if owners.len() == 0 {
+				delete(overlay.activeInsertRowIDMutations, rowID)
+			} else {
+				overlay.activeInsertRowIDMutations[rowID] = owners
+			}
+		}
+	}
+	if mutation.entry.typ == DELETE && mutation.entry.fileName == "" {
+		for row := range mutation.rowIDs {
+			if !workspaceRowIndexed(mutation.indexedRows, row) {
+				continue
+			}
+			rowID := &mutation.rowIDs[row]
+			blockID := rowID.CloneBlockID()
+			offsets := overlay.activeMemoryDeletes[blockID]
+			offset := rowID.GetRowOffset()
+			if offsets == nil || offsets[offset] == 0 {
+				panic("workspace row-delete access index is inconsistent")
+			}
+			if offsets[offset] == 1 {
+				delete(offsets, offset)
+			} else {
+				offsets[offset]--
+			}
+			if len(offsets) == 0 {
+				delete(overlay.activeMemoryDeletes, blockID)
+			}
+		}
+	}
+	mutation.indexedRows = nil
+}
+
+// retainMutationAccessIndexesLocked snapshots only the access facts that are
+// about to leave the current TableOverlay. These facts are sufficient to find
+// candidate payload generations for any still-live statement ReadView; row
+// visibility and the exact payload generation remain authoritative in
+// entriesForMutationIDsLocked and PayloadStore.
+func (w *txnWorkspace) retainMutationAccessIndexesLocked(
+	overlay *tableOverlay,
+	mutation *workspaceMutation,
+	endRevision uint64,
+) {
+	if mutation == nil || mutation.entry.typ != INSERT ||
+		mutation.accessIndexRevision >= endRevision {
+		return
+	}
+	if mutation.memoryInsert && !mutation.pkIndexComplete {
+		overlay.historicalUnindexedMemoryInserts = append(
+			overlay.historicalUnindexedMemoryInserts,
+			workspaceAccessIndexInterval{
+				mutationID: mutation.id,
+				start:      mutation.accessIndexRevision,
+				end:        endRevision,
+			},
+		)
+	}
+	for row, key := range mutation.pkKeys {
+		if !workspaceRowIndexed(mutation.indexedRows, row) {
+			continue
+		}
+		overlay.historicalInsertPKMutations[key] = append(
+			overlay.historicalInsertPKMutations[key],
+			workspaceAccessIndexInterval{
+				mutationID: mutation.id,
+				start:      mutation.accessIndexRevision,
+				end:        endRevision,
+			},
+		)
+	}
+	if mutation.memoryInsert && !mutation.rowIDIndexComplete {
+		overlay.historicalUnindexedMemoryInsertRowIDs = append(
+			overlay.historicalUnindexedMemoryInsertRowIDs,
+			workspaceAccessIndexInterval{
+				mutationID: mutation.id,
+				start:      mutation.accessIndexRevision,
+				end:        endRevision,
+			},
+		)
+	}
+	for row, rowID := range mutation.rowIDs {
+		if !workspaceRowIndexed(mutation.indexedRows, row) {
+			continue
+		}
+		overlay.historicalInsertRowIDMutations[rowID] = append(
+			overlay.historicalInsertRowIDMutations[rowID],
+			workspaceAccessIndexInterval{
+				mutationID: mutation.id,
+				start:      mutation.accessIndexRevision,
+				end:        endRevision,
+			},
+		)
+	}
+}
+
+func (w *txnWorkspace) refreshMutationAccessIndexesLocked(
+	mutation *workspaceMutation,
+	indexData workspaceMutationIndexData,
+	selections []int64,
+	newRevision uint64,
+) {
+	key := workspaceOverlayKey{
+		accountID: mutation.entry.accountId, databaseID: mutation.entry.databaseId,
+		tableID: mutation.entry.tableId,
+	}
+	overlay := w.overlays[key]
+	if overlay == nil {
+		panic("workspace mutation table overlay is missing during access-index refresh")
+	}
+	w.retainMutationAccessIndexesLocked(overlay, mutation, newRevision)
+	w.removeMutationAccessIndexesLocked(overlay, mutation)
+	mutation.pkKeys = slices.Clone(indexData.pkKeys)
+	mutation.rowIDs = slices.Clone(indexData.rowIDs)
+	mutation.memoryInsert = indexData.memoryInsert
+	mutation.pkIndexComplete = indexData.pkIndexComplete
+	mutation.rowIDIndexComplete = indexData.rowIDIndexComplete
+	mutation.accessIndexRevision = newRevision
+	w.addMutationAccessIndexesLocked(overlay, mutation, selections)
+}
+
+// queueCompactionLocked records that the physical input used to decide
+// compaction eligibility changed. A mutation can already be pending when its
+// selections or payload generation changes; advancing the generation lets an
+// older in-flight plan finish without consuming that newer work.
+func (w *txnWorkspace) queueCompactionLocked(mutation *workspaceMutation) {
+	if mutation == nil || !mutation.active || mutation.retiredRevision != 0 ||
+		(mutation.entry.typ != INSERT && mutation.entry.typ != DELETE) {
+		return
+	}
+	w.nextCompactionInputGeneration++
+	mutation.compactionInputGeneration = w.nextCompactionInputGeneration
+	if !w.pendingCompactions.contains(mutation.id) {
+		w.pendingCompactions.add(mutation)
+	}
+}
+
 // retireMutationStateLocked is the only logical active-to-retired transition
 // for workspace mutations. The caller holds txnWorkspace.mu and any replacement
 // payload publication has already succeeded. The method removes the mutation
@@ -2547,6 +3189,8 @@ func (w *txnWorkspace) retireMutationStateLocked(
 		panic("workspace mutation table overlay is missing during retirement")
 	}
 	w.retiredMutationIDs[mutation.id] = struct{}{}
+	w.retainMutationAccessIndexesLocked(overlay, mutation, revision)
+	w.removeMutationAccessIndexesLocked(overlay, mutation)
 	overlay.retiredMutations = append(overlay.retiredMutations, mutation.id)
 	if mutation.entry.pkCheck.enabled {
 		overlay.retiredPKCandidateMutations = append(
@@ -2558,7 +3202,13 @@ func (w *txnWorkspace) retireMutationStateLocked(
 		w.activePKCandidates.remove(mutation)
 	}
 	if mutation.entry.typ == INSERT || mutation.entry.typ == DELETE {
-		w.activeCompactions.remove(mutation)
+		if w.activeCompactionCount == 0 {
+			panic("workspace active compaction count underflow")
+		}
+		w.activeCompactionCount--
+		if w.pendingCompactions.contains(mutation.id) {
+			w.pendingCompactions.remove(mutation)
+		}
 	}
 	if mutation.blockMeta {
 		w.activeBlockMeta.remove(mutation)
@@ -2638,10 +3288,39 @@ func (w *txnWorkspace) retireObjectDeleteStateLocked(
 func (w *txnWorkspace) beginSpill(
 	ids []workspaceMutationID,
 ) (*workspaceSpillAttempt, error) {
+	return w.beginSpillWithMode(ids, false)
+}
+
+// beginTerminalSpill freezes the final commit representation. Unlike an
+// ordinary spill, its replacement objects may combine mutations from completed
+// statements. The target still belongs to the current open attempt so a stale
+// publication is rejected if the boundary changes while remote IO is running.
+func (w *txnWorkspace) beginTerminalSpill(
+	ids []workspaceMutationID,
+) (*workspaceSpillAttempt, error) {
+	return w.beginSpillWithMode(ids, true)
+}
+
+func (w *txnWorkspace) beginSpillWithMode(
+	ids []workspaceMutationID,
+	terminal bool,
+) (*workspaceSpillAttempt, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	attempt := &workspaceSpillAttempt{workspace: w}
+	attempt := &workspaceSpillAttempt{workspace: w, terminal: terminal}
+	if terminal {
+		if w.journal.current == nil ||
+			w.journal.current.state != statementAttemptOpen {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"workspace terminal spill requires an open final statement")
+		}
+		w.commitStarted = true
+		attempt.owner = w.journal.current.key()
+	} else if w.commitStarted {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"workspace ordinary spill cannot start after commit preparation")
+	}
 	seen := make(map[workspaceMutationID]struct{}, len(ids))
 	for _, id := range ids {
 		if _, ok := seen[id]; ok {
@@ -2691,6 +3370,14 @@ func (w *txnWorkspace) commitSpill(
 
 	if attempt == nil || attempt.workspace != w || attempt.closed || attempt.committed {
 		return nil, moerr.NewInternalErrorNoCtx("invalid workspace spill attempt")
+	}
+	if attempt.terminal {
+		if w.journal.current == nil ||
+			w.journal.current.state != statementAttemptOpen ||
+			w.journal.current.key() != attempt.owner {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"workspace terminal spill boundary changed before publication")
+		}
 	}
 	spills := make([]workspaceSpillPayload, len(attempt.sources))
 	for idx, source := range attempt.sources {
@@ -2745,8 +3432,9 @@ func (w *txnWorkspace) commitSpill(
 					"workspace spill source belongs to multiple objects")
 			}
 			claimedSources[sourceID] = struct{}{}
-			if source.statementID != object.statementID ||
-				source.attemptID != object.attemptID ||
+			if (!attempt.terminal &&
+				(source.statementID != object.statementID ||
+					source.attemptID != object.attemptID)) ||
 				!sameWorkspaceSpillGroup(source.entry, object.entry) {
 				return nil, moerr.NewInternalErrorNoCtx(
 					"workspace spill object does not match its logical source")
@@ -2757,14 +3445,19 @@ func (w *txnWorkspace) commitSpill(
 				earliest = commitOrder
 			}
 		}
-		if err := w.journal.validatePhysicalMutationReplacement(
-			statementAttemptKey{
-				statementID: object.statementID,
-				attemptID:   object.attemptID,
-			},
-			object.sourceMutationIDs,
-		); err != nil {
-			return nil, err
+		if attempt.terminal {
+			object.statementID = attempt.owner.statementID
+			object.attemptID = attempt.owner.attemptID
+		} else {
+			if err := w.journal.validatePhysicalMutationReplacement(
+				statementAttemptKey{
+					statementID: object.statementID,
+					attemptID:   object.attemptID,
+				},
+				object.sourceMutationIDs,
+			); err != nil {
+				return nil, err
+			}
 		}
 		objectCommitOrders[idx] = slices.Clone(earliest)
 		objectBatches[idx] = object.entry.bat
@@ -2793,11 +3486,13 @@ func (w *txnWorkspace) commitSpill(
 		unclaimedByOwner[owner] = append(
 			unclaimedByOwner[owner], source.mutationID)
 	}
-	for owner, sourceIDs := range unclaimedByOwner {
-		if err := w.journal.validatePhysicalMutationReplacement(
-			owner, sourceIDs,
-		); err != nil {
-			return nil, err
+	if !attempt.terminal {
+		for owner, sourceIDs := range unclaimedByOwner {
+			if err := w.journal.validatePhysicalMutationReplacement(
+				owner, sourceIDs,
+			); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -2828,17 +3523,28 @@ func (w *txnWorkspace) commitSpill(
 			object.attemptID,
 			objectCommitOrders[idx],
 		)
-		w.journal.replaceMutationsValidated(
-			statementAttemptKey{
-				statementID: object.statementID,
-				attemptID:   object.attemptID,
-			},
-			object.sourceMutationIDs,
-			[]workspaceMutationID{ids[idx]},
-		)
+		if attempt.terminal {
+			w.journal.replaceTerminalMutationsValidated(
+				object.sourceMutationIDs,
+				[]workspaceMutationID{ids[idx]},
+			)
+		} else {
+			w.journal.replaceMutationsValidated(
+				statementAttemptKey{
+					statementID: object.statementID,
+					attemptID:   object.attemptID,
+				},
+				object.sourceMutationIDs,
+				[]workspaceMutationID{ids[idx]},
+			)
+		}
 	}
 	for owner, sourceIDs := range unclaimedByOwner {
-		w.journal.replaceMutationsValidated(owner, sourceIDs, nil)
+		if attempt.terminal {
+			w.journal.replaceTerminalMutationsValidated(sourceIDs, nil)
+		} else {
+			w.journal.replaceMutationsValidated(owner, sourceIDs, nil)
+		}
 	}
 	attempt.committed = true
 	return ids, nil
@@ -2878,8 +3584,14 @@ func (w *txnWorkspace) replaceSelections(
 	); err != nil {
 		return err
 	}
+	w.refreshMutationAccessIndexesLocked(m, workspaceMutationIndexData{
+		pkKeys: m.pkKeys, rowIDs: m.rowIDs,
+		memoryInsert: m.memoryInsert, pkIndexComplete: m.pkIndexComplete,
+		rowIDIndexComplete: m.rowIDIndexComplete,
+	}, selections, newRevision)
 	w.journal.recordSelectionUndo(id, current)
 	w.revision = newRevision
+	w.queueCompactionLocked(m)
 	return nil
 }
 
@@ -2899,14 +3611,17 @@ func (w *txnWorkspace) replaceMemory(
 		return moerr.NewInternalErrorNoCtx("workspace mutation is not active")
 	}
 	newRevision := w.revision + 1
+	indexData := classifyWorkspaceMutation(m.entry, newBat)
 	if err := w.payloads.replaceMemory(
 		m.payloadID, oldBat, newBat, selections, newRevision,
 	); err != nil {
 		return err
 	}
+	w.refreshMutationAccessIndexesLocked(m, indexData, selections, newRevision)
 	w.usage.sub(usageOfWorkspaceEntry(m.entry, oldBat))
 	w.usage.add(usageOfWorkspaceEntry(m.entry, newBat))
 	w.revision = newRevision
+	w.queueCompactionLocked(m)
 	return nil
 }
 
@@ -3333,6 +4048,14 @@ func (w *txnWorkspace) publishBoundaryValidatedLocked(
 	boundary workspaceBoundaryPublication,
 ) {
 	if boundary.advanceStatement {
+		// Once an attempt completes, its logical rollback ownership is released
+		// by StatementJournal. Requeue its physical representatives so later
+		// boundaries may compact them with other completed attempts. The current
+		// attempt is still kept separate while it is open, so statement retry and
+		// RollbackLastStatement never depend on a cross-attempt payload.
+		for mutationID := range w.journal.current.mutations {
+			w.queueCompactionLocked(w.mutations[mutationID])
+		}
 		w.journal.advanceValidated()
 	}
 	if boundary.rc != nil {
@@ -3373,11 +4096,9 @@ func (w *txnWorkspace) compactMemoryMany(compactions []workspaceMutationCompacti
 			statementID: dst.statementID,
 			attemptID:   dst.attemptID,
 		}
-		if err := w.journal.validatePhysicalMutationReplacement(
-			owner, []workspaceMutationID{dst.id},
-		); err != nil {
-			return err
-		}
+		compactionIDs := make(
+			[]workspaceMutationID, 1, len(merge.srcMutationIDs)+1)
+		compactionIDs[0] = dst.id
 		oldUsage.add(usageOfWorkspaceEntry(dst.entry, merge.dstOldBat))
 		newUsage.add(usageOfWorkspaceEntry(dst.entry, merge.dstNewBat))
 
@@ -3393,18 +4114,19 @@ func (w *txnWorkspace) compactMemoryMany(compactions []workspaceMutationCompacti
 				return moerr.NewInternalErrorNoCtx(
 					"workspace merge source is not active")
 			}
-			if src.statementID != owner.statementID ||
-				src.attemptID != owner.attemptID {
-				return moerr.NewInternalErrorNoCtx(
-					"workspace merge crosses statement attempts")
-			}
-			if err := w.journal.validatePhysicalMutationReplacement(
-				owner, []workspaceMutationID{src.id},
-			); err != nil {
-				return err
-			}
+			compactionIDs = append(compactionIDs, src.id)
 			srcPayloadIDs[srcIdx] = src.payloadID
 			oldUsage.add(usageOfWorkspaceEntry(src.entry, merge.srcOldBats[srcIdx]))
+		}
+		// The journal distinguishes only mutations owned by the open attempt
+		// from completed mutations. Completed attempts no longer support
+		// statement rollback, so their physical payloads may be coalesced while
+		// retaining the destination's stable commit position. Mixing an open
+		// attempt with completed data remains forbidden by this validation.
+		if err := w.journal.validatePhysicalMutationReplacement(
+			owner, compactionIDs,
+		); err != nil {
+			return err
 		}
 		payloadMerges[idx] = workspaceMemoryCompaction{
 			dstPayloadID:  dst.payloadID,
@@ -3422,10 +4144,13 @@ func (w *txnWorkspace) compactMemoryMany(compactions []workspaceMutationCompacti
 	w.usage.sub(oldUsage)
 	w.usage.add(newUsage)
 	for _, merge := range compactions {
+		dst := w.mutations[merge.dstMutationID]
+		indexData := classifyWorkspaceMutation(dst.entry, merge.dstNewBat)
+		w.refreshMutationAccessIndexesLocked(
+			dst, indexData, nil, newRevision)
 		for _, srcID := range merge.srcMutationIDs {
 			w.retireMutationStateLocked(w.mutations[srcID], newRevision)
 		}
-		dst := w.mutations[merge.dstMutationID]
 		w.journal.replaceMutationsValidated(
 			statementAttemptKey{
 				statementID: dst.statementID,
@@ -3538,8 +4263,16 @@ func (w *txnWorkspace) addMutationSelections(
 	); err != nil {
 		return err
 	}
+	w.refreshMutationAccessIndexesLocked(m, workspaceMutationIndexData{
+		pkKeys:             m.pkKeys,
+		rowIDs:             m.rowIDs,
+		memoryInsert:       m.memoryInsert,
+		pkIndexComplete:    m.pkIndexComplete,
+		rowIDIndexComplete: m.rowIDIndexComplete,
+	}, next, newRevision)
 	w.journal.recordSelectionUndo(id, current)
 	w.revision = newRevision
+	w.queueCompactionLocked(m)
 	return nil
 }
 
@@ -3568,6 +4301,13 @@ func (w *txnWorkspace) validateReadViewLocked(view client.WorkspaceReadView) err
 		return moerr.NewInternalErrorNoCtx("workspace read view revision is ahead of the transaction")
 	}
 	return nil
+}
+
+func (w *txnWorkspace) isCurrentReadViewLocked(
+	view client.WorkspaceReadView,
+) bool {
+	return !view.IsZero() && view.Revision() == w.revision &&
+		view.MaxMutationID() == uint64(w.nextMutationID)
 }
 
 func (w *txnWorkspace) validateWriteMarkLocked(mark client.WorkspaceWriteMark) error {
@@ -3629,6 +4369,324 @@ func (w *txnWorkspace) tableEntries(
 	return w.entriesForMutationIDsLocked(view, ids)
 }
 
+func workspaceMutationVisibleAtReadView(
+	mutation *workspaceMutation,
+	view client.WorkspaceReadView,
+) bool {
+	return mutation != nil && uint64(mutation.id) <= view.MaxMutationID() &&
+		mutation.createdRevision <= view.Revision() &&
+		(mutation.retiredRevision == 0 || view.Revision() < mutation.retiredRevision)
+}
+
+func workspaceCurrentAccessFactsVisibleAtReadView(
+	mutation *workspaceMutation,
+	view client.WorkspaceReadView,
+) bool {
+	return workspaceMutationVisibleAtReadView(mutation, view) &&
+		mutation.accessIndexRevision <= view.Revision()
+}
+
+func appendVisibleWorkspaceOwnerIDs(
+	ids []workspaceMutationID,
+	owners workspaceMutationOwners,
+	mutations map[workspaceMutationID]*workspaceMutation,
+	view client.WorkspaceReadView,
+) []workspaceMutationID {
+	owners.forEach(func(id workspaceMutationID, _ uint32) {
+		if workspaceCurrentAccessFactsVisibleAtReadView(mutations[id], view) &&
+			!slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	})
+	return ids
+}
+
+func appendVisibleWorkspaceIntervalIDs(
+	ids []workspaceMutationID,
+	intervals []workspaceAccessIndexInterval,
+	view client.WorkspaceReadView,
+) []workspaceMutationID {
+	for _, interval := range intervals {
+		if uint64(interval.mutationID) <= view.MaxMutationID() &&
+			interval.contains(view.Revision()) &&
+			!slices.Contains(ids, interval.mutationID) {
+			ids = append(ids, interval.mutationID)
+		}
+	}
+	return ids
+}
+
+// tablePointInsertEntries resolves a finite set of exact encoded primary keys through the
+// TableOverlay without opening unrelated payloads. Current access facts are
+// combined with the statement-scoped facts removed after the ReadView was
+// published. entriesForMutationIDsLocked then applies logical visibility and
+// pins the payload generation belonging to that exact revision.
+func (w *txnWorkspace) tablePointInsertEntries(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+	encodedKeys ...[]byte,
+) (entries *workspaceEntrySet, indexed bool, err error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err = w.validateReadViewLocked(view); err != nil {
+		return nil, false, err
+	}
+	if view.IsZero() {
+		return &workspaceEntrySet{}, true, nil
+	}
+	overlay := w.overlays[workspaceOverlayKey{
+		accountID: accountID, databaseID: databaseID, tableID: tableID,
+	}]
+	if overlay == nil {
+		return &workspaceEntrySet{}, true, nil
+	}
+	for id := range overlay.activeUnindexedMemoryInserts {
+		if workspaceCurrentAccessFactsVisibleAtReadView(w.mutations[id], view) {
+			return nil, false, nil
+		}
+	}
+	for _, interval := range overlay.historicalUnindexedMemoryInserts {
+		if uint64(interval.mutationID) <= view.MaxMutationID() &&
+			interval.contains(view.Revision()) {
+			return nil, false, nil
+		}
+	}
+	ids := make([]workspaceMutationID, 0, len(encodedKeys))
+	for _, encodedKey := range encodedKeys {
+		key := string(encodedKey)
+		ids = appendVisibleWorkspaceOwnerIDs(
+			ids, overlay.activeInsertPKMutations[key], w.mutations, view)
+		ids = appendVisibleWorkspaceIntervalIDs(
+			ids, overlay.historicalInsertPKMutations[key], view)
+	}
+	slices.SortStableFunc(ids, func(aID, bID workspaceMutationID) int {
+		return compareWorkspaceCommitOrder(
+			w.mutations[aID].commitOrder, w.mutations[bID].commitOrder)
+	})
+	entries, err = w.entriesForMutationIDsLocked(view, ids)
+	return entries, true, err
+}
+
+// tablePointInsertEntriesByRowIDs resolves transaction-local rows through the
+// current TableOverlay without opening unrelated INSERT payloads. The returned
+// entries are only the mutations that own at least one requested RowID.
+// Incomplete index facts that overlap the requested ReadView return
+// indexed=false so the caller can preserve the complete visibility path.
+func (w *txnWorkspace) tablePointInsertEntriesByRowIDs(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+	rowIDs []objectio.Rowid,
+) (entries *workspaceEntrySet, indexed bool, err error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err = w.validateReadViewLocked(view); err != nil {
+		return nil, false, err
+	}
+	if view.IsZero() {
+		return &workspaceEntrySet{}, true, nil
+	}
+	overlay := w.overlays[workspaceOverlayKey{
+		accountID: accountID, databaseID: databaseID, tableID: tableID,
+	}]
+	if overlay == nil {
+		return &workspaceEntrySet{}, true, nil
+	}
+	for id := range overlay.activeUnindexedMemoryInsertRowIDs {
+		if workspaceCurrentAccessFactsVisibleAtReadView(w.mutations[id], view) {
+			return nil, false, nil
+		}
+	}
+	for _, interval := range overlay.historicalUnindexedMemoryInsertRowIDs {
+		if uint64(interval.mutationID) <= view.MaxMutationID() &&
+			interval.contains(view.Revision()) {
+			return nil, false, nil
+		}
+	}
+	ownerSet := make(map[workspaceMutationID]struct{})
+	for _, rowID := range rowIDs {
+		overlay.activeInsertRowIDMutations[rowID].forEach(
+			func(id workspaceMutationID, _ uint32) {
+				if workspaceCurrentAccessFactsVisibleAtReadView(
+					w.mutations[id], view,
+				) {
+					ownerSet[id] = struct{}{}
+				}
+			})
+		for _, interval := range overlay.historicalInsertRowIDMutations[rowID] {
+			if uint64(interval.mutationID) <= view.MaxMutationID() &&
+				interval.contains(view.Revision()) {
+				ownerSet[interval.mutationID] = struct{}{}
+			}
+		}
+	}
+	ids := make([]workspaceMutationID, 0, len(ownerSet))
+	for id := range ownerSet {
+		ids = append(ids, id)
+	}
+	slices.SortStableFunc(ids, func(aID, bID workspaceMutationID) int {
+		return compareWorkspaceCommitOrder(
+			w.mutations[aID].commitOrder, w.mutations[bID].commitOrder)
+	})
+	entries, err = w.entriesForMutationIDsLocked(view, ids)
+	return entries, true, err
+}
+
+// tableMemoryDeleteOffsets probes only the requested row offsets in one
+// committed block. Passing nil candidates returns all current offsets for
+// GetTombstones. Like the PK index, this current-state index is not used for a
+// historical ReadView.
+func (w *txnWorkspace) tableMemoryDeleteOffsets(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+	blockID objectio.Blockid,
+	candidates []int64,
+) (deleted []int64, indexed bool, err error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err = w.validateReadViewLocked(view); err != nil {
+		return nil, false, err
+	}
+	if !w.isCurrentReadViewLocked(view) {
+		return nil, false, nil
+	}
+	overlay := w.overlays[workspaceOverlayKey{
+		accountID: accountID, databaseID: databaseID, tableID: tableID,
+	}]
+	if overlay == nil {
+		return nil, true, nil
+	}
+	offsets := overlay.activeMemoryDeletes[blockID]
+	if candidates == nil {
+		deleted = make([]int64, 0, len(offsets))
+		for offset := range offsets {
+			deleted = append(deleted, int64(offset))
+		}
+		slices.Sort(deleted)
+		return deleted, true, nil
+	}
+	deleted = make([]int64, 0, min(len(candidates), len(offsets)))
+	for _, offset := range candidates {
+		if offset >= 0 && offsets[uint32(offset)] != 0 {
+			deleted = append(deleted, offset)
+		}
+	}
+	return deleted, true, nil
+}
+
+func (w *txnWorkspace) tableTombstoneObjects(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+) (objects []objectio.ObjectStats, indexed bool, err error) {
+	objects, indexed, err = w.tableObjectStats(
+		view, accountID, databaseID, tableID, DELETE)
+	if err != nil || !indexed || len(objects) < 2 {
+		return objects, indexed, err
+	}
+	seen := make(map[objectio.ObjectStats]struct{})
+	unique := objects[:0]
+	for idx := range objects {
+		if _, exists := seen[objects[idx]]; exists {
+			continue
+		}
+		seen[objects[idx]] = struct{}{}
+		unique = append(unique, objects[idx])
+	}
+	return unique, true, nil
+}
+
+// tableObjectStats returns the persisted data or tombstone objects visible in
+// the current logical table overlay. Persisted INSERT ownership is indexed by
+// object ID, while persisted DELETE ownership is indexed by mutation ID. Both
+// indexes contain stable mutation identities and are updated atomically with
+// mutation publication, replacement, retirement, and statement rollback.
+//
+// Historical statement views deliberately report indexed=false: their visible
+// owners may include mutations retired from the current overlay, so callers
+// must use the immutable statement journal rather than infer history from a
+// current-state index.
+func (w *txnWorkspace) tableObjectStats(
+	view client.WorkspaceReadView,
+	accountID uint32,
+	databaseID uint64,
+	tableID uint64,
+	typ int,
+) (objects []objectio.ObjectStats, indexed bool, err error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if err = w.validateReadViewLocked(view); err != nil {
+		return nil, false, err
+	}
+	if !w.isCurrentReadViewLocked(view) {
+		return nil, false, nil
+	}
+
+	overlay := w.overlays[workspaceOverlayKey{
+		accountID: accountID, databaseID: databaseID, tableID: tableID,
+	}]
+	if overlay == nil {
+		return nil, true, nil
+	}
+
+	mutationSet := make(map[workspaceMutationID]struct{})
+	switch typ {
+	case INSERT:
+		for _, owners := range overlay.activeUncommittedObjects {
+			for mutationID := range owners {
+				mutationSet[mutationID] = struct{}{}
+			}
+		}
+	case DELETE:
+		for mutationID := range overlay.activeObjectDeleteMutations {
+			mutationSet[mutationID] = struct{}{}
+		}
+	default:
+		return nil, false, moerr.NewInternalErrorNoCtxf(
+			"unsupported workspace object mutation type %d", typ)
+	}
+	if len(mutationSet) == 0 {
+		return nil, true, nil
+	}
+
+	ids := make([]workspaceMutationID, 0, len(mutationSet))
+	for mutationID := range mutationSet {
+		ids = append(ids, mutationID)
+	}
+	slices.SortStableFunc(ids, func(aID, bID workspaceMutationID) int {
+		a := w.mutations[aID]
+		b := w.mutations[bID]
+		if a == nil || b == nil {
+			return 0
+		}
+		return compareWorkspaceCommitOrder(a.commitOrder, b.commitOrder)
+	})
+
+	entries, err := w.entriesForMutationIDsLocked(view, ids)
+	if err != nil {
+		return nil, false, err
+	}
+	defer entries.Close()
+	for idx := range entries.entries {
+		entry := &entries.entries[idx]
+		if entry.typ != typ {
+			return nil, false, moerr.NewInternalErrorNoCtxf(
+				"workspace object index contains mutation type %d, expected %d",
+				entry.typ, typ)
+		}
+		entry.forEachVisibleObjectStats(func(stats objectio.ObjectStats) {
+			objects = append(objects, stats)
+		})
+	}
+	return objects, true, nil
+}
+
 // pkCandidateEntries returns only in-memory user-table INSERT and DELETE
 // mutations published with an exact duplicate-check descriptor.
 // Candidate identity is maintained by each TableOverlay when a mutation is
@@ -3658,20 +4716,81 @@ func (w *txnWorkspace) pkCandidateEntries(
 	)
 }
 
-// compactionCandidateEntries atomically pins only INSERT and DELETE
-// mutations. Workspace memory compaction has no semantics for ALTER or other
-// mutation kinds, so those payloads must not be pulled into its planning
-// snapshot. The caller retains the existing payload-level eligibility checks
-// and deterministic commit order.
-func (w *txnWorkspace) compactionCandidateEntries() (*workspaceEntrySet, error) {
+// beginCompactionPlan atomically pins only INSERT and DELETE mutations that
+// have not been evaluated by a previous statement boundary. The input
+// generation watermark makes planning proportional to newly published
+// physical inputs rather than transaction history. The minimum-input gate is
+// evaluated before pending IDs are enumerated or payload generations are
+// pinned: statement completion is a hot path, and a deferred compaction must
+// remain O(1) until enough physical input exists to justify a plan.
+//
+// A plan is completed only after every physical replacement succeeds.  If
+// planning or publication fails, leaving the IDs pending makes the next
+// attempt retry the exact same logical work instead of silently losing it.
+func (w *txnWorkspace) beginCompactionPlan(
+	minimumNewInputs uint64,
+) (*workspaceCompactionPlan, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
+	newInputs := w.nextCompactionInputGeneration -
+		w.completedCompactionGeneration
+	if newInputs < minimumNewInputs {
+		return nil, nil
+	}
 	view := client.NewWorkspaceReadView(
 		w.id,
 		w.revision,
 		uint64(w.nextMutationID),
 	)
-	return w.entriesForMutationIDsLocked(view, w.activeCompactions.ids())
+	ids := w.pendingCompactions.ids()
+	inputGenerations := make([]uint64, len(ids))
+	for idx, id := range ids {
+		inputGenerations[idx] = w.pendingCompactions.byID[id].compactionInputGeneration
+	}
+	entries, err := w.entriesForMutationIDsLocked(view, ids)
+	if err != nil {
+		return nil, err
+	}
+	return &workspaceCompactionPlan{
+		entries:          entries,
+		mutationIDs:      ids,
+		inputGenerations: inputGenerations,
+		inputGeneration:  w.nextCompactionInputGeneration,
+		newInputs:        newInputs,
+		currentAttempt:   w.journal.current.key(),
+	}, nil
+}
+
+// completeCompactionPlan marks only the mutations captured by plan as
+// evaluated.  Mutations appended concurrently after the snapshot remain
+// pending, and mutations retired by the compaction have already removed
+// themselves from the index.
+func (w *txnWorkspace) completeCompactionPlan(
+	plan *workspaceCompactionPlan,
+	evaluated map[workspaceMutationID]struct{},
+) {
+	if plan == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Completing a no-op plan is still meaningful: it records that the planner
+	// inspected this input generation. Without this watermark, incompatible or
+	// one-entry tails would be re-opened on every subsequent statement.
+	if plan.inputGeneration > w.completedCompactionGeneration {
+		w.completedCompactionGeneration = plan.inputGeneration
+	}
+	for idx, id := range plan.mutationIDs {
+		if _, ok := evaluated[id]; !ok {
+			continue
+		}
+		mutation := w.mutations[id]
+		if mutation == nil || !w.pendingCompactions.contains(id) ||
+			mutation.compactionInputGeneration != plan.inputGenerations[idx] {
+			continue
+		}
+		w.pendingCompactions.remove(mutation)
+	}
 }
 
 // blockMetaEntries atomically pins only BlockMeta INSERT mutations. Object
@@ -3918,6 +5037,10 @@ func (w *txnWorkspace) rollbackCurrentAttemptAtBoundary(
 ) (*workspaceRollback, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.commitStarted {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"workspace statement rollback cannot run after commit preparation")
+	}
 	current := w.journal.current
 	var rcCompletedStatements uint64
 	if rollbackRC && current.statementID > 0 {
@@ -3959,6 +5082,8 @@ func (w *txnWorkspace) rollbackCurrentAttemptAtBoundary(
 		attemptMutationIDs[id] = struct{}{}
 	}
 	selectionRestores := make([]workspacePayloadSelectionRestore, 0, len(current.selectionUndo))
+	selectionRestoreMutationIDs := make(
+		[]workspaceMutationID, 0, len(current.selectionUndo))
 	for id, selections := range current.selectionUndo {
 		// A mutation created by this attempt is retired in full. Restoring one
 		// of its intermediate selection generations would be both unnecessary
@@ -3981,6 +5106,7 @@ func (w *txnWorkspace) rollbackCurrentAttemptAtBoundary(
 			payloadID:  mutation.payloadID,
 			selections: selections,
 		})
+		selectionRestoreMutationIDs = append(selectionRestoreMutationIDs, id)
 	}
 	rewriteRestores := make([]workspacePayloadRewriteRestore, 0, len(current.rewriteUndo))
 	restoredUsage := workspaceUsage{}
@@ -4053,6 +5179,18 @@ func (w *txnWorkspace) rollbackCurrentAttemptAtBoundary(
 		w.revision = rollbackRevision
 		w.usage.sub(retiredUsage)
 		w.usage.add(restoredUsage)
+		for _, id := range selectionRestoreMutationIDs {
+			if mutation := w.mutations[id]; mutation != nil && mutation.active &&
+				mutation.retiredRevision == 0 {
+				w.refreshMutationAccessIndexesLocked(mutation, workspaceMutationIndexData{
+					pkKeys: mutation.pkKeys, rowIDs: mutation.rowIDs,
+					memoryInsert:       mutation.memoryInsert,
+					pkIndexComplete:    mutation.pkIndexComplete,
+					rowIDIndexComplete: mutation.rowIDIndexComplete,
+				}, current.selectionUndo[id], rollbackRevision)
+				w.queueCompactionLocked(mutation)
+			}
+		}
 	}
 	attempt := w.journal.rollbackCurrent()
 	if rollbackRC && current.statementID > 0 {
@@ -4201,7 +5339,8 @@ func (w *txnWorkspace) close(mp *mpool.MPool) error {
 	w.mutations = nil
 	w.activeMutations = nil
 	w.activePKCandidates = nil
-	w.activeCompactions = nil
+	w.activeCompactionCount = 0
+	w.pendingCompactions = nil
 	w.activeBlockMeta = nil
 	w.retiredMutationIDs = nil
 	w.objectDeletes = nil

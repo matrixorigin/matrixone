@@ -53,10 +53,6 @@ func NewLocalDataSource(
 	policy engine.TombstoneApplyPolicy,
 	category engine.DataSourceType,
 ) (source *LocalDisttaeDataSource, err error) {
-	workspaceEntries, err := table.workspaceEntries(readView)
-	if err != nil {
-		return nil, err
-	}
 	workspaceObjectDeletes, err := table.getTxn().workspace.tableObjectDeletes(
 		readView,
 		table.accountId,
@@ -64,7 +60,6 @@ func NewLocalDataSource(
 		table.tableId,
 	)
 	if err != nil {
-		workspaceEntries.Close()
 		return nil, err
 	}
 
@@ -93,7 +88,6 @@ func NewLocalDataSource(
 
 	source.table = table
 	source.readView = readView
-	source.workspaceEntries = workspaceEntries
 	source.workspaceDeletes.rawByBlock = workspaceObjectDeletes
 	source.snapshotTS = types.TimestampToTS(table.db.op.SnapshotTS())
 
@@ -126,8 +120,9 @@ type LocalDisttaeDataSource struct {
 	cachedBat *batch.Batch
 	sels      []int64
 
-	readView         client.WorkspaceReadView
-	workspaceEntries *workspaceEntrySet
+	readView                    client.WorkspaceReadView
+	workspaceEntries            *workspaceEntrySet
+	workspaceEntriesInitialized bool
 
 	// runtime config
 	rc struct {
@@ -162,6 +157,7 @@ type LocalDisttaeDataSource struct {
 		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
 		rawByBlock  map[objectio.Blockid][]int64
 		objects     []objectio.ObjectStats
+		entrySet    *workspaceEntrySet
 	}
 
 	pStateTombstoneObjects struct {
@@ -417,6 +413,10 @@ func (ls *LocalDisttaeDataSource) Close() {
 		ls.workspaceEntries.Close()
 		ls.workspaceEntries = nil
 	}
+	if ls.workspaceDeletes.entrySet != nil {
+		ls.workspaceDeletes.entrySet.Close()
+		ls.workspaceDeletes.entrySet = nil
+	}
 	ls.pStateTombstoneObjects.initialized = false
 	ls.pStateTombstoneObjects.index = tombstoneObjectIndex{}
 	ls.pStateTombstoneObjects.candidates = nil
@@ -632,6 +632,9 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) error {
+	if err := ls.ensureWorkspaceInsertEntries(); err != nil {
+		return err
+	}
 	if ls.workspaceEntries == nil || ls.wsCursor >= len(ls.workspaceEntries.entries) {
 		return nil
 	}
@@ -791,6 +794,36 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+	return nil
+}
+
+func (ls *LocalDisttaeDataSource) ensureWorkspaceInsertEntries() error {
+	if ls.workspaceEntriesInitialized {
+		return nil
+	}
+	if ls.workspaceEntries != nil {
+		ls.workspaceEntriesInitialized = true
+		return nil
+	}
+	ls.workspaceEntriesInitialized = true
+	if ls.memPKFilter != nil && ls.memPKFilter.Valid() {
+		if keys, pointPredicate := ls.memPKFilter.PointKeys(); pointPredicate {
+			entries, indexed, err := ls.table.workspacePointInsertEntries(
+				ls.readView, keys)
+			if err != nil {
+				return err
+			}
+			if indexed {
+				ls.workspaceEntries = entries
+				return nil
+			}
+		}
+	}
+	entries, err := ls.table.workspaceEntries(ls.readView)
+	if err != nil {
+		return err
+	}
+	ls.workspaceEntries = entries
 	return nil
 }
 
@@ -1036,7 +1069,10 @@ func (ls *LocalDisttaeDataSource) ApplyTombstones(
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 &&
 		dynamicPolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		rowsOffset = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+		rowsOffset, err = ls.applyWorkspaceEntryDeletes(bid, rowsOffset, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(rowsOffset) == 0 {
 		return nil, nil
@@ -1096,7 +1132,10 @@ func (ls *LocalDisttaeDataSource) GetTombstones(
 	}
 
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedInMemory == 0 {
-		ls.applyWorkspaceEntryDeletes(bid, nil, &deletedRows)
+		if _, err = ls.applyWorkspaceEntryDeletes(bid, nil, &deletedRows); err != nil {
+			deletedRows.Release()
+			return
+		}
 	}
 	if ls.tombstonePolicy&engine.Policy_SkipUncommitedS3 == 0 {
 		if _, err = ls.applyWorkspaceFlushedS3Deletes(
@@ -1127,11 +1166,25 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	bid *objectio.Blockid,
 	offsets []int64,
 	deletedRows *objectio.Bitmap,
-) (leftRows []int64) {
+) (leftRows []int64, err error) {
 
 	leftRows = offsets
+	indexedOffsets, indexed, err := ls.table.workspaceMemoryDeleteOffsets(
+		ls.readView, *bid, offsets)
+	if err != nil {
+		return nil, err
+	}
+	if indexed {
+		readutil.FastApplyDeletesByRowOffsets(
+			&leftRows, deletedRows, indexedOffsets)
+		return leftRows, nil
+	}
 
-	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+	entries, err := ls.workspaceDeleteEntriesForBlockLocked(bid)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
@@ -1139,15 +1192,18 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		}
 	}
 
-	return leftRows
+	return leftRows, nil
 }
 
 func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 	bid *objectio.Blockid,
-) []workspaceDeleteEntry {
-	entries := ls.workspaceDeleteEntriesLocked()
+) ([]workspaceDeleteEntry, error) {
+	entries, err := ls.workspaceDeleteEntriesLocked()
+	if err != nil {
+		return nil, err
+	}
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 	if ls.workspaceDeletes.byBlock == nil {
 		ls.workspaceDeletes.byBlock = make(map[objectio.Blockid][]workspaceDeleteEntry)
@@ -1155,7 +1211,7 @@ func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
 			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
 		}
 	}
-	return ls.workspaceDeletes.byBlock[*bid]
+	return ls.workspaceDeletes.byBlock[*bid], nil
 }
 
 func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
@@ -1182,37 +1238,65 @@ func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspace
 		workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
 }
 
-func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
-	ls.initializeWorkspaceDeletesLocked()
-	return ls.workspaceDeletes.entries
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() (
+	[]workspaceDeleteEntry,
+	error,
+) {
+	if err := ls.initializeWorkspaceDeletesLocked(); err != nil {
+		return nil, err
+	}
+	return ls.workspaceDeletes.entries, nil
 }
 
-func (ls *LocalDisttaeDataSource) workspaceTombstoneObjectsLocked() []objectio.ObjectStats {
-	ls.initializeWorkspaceDeletesLocked()
-	return ls.workspaceDeletes.objects
+func (ls *LocalDisttaeDataSource) workspaceTombstoneObjectsLocked() (
+	[]objectio.ObjectStats,
+	error,
+) {
+	objects, indexed, err := ls.table.workspaceTombstoneObjects(ls.readView)
+	if err != nil {
+		return nil, err
+	}
+	if indexed {
+		return objects, nil
+	}
+	if err = ls.initializeWorkspaceDeletesLocked(); err != nil {
+		return nil, err
+	}
+	return ls.workspaceDeletes.objects, nil
 }
 
 // initializeWorkspaceDeletesLocked materializes all uncommitted tombstones
 // from the datasource's generation-pinned table view. In-memory rowids and
 // persisted tombstone objects therefore share one visibility boundary and
 // cannot leak mutations published by a later statement.
-func (ls *LocalDisttaeDataSource) initializeWorkspaceDeletesLocked() {
+func (ls *LocalDisttaeDataSource) initializeWorkspaceDeletesLocked() error {
 	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.readView == ls.readView {
-		return
+		return nil
+	}
+	if ls.workspaceDeletes.entrySet != nil && ls.workspaceDeletes.readView != ls.readView {
+		ls.workspaceDeletes.entrySet.Close()
+		ls.workspaceDeletes.entrySet = nil
 	}
 
 	entries := ls.workspaceDeletes.entries[:0]
 	objects := ls.workspaceDeletes.objects[:0]
 	ls.workspaceDeletes.byBlock = nil
-	if ls.workspaceEntries == nil {
+	if ls.workspaceDeletes.entrySet == nil {
+		entrySet, err := ls.table.workspaceEntries(ls.readView)
+		if err != nil {
+			return err
+		}
+		ls.workspaceDeletes.entrySet = entrySet
+	}
+	if ls.workspaceDeletes.entrySet == nil {
 		ls.workspaceDeletes.initialized = true
 		ls.workspaceDeletes.readView = ls.readView
 		ls.workspaceDeletes.entries = entries
 		ls.workspaceDeletes.objects = objects
-		return
+		return nil
 	}
 	seenObjects := make(map[objectio.ObjectStats]struct{})
-	writes := ls.workspaceEntries.entries
+	writes := ls.workspaceDeletes.entrySet.entries
 	for idx := range writes {
 		entry := &writes[idx]
 		if entry.typ != DELETE || entry.bat == nil || entry.bat.IsEmpty() {
@@ -1276,6 +1360,7 @@ func (ls *LocalDisttaeDataSource) initializeWorkspaceDeletesLocked() {
 	ls.workspaceDeletes.readView = ls.readView
 	ls.workspaceDeletes.entries = entries
 	ls.workspaceDeletes.objects = objects
+	return nil
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
@@ -1286,7 +1371,10 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
 
 	leftRows = offsets
 
-	tombstones := ls.workspaceTombstoneObjectsLocked()
+	tombstones, err := ls.workspaceTombstoneObjectsLocked()
+	if err != nil {
+		return nil, err
+	}
 
 	if len(tombstones) == 0 {
 		return

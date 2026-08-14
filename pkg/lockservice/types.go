@@ -345,9 +345,13 @@ type Lock struct {
 }
 
 type holders struct {
-	// all active transactions which hold this lock. Every waiter has a reference to the lock
-	// waiters.
-	txns map[string]pb.WaitTxn
+	// The overwhelming majority of row locks have exactly one holder. Keeping a
+	// Go map for that case makes the per-row lock metadata much larger than the
+	// row key itself. Store the common case inline and promote to a map only when
+	// a shared lock actually has multiple holders.
+	hasSingle bool
+	single    pb.WaitTxn
+	multiple  map[string]pb.WaitTxn
 }
 
 // SetLockServiceByServiceID set lockservice instance into process level runtime.

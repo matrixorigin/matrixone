@@ -1565,15 +1565,19 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	return findMergeGroup(base.GetChildren(0))
 }
 
+func newEmptyReaders(count int) []engine.Reader {
+	readers := make([]engine.Reader, count)
+	for i := range readers {
+		readers[i] = new(readutil.EmptyReader)
+	}
+	return readers
+}
+
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
 	if s.StarCountOnly {
-		readers = make([]engine.Reader, s.NodeInfo.Mcpu)
-		for i := range readers {
-			readers[i] = new(readutil.EmptyReader)
-		}
-		return readers, nil
+		return newEmptyReaders(s.NodeInfo.Mcpu), nil
 	}
 
 	// receive runtime filter and optimize the datasource.
@@ -1590,15 +1594,16 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 			break
 		}
 	}
-	if !emptyScan {
-		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
-		if err != nil {
-			return
-		}
-		err = s.getRelData(c, blockFilterList)
-		if err != nil {
-			return
-		}
+	if emptyScan {
+		return newEmptyReaders(s.NodeInfo.Mcpu), nil
+	}
+	blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
+	if err != nil {
+		return
+	}
+	err = s.getRelData(c, blockFilterList)
+	if err != nil {
+		return
 	}
 
 	switch {
@@ -1612,23 +1617,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if s.DataSource.AccountId != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
-		hint := engine.FilterHint{}
-		if tableDef := s.DataSource.TableDef; tableDef != nil {
-			switch {
-			case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-				if len(hint.MembershipFilterBytes) == 0 {
-					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
-						defines.IvfMembershipFilter{}).([]byte)
-				}
-			case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-				if len(hint.MembershipFilterBytes) == 0 {
-					hint.MembershipFilterBytes, _ = c.proc.Ctx.Value(
-						defines.FulltextMembershipFilter{}).([]byte)
-				}
-			}
-		}
+		hint := s.readerFilterHint(c, s.DataSource.TableDef)
 
 		readers, err = c.e.BuildBlockReaders(
 			ctx,
@@ -1649,27 +1638,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		hint := engine.FilterHint{}
-		// Pass runtime membership filter bytes to reader via FilterHint (only for ivf entries table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
+		var tableDef *plan.TableDef
+		if s.DataSource.node != nil {
+			tableDef = s.DataSource.node.TableDef
 		}
-		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
-		}
+		hint := s.readerFilterHint(c, tableDef)
 
 		readers, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -1725,26 +1698,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		crs := new(perfcounter.CounterSet)
 		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
 
-		hint := engine.FilterHint{}
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			n.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
-			if len(s.DataSource.MembershipFilterBytes) > 0 {
-				hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
-			} else if bfVal := c.proc.Ctx.Value(defines.IvfMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
+		var tableDef *plan.TableDef
+		if s.DataSource.node != nil {
+			tableDef = s.DataSource.node.TableDef
 		}
-		// Pass runtime membership filter bytes to reader via FilterHint (for fulltext index table).
-		if n := s.DataSource.node; n != nil && n.TableDef != nil &&
-			catalog.IsFullTextIndexTableType(n.TableDef.TableType, n.TableDef.Name) {
-			if bfVal := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}); bfVal != nil {
-				if bf, ok := bfVal.([]byte); ok && len(bf) > 0 {
-					hint.MembershipFilterBytes = bf
-				}
-			}
-		}
+		hint := s.readerFilterHint(c, tableDef)
 
 		mainRds, err = s.DataSource.Rel.BuildReaders(
 			newCtx,
@@ -1785,6 +1743,37 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		readers = newReaders
 	}
 	return
+}
+
+// readerFilterHint centralizes membership-filter propagation without changing
+// the source precedence of the existing reader paths. IVF readers accept the
+// scan-owned filter everywhere. Fulltext readers accept it only on remote scans;
+// local readers continue to consume the filter carried by the process context.
+func (s *Scope) readerFilterHint(c *Compile, tableDef *plan.TableDef) engine.FilterHint {
+	hint := engine.FilterHint{}
+	if tableDef == nil {
+		return hint
+	}
+
+	switch {
+	case tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries:
+		if len(s.DataSource.MembershipFilterBytes) > 0 {
+			hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			return hint
+		}
+		if membershipFilter, ok := c.proc.Ctx.Value(defines.IvfMembershipFilter{}).([]byte); ok {
+			hint.MembershipFilterBytes = membershipFilter
+		}
+	case catalog.IsFullTextIndexTableType(tableDef.TableType, tableDef.Name):
+		if s.IsRemote && len(s.DataSource.MembershipFilterBytes) > 0 {
+			hint.MembershipFilterBytes = s.DataSource.MembershipFilterBytes
+			return hint
+		}
+		if membershipFilter, ok := c.proc.Ctx.Value(defines.FulltextMembershipFilter{}).([]byte); ok {
+			hint.MembershipFilterBytes = membershipFilter
+		}
+	}
+	return hint
 }
 
 func (s Scope) TypeName() string {

@@ -42,8 +42,9 @@ const (
 // and commit use the all scope; commit additionally enables the stricter commit
 // thresholds and tombstone spill policy.
 type workspaceDumpScope struct {
-	kind   workspaceDumpScopeKind
-	commit bool
+	kind     workspaceDumpScopeKind
+	commit   bool
+	terminal bool
 }
 
 func workspaceDumpCurrentAttempt() workspaceDumpScope {
@@ -51,7 +52,61 @@ func workspaceDumpCurrentAttempt() workspaceDumpScope {
 }
 
 func workspaceDumpAll(commit bool) workspaceDumpScope {
-	return workspaceDumpScope{kind: workspaceDumpScopeAll, commit: commit}
+	return workspaceDumpScope{
+		kind:     workspaceDumpScopeAll,
+		commit:   commit,
+		terminal: commit,
+	}
+}
+
+// workspaceDumpCommitBoundary is the final statement-boundary dump performed
+// by Transaction.Commit. It keeps the ordinary write-threshold and tombstone
+// policy because commit-time tombstone transfer has not run yet, but it may
+// coalesce completed statements: any later error aborts the whole transaction,
+// so no individual statement can be retried after this boundary begins.
+func workspaceDumpCommitBoundary() workspaceDumpScope {
+	return workspaceDumpScope{
+		kind:     workspaceDumpScopeAll,
+		terminal: true,
+	}
+}
+
+// inMemoryInsertBytesForDumpScope returns the exact INSERT payload bytes that
+// dumpInsertBatchLocked can consume from scope. The all-workspace path is a
+// constant-time read of the mutation usage ledger; it must not materialize or
+// pin every historical payload merely to decide whether quota can grow. A
+// current-attempt dump is intentionally statement-local and normally contains
+// only the mutations produced by the active Write call.
+func (w *txnWorkspace) inMemoryInsertBytesForDumpScope(
+	scope workspaceDumpScope,
+) (uint64, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if scope.kind == workspaceDumpScopeAll {
+		return w.usage.spillEligibleInsertBytes, nil
+	}
+	if scope.kind != workspaceDumpScopeCurrentAttempt {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"workspace dump scope is invalid")
+	}
+
+	var size uint64
+	for _, id := range workspaceMutationIDs(w.journal.current.mutations) {
+		mutation := w.mutations[id]
+		if mutation == nil || !mutation.active {
+			continue
+		}
+		bat, err := w.payloads.currentBatch(mutation.payloadID)
+		if err != nil {
+			return 0, err
+		}
+		size += usageOfWorkspaceEntry(
+			mutation.entry,
+			bat,
+		).spillEligibleInsertBytes
+	}
+	return size, nil
 }
 
 func (w *txnWorkspace) entriesForDumpScope(
@@ -85,9 +140,10 @@ func (w *txnWorkspace) entriesForDumpScope(
 	return w.entriesForMutationIDsLocked(view, activeIDs)
 }
 
-// workspaceSpillGroupKey prevents one persisted object mutation from spanning
-// statement attempts. That boundary is required for exact statement rollback:
-// a replacement object belongs to precisely the same attempt as its sources.
+// workspaceSpillGroupKey preserves statement-attempt ownership for ordinary
+// spills. Terminal commit spills deliberately leave statementID and attemptID
+// zero, allowing all completed statements for one physical table to share an
+// object after per-statement rollback has become impossible.
 type workspaceSpillGroupKey struct {
 	table         tableKey
 	tableID       uint64
@@ -100,6 +156,11 @@ type workspaceSpillGroupKey struct {
 type stagedWorkspaceSpill struct {
 	objects []workspaceSpillObject
 	stats   []objectio.ObjectStats
+}
+
+type workspaceSpillGroup struct {
+	key     workspaceSpillGroupKey
+	sources []workspaceSpillSource
 }
 
 // dumpWorkspaceMutationsLocked performs a three-phase spill. The transaction
@@ -145,7 +206,12 @@ func (txn *Transaction) dumpWorkspaceMutationsLocked(
 		return 0, nil
 	}
 
-	attempt, err := txn.workspace.beginSpill(ids)
+	var attempt *workspaceSpillAttempt
+	if scope.terminal {
+		attempt, err = txn.workspace.beginTerminalSpill(ids)
+	} else {
+		attempt, err = txn.workspace.beginSpill(ids)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -221,37 +287,7 @@ func (txn *Transaction) stageWorkspaceSpill(
 	tables map[tableKey]engine.Relation,
 	attempt *workspaceSpillAttempt,
 ) (staged stagedWorkspaceSpill, err error) {
-	groups := make(map[workspaceSpillGroupKey]int)
-	orderedGroups := make([]struct {
-		key     workspaceSpillGroupKey
-		sources []workspaceSpillSource
-	}, 0)
-	for _, source := range attempt.sources {
-		entry := source.entry
-		key := workspaceSpillGroupKey{
-			table: tableKey{
-				accountId:  entry.accountId,
-				databaseId: entry.databaseId,
-				dbName:     entry.databaseName,
-				name:       entry.tableName,
-			},
-			tableID:       entry.tableId,
-			autoIncrEpoch: entry.autoIncrEpoch,
-			autoIncrKnown: entry.autoIncrEpochKnown,
-			statementID:   source.statementID,
-			attemptID:     source.attemptID,
-		}
-		index, ok := groups[key]
-		if !ok {
-			index = len(orderedGroups)
-			groups[key] = index
-			orderedGroups = append(orderedGroups, struct {
-				key     workspaceSpillGroupKey
-				sources []workspaceSpillSource
-			}{key: key})
-		}
-		orderedGroups[index].sources = append(orderedGroups[index].sources, source)
-	}
+	orderedGroups := groupWorkspaceSpillSources(attempt)
 
 	for _, group := range orderedGroups {
 		table := tables[group.key.table]
@@ -269,6 +305,44 @@ func (txn *Transaction) stageWorkspaceSpill(
 		}
 	}
 	return staged, nil
+}
+
+// groupWorkspaceSpillSources is the only owner of physical spill grouping.
+// Ordinary statement spills preserve retry ownership in the key. Terminal
+// commit spills omit that ownership only after beginTerminalSpill has closed
+// statement rollback, allowing one table object to represent the transaction's
+// complete final state instead of one object per completed statement.
+func groupWorkspaceSpillSources(
+	attempt *workspaceSpillAttempt,
+) []workspaceSpillGroup {
+	groups := make(map[workspaceSpillGroupKey]int)
+	orderedGroups := make([]workspaceSpillGroup, 0)
+	for _, source := range attempt.sources {
+		entry := source.entry
+		key := workspaceSpillGroupKey{
+			table: tableKey{
+				accountId:  entry.accountId,
+				databaseId: entry.databaseId,
+				dbName:     entry.databaseName,
+				name:       entry.tableName,
+			},
+			tableID:       entry.tableId,
+			autoIncrEpoch: entry.autoIncrEpoch,
+			autoIncrKnown: entry.autoIncrEpochKnown,
+		}
+		if !attempt.terminal {
+			key.statementID = source.statementID
+			key.attemptID = source.attemptID
+		}
+		index, ok := groups[key]
+		if !ok {
+			index = len(orderedGroups)
+			groups[key] = index
+			orderedGroups = append(orderedGroups, workspaceSpillGroup{key: key})
+		}
+		orderedGroups[index].sources = append(orderedGroups[index].sources, source)
+	}
+	return orderedGroups
 }
 
 func (txn *Transaction) stageWorkspaceSpillGroup(
@@ -369,9 +443,11 @@ func (txn *Transaction) stageWorkspaceSpillGroup(
 	entry := source.entry
 	entry.fileName = stats[0].ObjectLocation().String()
 	entry.bat = ownedBlockInfo
+	statementID := key.statementID
+	attemptID := key.attemptID
 	object = workspaceSpillObject{
-		statementID:       key.statementID,
-		attemptID:         key.attemptID,
+		statementID:       statementID,
+		attemptID:         attemptID,
 		sourceMutationIDs: make([]workspaceMutationID, len(sources)),
 		entry:             entry,
 	}
