@@ -295,6 +295,16 @@ func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
 	if !ok {
 		return moerr.NewBadConfigNoCtx("mongodb configuration must be a TOML table")
 	}
+	enableConfigured := false
+	for key := range table {
+		if !strings.EqualFold(key, "enable") {
+			continue
+		}
+		if enableConfigured {
+			return moerr.NewBadConfigNoCtx("mongodb configuration contains conflicting enable keys")
+		}
+		enableConfigured = true
+	}
 
 	var encoded bytes.Buffer
 	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
@@ -306,7 +316,7 @@ func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
 		return err
 	}
 	*parameters = MongoDBParameters(decoded)
-	_, parameters.enableConfigured = table["enable"]
+	parameters.enableConfigured = enableConfigured
 	return nil
 }
 

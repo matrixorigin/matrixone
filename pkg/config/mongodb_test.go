@@ -49,6 +49,9 @@ func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
 		{name: "mongodb section omitted", input: "", wantEnabled: true},
 		{name: "enable omitted", input: "[mongodb]\nallow-loopback = false\n", wantEnabled: true},
 		{name: "explicit disable", input: "[mongodb]\nenable = false\n", wantEnabled: false},
+		{name: "field case explicit disable", input: "[mongodb]\nEnable = false\n", wantEnabled: false},
+		{name: "upper case explicit disable", input: "[mongodb]\nENABLE = false\n", wantEnabled: false},
+		{name: "mixed case explicit disable", input: "[mongodb]\neNaBlE = false\n", wantEnabled: false},
 		{name: "explicit enable", input: "[mongodb]\nenable = true\n", wantEnabled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +74,14 @@ func TestMongoDBParametersEnablementTOMLDefaults(t *testing.T) {
 			require.Equal(t, tc.wantEnabled, parameters.MongoDB.Enable)
 		})
 	}
+}
+
+func TestMongoDBParametersRejectConflictingEnableKeys(t *testing.T) {
+	var parameters struct {
+		MongoDB MongoDBParameters `toml:"mongodb"`
+	}
+	_, err := toml.Decode("[mongodb]\nenable = false\nEnable = true\n", &parameters)
+	require.ErrorContains(t, err, "conflicting enable keys")
 }
 
 func TestMongoDBParametersUnmarshalPreservesOtherSettings(t *testing.T) {
