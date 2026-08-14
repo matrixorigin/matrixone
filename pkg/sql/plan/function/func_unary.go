@@ -5173,6 +5173,9 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 			// decision until the suffix is visible. Numeric suffixes are the
 			// exceptional two-digit-colon TIME form; other invalid-date suffixes
 			// are rejected by MySQL instead of being silently truncated to TIME.
+			if mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix, str, space) {
+				return 0, 0, 0, false
+			}
 			if mysqlInvalidDateClockSuffixForExtract(prefix[:space], str[space:]) {
 				return 0, 0, 0, false
 			}
@@ -5213,6 +5216,9 @@ func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
 	if suffix == "" {
 		return false
 	}
+	if mysqlSingleTokenTimeSuffixForExtract(suffix) {
+		return false
+	}
 	trailingWhitespace := mysqlEndsWithWhitespaceForExtract(suffix)
 	for trailingWhitespace && len(suffix) > 0 && mysqlWhitespaceForExtract(suffix[len(suffix)-1]) {
 		suffix = suffix[:len(suffix)-1]
@@ -5228,6 +5234,26 @@ func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
 		return false
 	}
 	return true
+}
+
+func mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix, str string, space int) bool {
+	if space <= 0 || space >= len(prefix) {
+		return false
+	}
+	suffix := mysqlTrimLeftWhitespaceForExtract(str[space:])
+	if suffix == "" {
+		return false
+	}
+	clock := prefix[:space]
+	return strings.HasSuffix(clock, ":") && strings.Count(clock, ":") >= 2 ||
+		strings.Contains(clock, "::")
+}
+
+func mysqlSingleTokenTimeSuffixForExtract(suffix string) bool {
+	return len(suffix) == 1 &&
+		(suffix[0] < '0' || suffix[0] > '9') &&
+		!mysqlDatetimePunctuationForExtract(suffix[0]) &&
+		!mysqlWhitespaceForExtract(suffix[0])
 }
 
 func mysqlClockFieldsForExtractHasThreeFields(str string) bool {
@@ -5370,6 +5396,9 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	}
 	secondText := str[secondStart:pos]
 	if len(secondText) == 0 {
+		if mysqlRepeatedClockSuffixHasTokenForExtract(str[pos:]) {
+			return 0, 0, 0, false
+		}
 		// A trailing second separator is a valid prefix with omitted seconds.
 		return hour, uint8(minute), 0, true
 	}
@@ -5377,9 +5406,30 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	if second >= 60 {
 		return 0, 0, 0, false
 	}
+	if mysqlRepeatedClockSuffixHasTokenForExtract(str[pos:]) {
+		return 0, 0, 0, false
+	}
 	// Stop after a complete HOUR:MINUTE:SECOND prefix. Following punctuation,
 	// including a third colon, does not discard the parsed clock.
 	return hour, uint8(minute), uint8(second), true
+}
+
+func mysqlRepeatedClockSuffixHasTokenForExtract(suffix string) bool {
+	if len(suffix) == 0 || !mysqlDatetimePunctuationForExtract(suffix[0]) {
+		return false
+	}
+	pos := 0
+	for pos < len(suffix) {
+		if !mysqlWhitespaceForExtract(suffix[pos]) {
+			pos++
+			continue
+		}
+		for pos < len(suffix) && mysqlWhitespaceForExtract(suffix[pos]) {
+			pos++
+		}
+		return pos < len(suffix)
+	}
+	return false
 }
 
 func mysqlCompactTimePrefixBoundary(prefix, suffix string) bool {

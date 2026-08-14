@@ -1,0 +1,26 @@
+DROP DATABASE IF EXISTS time_extract_suffix_token_db;
+CREATE DATABASE time_extract_suffix_token_db;
+USE time_extract_suffix_token_db;
+DROP TABLE IF EXISTS time_extract_suffix_token;
+CREATE TABLE time_extract_suffix_token (
+case_id INT PRIMARY KEY,
+v VARCHAR(64),
+c CHAR(64),
+t TEXT,
+expected VARCHAR(16)
+);
+INSERT INTO time_extract_suffix_token (case_id, v, c, t, expected) VALUES
+(1, '12:34:56 x', '12:34:56 x', '12:34:56 x', '12/34/56'),
+(2, '123:34:56 x', '123:34:56 x', '123:34:56 x', '123/34/56'),
+(3, '12:34:56: 78', '12:34:56: 78', '12:34:56: 78', 'NULL'),
+(4, '12:34:56:: x', '12:34:56:: x', '12:34:56:: x', 'NULL'),
+(5, '12:34::56 78', '12:34::56 78', '12:34::56 78', 'NULL');
+SELECT COUNT(*) AS case_count,
+SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
++ SUM(CASE WHEN COALESCE(concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)), 'NULL') <> expected THEN 1 ELSE 0 END)
++ SUM(CASE WHEN COALESCE(concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)), 'NULL') <> expected THEN 1 ELSE 0 END) AS mismatches
+FROM time_extract_suffix_token;
+➤ case_count[-5,64,0]  ¦  mismatches[3,38,0]  𝄀
+5  ¦  0
+DROP TABLE time_extract_suffix_token;
+DROP DATABASE time_extract_suffix_token_db;

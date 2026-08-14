@@ -10898,6 +10898,31 @@ func TestDateStringExtractorsYearZeroAndLegacyDelimiters(t *testing.T) {
 		})
 	}
 }
+
+func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "12:34:56 x", want: "12/34/56"},
+		{input: "123:34:56 x", want: "123/34/56"},
+		{input: "12:34:56: 78", want: "NULL"},
+		{input: "12:34:56:: x", want: "NULL"},
+		{input: "12:34::56 78", want: "NULL"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
 func TestStringTimeExtractOracleMatrix843(t *testing.T) {
 	cases := make([]string, 0, 843)
 	years := []string{"0", "1", "12", "123", "2024", "12345"}
