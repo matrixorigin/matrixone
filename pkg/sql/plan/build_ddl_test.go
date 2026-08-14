@@ -2096,6 +2096,46 @@ func TestBuildCreateTableLikePersistsExpandedSQL(t *testing.T) {
 	require.Contains(t, strings.ToUpper(persisted), "TINYTEXT")
 }
 
+func TestBuildCreateTableLikeAndCloneRejectsSequenceSource(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	const sequenceSQL = "CREATE SEQUENCE seq1 INCREMENT 2 START WITH 11 NO CYCLE"
+
+	sequenceStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sequenceSQL, 1)
+	require.NoError(t, err)
+	defer sequenceStmt.Free()
+	sequencePlan, err := BuildPlan(ctx, sequenceStmt, false)
+	require.NoError(t, err)
+
+	sequenceDef := DeepCopyTableDef(
+		sequencePlan.GetDdl().GetCreateSequence().GetTableDef(),
+		true,
+	)
+	sequenceDef.DbName = ctx.DefaultDatabase()
+	// The sequence builder stores relkind in the properties; catalog resolution
+	// exposes it as TableType on the resolved source definition.
+	sequenceDef.TableType = catalog.SystemSequenceRel
+	ctx.tables[sequenceDef.Name] = sequenceDef
+	ctx.objects[sequenceDef.Name] = &plan.ObjectRef{
+		SchemaName: ctx.DefaultDatabase(),
+		ObjName:    sequenceDef.Name,
+	}
+
+	for _, createSQL := range []string{
+		"CREATE TABLE dst_live CLONE seq1",
+		"CREATE TABLE dst_snapshot CLONE seq1 {SNAPSHOT = 'sp1'}",
+		"CREATE TABLE dst_like LIKE seq1",
+	} {
+		t.Run(createSQL, func(t *testing.T) {
+			createStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+			require.NoError(t, err)
+			defer createStmt.Free()
+
+			_, err = BuildPlan(ctx, createStmt, false)
+			require.ErrorContains(t, err, "tpch.seq1 is not BASE TABLE")
+		})
+	}
+}
+
 func TestBuildPartitionedTablePersistsCanonicalSingleStatementSQL(t *testing.T) {
 	const rootSQL = "/* before */ CREATE TABLE partitioned_t (category VARCHAR(20)) PARTITION BY LIST COLUMNS (category) (PARTITION p0 VALUES IN ('A'));"
 	ctx := &rootSQLCompilerContext{
