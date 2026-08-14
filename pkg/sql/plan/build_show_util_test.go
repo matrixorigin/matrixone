@@ -160,6 +160,16 @@ func Test_buildTestShowCreateTable(t *testing.T) {
 			sql:  `CREATE TABLE t_expr_default (id INT, c VARCHAR(10) DEFAULT (concat('x','y')), s VARCHAR(10) DEFAULT 'plain')`,
 			want: "CREATE TABLE `t_expr_default` (\n  `id` int DEFAULT NULL,\n  `c` varchar(10) DEFAULT (concat('x', 'y')),\n  `s` varchar(10) DEFAULT 'plain'\n)",
 		},
+		{
+			name: "expression default preserves quoted function arguments",
+			sql:  `CREATE TABLE t_sequence_default (id BIGINT DEFAULT nextval('seq'), v VARCHAR(20))`,
+			want: "CREATE TABLE `t_sequence_default` (\n  `id` bigint DEFAULT nextval('seq'),\n  `v` varchar(20) DEFAULT NULL\n)",
+		},
+		{
+			name: "literal default remains formatted",
+			sql:  `CREATE TABLE t_literal_default (id BIGINT DEFAULT 42)`,
+			want: "CREATE TABLE `t_literal_default` (\n  `id` bigint DEFAULT 42\n)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

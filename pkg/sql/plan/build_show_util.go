@@ -189,7 +189,7 @@ func constructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString, col.Default.Expr))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -1470,10 +1470,16 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
-func formatDefaultExpr(expr string) string {
+// formatDefaultExpr escapes literal defaults for the generated CREATE TABLE
+// statement. Non-literal defaults already contain SQL syntax in OriginString,
+// so escaping their quotes as string contents would corrupt the expression.
+func formatDefaultExpr(expr string, defaultExpr *plan.Expr) string {
 	trimmed := strings.TrimSpace(expr)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
+	}
+	if defaultExpr != nil && defaultExpr.GetLit() == nil {
+		return expr
 	}
 	return formatStr(expr)
 }

@@ -270,6 +270,9 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
+	// siriusRead is the single terminal owner for a hinted offload. It remains
+	// nil for every native statement.
+	siriusRead *siriusReadOwner
 
 	pn *plan.Plan
 
