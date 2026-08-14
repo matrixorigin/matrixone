@@ -419,6 +419,39 @@ func TestBuildTable_AlterView(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := NewMockCompilerContext2(ctrl)
+	snapshot := &Snapshot{ExtraInfo: &plan.SnapshotExtraInfo{
+		Name: "snapshot", Level: tree.SNAPSHOTLEVELTABLE.String(), ObjId: 1,
+	}}
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1))
+	ctx.EXPECT().GetSnapshot().Return(nil)
+	ctx.EXPECT().ResolveSnapshotWithSnapshotName("snapshot").Return(snapshot, nil)
+	ctx.EXPECT().DatabaseExists("db", snapshot).Return(true)
+	ctx.EXPECT().GetSubscriptionMeta("db", snapshot).Return(nil, nil)
+	ctx.EXPECT().Resolve("db", "other_table", snapshot).Return(
+		&plan.ObjectRef{SchemaName: "db", ObjName: "other_table"},
+		&plan.TableDef{DbId: 1, TblId: 2},
+		nil,
+	)
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	bindCtx.snapshot = snapshot
+	table := &tree.TableName{}
+	table.SchemaName = "db"
+	table.ObjectName = "other_table"
+	table.AtTsExpr = &tree.AtTimeStamp{
+		Type: tree.ATTIMESTAMPSNAPSHOT,
+		Expr: tree.NewNumVal("snapshot", "snapshot", false, tree.P_char),
+	}
+	_, err := builder.buildTable(table, bindCtx, nil)
+	require.EqualError(t, err, "internal error: table-level snapshot(snapshot) does not belong to the table(db-other_table)")
+}
+
 func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
 	sqlMode := "PIPES_AS_CONCAT"
 	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
@@ -2491,10 +2524,14 @@ func TestQueryBuilder_bindProjection(t *testing.T) {
 
 // genBuilderAndCtxWithColumnType creates a builder and context with a column of specified type
 func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder, *BindContext) {
+	typesType := typ.ToType()
+	return genBuilderAndCtxWithColumnTypesType(typesType, colName)
+}
+
+func genBuilderAndCtxWithColumnTypesType(typesType types.Type, colName string) (*QueryBuilder, *BindContext) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 	bindCtx := NewBindContext(builder, nil)
 
-	typesType := typ.ToType()
 	plan2Type := makePlan2Type(&typesType)
 	bind := &Binding{
 		tag:            1,
@@ -2515,6 +2552,237 @@ func genBuilderAndCtxWithColumnType(typ types.T, colName string) (*QueryBuilder,
 	bindCtx.bindingByCol[colName] = bind
 	bindCtx.bindingByTag[bind.tag] = bind
 	return builder, bindCtx
+}
+
+func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.T) {
+	tests := []struct {
+		name      string
+		inputType types.Type
+		wantScale int32
+	}{
+		{
+			name:      "timestamp6",
+			inputType: types.T_timestamp.ToTypeWithScale(6),
+			wantScale: 6,
+		},
+		{
+			name:      "datetime6",
+			inputType: types.T_datetime.ToTypeWithScale(6),
+			wantScale: 6,
+		},
+		{
+			name:      "varchar",
+			inputType: types.T_varchar.ToType(),
+			wantScale: 6,
+		},
+		{
+			name:      "datetime0",
+			inputType: types.T_datetime.ToType(),
+			wantScale: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnTypesType(tt.inputType, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: "second",
+				},
+			}
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+
+			truncateExpr, err := projectionBinder.BindExpr(helpFunc.truncate, 0, true)
+			require.NoError(t, err)
+
+			truncateFunc := truncateExpr.GetF()
+			require.NotNil(t, truncateFunc)
+			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
+			require.Len(t, truncateFunc.Args, 3)
+
+			castExpr := truncateFunc.Args[0]
+			castFunc := castExpr.GetF()
+			require.NotNil(t, castFunc)
+			require.Equal(t, "cast", castFunc.GetFunc().GetObjName())
+			require.Len(t, castFunc.Args, 2)
+			require.Equal(t, int32(types.T_datetime), castExpr.Typ.Id)
+			require.Equal(t, tt.wantScale, castExpr.Typ.Scale)
+			require.Equal(t, int32(types.T_datetime), castFunc.Args[1].Typ.Id)
+			require.Equal(t, tt.wantScale, castFunc.Args[1].Typ.Scale)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *testing.T) {
+	tests := []struct {
+		name         string
+		intervalUnit string
+		slidingUnit  string
+	}{
+		{
+			name:         "interval month",
+			intervalUnit: "month",
+		},
+		{
+			name:         "interval week",
+			intervalUnit: "week",
+		},
+		{
+			name:         "interval year",
+			intervalUnit: "year",
+		},
+		{
+			name:         "interval quarter",
+			intervalUnit: "quarter",
+		},
+		{
+			name:         "sliding month",
+			intervalUnit: "second",
+			slidingUnit:  "month",
+		},
+		{
+			name:         "sliding week",
+			intervalUnit: "day",
+			slidingUnit:  "week",
+		},
+		{
+			name:         "sliding year",
+			intervalUnit: "hour",
+			slidingUnit:  "year",
+		},
+		{
+			name:         "sliding quarter",
+			intervalUnit: "minute",
+			slidingUnit:  "quarter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.intervalUnit,
+				},
+			}
+			if tt.slidingUnit != "" {
+				astTimeWindow.Sliding = &tree.Sliding{
+					Val:  tree.NewNumVal(int64(1), "1", false, tree.P_int64),
+					Unit: tt.slidingUnit,
+				}
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+			require.ErrorContains(t, err, unsupportedTimeWindowIntervalUnit)
+		})
+	}
+}
+
+func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *testing.T) {
+	tests := []struct {
+		name          string
+		intervalValue int64
+		slidingValue  *int64
+		errorContains string
+	}{
+		{
+			name:          "zero interval",
+			intervalValue: 0,
+			errorContains: timeWindowIntervalMustBePositive,
+		},
+		{
+			name:          "negative interval",
+			intervalValue: -1,
+			errorContains: timeWindowIntervalMustBePositive,
+		},
+		{
+			name:          "zero sliding",
+			intervalValue: 5,
+			slidingValue:  ptrTo[int64](0),
+			errorContains: timeWindowSlidingMustBePositive,
+		},
+		{
+			name:          "negative sliding",
+			intervalValue: 5,
+			slidingValue:  ptrTo[int64](-1),
+			errorContains: timeWindowSlidingMustBePositive,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_timestamp, "ts")
+			havingBinder := NewHavingBinder(builder, bindCtx)
+			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+
+			astTimeWindow := &tree.TimeWindow{
+				Interval: &tree.Interval{
+					Col:  tree.NewUnresolvedName(tree.NewCStr("ts", 0)),
+					Val:  tree.NewNumVal(tt.intervalValue, fmt.Sprintf("%d", tt.intervalValue), false, tree.P_int64),
+					Unit: "minute",
+				},
+			}
+			if tt.slidingValue != nil {
+				astTimeWindow.Sliding = &tree.Sliding{
+					Val:  tree.NewNumVal(*tt.slidingValue, fmt.Sprintf("%d", *tt.slidingValue), false, tree.P_int64),
+					Unit: "minute",
+				}
+			}
+
+			helpFunc, err := makeHelpFuncForTimeWindow(astTimeWindow)
+			require.NoError(t, err)
+			timeWindowGroup := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_datetime)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{RelPos: 1, ColPos: 0},
+				},
+			}
+
+			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+				bindCtx,
+				projectionBinder,
+				astTimeWindow,
+				timeWindowGroup,
+				helpFunc,
+			)
+			require.ErrorContains(t, err, tt.errorContains)
+		})
+	}
+}
+
+func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
+	err := validateTimeWindowIntervalUnit(context.Background(), "century")
+	require.ErrorContains(t, err, "invalid interval type 'century'")
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
 }
 
 func TestQueryBuilder_bindTimeWindow(t *testing.T) {

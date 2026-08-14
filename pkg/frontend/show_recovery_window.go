@@ -419,8 +419,8 @@ func searchTables(
 		}
 
 		searchSQL = fmt.Sprintf(
-			"select reldatabase, relname from `%s`.`%s` {SNAPSHOT = '%s'} where %s",
-			catalog.MO_CATALOG, catalog.MO_TABLES, snap.snapshotName,
+			"select reldatabase, relname from `%s`.`%s` {MO_TS = %d} where %s",
+			catalog.MO_CATALOG, catalog.MO_TABLES, snap.ts,
 			searchCondA+searchCondB+searchCondC,
 		)
 

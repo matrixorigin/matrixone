@@ -187,6 +187,34 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	// Cancel at the second polling interval, after the running aggregate has
+	// accumulated state, to exercise the mid-chunk cleanup path.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -228,6 +256,30 @@ func makeCurrentRowFrame() *plan.FrameClause {
 		Type:  plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makeCumulativeFrame() *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makeFiniteCumulativeFrame(preceding uint64) *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_U64Val{U64Val: preceding},
+			}}},
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 	}
 }
 
@@ -491,6 +543,38 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparedCumulativeBoundUsesRuntimeValue(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, 0),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("2147483647"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, cumulativeRowsFrame(arg.ctr.runtimeFrames[0], nil, bat.RowCount()))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 30, 60, 100},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -588,6 +672,38 @@ func TestBuildRowsIntervalSaturatesLargeOffsets(t *testing.T) {
 			start, end := ctr.buildRowsInterval(12, 10, 15, testCase.frame)
 			require.Equal(t, testCase.wantStart, start)
 			require.Equal(t, testCase.wantEnd, end)
+		})
+	}
+}
+
+func TestCumulativeRowsFrameEligibility(t *testing.T) {
+	tests := []struct {
+		name       string
+		frame      *plan.FrameClause
+		partitions []int64
+		rows       int
+		want       bool
+	}{
+		{name: "unbounded", frame: makeCumulativeFrame(), rows: 4, want: true},
+		{name: "finite covers partition", frame: makeFiniteCumulativeFrame(3), rows: 4, want: true},
+		{name: "finite shorter than partition", frame: makeFiniteCumulativeFrame(2), rows: 4},
+		{name: "finite covers largest partition", frame: makeFiniteCumulativeFrame(2), partitions: []int64{0, 3, 5}, rows: 7, want: true},
+		{name: "finite shorter than one partition", frame: makeFiniteCumulativeFrame(1), partitions: []int64{0, 3, 5}, rows: 7},
+		{name: "current row start", frame: makeCurrentRowFrame(), rows: 4},
+		{name: "following end", frame: makeFullFrame(), rows: 4},
+		{name: "range frame", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}, rows: 4},
+		{name: "invalid partitions", frame: makeFiniteCumulativeFrame(10), partitions: []int64{1}, rows: 4},
+		{name: "empty partition", frame: makeFiniteCumulativeFrame(10), partitions: []int64{0, 0}, rows: 4},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				cumulativeRowsFrame(test.frame, test.partitions, test.rows))
 		})
 	}
 }
@@ -698,8 +814,10 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := makeKeyValBatch(proc.Mp(), []string{"k1", "k2", "k3"}, nil, []int32{10, 20, 30})
 
+	spec := makeAggWindowSpec("json_objectagg")
+	spec.GetW().Frame = makeCumulativeFrame()
 	arg := &Window{
-		WinSpecList: []*plan.Expr{makeAggWindowSpec("json_objectagg")},
+		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{jsonObjectAggColExpr(t, 0, 1)},
 		OperatorBase: vm.OperatorBase{
 			OperatorInfo: vm.OperatorInfo{Idx: 0},
@@ -715,11 +833,17 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 
 	resVec := result.Batch.Vecs[len(result.Batch.Vecs)-1]
 	require.Equal(t, 3, resVec.Length())
-	// Full frame over a single partition: every row aggregates the whole partition.
-	want := `{"k1": 10, "k2": 20, "k3": 30}`
-	for i := 0; i < resVec.Length(); i++ {
-		require.Equal(t, want, types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	// JSON aggregate Merge may consume its source state, so it must retain the
+	// ordinary frame evaluator instead of entering the SUM/AVG cumulative path.
+	want := []string{
+		`{"k1": 10}`,
+		`{"k1": 10, "k2": 20}`,
+		`{"k1": 10, "k2": 20, "k3": 30}`,
 	}
+	for i := 0; i < resVec.Length(); i++ {
+		require.Equal(t, want[i], types.DecodeJson(resVec.GetBytesAt(i)).String(), "row %d", i)
+	}
+	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -779,9 +903,8 @@ func collectFixedWindowColumn[T types.FixedSizeT](
 	}
 }
 
-// TestWindowAggResultAcrossChunks verifies that Window exposes one logical
-// result as bounded output batches. CURRENT ROW keeps the test O(n) while the
-// input crosses AggBatchSize.
+// TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
+// its running state across bounded output batches.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -798,7 +921,7 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	second.SetRowCount(rows - split)
 
 	spec := makeWindowSpec()
-	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCumulativeFrame()
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
@@ -813,8 +936,10 @@ func TestWindowAggResultAcrossChunks(t *testing.T) {
 	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+		want := int64(idx+1) * int64(idx+2) / 2
+		require.Equal(t, want, resultValues[idx], "row %d", idx)
 	}
+	require.Nil(t, arg.ctr.runningAgg)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1191,6 +1316,18 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestNtileBucketCountRejectsNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bucketVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
+	defer bucketVec.Free(mp)
+
+	ctr := container{
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}},
+	}
+	_, err := ctr.ntileBucketCount(0)
+	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
+}
+
 func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize * 2
@@ -1203,7 +1340,7 @@ func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	bat.SetRowCount(rows)
 
 	spec := makeWindowSpec()
-	spec.Expr.(*plan.Expr_W).W.Frame = makeCurrentRowFrame()
+	spec.Expr.(*plan.Expr_W).W.Frame = makeCumulativeFrame()
 	arg := &Window{
 		WinSpecList: []*plan.Expr{spec},
 		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
@@ -1221,13 +1358,70 @@ func TestWindowResetBeforeAllChunksReleasesState(t *testing.T) {
 	require.Equal(t, colexec.DefaultBatchSize, arg.ctr.emitOffset)
 	require.Equal(t, emit, arg.ctr.status)
 	require.Nil(t, arg.ctr.batAggs)
+	require.NotNil(t, arg.ctr.runningAgg)
 
 	// Model LIMIT stopping the pipeline after the first output chunk.
 	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runningAgg)
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 10, 20})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 2},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 10, 30},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.Nil(t, ctr.runningAgg)
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 3}, []uint64{1}, proc.Mp())
+	bat.SetRowCount(3)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 4},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	require.False(t, result.HasNull())
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestWindowOrdersPartitionedInput(t *testing.T) {
@@ -1276,6 +1470,53 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 2}, nil, proc.Mp())
+	// Deliberately reuse the same order values in both groups. Without the
+	// partition-key prefix this would look like one peer stream.
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	second.SetRowCount(2)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, arg.Fs, 2)
+	require.Len(t, arg.ctr.orderVecs, 2)
+	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestWindowOrderHonorsCancellation(t *testing.T) {

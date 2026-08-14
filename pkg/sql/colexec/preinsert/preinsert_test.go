@@ -103,6 +103,32 @@ func TestPreInsertNormal(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+func TestTargetSelectedRows(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_Rowid.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 2, 1, 1}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []bool{true, true, false, true}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[2], []types.Rowid{{1}, {2}, {3}, {4}}, nil, proc.Mp()))
+	bat.Vecs[0].GetNulls().Add(3)
+	bat.Vecs[2].GetNulls().Add(1)
+	bat.SetRowCount(4)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+
+	preInsert := &PreInsert{
+		HasTargetSelector: true, TargetRowNumberCol: 0, TargetActiveCol: 1, TargetRowIDCol: 2,
+	}
+	selected, err := preInsert.targetSelectedRows(proc, bat)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, selected)
+
+	preInsert.TargetActiveCol = 3
+	_, err = preInsert.targetSelectedRows(proc, bat)
+	require.ErrorContains(t, err, "invalid pre-insert target selector columns")
+}
+
 func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()

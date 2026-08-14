@@ -137,12 +137,13 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 	}
 }
 
-func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
+func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	typesToEncode := []types.Type{
 		types.New(types.T_char, 8, 0),
 		types.New(types.T_varchar, 128, 0),
 		types.New(types.T_text, 0, 0),
+		types.New(types.T_text, types.MaxTinyTextLen, 0),
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 128, 0),
 		types.New(types.T_blob, 0, 0),
@@ -155,21 +156,40 @@ func TestBuiltInInternalCharSizeUsesEncodedWidth(t *testing.T) {
 		encoded[i] = string(data)
 	}
 
-	tc := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+	for _, test := range []struct {
+		name   string
+		fn     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		values []int64
+	}{
+		{
+			name:   "maximum character length",
+			fn:     builtInInternalCharLength,
+			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
 		},
-		NewFunctionTestResult(
-			types.T_int64.ToType(),
-			false,
-			[]int64{32, 512, 0, 8, 128, 0, 0},
-			[]bool{false, false, false, false, false, false, true},
-		),
-		builtInInternalCharSize,
-	)
-	ok, info := tc.Run()
-	require.True(t, ok, info)
+		{
+			name:   "maximum octet length",
+			fn:     builtInInternalCharSize,
+			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), encoded, nil),
+				},
+				NewFunctionTestResult(
+					types.T_int64.ToType(),
+					false,
+					test.values,
+					[]bool{false, false, false, false, false, false, false, true},
+				),
+				test.fn,
+			)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestBuiltInNameConst(t *testing.T) {
@@ -1144,6 +1164,41 @@ func Test_BuiltIn_Serial(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	parameters := []*vector.Vector{
+		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{-1, 0, 42}, nil),
+		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "b\x00c", "世界"}, nil),
+	}
+	for _, parameter := range parameters {
+		defer parameter.Free(proc.Mp())
+	}
+
+	serialResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialResult.Free()
+	serialFullResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer serialFullResult.Free()
+	require.NoError(t, serialResult.PreExtendAndReset(3))
+	require.NoError(t, serialFullResult.PreExtendAndReset(3))
+
+	serialOp := newOpSerial()
+	defer serialOp.Close()
+	serialFullOp := newOpSerial()
+	defer serialFullOp.Close()
+	require.NoError(t, serialOp.BuiltInSerial(parameters, serialResult, proc, 3, nil))
+	require.NoError(t, serialFullOp.BuiltInSerialFull(parameters, serialFullResult, proc, 3, nil))
+
+	for row := 0; row < 3; row++ {
+		require.False(t, serialResult.GetResultVector().IsNull(uint64(row)))
+		require.False(t, serialFullResult.GetResultVector().IsNull(uint64(row)))
+		require.Equal(t,
+			serialResult.GetResultVector().GetBytesAt(row),
+			serialFullResult.GetResultVector().GetBytesAt(row),
+			"non-NULL comparison bounds must be byte-compatible with stored keys",
+		)
+	}
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {

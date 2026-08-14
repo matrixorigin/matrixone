@@ -94,6 +94,11 @@ func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.
 			if err := exec.copyWinner(x, state.vecs, int(y), vectors, rows); err != nil {
 				return err
 			}
+		} else if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) &&
+			vectors[0].GetBinaryStringMetadataAt(rows[0]) {
+			if err := state.vecs[0].SetIsBinaryStringAt(int(y), true, exec.mp); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -124,6 +129,11 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
+		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) &&
+			candidate[0].GetBinaryStringMetadataAt(rows[0]) {
+			if err := current[0].SetIsBinaryStringAt(int(y1), true, exec.mp); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -140,6 +150,12 @@ func candidateWins(candidate []*vector.Vector, candidateRows [3]int, current []*
 	// final deterministic fallback so partial aggregation merge order cannot
 	// change the result when it is not.
 	return compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) > 0
+}
+
+func candidateEquals(candidate []*vector.Vector, candidateRows [3]int, current []*vector.Vector, currentRow int, typs []types.Type) bool {
+	return compareVectorValue(candidate[1], candidateRows[1], current[1], currentRow, typs[1]) == 0 &&
+		compareNullableVectorValue(candidate[2], candidateRows[2], current[2], currentRow, typs[2]) == 0 &&
+		compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) == 0
 }
 
 func compareNullableVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ types.Type) int {
@@ -274,15 +290,15 @@ func (exec *maxByExec) copyWinner(
 			dst[i].SetNull(uint64(dstRow))
 			continue
 		}
-		if err := dst[i].SetRawBytesAt(dstRow, src[i].GetRawBytesAt(srcRows[i]), exec.mp); err != nil {
-			return err
-		}
-		dst[i].UnsetNull(uint64(dstRow))
 		if i == 0 {
-			if err := dst[i].SetPrepareParamKindAtWithMP(
-				dstRow, src[i].GetPrepareParamKindAt(srcRows[i]), exec.mp); err != nil {
+			if err := dst[i].SetRawBytesAtFromAndUnsetNull(dstRow, src[i], srcRows[i], exec.mp); err != nil {
 				return err
 			}
+		} else {
+			if err := dst[i].SetRawBytesAtFrom(dstRow, src[i], srcRows[i], exec.mp); err != nil {
+				return err
+			}
+			dst[i].UnsetNull(uint64(dstRow))
 		}
 	}
 	for i, vec := range dst {

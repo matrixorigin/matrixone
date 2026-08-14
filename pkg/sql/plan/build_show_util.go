@@ -184,7 +184,7 @@ func constructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString, col.Default.Expr))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -251,8 +251,12 @@ func constructCreateTableSQL(
 			}
 
 			var indexStr string
-			if !indexdef.Unique && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-				indexStr += " FULLTEXT "
+			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
+				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+					indexStr += " FULLTEXT2 "
+				} else {
+					indexStr += " FULLTEXT "
+				}
 
 				if len(indexdef.IndexName) > 0 {
 					indexStr += sqlquote.Ident(indexdef.IndexName)
@@ -274,6 +278,16 @@ func constructCreateTableSQL(
 
 				indexStr += ")"
 
+				// INCLUDE columns: render so SHOW CREATE round-trips — a rebuild from
+				// the clause-less DDL would silently drop the covering/prefilter columns.
+				// Uses the same helper as the vector-index branch below (INCLUDE is an
+				// order-flexible index_option, so it may precede WITH PARSER).
+				includedColumns, incErr := indexDefIncludedColumns(indexdef)
+				if incErr != nil {
+					return "", nil, incErr
+				}
+				indexStr += indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
 					// ignore err != nil --> value not found
@@ -289,20 +303,32 @@ func constructCreateTableSQL(
 						}
 					}
 
-					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
-					// ignore err != nil --> value not found
-					if err == nil {
-						async, err := val.StrictString()
+					if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+						// fulltext2 carries persisted build options (position_free,
+						// max_index_capacity, max_postings_capacity) plus async / cron
+						// scheduling. Render the FULL set via the shared list so SHOW CREATE
+						// round-trips — a rebuild from parser-only DDL would silently drop
+						// POSITION_FREE and the capacities and build a different index.
+						paramStr, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 						if err != nil {
-							// value exists but not string type
 							return "", nil, err
 						}
+						indexStr += paramStr
+					} else {
+						val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
+						// ignore err != nil --> value not found
+						if err == nil {
+							async, err := val.StrictString()
+							if err != nil {
+								// value exists but not string type
+								return "", nil, err
+							}
 
-						if async == "true" {
-							indexStr += " ASYNC"
+							if async == "true" {
+								indexStr += " ASYNC"
+							}
 						}
 					}
-
 				}
 
 			} else {
@@ -1445,10 +1471,16 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
-func formatDefaultExpr(expr string) string {
+// formatDefaultExpr escapes literal defaults for the generated CREATE TABLE
+// statement. Non-literal defaults already contain SQL syntax in OriginString,
+// so escaping their quotes as string contents would corrupt the expression.
+func formatDefaultExpr(expr string, defaultExpr *plan.Expr) string {
 	trimmed := strings.TrimSpace(expr)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
+	}
+	if defaultExpr != nil && defaultExpr.GetLit() == nil {
+		return expr
 	}
 	return formatStr(expr)
 }

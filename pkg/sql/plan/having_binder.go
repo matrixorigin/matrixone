@@ -221,7 +221,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
 		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
 	} else {
-		expr, err = b.bindPreparedNumericAggregateFuncExpr(funcName, astExpr.Exprs, depth)
+		expr, err = b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
 	}
 	if err != nil {
 		b.insideAgg = false
@@ -444,6 +444,19 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		expr.Typ.Scale = fGet.GetReturnType().Scale
 	}
 	return expr, nil
+}
+
+func needsTimeWindowResultAggRemap(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	funcId, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	switch funcId {
+	case function.MAX_BY, function.MAX_BY_NON_NULL:
+		return true
+	default:
+		return false
+	}
 }
 
 func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
@@ -711,7 +724,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	// be reused.
 	outerFn.AggConfig = nil
 	outerFn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
-	if b.ctx.sliding {
+	if b.ctx.sliding || needsTimeWindowResultAggRemap(expr) {
 		expr, err = b.remapAggToTimeWindowResultAgg(expr)
 		if err != nil {
 			return nil, err

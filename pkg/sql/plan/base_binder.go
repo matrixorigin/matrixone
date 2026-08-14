@@ -2539,22 +2539,35 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
 
-// bindPreparedNumericAggregateFuncExpr gives prepared SUM/AVG arguments the
-// same static numeric context as prepared arithmetic. ParamRef remains TEXT for
-// transport and an explicit cast materializes the inferred computation type.
+func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
+	if isPreparedNumericAggregate(name, argCount) {
+		return nil, true
+	}
+	if argCount == 1 && strings.EqualFold(name, "ntile") {
+		typ := types.T_int64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	return nil, false
+}
+
+// bindPreparedNumericFuncExpr gives prepared numeric function arguments the
+// same static context as prepared arithmetic. SUM/AVG use the inferred numeric
+// domain, while NTILE requires an integer domain. ParamRef remains TEXT for
+// transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
-// SUM/AVG over string columns continues to be rejected by aggregate overload
-// resolution.
-func (b *baseBinder) bindPreparedNumericAggregateFuncExpr(
+// string inputs continue to be rejected by function overload resolution.
+func (b *baseBinder) bindPreparedNumericFuncExpr(
 	name string,
 	astArgs []tree.Expr,
 	depth int32,
 ) (*plan.Expr, error) {
-	if b.builder == nil || !b.builder.isPrepareStatement || !isPreparedNumericAggregate(name, len(astArgs)) {
+	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
+	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
 
-	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, nil)
+	arg, err := b.bindNumericExprWithContext(astArgs[0], depth, target)
 	if err != nil {
 		return nil, err
 	}
@@ -3291,10 +3304,20 @@ between_fallback:
 }
 
 // validateNthValueArgs enforces MySQL's bind-time contract for NTH_VALUE:
-// the offset must be a constant positive integer. Folding first keeps valid
-// constant expressions, such as 1 + 1, compatible with MySQL.
+// the offset must be a constant positive integer or a positional parameter.
+// Folding first keeps valid constant expressions, such as 1 + 1, compatible
+// with MySQL.
 func validateNthValueArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
-	if len(args) != 2 || proc == nil {
+	if len(args) != 2 {
+		return moerr.NewWrongArguments(ctx, "nth_value")
+	}
+
+	if isDirectDynamicParam(args[1]) {
+		// Keep the marker intact so execution can validate both its source type
+		// and its value after binding.
+		return nil
+	}
+	if proc == nil {
 		return moerr.NewWrongArguments(ctx, "nth_value")
 	}
 
@@ -3515,9 +3538,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-			Id: int32(types.T_datetime),
-		})
+		sourceType := makeTypeByPlan2Expr(args[0])
+		targetType := types.T_datetime.ToType()
+		function.SetTargetScaleFromSource(&sourceType, &targetType)
+		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
 		if err != nil {
 			return nil, err
 		}

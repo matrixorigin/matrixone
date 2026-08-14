@@ -19,15 +19,17 @@ package substrait
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	spb "github.com/substrait-io/substrait-protobuf/go/substraitpb"
 	"github.com/substrait-io/substrait-protobuf/go/substraitpb/extensions"
 	"google.golang.org/protobuf/proto"
@@ -38,6 +40,9 @@ const (
 	Version        = "0.78.0"
 	TaeReadTypeURL = "type.googleapis.com/matrixone.sirius.v1.TaeRead"
 	MaxPlanBytes   = 16 << 20
+	// Bound the materialization of optimizer-folded IN lists before allocating
+	// one Substrait expression per member.
+	maxLiteralVectorValues = 1 << 16
 )
 
 // Candidate is a fully validated logical plan with unresolved storage reads.
@@ -46,6 +51,7 @@ type Candidate struct {
 	query    *planpb.Query
 	reads    []Read
 	headings []string
+	types    []planpb.Type
 }
 
 // Read identifies one physical table scan which needs a TaeRead lease.
@@ -78,20 +84,52 @@ func (c *Candidate) Reads() []Read {
 	return result
 }
 
+// OutputTypes returns the MatrixOne result contract corresponding to the
+// Substrait root names. Transport decoding uses it to restore MO physical
+// representations (notably DATE and unsigned EXTRACT results).
+func (c *Candidate) OutputTypes() []planpb.Type {
+	if c == nil {
+		return nil
+	}
+	return append([]planpb.Type(nil), c.types...)
+}
+
 // Export validates q without performing I/O.
 func Export(q *planpb.Query) (*Candidate, error) {
 	if q == nil {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: missing query")
 	}
-	if q.StmtType != planpb.Query_SELECT || len(q.Steps) != 1 || len(q.BackgroundQueries) != 0 {
-		return nil, notEligiblef(EligibilityPlanShape, "exactly one SELECT query root is required")
+	if q.StmtType != planpb.Query_SELECT || len(q.Steps) == 0 || len(q.BackgroundQueries) != 0 {
+		return nil, notEligiblef(EligibilityPlanShape, "a SELECT query root is required")
+	}
+	// Adaptive rank selection inspects the complete MO node array, including
+	// nodes outside the final reachable tree. Reject it at the same whole-plan
+	// boundary instead of letting export silently bypass that compile decision.
+	for nodeID, node := range q.Nodes {
+		if node != nil && node.RankOption != nil {
+			return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported rank semantics", nodeID)
+		}
 	}
 	c := &Candidate{query: q}
 	e := exporter{query: q, readValues: make(map[int32][]byte), validateOnly: true}
-	if _, err := e.node(q.Steps[0]); err != nil {
-		return nil, err
+	for step, rootID := range q.Steps {
+		if rootID < 0 || int(rootID) >= len(q.Nodes) {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid root node id %d at step %d", rootID, step)
+		}
+		e.stepOrdinal = int32(step)
+		root := q.Nodes[rootID]
+		if step < len(q.Steps)-1 && (root == nil || root.NodeType != planpb.Node_SINK) {
+			return nil, notEligiblef(EligibilityPlanShape, "step %d is not a shared sink producer", step)
+		}
+		if step == len(q.Steps)-1 && root != nil && root.NodeType == planpb.Node_SINK {
+			return nil, notEligiblef(EligibilityPlanShape, "the final SELECT step cannot be a sink")
+		}
+		if _, err := e.node(rootID); err != nil {
+			return nil, err
+		}
 	}
-	width, err := e.nodeWidth(q.Steps[0])
+	finalID := q.Steps[len(q.Steps)-1]
+	width, err := e.nodeWidth(finalID)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +138,13 @@ func Export(q *planpb.Query) (*Candidate, error) {
 	}
 	c.reads = e.reads
 	c.headings = append([]string(nil), q.Headings...)
+	c.types, err = e.outputTypes(finalID)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.types) != width {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: query root has %d output types for %d columns", len(c.types), width)
+	}
 	return c, nil
 }
 
@@ -109,13 +154,22 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil candidate")
 	}
 	e := exporter{query: c.query, readValues: readValues}
-	root, err := e.node(c.query.Steps[0])
-	if err != nil {
-		return nil, err
+	relations := make([]*spb.PlanRel, 0, len(c.query.Steps))
+	for step, rootID := range c.query.Steps {
+		e.stepOrdinal = int32(step)
+		relation, err := e.node(rootID)
+		if err != nil {
+			return nil, err
+		}
+		if step < len(c.query.Steps)-1 {
+			relations = append(relations, &spb.PlanRel{RelType: &spb.PlanRel_Rel{Rel: relation}})
+		} else {
+			relations = append(relations, &spb.PlanRel{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: relation, Names: append([]string(nil), c.headings...)}}})
+		}
 	}
 	p := &spb.Plan{
 		Version:          &spb.Version{MajorNumber: 0, MinorNumber: 78, PatchNumber: 0, Producer: "matrixone"},
-		Relations:        []*spb.PlanRel{{RelType: &spb.PlanRel_Root{Root: &spb.RelRoot{Input: root, Names: append([]string(nil), c.headings...)}}}},
+		Relations:        relations,
 		ExpectedTypeUrls: []string{TaeReadTypeURL},
 		Extensions:       e.extensions(),
 	}
@@ -136,6 +190,8 @@ type exporter struct {
 	functions    map[string]uint32
 	validateOnly bool
 	visiting     map[int32]bool
+	readSeen     map[int32]bool
+	stepOrdinal  int32
 }
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
@@ -154,56 +210,47 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	if n == nil || n.NodeId != id {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d is missing or misindexed", id)
 	}
+	if n.NodeType != planpb.Node_SORT && len(n.OrderBy) != 0 {
+		return nil, notEligiblef(EligibilityOperator, "node %d carries sort semantics outside a SORT node", id)
+	}
 	var rel *spb.Rel
 	var err error
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
 	case planpb.Node_FILTER:
-		var input *spb.Rel
-		input, err = e.unary(n)
+		rel, err = e.unary(n)
 		if err == nil {
-			var inputWidth int
-			inputWidth, err = e.nodeWidth(n.Children[0])
-			if err == nil {
-				err = validateExprFields(n.FilterList, inputWidth)
-			}
-		}
-		if err == nil {
-			var condition *spb.Expression
-			condition, err = e.conjunction(n.FilterList)
-			if err == nil {
-				rel = &spb.Rel{RelType: &spb.Rel_Filter{Filter: &spb.FilterRel{Input: input, Condition: condition}}}
+			inputWidth, widthErr := e.nodeWidth(n.Children[0])
+			if widthErr != nil {
+				err = widthErr
+			} else {
+				rel, err = e.applyFilter(rel, n.FilterList, []int{inputWidth})
+				if err == nil {
+					rel, err = e.applyProject(rel, inputWidth, n.ProjectList, []int{inputWidth})
+				}
 			}
 		}
 	case planpb.Node_PROJECT:
-		var input *spb.Rel
-		input, err = e.unary(n)
+		rel, err = e.unary(n)
 		if err == nil {
-			var inputWidth int
-			inputWidth, err = e.nodeWidth(n.Children[0])
-			if err == nil {
-				err = validateExprFields(n.ProjectList, inputWidth)
-			}
-			exprs := make([]*spb.Expression, len(n.ProjectList))
-			mapping := make([]int32, len(n.ProjectList))
-			if err == nil {
-				for i := range n.ProjectList {
-					exprs[i], err = e.expr(n.ProjectList[i])
-					if err != nil {
-						break
-					}
-					mapping[i] = int32(inputWidth + i)
-				}
-			}
-			if err == nil {
-				rel = &spb.Rel{RelType: &spb.Rel_Project{Project: &spb.ProjectRel{Common: &spb.RelCommon{EmitKind: &spb.RelCommon_Emit_{Emit: &spb.RelCommon_Emit{OutputMapping: mapping}}}, Input: input, Expressions: exprs}}}
+			inputWidth, widthErr := e.nodeWidth(n.Children[0])
+			if widthErr != nil {
+				err = widthErr
+			} else {
+				rel, err = e.applyProject(rel, inputWidth, n.ProjectList, []int{inputWidth})
 			}
 		}
 	case planpb.Node_AGG:
 		rel, err = e.aggregate(n)
 	case planpb.Node_SORT:
 		rel, err = e.sort(n)
+	case planpb.Node_JOIN:
+		rel, err = e.join(n)
+	case planpb.Node_SINK:
+		rel, err = e.sink(n)
+	case planpb.Node_SINK_SCAN:
+		rel, err = e.sinkScan(n)
 	default:
 		return nil, notEligiblef(EligibilityOperator, "node %d uses unsupported operator %s", id, n.NodeType.String())
 	}
@@ -236,14 +283,134 @@ func (e *exporter) nodeWidth(id int32) (int, error) {
 	case planpb.Node_PROJECT:
 		return len(n.ProjectList), nil
 	case planpb.Node_AGG:
+		if len(n.ProjectList) > 0 {
+			return len(n.ProjectList), nil
+		}
 		return len(n.GroupBy) + len(n.AggList), nil
-	case planpb.Node_FILTER, planpb.Node_SORT:
+	case planpb.Node_JOIN:
+		if len(n.Children) != 2 {
+			return 0, notEligiblef(EligibilityOperator, "unsupported width for %s", n.NodeType.String())
+		}
+		if len(n.ProjectList) > 0 {
+			return len(n.ProjectList), nil
+		}
+		left, err := e.nodeWidth(n.Children[0])
+		if err != nil {
+			return 0, err
+		}
+		if (n.JoinType == planpb.Node_SEMI || n.JoinType == planpb.Node_ANTI) && !n.IsRightJoin {
+			return left, nil
+		}
+		right, err := e.nodeWidth(n.Children[1])
+		if err != nil {
+			return 0, err
+		}
+		if n.JoinType == planpb.Node_SEMI || n.JoinType == planpb.Node_ANTI {
+			return right, nil
+		}
+		return left + right, nil
+	case planpb.Node_FILTER, planpb.Node_SORT, planpb.Node_SINK:
 		if len(n.Children) != 1 {
 			return 0, moerr.NewInternalErrorNoCtxf("substrait: node %d requires one child", id)
 		}
+		if len(n.ProjectList) > 0 {
+			return len(n.ProjectList), nil
+		}
 		return e.nodeWidth(n.Children[0])
+	case planpb.Node_SINK_SCAN:
+		if len(n.ProjectList) > 0 {
+			return len(n.ProjectList), nil
+		}
+		if len(n.SourceStep) != 1 || n.SourceStep[0] < 0 || int(n.SourceStep[0]) >= len(e.query.Steps) {
+			return 0, moerr.NewInternalErrorNoCtxf("substrait: sink scan %d has malformed source metadata", id)
+		}
+		return e.nodeWidth(e.query.Steps[n.SourceStep[0]])
 	default:
 		return 0, notEligiblef(EligibilityOperator, "unsupported width for %s", n.NodeType.String())
+	}
+}
+
+func (e *exporter) outputTypes(id int32) ([]planpb.Type, error) {
+	if id < 0 || int(id) >= len(e.query.Nodes) || e.query.Nodes[id] == nil {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid node id %d", id)
+	}
+	n := e.query.Nodes[id]
+	if len(n.ProjectList) > 0 {
+		result := make([]planpb.Type, len(n.ProjectList))
+		for i, expression := range n.ProjectList {
+			if expression != nil {
+				result[i] = expression.Typ
+			}
+		}
+		return result, nil
+	}
+	if n.NodeType == planpb.Node_TABLE_SCAN && n.TableDef != nil {
+		result := make([]planpb.Type, 0, len(n.TableDef.Cols))
+		for _, column := range n.TableDef.Cols {
+			if column != nil && !column.Hidden {
+				result = append(result, column.Typ)
+			}
+		}
+		return result, nil
+	}
+	switch n.NodeType {
+	case planpb.Node_FILTER, planpb.Node_SORT, planpb.Node_SINK:
+		if len(n.Children) != 1 {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d requires one child", id)
+		}
+		return e.outputTypes(n.Children[0])
+	case planpb.Node_AGG:
+		result := make([]planpb.Type, 0, len(n.GroupBy)+len(n.AggList))
+		for _, expression := range n.GroupBy {
+			result = append(result, expression.Typ)
+		}
+		for _, expression := range n.AggList {
+			outputType := expression.Typ
+			if call := expression.GetF(); len(n.GroupBy) == 0 && call != nil && call.Func != nil {
+				functionID, _ := function.DecodeOverloadID(call.Func.Obj)
+				if aggregateCanReturnNullOnEmpty(functionID) {
+					outputType.NotNullable = false
+				}
+			}
+			result = append(result, outputType)
+		}
+		return result, nil
+	case planpb.Node_JOIN:
+		if len(n.Children) != 2 {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: join node %d requires two children", id)
+		}
+		left, err := e.outputTypes(n.Children[0])
+		if err != nil {
+			return nil, err
+		}
+		if (n.JoinType == planpb.Node_SEMI || n.JoinType == planpb.Node_ANTI) && !n.IsRightJoin {
+			return left, nil
+		}
+		right, err := e.outputTypes(n.Children[1])
+		if err != nil {
+			return nil, err
+		}
+		if n.JoinType == planpb.Node_SEMI || n.JoinType == planpb.Node_ANTI {
+			return right, nil
+		}
+		switch n.JoinType {
+		case planpb.Node_LEFT:
+			for i := range right {
+				right[i].NotNullable = false
+			}
+		case planpb.Node_RIGHT:
+			for i := range left {
+				left[i].NotNullable = false
+			}
+		}
+		return append(left, right...), nil
+	case planpb.Node_SINK_SCAN:
+		if len(n.SourceStep) != 1 || n.SourceStep[0] < 0 || int(n.SourceStep[0]) >= len(e.query.Steps) {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: sink scan %d has malformed source metadata", id)
+		}
+		return e.outputTypes(e.query.Steps[n.SourceStep[0]])
+	default:
+		return nil, notEligiblef(EligibilityOperator, "unsupported output types for %s", n.NodeType.String())
 	}
 }
 
@@ -254,12 +421,167 @@ func (e *exporter) unary(n *planpb.Node) (*spb.Rel, error) {
 	return e.node(n.Children[0])
 }
 
+func (e *exporter) applyFilter(input *spb.Rel, predicates []*planpb.Expr, inputs []int) (*spb.Rel, error) {
+	if len(predicates) == 0 {
+		return input, nil
+	}
+	if err := validateExprFields(predicates, inputs); err != nil {
+		return nil, err
+	}
+	condition, err := e.conjunction(predicates, inputs)
+	if err != nil {
+		return nil, err
+	}
+	return &spb.Rel{RelType: &spb.Rel_Filter{Filter: &spb.FilterRel{Input: input, Condition: condition}}}, nil
+}
+
+func (e *exporter) applyProject(input *spb.Rel, inputWidth int, expressions []*planpb.Expr, inputs []int) (*spb.Rel, error) {
+	if len(expressions) == 0 {
+		return input, nil
+	}
+	if err := validateExprFields(expressions, inputs); err != nil {
+		return nil, err
+	}
+	projected := make([]*spb.Expression, len(expressions))
+	mapping := make([]int32, len(expressions))
+	for i := range expressions {
+		var err error
+		projected[i], err = e.expr(expressions[i], inputs)
+		if err != nil {
+			return nil, err
+		}
+		mapping[i] = int32(inputWidth + i)
+	}
+	return &spb.Rel{RelType: &spb.Rel_Project{Project: &spb.ProjectRel{
+		Common:      emit(mapping),
+		Input:       input,
+		Expressions: projected,
+	}}}, nil
+}
+
+func emit(mapping []int32) *spb.RelCommon {
+	return &spb.RelCommon{EmitKind: &spb.RelCommon_Emit_{Emit: &spb.RelCommon_Emit{OutputMapping: mapping}}}
+}
+
+func (e *exporter) sink(n *planpb.Node) (*spb.Rel, error) {
+	input, err := e.unary(n)
+	if err != nil {
+		return nil, err
+	}
+	inputWidth, err := e.nodeWidth(n.Children[0])
+	if err != nil {
+		return nil, err
+	}
+	return e.applyProject(input, inputWidth, n.ProjectList, []int{inputWidth})
+}
+
+func (e *exporter) sinkScan(n *planpb.Node) (*spb.Rel, error) {
+	if len(n.Children) != 0 || len(n.SourceStep) != 1 {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: sink scan %d has malformed source metadata", n.NodeId)
+	}
+	sourceStep := n.SourceStep[0]
+	if sourceStep < 0 || sourceStep >= e.stepOrdinal || int(sourceStep) >= len(e.query.Steps) {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: sink scan %d must reference an earlier producer step", n.NodeId)
+	}
+	producerID := e.query.Steps[sourceStep]
+	producer := e.query.Nodes[producerID]
+	if producer == nil || producer.NodeType != planpb.Node_SINK {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: sink scan %d references a non-sink step", n.NodeId)
+	}
+	producerWidth, err := e.nodeWidth(producerID)
+	if err != nil {
+		return nil, err
+	}
+	reference := &spb.Rel{RelType: &spb.Rel_Reference{Reference: &spb.ReferenceRel{SubtreeOrdinal: sourceStep}}}
+	return e.applyProject(reference, producerWidth, n.ProjectList, []int{producerWidth})
+}
+
+func (e *exporter) join(n *planpb.Node) (*spb.Rel, error) {
+	if len(n.Children) != 2 {
+		return nil, notEligiblef(EligibilityOperator, "join node %d requires two inputs", n.NodeId)
+	}
+	left, err := e.node(n.Children[0])
+	if err != nil {
+		return nil, err
+	}
+	right, err := e.node(n.Children[1])
+	if err != nil {
+		return nil, err
+	}
+	leftWidth, err := e.nodeWidth(n.Children[0])
+	if err != nil {
+		return nil, err
+	}
+	rightWidth, err := e.nodeWidth(n.Children[1])
+	if err != nil {
+		return nil, err
+	}
+	inputs := []int{leftWidth, rightWidth}
+	var condition *spb.Expression
+	if len(n.OnList) == 0 {
+		condition, err = literal(&planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}, &planpb.Type{Id: int32(types.T_bool), NotNullable: true})
+	} else {
+		if err = validateExprFields(n.OnList, inputs); err != nil {
+			return nil, err
+		}
+		condition, err = e.conjunction(n.OnList, inputs)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var joinType spb.JoinRel_JoinType
+	joinWidth := leftWidth + rightWidth
+	projectInputs := inputs
+	switch n.JoinType {
+	case planpb.Node_INNER:
+		joinType = spb.JoinRel_JOIN_TYPE_INNER
+	case planpb.Node_LEFT:
+		joinType = spb.JoinRel_JOIN_TYPE_LEFT
+	case planpb.Node_RIGHT:
+		joinType = spb.JoinRel_JOIN_TYPE_RIGHT
+	case planpb.Node_SEMI:
+		if n.IsRightJoin {
+			joinType = spb.JoinRel_JOIN_TYPE_RIGHT_SEMI
+			joinWidth = rightWidth
+			projectInputs = []int{0, rightWidth}
+		} else {
+			joinType = spb.JoinRel_JOIN_TYPE_LEFT_SEMI
+			joinWidth = leftWidth
+			projectInputs = []int{leftWidth, 0}
+		}
+	case planpb.Node_ANTI:
+		if n.IsRightJoin {
+			joinType = spb.JoinRel_JOIN_TYPE_RIGHT_ANTI
+			joinWidth = rightWidth
+			projectInputs = []int{0, rightWidth}
+		} else {
+			joinType = spb.JoinRel_JOIN_TYPE_LEFT_ANTI
+			joinWidth = leftWidth
+			projectInputs = []int{leftWidth, 0}
+		}
+	default:
+		return nil, notEligiblef(EligibilityOperator, "node %d uses unsupported join type %s", n.NodeId, n.JoinType.String())
+	}
+	relation := &spb.Rel{RelType: &spb.Rel_Join{Join: &spb.JoinRel{Left: left, Right: right, Expression: condition, Type: joinType}}}
+	relation, err = e.applyFilter(relation, n.FilterList, projectInputs)
+	if err != nil {
+		return nil, err
+	}
+	return e.applyProject(relation, joinWidth, n.ProjectList, projectInputs)
+}
+
 func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
-	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil || n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has a malformed table scan", n.NodeId)
+	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has malformed table scan structure", n.NodeId)
+	}
+	if n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has malformed table identity db=%d object=%d table=%d", n.NodeId, n.ObjRef.Db, n.ObjRef.Obj, n.TableDef.TblId)
 	}
 	if n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
 		return nil, notEligiblef(EligibilityPlanShape, "node %d is not a persistent TAE table scan", n.NodeId)
+	}
+	if n.IndexScanInfo.ProtoSize() != 0 || n.IndexReaderParam != nil {
+		return nil, notEligiblef(EligibilityOperator, "node %d carries unsupported index scan semantics", n.NodeId)
 	}
 	schema, err := namedStruct(n.TableDef)
 	if err != nil {
@@ -273,14 +595,22 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if err != nil {
 		return nil, err
 	}
-	e.reads = append(e.reads, Read{
-		NodeID:        n.NodeId,
-		DatabaseID:    uint64(n.ObjRef.Db),
-		TableID:       n.TableDef.TblId,
-		SchemaVersion: n.TableDef.Version,
-		Columns:       columns,
-		Schema:        schemaBytes,
-	})
+	if e.validateOnly {
+		if e.readSeen == nil {
+			e.readSeen = make(map[int32]bool)
+		}
+		if !e.readSeen[n.NodeId] {
+			e.readSeen[n.NodeId] = true
+			e.reads = append(e.reads, Read{
+				NodeID:        n.NodeId,
+				DatabaseID:    uint64(n.ObjRef.Db),
+				TableID:       n.TableDef.TblId,
+				SchemaVersion: n.TableDef.Version,
+				Columns:       columns,
+				Schema:        schemaBytes,
+			})
+		}
+	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has no admitted TaeRead", n.NodeId)
@@ -289,33 +619,12 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 		BaseSchema: schema,
 		ReadType:   &spb.ReadRel_ExtensionTable_{ExtensionTable: &spb.ReadRel_ExtensionTable{Detail: &anypb.Any{TypeUrl: TaeReadTypeURL, Value: value}}},
 	}}}
-	if err = validateExprFields(n.FilterList, len(schema.Struct.Types)); err != nil {
+	width := len(schema.Struct.Types)
+	rel, err = e.applyFilter(rel, n.FilterList, []int{width})
+	if err != nil {
 		return nil, err
 	}
-	if err = validateExprFields(n.ProjectList, len(schema.Struct.Types)); err != nil {
-		return nil, err
-	}
-	if len(n.FilterList) > 0 {
-		condition, xerr := e.conjunction(n.FilterList)
-		if xerr != nil {
-			return nil, xerr
-		}
-		rel = &spb.Rel{RelType: &spb.Rel_Filter{Filter: &spb.FilterRel{Input: rel, Condition: condition}}}
-	}
-	if len(n.ProjectList) > 0 {
-		width := len(schema.Struct.Types)
-		exprs := make([]*spb.Expression, len(n.ProjectList))
-		mapping := make([]int32, len(n.ProjectList))
-		for i := range n.ProjectList {
-			exprs[i], err = e.expr(n.ProjectList[i])
-			if err != nil {
-				return nil, err
-			}
-			mapping[i] = int32(width + i)
-		}
-		rel = &spb.Rel{RelType: &spb.Rel_Project{Project: &spb.ProjectRel{Common: &spb.RelCommon{EmitKind: &spb.RelCommon_Emit_{Emit: &spb.RelCommon_Emit{OutputMapping: mapping}}}, Input: rel, Expressions: exprs}}}
-	}
-	return rel, nil
+	return e.applyProject(rel, width, n.ProjectList, []int{width})
 }
 
 func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
@@ -337,13 +646,14 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = validateExprFields(n.GroupBy, inputWidth); err != nil {
+	inputs := []int{inputWidth}
+	if err = validateExprFields(n.GroupBy, inputs); err != nil {
 		return nil, err
 	}
 	groups := make([]*spb.Expression, len(n.GroupBy))
 	refs := make([]uint32, len(groups))
 	for i := range n.GroupBy {
-		groups[i], err = e.expr(n.GroupBy[i])
+		groups[i], err = e.expr(n.GroupBy[i], inputs)
 		refs[i] = uint32(i)
 		if err != nil {
 			return nil, err
@@ -383,12 +693,12 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		if !supported {
 			return nil, notEligiblef(EligibilityExpression, "aggregate overload %q has no declared Sirius semantic equivalence", f.Func.ObjName)
 		}
-		if err := validateExprFields(f.Args, inputWidth); err != nil {
+		if err := validateExprFields(f.Args, inputs); err != nil {
 			return nil, err
 		}
 		args := make([]*spb.FunctionArgument, len(f.Args))
 		for j := range f.Args {
-			a, xerr := e.expr(f.Args[j])
+			a, xerr := e.expr(f.Args[j], inputs)
 			if xerr != nil {
 				return nil, xerr
 			}
@@ -400,7 +710,13 @@ func (e *exporter) aggregate(n *planpb.Node) (*spb.Rel, error) {
 		}
 		measures[i] = &spb.AggregateRel_Measure{Measure: &spb.AggregateFunction{FunctionReference: e.function(name), Arguments: args, OutputType: out, Phase: spb.AggregationPhase_AGGREGATION_PHASE_INITIAL_TO_RESULT, Invocation: spb.AggregateFunction_AGGREGATION_INVOCATION_ALL}}
 	}
-	return &spb.Rel{RelType: &spb.Rel_Aggregate{Aggregate: &spb.AggregateRel{Input: input, GroupingExpressions: groups, Groupings: []*spb.AggregateRel_Grouping{{ExpressionReferences: refs}}, Measures: measures}}}, nil
+	relation := &spb.Rel{RelType: &spb.Rel_Aggregate{Aggregate: &spb.AggregateRel{Input: input, GroupingExpressions: groups, Groupings: []*spb.AggregateRel_Grouping{{ExpressionReferences: refs}}, Measures: measures}}}
+	aggregateWidth := len(groups) + len(measures)
+	relation, err = e.applyFilter(relation, n.FilterList, []int{aggregateWidth})
+	if err != nil {
+		return nil, err
+	}
+	return e.applyProject(relation, aggregateWidth, n.ProjectList, []int{aggregateWidth})
 }
 
 func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
@@ -414,16 +730,20 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 	}
 	sorts := make([]*spb.SortField, len(n.OrderBy))
 	for i, order := range n.OrderBy {
-		if order == nil {
+		if order == nil || order.Expr == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed sort at %d", i)
+		}
+		switch types.T(order.Expr.Typ.Id) {
+		case types.T_float32, types.T_float64:
+			return nil, notEligiblef(EligibilityOperator, "floating-point sort at %d has no Sirius ordering equivalence", i)
 		}
 		if order.Collation != "" || int32(order.Flag)&int32(planpb.OrderBySpec_UNIQUE) != 0 {
 			return nil, notEligiblef(EligibilityOperator, "unsupported sort at %d", i)
 		}
-		if err := validateExprFields([]*planpb.Expr{order.Expr}, inputWidth); err != nil {
+		if err := validateExprFields([]*planpb.Expr{order.Expr}, []int{inputWidth}); err != nil {
 			return nil, err
 		}
-		x, xerr := e.expr(order.Expr)
+		x, xerr := e.expr(order.Expr, []int{inputWidth})
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -453,7 +773,12 @@ func (e *exporter) sort(n *planpb.Node) (*spb.Rel, error) {
 		}
 		sorts[i] = &spb.SortField{Expr: x, SortKind: &spb.SortField_Direction{Direction: direction}}
 	}
-	return &spb.Rel{RelType: &spb.Rel_Sort{Sort: &spb.SortRel{Input: input, Sorts: sorts}}}, nil
+	relation := &spb.Rel{RelType: &spb.Rel_Sort{Sort: &spb.SortRel{Input: input, Sorts: sorts}}}
+	relation, err = e.applyFilter(relation, n.FilterList, []int{inputWidth})
+	if err != nil {
+		return nil, err
+	}
+	return e.applyProject(relation, inputWidth, n.ProjectList, []int{inputWidth})
 }
 
 func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
@@ -484,7 +809,7 @@ func (e *exporter) fetch(input *spb.Rel, n *planpb.Node) (*spb.Rel, error) {
 	return &spb.Rel{RelType: &spb.Rel_Fetch{Fetch: fetch}}, nil
 }
 
-func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
+func (e *exporter) conjunction(xs []*planpb.Expr, inputs []int) (*spb.Expression, error) {
 	if len(xs) == 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: empty filter")
 	}
@@ -493,12 +818,12 @@ func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: filter predicate is not boolean")
 		}
 	}
-	x, err := e.expr(xs[0])
+	x, err := e.expr(xs[0], inputs)
 	if err != nil {
 		return nil, err
 	}
 	for i := 1; i < len(xs); i++ {
-		right, xerr := e.expr(xs[i])
+		right, xerr := e.expr(xs[i], inputs)
 		if xerr != nil {
 			return nil, xerr
 		}
@@ -507,33 +832,44 @@ func (e *exporter) conjunction(xs []*planpb.Expr) (*spb.Expression, error) {
 	return x, nil
 }
 
-func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
+func (e *exporter) expr(x *planpb.Expr, inputs []int) (*spb.Expression, error) {
 	if x == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: nil expression")
 	}
-	if _, err := substraitType(&x.Typ); err != nil {
-		return nil, err
-	}
 	switch v := x.Expr.(type) {
 	case *planpb.Expr_Col:
-		// Joins and correlated expressions are rejected structurally, so col_pos
-		// is the unambiguous ordinal in the single input regardless of MO's
-		// binding-tag value in rel_pos.
-		if v.Col == nil || v.Col.ColPos < 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("substrait: invalid column reference")
+		ordinal, err := fieldOrdinal(v.Col, inputs)
+		if err != nil {
+			return nil, err
 		}
-		return field(v.Col.ColPos), nil
+		return field(ordinal), nil
 	case *planpb.Expr_Lit:
 		return literal(v.Lit, &x.Typ)
+	case *planpb.Expr_List:
+		return nil, notEligiblef(EligibilityExpression, "an expression list is only valid as an IN argument")
 	case *planpb.Expr_F:
 		if v.F == nil || v.F.Func == nil {
 			return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed function")
+		}
+		functionID, _ := function.DecodeOverloadID(v.F.Func.Obj)
+		switch functionID {
+		case function.CAST:
+			return e.castExpr(x, v.F, inputs)
+		case function.CASE:
+			return e.caseExpr(x, v.F, inputs)
+		case function.IN:
+			return e.inExpr(x, v.F, inputs)
+		case function.EXTRACT:
+			return e.extractExpr(x, v.F, inputs)
+		}
+		if functionID == function.UNARY_MINUS && len(v.F.Args) == 1 {
+			return e.unaryMinusExpr(x, v.F, inputs)
 		}
 		name, ok := scalarName(v.F.Func.ObjName)
 		if !ok {
 			return nil, notEligiblef(EligibilityExpression, "unsupported scalar function %q", v.F.Func.ObjName)
 		}
-		if want := scalarArity(name); len(v.F.Args) != want {
+		if want := scalarArity(name); want >= 0 && len(v.F.Args) != want {
 			return nil, notEligiblef(EligibilityExpression, "%s requires %d arguments", name, want)
 		}
 		if err := validateScalarSignature(name, &x.Typ, v.F.Args); err != nil {
@@ -552,7 +888,7 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 		args := make([]*spb.Expression, len(v.F.Args))
 		for i := range v.F.Args {
 			var err error
-			args[i], err = e.expr(v.F.Args[i])
+			args[i], err = e.expr(v.F.Args[i], inputs)
 			if err != nil {
 				return nil, err
 			}
@@ -561,6 +897,237 @@ func (e *exporter) expr(x *planpb.Expr) (*spb.Expression, error) {
 	default:
 		return nil, notEligiblef(EligibilityExpression, "unsupported expression %T", x.Expr)
 	}
+}
+
+func (e *exporter) unaryMinusExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
+	if len(call.Args) != 1 || call.Args[0] == nil || !isDecimalType(types.T(call.Args[0].Typ.Id)) || semanticTypeFromPlan(&call.Args[0].Typ) != semanticTypeFromPlan(&result.Typ) {
+		return nil, notEligiblef(EligibilityExpression, "unsupported unary minus signature")
+	}
+	supported, err := hasSemanticCapability(semanticScalar, "unary_minus", call.Func, call.Args, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, notEligiblef(EligibilityExpression, "unary minus overload has no declared Sirius semantic equivalence")
+	}
+	value, err := e.expr(call.Args[0], inputs)
+	if err != nil {
+		return nil, err
+	}
+	zero := &planpb.Literal{}
+	if types.T(result.Typ.Id) == types.T_decimal64 {
+		zero.Value = &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{}}
+	} else {
+		zero.Value = &planpb.Literal_Decimal128Val{Decimal128Val: &planpb.Decimal128{}}
+	}
+	zeroExpr, err := literal(zero, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return e.scalar("subtract", &result.Typ, zeroExpr, value), nil
+}
+
+func fieldOrdinal(column *planpb.ColRef, inputs []int) (int32, error) {
+	if column == nil || column.ColPos < 0 || len(inputs) == 0 || len(inputs) > 2 {
+		return 0, moerr.NewInternalErrorNoCtx("substrait: invalid column reference")
+	}
+	relation := column.RelPos
+	if len(inputs) == 1 && (relation == 0 || relation == -1 || relation == -2) {
+		if int(column.ColPos) >= inputs[0] {
+			return 0, moerr.NewInternalErrorNoCtxf("substrait: column ordinal is outside input width %d", inputs[0])
+		}
+		return column.ColPos, nil
+	}
+	if len(inputs) == 2 && (relation == 0 || relation == 1) {
+		if int(column.ColPos) >= inputs[relation] {
+			return 0, moerr.NewInternalErrorNoCtxf("substrait: column ordinal is outside join input %d width %d", relation, inputs[relation])
+		}
+		if relation == 1 {
+			return int32(inputs[0]) + column.ColPos, nil
+		}
+		return column.ColPos, nil
+	}
+	return 0, moerr.NewInternalErrorNoCtxf("substrait: relation ordinal %d is invalid for %d inputs", relation, len(inputs))
+}
+
+func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
+	if len(call.Args) != 2 {
+		return nil, notEligiblef(EligibilityExpression, "cast requires a value and target type descriptor")
+	}
+	supported, err := hasSemanticCapability(semanticScalar, "cast", call.Func, call.Args, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, notEligiblef(EligibilityExpression, "cast overload %q has no declared Sirius semantic equivalence", call.Func.ObjName)
+	}
+	input, err := e.expr(call.Args[0], inputs)
+	if err != nil {
+		return nil, err
+	}
+	target, err := substraitType(&result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return &spb.Expression{RexType: &spb.Expression_Cast_{Cast: &spb.Expression_Cast{
+		Type: target, Input: input, FailureBehavior: spb.Expression_Cast_FAILURE_BEHAVIOR_THROW_EXCEPTION,
+	}}}, nil
+}
+
+func (e *exporter) caseExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
+	if len(call.Args) < 3 || len(call.Args)%2 == 0 {
+		return nil, notEligiblef(EligibilityExpression, "case requires condition/result pairs and an else expression")
+	}
+	supported, err := hasSemanticCapability(semanticScalar, "if_then", call.Func, call.Args, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, notEligiblef(EligibilityExpression, "case overload has no declared Sirius semantic equivalence")
+	}
+	ifThen := &spb.Expression_IfThen{Ifs: make([]*spb.Expression_IfThen_IfClause, 0, len(call.Args)/2)}
+	for i := 0; i+1 < len(call.Args)-1; i += 2 {
+		if types.T(call.Args[i].Typ.Id) != types.T_bool {
+			return nil, notEligiblef(EligibilityExpression, "case condition is not boolean")
+		}
+		condition, xerr := e.expr(call.Args[i], inputs)
+		if xerr != nil {
+			return nil, xerr
+		}
+		value, xerr := e.expr(call.Args[i+1], inputs)
+		if xerr != nil {
+			return nil, xerr
+		}
+		ifThen.Ifs = append(ifThen.Ifs, &spb.Expression_IfThen_IfClause{If: condition, Then: value})
+	}
+	ifThen.Else, err = e.expr(call.Args[len(call.Args)-1], inputs)
+	if err != nil {
+		return nil, err
+	}
+	return &spb.Expression{RexType: &spb.Expression_IfThen_{IfThen: ifThen}}, nil
+}
+
+func (e *exporter) inExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
+	if len(call.Args) < 2 {
+		return nil, notEligiblef(EligibilityExpression, "in requires a value and at least one option")
+	}
+	supported, err := hasSemanticCapability(semanticScalar, "singular_or_list", call.Func, call.Args, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, notEligiblef(EligibilityExpression, "in overload has no declared Sirius semantic equivalence")
+	}
+	value, err := e.expr(call.Args[0], inputs)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]*spb.Expression, 0, len(call.Args)-1)
+	for _, argument := range call.Args[1:] {
+		if list := argument.GetList(); list != nil {
+			for _, item := range list.List {
+				option, xerr := e.expr(item, inputs)
+				if xerr != nil {
+					return nil, xerr
+				}
+				options = append(options, option)
+			}
+			continue
+		}
+		if argument.GetVec() != nil {
+			items, xerr := literalVectorOptions(argument.GetVec(), &call.Args[0].Typ)
+			if xerr != nil {
+				return nil, xerr
+			}
+			for _, item := range items {
+				option, itemErr := e.expr(item, inputs)
+				if itemErr != nil {
+					return nil, itemErr
+				}
+				options = append(options, option)
+			}
+			continue
+		}
+		option, xerr := e.expr(argument, inputs)
+		if xerr != nil {
+			return nil, xerr
+		}
+		options = append(options, option)
+	}
+	if len(options) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: IN option list is empty")
+	}
+	return &spb.Expression{RexType: &spb.Expression_SingularOrList_{SingularOrList: &spb.Expression_SingularOrList{Value: value, Options: options}}}, nil
+}
+
+func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (options []*planpb.Expr, err error) {
+	if encoded == nil || expected == nil || encoded.Len <= 0 || encoded.Len > maxLiteralVectorValues || len(encoded.Data) == 0 || len(encoded.Data) > MaxPlanBytes {
+		return nil, notEligiblef(EligibilityExpression, "folded IN list is empty or exceeds the supported bound")
+	}
+	// Keep malformed optimizer input total even if a future vector accessor
+	// grows an invariant stronger than UnmarshalBinary's wire validation.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			options = nil
+			err = moerr.NewInternalErrorNoCtxf("substrait: malformed folded IN list: %v", recovered)
+		}
+	}()
+	var values vector.Vector
+	if unmarshalErr := values.UnmarshalBinary(encoded.Data); unmarshalErr != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: malformed folded IN list: %v", unmarshalErr)
+	}
+	defer values.Free(nil)
+	if values.Length() != int(encoded.Len) || values.GetType() == nil || int32(values.GetType().Oid) != expected.Id || values.GetType().Width != expected.Width || values.GetType().Scale != expected.Scale {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: folded IN list type or length mismatch")
+	}
+	physicalLength := values.Length()
+	if values.IsConst() && physicalLength > 0 {
+		physicalLength = 1
+	}
+	options = make([]*planpb.Expr, physicalLength)
+	for i := 0; i < physicalLength; i++ {
+		value := rule.GetConstantValue(&values, true, uint64(i))
+		if value == nil {
+			return nil, notEligiblef(EligibilityExpression, "folded IN list uses unsupported type %s", values.GetType().Oid.String())
+		}
+		value.IsSerialized = encoded.IsSerialized
+		typ := *expected
+		typ.NotNullable = !value.Isnull
+		options[i] = &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: value}}
+	}
+	return options, nil
+}
+
+func (e *exporter) extractExpr(result *planpb.Expr, call *planpb.Function, inputs []int) (*spb.Expression, error) {
+	if len(call.Args) != 2 || call.Args[0].GetLit() == nil {
+		return nil, notEligiblef(EligibilityExpression, "extract requires a literal field and one value")
+	}
+	unit := strings.ToLower(call.Args[0].GetLit().GetSval())
+	if unit == "" {
+		return nil, notEligiblef(EligibilityExpression, "extract field is empty")
+	}
+	supported, err := hasSemanticCapability(semanticScalar, "extract", call.Func, call.Args, &result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if !supported {
+		return nil, notEligiblef(EligibilityExpression, "extract overload has no declared Sirius semantic equivalence")
+	}
+	value, err := e.expr(call.Args[1], inputs)
+	if err != nil {
+		return nil, err
+	}
+	output, err := substraitType(&result.Typ)
+	if err != nil {
+		return nil, err
+	}
+	return &spb.Expression{RexType: &spb.Expression_ScalarFunction_{ScalarFunction: &spb.Expression_ScalarFunction{
+		FunctionReference: e.function("extract"),
+		Arguments: []*spb.FunctionArgument{
+			{ArgType: &spb.FunctionArgument_Enum{Enum: unit}}, valueArg(value),
+		},
+		OutputType: output,
+	}}}, nil
 }
 
 func (e *exporter) scalar(name string, typ *planpb.Type, args ...*spb.Expression) *spb.Expression {
@@ -652,21 +1219,56 @@ func columnMapping(t *planpb.TableDef) ([]ColumnMapping, error) {
 	return result, nil
 }
 
-func validateExprFields(exprs []*planpb.Expr, width int) error {
+func validateExprFields(exprs []*planpb.Expr, inputs []int) error {
 	for _, expr := range exprs {
 		if expr == nil {
 			return moerr.NewInternalErrorNoCtxf("substrait: nil expression")
 		}
 		switch value := expr.Expr.(type) {
 		case *planpb.Expr_Col:
-			if value.Col == nil || value.Col.ColPos < 0 || int(value.Col.ColPos) >= width {
-				return moerr.NewInternalErrorNoCtxf("substrait: column ordinal is outside input width %d", width)
+			if _, err := fieldOrdinal(value.Col, inputs); err != nil {
+				return err
 			}
 		case *planpb.Expr_F:
-			if value.F == nil {
+			if value.F == nil || value.F.Func == nil {
 				return moerr.NewInternalErrorNoCtxf("substrait: malformed function")
 			}
-			if err := validateExprFields(value.F.Args, width); err != nil {
+			args := value.F.Args
+			functionID, _ := function.DecodeOverloadID(value.F.Func.Obj)
+			if functionID == function.CAST {
+				if len(args) != 2 || args[1] == nil || args[1].GetT() == nil {
+					return moerr.NewInternalErrorNoCtx("substrait: malformed cast target")
+				}
+				args = args[:1]
+			}
+			if functionID == function.IN {
+				if len(args) < 2 {
+					return moerr.NewInternalErrorNoCtx("substrait: malformed IN expression")
+				}
+				if err := validateExprFields(args[:1], inputs); err != nil {
+					return err
+				}
+				for _, argument := range args[1:] {
+					if argument == nil {
+						return moerr.NewInternalErrorNoCtx("substrait: nil IN option")
+					}
+					if argument.GetVec() != nil {
+						continue
+					}
+					if err := validateExprFields([]*planpb.Expr{argument}, inputs); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if err := validateExprFields(args, inputs); err != nil {
+				return err
+			}
+		case *planpb.Expr_List:
+			if value.List == nil || len(value.List.List) == 0 {
+				return moerr.NewInternalErrorNoCtx("substrait: empty expression list")
+			}
+			if err := validateExprFields(value.List.List, inputs); err != nil {
 				return err
 			}
 		case *planpb.Expr_Lit:
@@ -710,25 +1312,31 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 		return &spb.Type{Kind: &spb.Type_I32_{I32: &spb.Type_I32{Nullability: n}}}, nil
 	case types.T_int64:
 		return &spb.Type{Kind: &spb.Type_I64_{I64: &spb.Type_I64{Nullability: n}}}, nil
+	case types.T_uint32:
+		// Substrait has no unsigned integer primitive. Sirius/DuckDB EXTRACT
+		// returns a signed i64; the Flight decoder restores MO's uint32 result.
+		return &spb.Type{Kind: &spb.Type_I64_{I64: &spb.Type_I64{Nullability: n}}}, nil
 	case types.T_float32:
 		return &spb.Type{Kind: &spb.Type_Fp32{Fp32: &spb.Type_FP32{Nullability: n}}}, nil
 	case types.T_float64:
 		return &spb.Type{Kind: &spb.Type_Fp64{Fp64: &spb.Type_FP64{Nullability: n}}}, nil
 	case types.T_char:
-		if t.Width <= 0 {
-			return nil, notEligiblef(EligibilityType, "char width %d is outside the supported bound", t.Width)
-		}
-		return &spb.Type{Kind: &spb.Type_FixedChar_{FixedChar: &spb.Type_FixedChar{Length: t.Width, Nullability: n}}}, nil
+		return nil, notEligiblef(EligibilityType, "unsupported type %s", types.T(t.Id).String())
 	case types.T_varchar:
 		if t.Width < 0 {
 			return nil, notEligiblef(EligibilityType, "negative varchar width %d", t.Width)
 		}
 		return &spb.Type{Kind: &spb.Type_Varchar{Varchar: &spb.Type_VarChar{Length: t.Width, Nullability: n}}}, nil
-	case types.T_date, types.T_timestamp:
-		// MatrixOne stores both values relative to year 1, while Substrait uses
-		// Unix-epoch units. Timestamp also has session-timezone rendering
-		// semantics that do not match timezone-naive PrecisionTimestamp. Reject
-		// these types until reads and literals share one proven conversion.
+	case types.T_decimal64, types.T_decimal128:
+		if t.Width <= 0 || t.Width > 38 || t.Scale < 0 || t.Scale > t.Width {
+			return nil, notEligiblef(EligibilityType, "decimal(%d,%d) is outside the supported bound", t.Width, t.Scale)
+		}
+		return &spb.Type{Kind: &spb.Type_Decimal_{Decimal: &spb.Type_Decimal{Precision: t.Width, Scale: t.Scale, Nullability: n}}}, nil
+	case types.T_date:
+		// TAE decoding in Sirius subtracts MO_UNIX_EPOCH_DAYS, so both scan
+		// values and literals reach DuckDB in Substrait's Unix-day domain.
+		return &spb.Type{Kind: &spb.Type_Date_{Date: &spb.Type_Date{Nullability: n}}}, nil
+	case types.T_timestamp:
 		return nil, notEligiblef(EligibilityType, "unsupported temporal type %s", types.T(t.Id).String())
 	default:
 		return nil, notEligiblef(EligibilityType, "unsupported type %s", types.T(t.Id).String())
@@ -783,6 +1391,11 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 			return mismatch()
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_I64{I64: v.I64Val}}), nil
+	case *planpb.Literal_U32Val:
+		if oid != types.T_uint32 {
+			return mismatch()
+		}
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_I64{I64: int64(v.U32Val)}}), nil
 	case *planpb.Literal_Fval:
 		if oid != types.T_float32 {
 			return mismatch()
@@ -794,16 +1407,33 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Fp64{Fp64: v.Dval}}), nil
 	case *planpb.Literal_Sval:
-		if oid != types.T_char && oid != types.T_varchar {
+		if oid != types.T_varchar {
 			return mismatch()
 		}
-		if oid == types.T_varchar {
-			return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_VarChar_{VarChar: &spb.Expression_Literal_VarChar{Value: v.Sval, Length: uint32(typ.Width)}}}), nil
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_VarChar_{VarChar: &spb.Expression_Literal_VarChar{Value: v.Sval, Length: uint32(typ.Width)}}}), nil
+	case *planpb.Literal_Dateval:
+		if oid != types.T_date {
+			return mismatch()
 		}
-		if utf8.RuneCountInString(v.Sval) != int(typ.Width) {
-			return nil, notEligiblef(EligibilityType, "char literal length does not match width %d", typ.Width)
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Date{Date: types.Date(v.Dateval).DaysSinceUnixEpoch()}}), nil
+	case *planpb.Literal_Decimal64Val:
+		if oid != types.T_decimal64 || v.Decimal64Val == nil {
+			return mismatch()
 		}
-		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_FixedChar{FixedChar: v.Sval}}), nil
+		value := make([]byte, 16)
+		binary.LittleEndian.PutUint64(value, uint64(v.Decimal64Val.A))
+		if v.Decimal64Val.A < 0 {
+			binary.LittleEndian.PutUint64(value[8:], math.MaxUint64)
+		}
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Decimal_{Decimal: &spb.Expression_Literal_Decimal{Value: value, Precision: typ.Width, Scale: typ.Scale}}}), nil
+	case *planpb.Literal_Decimal128Val:
+		if oid != types.T_decimal128 || v.Decimal128Val == nil {
+			return mismatch()
+		}
+		value := make([]byte, 16)
+		binary.LittleEndian.PutUint64(value, uint64(v.Decimal128Val.A))
+		binary.LittleEndian.PutUint64(value[8:], uint64(v.Decimal128Val.B))
+		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Decimal_{Decimal: &spb.Expression_Literal_Decimal{Value: value, Precision: typ.Width, Scale: typ.Scale}}}), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: unsupported literal %T", l.Value)
 	}
@@ -815,7 +1445,7 @@ func valueArg(x *spb.Expression) *spb.FunctionArgument {
 
 func scalarName(name string) (string, bool) {
 	n := strings.ToLower(name)
-	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "isnull": "is_null", "is_not_null": "is_not_null", "isnotnull": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "mod": "modulus", "between": "between"}
+	m := map[string]string{"and": "and", "or": "or", "not": "not", "=": "equal", "equal": "equal", "!=": "not_equal", "<>": "not_equal", "<": "lt", "<=": "lte", ">": "gt", ">=": "gte", "is_null": "is_null", "isnull": "is_null", "is_not_null": "is_not_null", "isnotnull": "is_not_null", "<=>": "is_not_distinct_from", "+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "modulus", "mod": "modulus", "between": "between", "like": "like", "prefix_eq": "starts_with", "substring": "substring"}
 	v, ok := m[n]
 	return v, ok
 }
@@ -826,6 +1456,10 @@ func scalarArity(name string) int {
 		return 1
 	case "between":
 		return 3
+	case "substring":
+		return 3
+	case "and", "or":
+		return -1
 	default:
 		return 2
 	}
@@ -841,6 +1475,8 @@ func aggregateName(name string) (string, bool) {
 		return "min", true
 	case "max":
 		return "max", true
+	case "avg":
+		return "avg", true
 	default:
 		return "", false
 	}
@@ -965,7 +1601,7 @@ func buildSemanticCapabilities(declarations []semanticDeclaration) (map[semantic
 
 func aggregateCanReturnNullOnEmpty(functionID int32) bool {
 	switch functionID {
-	case function.MIN, function.MAX:
+	case function.MIN, function.MAX, function.SUM, function.AVG:
 		return true
 	default:
 		return false
@@ -981,8 +1617,11 @@ func addSemanticCapability(result map[semanticCapabilityKey]semanticCapability, 
 }
 
 func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) (bool, error) {
-	if ref == nil || out == nil || len(args) > 3 {
+	if ref == nil || out == nil {
 		return false, nil
+	}
+	if len(args) > 3 {
+		return hasTPCHSemanticCapability(kind, name, ref, args, out)
 	}
 	key := semanticCapabilityKey{kind: kind, overloadID: ref.Obj, argumentN: uint8(len(args)), result: semanticTypeFromPlan(out)}
 	for i, argument := range args {
@@ -996,7 +1635,174 @@ func hasSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb
 		return false, err
 	}
 	capability, ok := registry[key]
-	return ok && capability.name == name && capability.equivalence != "", nil
+	if ok && capability.name == name && capability.equivalence != "" {
+		return true, nil
+	}
+	return hasTPCHSemanticCapability(kind, name, ref, args, out)
+}
+
+// hasTPCHSemanticCapability covers the parameterized decimal/string/date
+// overload families used by the canonical TPC-H plans. It remains exact: the
+// bound encoded overload, resolved argument types, result width/scale, and
+// result nullability must all agree before a named semantic family is enough.
+func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *planpb.ObjectRef, args []*planpb.Expr, out *planpb.Type) (bool, error) {
+	if ref == nil || out == nil || len(args) == 0 {
+		return false, nil
+	}
+	functionID, _ := function.DecodeOverloadID(ref.Obj)
+	declared := false
+	switch kind {
+	case semanticScalar:
+		switch name {
+		case "and", "or":
+			declared = functionID == map[string]int32{"and": function.AND, "or": function.OR}[name] && booleanArgs(args, 2)
+		case "equal", "not_equal", "lt", "lte", "gt", "gte":
+			declared = functionID == map[string]int32{"equal": function.EQUAL, "not_equal": function.NOT_EQUAL, "lt": function.LESS_THAN, "lte": function.LESS_EQUAL, "gt": function.GREAT_THAN, "gte": function.GREAT_EQUAL}[name] && comparableTPCHArgs(args)
+		case "add", "subtract", "multiply", "divide":
+			declared = functionID == map[string]int32{"add": function.PLUS, "subtract": function.MINUS, "multiply": function.MULTI, "divide": function.DIV}[name] && decimalArgs(args)
+		case "unary_minus":
+			declared = functionID == function.UNARY_MINUS && len(args) == 1 && args[0] != nil && isDecimalType(types.T(args[0].Typ.Id))
+		case "between":
+			declared = functionID == function.BETWEEN && len(args) == 3 && comparableTPCHArgs(args)
+		case "like":
+			declared = functionID == function.LIKE && varcharArgs(args, 2)
+		case "starts_with":
+			declared = functionID == function.PREFIX_EQ && varcharArgs(args, 2)
+		case "substring":
+			declared = functionID == function.SUBSTRING && len(args) == 3 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_int64 && types.T(args[2].Typ.Id) == types.T_int64
+		case "cast":
+			declared = functionID == function.CAST && len(args) == 2 && tpchCastType(types.T(args[0].Typ.Id)) && tpchCastType(types.T(out.Id))
+		case "if_then":
+			declared = functionID == function.CASE && len(args) >= 3 && len(args)%2 == 1 && tpchCaseArgs(args, out)
+		case "singular_or_list":
+			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || types.T(args[0].Typ.Id) == types.T_varchar)
+		case "extract":
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+		}
+	case semanticAggregate:
+		switch name {
+		case "count":
+			declared = (functionID == function.COUNT || functionID == function.STARCOUNT) && len(args) == 1 && (types.T(args[0].Typ.Id) == types.T_int32 || types.T(args[0].Typ.Id) == types.T_int64)
+		case "sum":
+			declared = functionID == function.SUM && len(args) == 1 && (types.T(args[0].Typ.Id) == types.T_int64 || isDecimalType(types.T(args[0].Typ.Id)))
+		case "avg":
+			declared = functionID == function.AVG && len(args) == 1 && isDecimalType(types.T(args[0].Typ.Id))
+		case "min":
+			declared = functionID == function.MIN && len(args) == 1 && isDecimalType(types.T(args[0].Typ.Id))
+		case "max":
+			declared = functionID == function.MAX && len(args) == 1 && isDecimalType(types.T(args[0].Typ.Id))
+		}
+	}
+	if !declared {
+		return false, nil
+	}
+	if kind == semanticScalar && name == "singular_or_list" {
+		// IN is bound against an MO tuple/list pseudo-type, which may later be
+		// constant-folded into LiteralVec. Re-resolving that pseudo-signature
+		// cannot recover the member types, so validate the already-bound exact
+		// overload plus its boolean/nullability contract here; inExpr validates
+		// every list or vector member against the left-hand value type.
+		if _, exists := function.GetFunctionByIdWithoutError(ref.Obj); !exists || types.T(out.Id) != types.T_bool {
+			return false, nil
+		}
+		return function.DeduceNotNullable(ref.Obj, args) == out.NotNullable, nil
+	}
+	inputs := make([]types.Type, len(args))
+	for i, argument := range args {
+		if argument == nil {
+			return false, nil
+		}
+		inputs[i] = types.Type{Oid: types.T(argument.Typ.Id), Width: argument.Typ.Width, Scale: argument.Typ.Scale}
+	}
+	resolved, err := function.GetFunctionByName(context.Background(), ref.ObjName, inputs)
+	if err != nil {
+		return false, nil
+	}
+	if resolved.GetEncodedOverloadID() != ref.Obj {
+		return false, nil
+	}
+	result := resolved.GetReturnType()
+	if int32(result.Oid) != out.Id || result.Width != out.Width || result.Scale != out.Scale {
+		return false, nil
+	}
+	notNullable := function.DeduceNotNullable(resolved.GetEncodedOverloadID(), args)
+	if kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && !out.NotNullable {
+		return true, nil
+	}
+	return notNullable == out.NotNullable, nil
+}
+
+func isDecimalType(value types.T) bool {
+	return value == types.T_decimal64 || value == types.T_decimal128
+}
+
+func decimalArgs(args []*planpb.Expr) bool {
+	return len(args) == 2 && args[0] != nil && args[1] != nil && isDecimalType(types.T(args[0].Typ.Id)) && isDecimalType(types.T(args[1].Typ.Id))
+}
+
+func booleanArgs(args []*planpb.Expr, minimum int) bool {
+	if len(args) < minimum {
+		return false
+	}
+	for _, argument := range args {
+		if argument == nil || types.T(argument.Typ.Id) != types.T_bool {
+			return false
+		}
+	}
+	return true
+}
+
+func comparableTPCHArgs(args []*planpb.Expr) bool {
+	if len(args) < 2 || args[0] == nil {
+		return false
+	}
+	family := types.T(args[0].Typ.Id)
+	if family != types.T_date && family != types.T_int32 && family != types.T_int64 && family != types.T_varchar && !isDecimalType(family) {
+		return false
+	}
+	for _, argument := range args[1:] {
+		if argument == nil || types.T(argument.Typ.Id) != family {
+			return false
+		}
+	}
+	return true
+}
+
+func varcharArgs(args []*planpb.Expr, count int) bool {
+	if len(args) != count {
+		return false
+	}
+	for _, argument := range args {
+		if argument == nil || types.T(argument.Typ.Id) != types.T_varchar {
+			return false
+		}
+	}
+	return true
+}
+
+func tpchCastType(value types.T) bool {
+	switch value {
+	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_varchar:
+		return true
+	default:
+		return false
+	}
+}
+
+func tpchCaseArgs(args []*planpb.Expr, out *planpb.Type) bool {
+	for i, argument := range args {
+		if argument == nil {
+			return false
+		}
+		if i < len(args)-1 && i%2 == 0 {
+			if types.T(argument.Typ.Id) != types.T_bool {
+				return false
+			}
+		} else if argument.Typ.Id != out.Id || argument.Typ.Width != out.Width || argument.Typ.Scale != out.Scale {
+			return false
+		}
+	}
+	return true
 }
 
 func semanticTypeFromPlan(value *planpb.Type) semanticTypeKey {
@@ -1024,14 +1830,14 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return false
 		}
 		switch types.T(t.Id) {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
 			return true
 		}
 		return false
 	}
 	switch name {
 	case "and", "or", "not":
-		if !isBool(out) {
+		if !isBool(out) || (name != "not" && len(args) < 2) {
 			return notEligiblef(EligibilityExpression, "%s has non-boolean result", name)
 		}
 		for _, a := range args {
@@ -1048,8 +1854,16 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "add", "subtract", "multiply", "divide", "modulus":
-		if !numeric(out) || !same() || args[0].Typ.Id != out.Id {
+		if !numeric(out) || len(args) != 2 {
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
+		}
+	case "like", "starts_with":
+		if !isBool(out) || len(args) != 2 || types.T(args[0].Typ.Id) != types.T_varchar || types.T(args[1].Typ.Id) != types.T_varchar {
+			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
+		}
+	case "substring":
+		if types.T(out.Id) != types.T_varchar || len(args) != 3 || types.T(args[0].Typ.Id) != types.T_varchar || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
+			return notEligiblef(EligibilityExpression, "unsupported substring signature")
 		}
 	}
 	return nil
