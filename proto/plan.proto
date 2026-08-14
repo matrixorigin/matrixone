@@ -1048,6 +1048,11 @@ message Node {
   // node during pushdown. This is used when a predicate observes a final DML
   // row image and moving it would change statement semantics.
   bool filter_is_barrier = 79;
+
+  // PARTITION only: when limit is set, order_by begins with this many
+  // partition equality keys and the remaining entries are per-partition
+  // ordering keys for bounded Top-N execution.
+  int32 partition_by_count = 80;
 }
 
 message SnapshotExtraInfo {

@@ -285,7 +285,7 @@ func chunkedColumnPolicyForService(serviceID string) objectio.ChunkedColumnPolic
 		}
 		value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 		version, valid := value.(int64)
-		return ok && valid && version >= defines.MORPCVersion19
+		return ok && valid && version >= defines.MORPCVersion20
 	}
 }
 

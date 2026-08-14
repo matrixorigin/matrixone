@@ -142,7 +142,7 @@ func TestCNS3DataWriterChunkedColumnProtocolGateIsLive(t *testing.T) {
 	enabledAfterConstruction := NewCNS3DataWriterForService(
 		serviceID, proc.Mp(), fs, tableDef, -1, true,
 	)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion19)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
 	require.Equal(t, uint8(compress.Lz4Chunked), writeAndColumnAlgorithm(enabledAfterConstruction))
 
 	disabledAfterConstruction := NewCNS3DataWriterForService(
