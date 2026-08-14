@@ -213,6 +213,30 @@ func TestHistoricalRestoreTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing
 	})
 }
 
+func TestCheckRestorePrivEnforcesDatabaseSnapshotScope(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{feSessionImpl: feSessionImpl{
+		tenant: &TenantInfo{Tenant: "tenant"},
+	}}
+	snapshot := &snapshotRecord{
+		level:        tree.SNAPSHOTLEVELDATABASE.String(),
+		accountName:  "tenant",
+		databaseName: "source_db",
+	}
+	stmt := &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		AccountName:  "tenant",
+		DatabaseName: "source_db",
+		TableName:    "table",
+	}
+
+	require.NoError(t, checkRestorePriv(ctx, ses, snapshot, stmt))
+
+	stmt.DatabaseName = "other_db"
+	err := checkRestorePriv(ctx, ses, snapshot, stmt)
+	require.EqualError(t, err, "internal error: databaseName(other_db) does not match snapshot.databaseName(source_db)")
+}
+
 func TestCollectRestoreSourceTableInfos(t *testing.T) {
 	t.Run("database restore reads only the selected table", func(t *testing.T) {
 		var listed bool
@@ -287,7 +311,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			snapshotTs   = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
@@ -319,7 +343,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			snapshotTs   = int64(100)
 		)
 
-		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {snapshot = '%s'} where datname = '%s' and account_id = 0", snapshotName, dbName)] =
+		bh.sql2result[fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", snapshotTs, dbName)] =
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql"}, [][]interface{}{{dbName, "create database db1"}})
 		bh.sql2result[buildTableInfoListSQL(dbName, tblName, snapshotTs, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{{tblName, "BASE TABLE", catalog.SystemExternalRel}})

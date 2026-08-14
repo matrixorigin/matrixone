@@ -1843,7 +1843,7 @@ func Test_checkDatabaseExists_GoodPath(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 
 		// Mock result - database exists
 		mockedResult := func(ctrl *gomock.Controller) []interface{} {
@@ -1866,7 +1866,7 @@ func Test_checkDatabaseExists_GoodPath(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		ctx := context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 
 		// Mock result - database not exists
 		mockedResult := func(ctrl *gomock.Controller) []interface{} {

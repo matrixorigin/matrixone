@@ -562,7 +562,11 @@ func (proc *Process) GetSpillFileService() (fileservice.MutableFileService, erro
 		return nil, err
 	}
 
-	if err := local.EnsureDir(proc.Ctx, defines.SpillFileServiceName); err != nil {
+	// The spill directory is process-independent, idempotent initialization.
+	// proc.Ctx is pipeline-scoped and may already be canceled (or be nil in a
+	// lightweight Process) before a frontend spool asks for the service. The
+	// actual spill I/O still receives and observes its caller-owned context.
+	if err := local.EnsureDir(context.Background(), defines.SpillFileServiceName); err != nil {
 		return nil, err
 	}
 

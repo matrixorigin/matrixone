@@ -56,6 +56,7 @@ func TestCloneTableFormat(t *testing.T) {
 
 func TestCloneDatabaseFormat(t *testing.T) {
 	stmt := &CloneDatabase{
+		IfNotExists: true,
 		DstDatabase: Identifier("dst`db"),
 		SrcDatabase: Identifier("src`db"),
 		AtTsExpr: &AtTimeStamp{
@@ -67,7 +68,7 @@ func TestCloneDatabaseFormat(t *testing.T) {
 
 	require.Equal(
 		t,
-		"create database `dst``db` clone `src``db`{snapshot = 'sp1'} to account `acc``name`",
+		"create database if not exists `dst``db` clone `src``db`{snapshot = 'sp1'} to account `acc``name`",
 		StringWithOpts(stmt, dialect.MYSQL, WithQuoteIdentifier(), WithSingleQuoteString()),
 	)
 }
