@@ -65,12 +65,31 @@ insert into dsrc.rt values (1),(2),(3);
 truncate table dsrc.rt;
 insert into dsrc.rt values (7),(8);
 rename table dsrc.rt to dsrc.rt2;
+
+-- ALTER TABLE RENAME must remap its qualified destination as well as source.
+create table dsrc.alter_rename_src(a int);
+alter table dsrc.alter_rename_src rename to dsrc.alter_rename_dst;
+
+-- String PREPARE freezes the same remapped source/destination pair.
+create table dsrc.prepared_rename_src(a int);
+prepare remap_alter_rename from
+    'alter table dsrc.prepared_rename_src rename to dsrc.prepared_rename_dst';
+execute remap_alter_rename;
+deallocate prepare remap_alter_rename;
 set remap_rewrites = '';
 -- rt is gone, rt2 exists in ddst with the 2 post-truncate rows
 select concat(table_schema,'.',table_name) as renamed from information_schema.tables where table_name in ('rt','rt2') order by 1;
 select count(*) as rt2_rows from ddst.rt2;
+select concat(table_schema,'.',table_name) as alter_renamed
+from information_schema.tables
+where table_name in ('alter_rename_src','alter_rename_dst') order by 1;
+select concat(table_schema,'.',table_name) as prepared_renamed
+from information_schema.tables
+where table_name in ('prepared_rename_src','prepared_rename_dst') order by 1;
 set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
 drop table dsrc.rt2;
+drop table dsrc.alter_rename_dst;
+drop table dsrc.prepared_rename_dst;
 set remap_rewrites = '';
 use mysql;
 

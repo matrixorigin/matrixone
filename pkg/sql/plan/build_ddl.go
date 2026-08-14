@@ -4132,6 +4132,24 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
+func rejectCrossDatabaseTableRename(
+	ctx context.Context,
+	sourceDatabase string,
+	option *tree.AlterOptionTableName,
+) error {
+	target := option.Name.ToTableName()
+	if !target.ExplicitSchema || string(target.Schema()) == sourceDatabase {
+		return nil
+	}
+
+	return moerr.NewNotSupportedf(
+		ctx,
+		"cross-database table rename from database '%s' to '%s'",
+		sourceDatabase,
+		target.Schema(),
+	)
+}
+
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
 	type renamedInfo struct {
@@ -4168,6 +4186,13 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 		}
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
+		}
+		for _, option := range alterTable.Options {
+			if rename, ok := option.(*tree.AlterOptionTableName); ok {
+				if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		if tableDef.IsTemporary {
