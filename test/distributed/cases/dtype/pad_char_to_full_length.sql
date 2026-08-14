@@ -10,15 +10,21 @@ set sql_mode = '';
 create table pad_char_to_full_length_t (
     c char(8),
     unicode_c char(4),
-    v varchar(8)
+    v varchar(8),
+    short_c char(4)
 );
-insert into pad_char_to_full_length_t values ('MO', '你好', 'MO');
+insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
 
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
        char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
 select count(*) from pad_char_to_full_length_t where length(c) = 2;
+select count(*) from pad_char_to_full_length_t where c = 'MO';
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<'') from pad_char_to_full_length_t';
@@ -29,6 +35,11 @@ select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
 select count(*) from pad_char_to_full_length_t where length(c) = 8;
+select count(*) from pad_char_to_full_length_t where c = 'MO';
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.v;
+select count(*) from pad_char_to_full_length_t as lhs
+join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 execute pad_char_stmt;
 
 set sql_mode = '';
