@@ -307,7 +307,7 @@ conda activate go
 Build:
 
 ```bash
-MO_CL_CUDA=1 make
+MO_CL_CUDA=1 make -j8
 ```
 
 What `MO_CL_CUDA=1` flips:
@@ -324,13 +324,14 @@ Guardrails:
 
 - `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
+- Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
 
 The linked `libmo` must itself be GPU-built:
 
 ```bash
-MO_CL_CUDA=1 make cgo
+MO_CL_CUDA=1 make -j8 cgo
 ```
 
 GPU tests need `-tags gpu` plus CUDA search paths. Linux only:
