@@ -44,7 +44,7 @@ func BenchmarkIssue26465AlterCopyQAShape(b *testing.B) {
 	restoreMemProfileRate := issue26465DisableSetupAllocationProfiling()
 	defer restoreMemProfileRate()
 
-	RunBaseClusterTests(b, func(cluster Cluster) {
+	RunSingleCNBaseClusterTests(b, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		if err != nil {
 			b.Fatal(err)
@@ -66,7 +66,7 @@ func BenchmarkIssue26465AlterCopyQAShape(b *testing.B) {
 }
 
 func TestIssue26465AlterCopyPreservesParentReference(t *testing.T) {
-	RunBaseClusterTests(t, func(cluster Cluster) {
+	RunSingleCNBaseClusterTests(t, func(cluster Cluster) {
 		cn, err := cluster.GetCNService(0)
 		if err != nil {
 			t.Fatal(err)

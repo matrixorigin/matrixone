@@ -51,8 +51,12 @@ CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
 IS_BUILD_FAIL=""
 UT_TEST_STATUS=0
+PLAN_RACE_TEST_BINARY=""
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
+# Static analysis owns vet in the separate SCA job. Running it again for every
+# UT package duplicates work and increases race-test compile CPU/memory.
+GO_TEST_VET_FLAGS="-vet=off"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -103,6 +107,10 @@ function report_active_ut_cases(){
 
 function handle_ut_termination(){
     trap - TERM
+    if [[ -n "${PLAN_RACE_TEST_BINARY}" ]]; then
+        rm -f "${PLAN_RACE_TEST_BINARY}"
+        PLAN_RACE_TEST_BINARY=""
+    fi
     logger "ERR" "UT runner received SIGTERM; reporting work without terminal Go test events"
     report_active_ut_cases
     exit 143
@@ -125,6 +133,11 @@ function run_vet(){
 function run_plan_race_shards(){
     local plan_package=$1
     local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
+    local build_log="${G_WKSP}/${G_TS}-plan-race-build.out"
+    local plan_test_binary="${G_WKSP}/${G_TS}-plan-race.test"
+    local plan_package_dir=""
+    local plan_package_import=""
+    local build_status=0
     local list_status=0
     local shard_status=0
     local test_name=""
@@ -139,17 +152,49 @@ function run_plan_race_shards(){
         return 2
     fi
 
-    # Listing does not run tests, so the process exits before race-detector
-    # state can accumulate. Use -race here so race-tagged tests are included.
+    if ! plan_package_dir=$(go list ${GO_MODULE_MODE} \
+        -f '{{.Dir}}' "${plan_package}"); then
+        logger "ERR" "Failed to resolve package metadata for ${plan_package}"
+        return 2
+    fi
+    if ! plan_package_import=$(go list ${GO_MODULE_MODE} \
+        -f '{{.ImportPath}}' "${plan_package}"); then
+        logger "ERR" "Failed to resolve package import path for ${plan_package}"
+        return 2
+    fi
+
+    # Compile and link the race-instrumented test binary once. Each shard still
+    # runs in a fresh process, preserving race-detector and package-global
+    # isolation without repeating the same link action for every shard.
+    PLAN_RACE_TEST_BINARY="${plan_test_binary}"
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} -short -race -tags "${TAGS}" \
-        -list '^(Test|Fuzz|Example)' "${plan_package}" > "${test_list}"
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1
+    build_status=$?
+    if (( build_status != 0 )); then
+        logger "ERR" "Failed to build race test binary for ${plan_package}"
+        tail -n 200 "${build_log}"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        return "${build_status}"
+    fi
+
+    # Test binaries normally execute with the package source directory as cwd.
+    # Preserve that contract for both discovery and shard execution.
+    (
+        cd "${plan_package_dir}" || exit 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            "${plan_test_binary}" -test.short=true \
+            -test.list='^(Test|Fuzz|Example)'
+    ) > "${test_list}" 2>&1
     list_status=$?
     if (( list_status != 0 )); then
         logger "ERR" "Failed to list tests for ${plan_package}"
         tail -n 200 "${test_list}"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
         return "${list_status}"
     fi
 
@@ -174,6 +219,8 @@ function run_plan_race_shards(){
 
     if (( test_count == 0 )); then
         logger "ERR" "No tests discovered for ${plan_package}"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
         return 2
     fi
 
@@ -184,17 +231,22 @@ function run_plan_race_shards(){
         fi
         shard_patterns[shard]+=')$'
         logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-            CGO_CFLAGS="${CGO_CFLAGS}" \
-            CGO_LDFLAGS="${CGO_LDFLAGS}" \
-            go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" \
-            -p 1 -count=1 -timeout "${UT_TIMEOUT}m" -race \
-            -run "${shard_patterns[shard]}" "${plan_package}" >> "${UT_REPORT}"
+        (
+            cd "${plan_package_dir}" || exit 2
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                go tool test2json -t -p "${plan_package_import}" \
+                "${plan_test_binary}" -test.short=true -test.v=test2json \
+                -test.paniconexit0=true -test.count=1 \
+                -test.timeout="${UT_TIMEOUT}m" \
+                -test.run="${shard_patterns[shard]}"
+        ) >> "${UT_REPORT}"
         if (( $? != 0 )); then
             shard_status=1
         fi
     done
 
+    rm -f "${plan_test_binary}"
+    PLAN_RACE_TEST_BINARY=""
     return "${shard_status}"
 }
 
@@ -248,19 +300,22 @@ function run_tests(){
 
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT packages with parallelism ${UT_PARALLEL} and process-lifecycle cluster admission"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" $test_scope > $UT_REPORT
         UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
         local plan_package
         local serial_test_scope
-        local heavy_test_scope
+        local cluster_test_scope
+        local resource_heavy_test_scope
         local light_test_scope
         local package
+        local cluster_package_parallel=2
         local package_status=0
         local light_status=0
         local serial_status=0
-        local heavy_status=0
+        local cluster_status=0
+        local resource_heavy_status=0
         local plan_status=0
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
@@ -268,6 +323,9 @@ function run_tests(){
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
+        fi
+        if (( HEAVY_RACE_PARALLEL < cluster_package_parallel )); then
+            cluster_package_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
@@ -290,26 +348,49 @@ function run_tests(){
             return 0
         fi
 
-        if ! heavy_test_scope=$(go list ${GO_MODULE_MODE} \
-            ./pkg/sql/plan/function \
-            ./pkg/tests/dml \
-            ./pkg/tests/shard \
-            ./pkg/tests/partition \
-            ./pkg/tests/txnexecutor); then
-            logger "ERR" "Failed to resolve heavy race-test packages"
+        # Derive cluster owners from each race test binary's complete dependency
+        # graph. This also catches packages that start a cluster through a test
+        # helper, without relying on an incomplete directory allowlist.
+        if ! cluster_test_scope=$(list_embedded_cluster_test_packages ${test_scope}); then
+            logger "ERR" "Failed to discover embedded-cluster race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
+
+        # Group precedence is exclusive > embedded cluster > resource heavy >
+        # light. Keep every package in exactly one group even when its test
+        # dependencies evolve.
+        cluster_test_scope=$(remove_packages_from_scope \
+            "${cluster_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope})
+
+        if ! resource_heavy_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/backup \
+            ./pkg/fileservice \
+            ./pkg/sql/plan/function \
+            ./pkg/vm/engine/test \
+            ./pkg/vm/engine/tae/db/test); then
+            logger "ERR" "Failed to resolve resource-heavy race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        resource_heavy_test_scope=$(remove_packages_from_scope \
+            "${resource_heavy_test_scope}" \
+            "${plan_package}" \
+            ${serial_test_scope} \
+            ${cluster_test_scope})
 
         light_test_scope=$(remove_packages_from_scope \
             "${test_scope}" \
             "${plan_package}" \
             ${serial_test_scope} \
-            ${heavy_test_scope})
+            ${cluster_test_scope} \
+            ${resource_heavy_test_scope})
 
         if [[ -n "${light_test_scope}" ]]; then
             logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
             light_status=$?
         else
             : > "${UT_REPORT}"
@@ -318,7 +399,7 @@ function run_tests(){
         logger "INF" "Run exclusive race-test packages serially"
         for package in ${serial_test_scope}; do
             logger "INF" "Run exclusive race-test package ${package}"
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race "${package}" >> $UT_REPORT
             package_status=$?
             if (( package_status != 0 )); then
                 serial_status=1
@@ -326,14 +407,23 @@ function run_tests(){
             fi
         done
 
-        logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
-        heavy_status=$?
+        # These packages link embedded clusters with substantial race-detector
+        # memory. The runner-wide file-lock admission keeps complete cluster
+        # lifecycles serialized across test binaries. Allow one additional
+        # package process to overlap linking, setup, and non-cluster work without
+        # returning to the six-way contention that starved HAKeeper.
+        logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope >> $UT_REPORT
+        cluster_status=$?
+
+        logger "INF" "Run resource-heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope >> $UT_REPORT
+        resource_heavy_status=$?
 
         run_plan_race_shards "${plan_package}"
         plan_status=$?
 
-        if (( light_status != 0 || serial_status != 0 || heavy_status != 0 || plan_status != 0 )); then
+        if (( light_status != 0 || serial_status != 0 || cluster_status != 0 || resource_heavy_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
