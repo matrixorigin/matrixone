@@ -15,6 +15,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	btoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -278,9 +280,59 @@ type MongoDBParameters struct {
 	MaxConversionErrors    int64         `toml:"max-conversion-errors" user_setting:"advanced"`
 	MaxConversionErrorRate float64       `toml:"max-conversion-error-rate" user_setting:"advanced"`
 	MaxSourceConcurrency   int           `toml:"max-source-concurrency" user_setting:"advanced"`
+
+	// enableConfigured records a TOML-provided value. enableDefaulted makes
+	// defaulting idempotent so a later programmatic false remains an opt-out.
+	enableConfigured bool
+	enableDefaulted  bool
+}
+
+// NewMongoDBParameters returns MongoDB parameters with defaults that must be
+// established before TOML decoding. Initializing Enable here lets an explicit
+// false from either TOML or programmatic configuration remain meaningful when
+// SetDefaultValues is called again later in the service lifecycle.
+func NewMongoDBParameters() *MongoDBParameters {
+	return &MongoDBParameters{Enable: true, enableDefaulted: true}
+}
+
+// UnmarshalTOML rejects ambiguous case variants while preserving defaults that
+// were initialized before decoding. The alias prevents recursive calls back
+// into this method when decoding the remaining MongoDB settings.
+func (parameters *MongoDBParameters) UnmarshalTOML(value interface{}) error {
+	table, ok := value.(map[string]interface{})
+	if !ok {
+		return moerr.NewBadConfigNoCtx("mongodb configuration must be a TOML table")
+	}
+	enableConfigured := false
+	for key := range table {
+		if !strings.EqualFold(key, "enable") {
+			continue
+		}
+		if enableConfigured {
+			return moerr.NewBadConfigNoCtx("mongodb configuration contains conflicting enable keys")
+		}
+		enableConfigured = true
+	}
+
+	var encoded bytes.Buffer
+	if err := btoml.NewEncoder(&encoded).Encode(table); err != nil {
+		return err
+	}
+	type plainMongoDBParameters MongoDBParameters
+	decoded := plainMongoDBParameters(*parameters)
+	if _, err := btoml.Decode(encoded.String(), &decoded); err != nil {
+		return err
+	}
+	*parameters = MongoDBParameters(decoded)
+	parameters.enableConfigured = enableConfigured
+	return nil
 }
 
 func (parameters *MongoDBParameters) SetDefaultValues() {
+	if !parameters.enableConfigured && !parameters.enableDefaulted {
+		parameters.Enable = true
+	}
+	parameters.enableDefaulted = true
 	if parameters.ConnectTimeout.Duration == 0 {
 		parameters.ConnectTimeout.Duration = 10 * time.Second
 	}

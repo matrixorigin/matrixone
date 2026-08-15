@@ -1839,25 +1839,46 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 		flags     uint16
 	}{
 		{
-			name:      "varchar length is encoded in utf8mb3 bytes",
+			name:      "varchar length is encoded in utf8mb4 bytes",
 			typ:       types.New(types.T_varchar, 128, 0),
 			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
-			charset:   charsetVarchar,
-			length:    384,
+			charset:   uint16(Utf8mb4CollationID),
+			length:    512,
 		},
 		{
-			name:      "char length is encoded in utf8mb3 bytes",
+			name:      "char length is encoded in utf8mb4 bytes",
 			typ:       types.New(types.T_char, 128, 0),
 			mysqlType: defines.MYSQL_TYPE_STRING,
+			charset:   uint16(Utf8mb4CollationID),
+			length:    512,
+		},
+		{
+			name:      "maximum varchar length is encoded in utf8mb4 bytes",
+			typ:       types.New(types.T_varchar, types.MaxVarcharLen, 0),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   uint16(Utf8mb4CollationID),
+			length:    types.MaxVarcharLen * 4,
+		},
+		{
+			name:      "legacy varchar length stays encoded in utf8mb3 bytes",
+			typ:       types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetLegacy),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
 			charset:   charsetVarchar,
 			length:    384,
 		},
 		{
-			name:      "maximum varchar length is encoded in utf8mb3 bytes",
-			typ:       types.New(types.T_varchar, types.MaxVarcharLen, 0),
+			name:      "utf8mb4 bin varchar length is encoded in utf8mb4 bytes",
+			typ:       types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetUTF8MB4Bin),
 			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
-			charset:   charsetVarchar,
-			length:    types.MaxVarcharLen * charsetVarcharMaxBytesPerCharacter,
+			charset:   uint16(utf8mb4BinCollationID),
+			length:    512,
+		},
+		{
+			name:      "opaque binary varchar length stays in bytes",
+			typ:       types.NewWithCharset(types.T_varchar, 128, 0, types.CharsetBinary),
+			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
+			charset:   charsetBinary,
+			length:    128,
 		},
 		{
 			name:      "varbinary length stays in bytes",
@@ -1879,21 +1900,21 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 			name:      "unknown varchar width stays unbounded",
 			typ:       types.New(types.T_varchar, -1, 0),
 			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
-			charset:   charsetVarchar,
+			charset:   uint16(Utf8mb4CollationID),
 			length:    math.MaxUint32,
 		},
 		{
 			name:      "unspecified varchar width stays unbounded",
 			typ:       types.New(types.T_varchar, 0, 0),
 			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
-			charset:   charsetVarchar,
+			charset:   uint16(Utf8mb4CollationID),
 			length:    math.MaxUint32,
 		},
 		{
 			name:      "varchar byte length saturates instead of wrapping",
 			typ:       types.New(types.T_varchar, math.MaxInt32, 0),
 			mysqlType: defines.MYSQL_TYPE_VAR_STRING,
-			charset:   charsetVarchar,
+			charset:   uint16(Utf8mb4CollationID),
 			length:    math.MaxUint32,
 		},
 		{
@@ -1919,9 +1940,10 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 			col, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
 				Name: "c",
 				Typ: plan2.Type{
-					Id:    int32(tt.typ.Oid),
-					Width: tt.typ.Width,
-					Scale: tt.typ.Scale,
+					Id:      int32(tt.typ.Oid),
+					Width:   tt.typ.Width,
+					Scale:   tt.typ.Scale,
+					Charset: uint32(tt.typ.Charset),
 				},
 			})
 			require.NoError(t, err)

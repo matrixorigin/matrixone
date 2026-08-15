@@ -16,13 +16,13 @@ package main
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -193,6 +193,33 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := *NewConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestMongoDBEnablementConfigDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "omitted", input: "", wantEnabled: true},
+		{name: "explicit disable", input: "[cn.frontend.mongodb]\nenable = false\n", wantEnabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewConfig()
+			require.NoError(t, parseFromString(tc.input, cfg))
+			require.NoError(t, cfg.setDefaultValue())
+			require.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+			require.False(t, cfg.CN.Frontend.MongoDB.EnablePerAccount)
+			require.False(t, cfg.CN.Frontend.MongoDB.AllowLoopback)
+			require.Empty(t, cfg.CN.Frontend.MongoDB.AllowedHostSuffixes)
+			require.Empty(t, cfg.CN.Frontend.MongoDB.AllowedCIDRs)
+
+			// Service construction and config reporting may default the same
+			// object again; an explicit false must remain stable.
+			cfg.CN.SetDefaultValue()
+			require.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+		})
+	}
 }
 
 func TestObservabilityRetiresSpansByDefault(t *testing.T) {

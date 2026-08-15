@@ -119,7 +119,9 @@ var PathExists = func(path string) (bool, bool, error) {
 }
 
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
-	sv := &mo_config.FrontendParameters{}
+	sv := &mo_config.FrontendParameters{
+		MongoDB: *mo_config.NewMongoDBParameters(),
+	}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
 	if err != nil {
@@ -1744,13 +1746,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		col.SetLength(uint32(types.MaxVarcharLen))
 	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
 		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
-		// string widths are declared in characters and use utf8mb3 metadata.
+		// string widths are declared in characters, so the byte multiplier must
+		// match the collation emitted by setMysqlColumnTypeInfo.
 		if typ.Oid == types.T_varchar && typ.Width == 0 {
 			// Synthesized VARCHAR result columns historically use zero as an
 			// unspecified width and must keep their unbounded metadata.
 			col.SetLength(math.MaxUint32)
 		} else {
-			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+			col.SetLength(mysqlStringColumnLength(typ.Width, mysqlTextMaxBytesPerCharacter(typ.Charset)))
 		}
 	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		// Binary string widths are already declared in bytes.
@@ -1767,6 +1770,18 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		return
 	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
+	switch charset {
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetBinary:
+		return 1
+	default:
+		// Legacy and unknown text metadata is emitted as utf8_general_ci.
+		return utf8MaxBytesPerCharacter
+	}
 }
 
 func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
