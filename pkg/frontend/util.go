@@ -1696,6 +1696,14 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
 		return err
 	}
+	if typ.Oid == types.T_blob {
+		length := uint32(math.MaxUint32)
+		if typ.Width > 0 {
+			length = uint32(typ.Width)
+		}
+		setMysqlBinaryBlobColumnMetadata(col, length)
+		return nil
+	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
 	switch typ.Charset {
@@ -1718,6 +1726,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		col.SetFlag(col.Flag() | uint16(defines.BINARY_FLAG))
 	}
 	return nil
+}
+
+func setMysqlBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
+	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	col.SetCharset(charsetBinary)
+	col.SetLength(length)
+	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
 }
 
 const mysqlDecimalNotSpecified = 0x1f
@@ -2225,6 +2240,12 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
+	}
+	if typ.Oid == types.T_blob && col.OriginTblName != "" {
+		// A directly selected table BLOB has MySQL's regular BLOB capacity.
+		// Width-less computed BLOB expressions keep the conservative upper bound
+		// installed by setMysqlColumnTypeInfo instead.
+		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
 
