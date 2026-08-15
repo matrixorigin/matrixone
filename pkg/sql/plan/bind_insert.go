@@ -3580,12 +3580,9 @@ func insertPrimaryKeyColumnPositions(table *plan.TableDef) ([]int32, bool) {
 }
 
 func insertKeyTypesCompatible(source, target plan.Type) bool {
-	return source.Id == target.Id &&
-		source.Width == target.Width &&
-		source.Scale == target.Scale &&
-		source.Table == target.Table &&
-		source.Enumvalues == target.Enumvalues &&
-		source.Charset == target.Charset
+	// Table records column provenance, not physical representation. Keys from
+	// different tables remain compatible when their encoded type fields match.
+	return isSameColumnType(source, target)
 }
 
 // isNumericAssignmentTarget reports whether a DML target column type may seed the

@@ -1940,10 +1940,11 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 }
 
 // disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
-// Unlike normal DEDUP, RIGHT DEDUP inserts every incoming key into its resident
-// hashmap and cannot start spilling when that probe-side map grows.  Multiple
-// DEDUP operators used for a primary key and unique indexes are chained in one
-// pipeline, so their maps coexist and must be budgeted together.
+// Ordinary RIGHT DEDUP inserts every incoming key into its resident hashmap
+// and cannot start spilling when that probe-side map grows. Lookup-only RIGHT
+// DEDUP retains only the target map. Multiple DEDUP operators used for a
+// primary key and unique indexes are chained in one pipeline, so their maps
+// coexist and must be budgeted together.
 //
 // This pass runs immediately before swapJoinChildren. At this point a DEDUP's
 // logical left child is the existing target and its logical right child is the

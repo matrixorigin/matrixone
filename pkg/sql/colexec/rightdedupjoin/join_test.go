@@ -201,6 +201,14 @@ func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool
 	}
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
 	installTestAllocation(t, arg, buildArg)
+	defer func() {
+		arg.Free(proc, false, nil)
+		buildArg.Free(proc, false, nil)
+		buildBat.Clean(proc.Mp())
+		probeBat.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
 
 	require.NoError(t, buildArg.Prepare(proc))
 	require.NoError(t, arg.Prepare(proc))
@@ -221,9 +229,6 @@ func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool
 		require.Equal(t, vm.ExecStop, res.Status)
 	}
 
-	arg.Free(proc, false, nil)
-	buildArg.Free(proc, false, nil)
-	proc.Free()
 }
 
 func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches, inputKeysUnique bool) {

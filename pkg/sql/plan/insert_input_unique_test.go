@@ -214,6 +214,45 @@ func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
 	}
 }
 
+func TestInsertSelectMarksCrossTableTargetPKDedupInputUnique(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	// The mock catalog omits Type.Table by default. Populate its two real table
+	// entries so Resolve returns the same distinct provenance as production.
+	for _, tableName := range []string{"emp", "employees"} {
+		tableDef := mock.ctxt.tables[tableName]
+		require.NotNil(t, tableDef)
+		for _, col := range tableDef.Cols {
+			col.Typ.Table = tableName
+		}
+	}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into constraint_test.emp (empno, ename, job) "+
+			"select empno, ename, job from constraint_test.employees where empno > 0")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan.GetQuery())
+
+	keyProvenance := make(map[string]string)
+	marked := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.TableDef != nil {
+			for _, col := range node.TableDef.Cols {
+				if col.Name == "empno" {
+					keyProvenance[node.TableDef.Name] = col.Typ.Table
+					break
+				}
+			}
+		}
+		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_DEDUP &&
+			node.DedupInputKeysUnique {
+			marked++
+		}
+	}
+	require.Equal(t, "employees", keyProvenance["employees"])
+	require.Equal(t, "emp", keyProvenance["emp"])
+	require.Equal(t, 1, marked, "table provenance must not change compatible key encodings")
+}
+
 func TestInsertSelectInputUniqueProofRequiresProtocolVersion21(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	proc := mock.CurrentContext().GetProcess()
