@@ -491,7 +491,7 @@ function run_tests(){
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
     echo "#  CLUSTER ADMISSION: process lifecycle"
-    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL package slots (+1 low-CPU engine shard)"
+    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL total package slots"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -660,15 +660,13 @@ function run_tests(){
             # engine/test is dominated by serial fixture lifecycles inside one
             # process. Build it once and split every discovered top-level test
             # across fresh race processes. The effective shard count and the
-            # remaining go-test parallelism use one extra process over the old
-            # package budget. Locally the two shards peak at 3.75 GB combined,
-            # only 1.1 GB above the old single process, while cutting runtime
-            # from 179s to 97s. Low custom budgets keep sequential waves.
+            # remaining go-test parallelism share HEAVY_RACE_PARALLEL as one
+            # strict process budget. Low custom budgets use sequential waves.
             engine_race_parallel=${ENGINE_RACE_SHARDS}
             if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
                 engine_race_parallel=${HEAVY_RACE_PARALLEL}
             fi
-            resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - engine_race_parallel + 1 ))
+            resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - engine_race_parallel ))
             if (( HEAVY_RACE_PARALLEL <= engine_race_parallel )); then
                 resource_heavy_parallel=0
             fi
