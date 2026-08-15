@@ -20,16 +20,19 @@ drop table if exists pad_char_set4;
 drop table if exists pad_char_set_v8;
 drop table if exists pad_char_set_text;
 drop table if exists pad_char_promoted;
+drop table if exists pad_char_window;
 create table pad_char_set8 (c char(8));
 create table pad_char_set4 (c char(4));
 create table pad_char_set_v8 (c varchar(8));
 create table pad_char_set_text (c text);
 create table pad_char_promoted (c char(8), v varchar(8));
+create table pad_char_window (id int, c char(8), v varchar(8));
 insert into pad_char_set8 values ('MO');
 insert into pad_char_set4 values ('MO');
 insert into pad_char_set_v8 values ('MO');
 insert into pad_char_set_text values ('MO');
 insert into pad_char_promoted values ('MO', null), (null, 'MO');
+insert into pad_char_window values (1, 'MO', null), (2, null, 'MO'), (3, null, 'X');
 
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
@@ -102,6 +105,11 @@ select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x not in ('MO', 'XX');
+select count(y) from (
+    select distinct y from (
+        select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
+    ) d
+) q;
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -180,6 +188,11 @@ select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x not in ('MO', 'XX');
+select count(y) from (
+    select distinct y from (
+        select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
+    ) d
+) q;
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;
@@ -195,3 +208,4 @@ drop table pad_char_set4;
 drop table pad_char_set_v8;
 drop table pad_char_set_text;
 drop table pad_char_promoted;
+drop table pad_char_window;
