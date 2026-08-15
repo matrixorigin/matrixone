@@ -1,0 +1,61 @@
+drop database if exists qualified_insert_columns;
+create database qualified_insert_columns;
+use qualified_insert_columns;
+create table t (
+id int primary key,
+value int not null,
+note varchar(20) not null
+);
+insert into qualified_insert_columns.t(id, value, note)
+values (1, 10, 'unqualified');
+insert into qualified_insert_columns.t(t.id, t.value, t.note)
+values (2, 20, 'table');
+insert into qualified_insert_columns.t(
+qualified_insert_columns.t.id,
+qualified_insert_columns.t.value,
+qualified_insert_columns.t.note
+) values (3, 30, 'database');
+insert into `qualified_insert_columns`.`t`(
+`qualified_insert_columns`.`t`.`id`,
+`qualified_insert_columns`.`t`.`value`,
+`qualified_insert_columns`.`t`.`note`
+) values (4, 40, 'quoted');
+select id, value, note from t order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  10  ¦  unqualified  𝄀
+2  ¦  20  ¦  table  𝄀
+3  ¦  30  ¦  database  𝄀
+4  ¦  40  ¦  quoted
+prepare qualified_insert from
+'insert into `qualified_insert_columns`.`t`(
+`qualified_insert_columns`.`t`.`id`,
+`qualified_insert_columns`.`t`.`value`,
+`qualified_insert_columns`.`t`.`note`
+) values (?, ?, ?)';
+set @id = 5;
+set @value = 50;
+set @note = 'prepared';
+execute qualified_insert using @id, @value, @note;
+deallocate prepare qualified_insert;
+select count(*) as row_count, sum(id) as id_sum, sum(value) as value_sum from t;
+➤ row_count[-5,64,0]  ¦  id_sum[-5,64,0]  ¦  value_sum[-5,64,0]  𝄀
+5  ¦  15  ¦  150
+insert into qualified_insert_columns.t(
+qualified_insert_columns.t.id,
+qualified_insert_columns.t.missing
+) values (6, 60);
+Unknown column 'missing' in 't'
+select count(*) as row_count, sum(id) as id_sum, sum(value) as value_sum from t;
+➤ row_count[-5,64,0]  ¦  id_sum[-5,64,0]  ¦  value_sum[-5,64,0]  𝄀
+5  ¦  15  ¦  150
+insert into qualified_insert_columns.t(id, value, note)
+values (6, 60, 'after_error');
+select id, value, note from t order by id;
+➤ id[4,32,0]  ¦  value[4,32,0]  ¦  note[12,20,0]  𝄀
+1  ¦  10  ¦  unqualified  𝄀
+2  ¦  20  ¦  table  𝄀
+3  ¦  30  ¦  database  𝄀
+4  ¦  40  ¦  quoted  𝄀
+5  ¦  50  ¦  prepared  𝄀
+6  ¦  60  ¦  after_error
+drop database qualified_insert_columns;

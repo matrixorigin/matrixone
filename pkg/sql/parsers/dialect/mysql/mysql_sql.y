@@ -6109,6 +6109,10 @@ insert_column:
     {
         $$ = yylex.(*Lexer).GetDbOrTblName($3.Origin())
     }
+|   ident '.' ident '.' ident
+    {
+        $$ = yylex.(*Lexer).GetDbOrTblName($5.Origin())
+    }
 
 values_list:
     row_value
