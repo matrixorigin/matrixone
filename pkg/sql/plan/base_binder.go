@@ -5385,7 +5385,8 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 
 func isPadSpaceValueSelectingFunction(name string) bool {
 	switch name {
-	case "case", "coalesce", "if", "ifnull":
+	case "case", "coalesce", "if", "ifnull",
+		"lag", "lead", "first_value", "last_value", "nth_value":
 		return true
 	default:
 		return false

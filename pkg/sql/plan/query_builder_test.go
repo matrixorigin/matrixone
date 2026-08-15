@@ -4441,6 +4441,49 @@ func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) 
 	}
 }
 
+func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name       string
+		windowExpr string
+		wantKey    bool
+	}{
+		{name: "lag", windowExpr: "lag(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "lead", windowExpr: "lead(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "first value", windowExpr: "first_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "last value", windowExpr: "last_value(" + value + ") over (order by n_nationkey)", wantKey: true},
+		{name: "nth value", windowExpr: "nth_value(" + value + ", 1) over (order by n_nationkey)", wantKey: true},
+		{
+			name:       "varchar control",
+			windowExpr: "lag(cast(n_name as varchar(8))) over (order by n_nationkey)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct y from (select "+tc.windowExpr+" as y from nation) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
 func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	for _, tc := range []struct {
 		name string
