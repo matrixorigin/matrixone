@@ -31,6 +31,10 @@ type Bytes struct {
 	deallocator malloc.Deallocator
 	owner       *fscache.DataOwner
 	reservation cacheDataReservation
+	// doNotReuse preserves malloc.DoNotReuse across the MemCache's internal
+	// pending-allocation pool. Such callers require Release to return the
+	// allocation to the underlying allocator immediately.
+	doNotReuse bool
 	// cacheAdmissionOwner identifies a cache that deliberately allocated this
 	// as a transient read buffer because it could not reserve cache capacity.
 	cacheAdmissionOwner *fscache.DataOwner
@@ -104,17 +108,29 @@ func (b *Bytes) Release() {
 	if n == 0 {
 		// Last reference: no other goroutine may legally touch b anymore
 		// (Retain from zero panics), so plain writes are safe here.
-		b.bytes = nil
-		if b.deallocator != nil {
-			b.deallocator.Deallocate()
-			b.deallocator = nil
+		if reservation, ok := b.reservation.(recyclableCacheDataReservation); ok &&
+			!b.doNotReuse && reservation.recycle(b) {
+			return
 		}
-		if b.reservation != nil {
-			b.reservation.release()
-			b.reservation = nil
-		}
+		b.releaseAllocation()
 	} else if n < 0 {
 		panic("Bytes.Release: double free")
+	}
+}
+
+// releaseAllocation returns the native allocation and drops any pending cache
+// reservation. It is called on the ordinary final Release path and when a
+// MemCache drains an idle pending allocation at an explicit reclaim boundary.
+// The latter owns a Bytes with refs already at zero.
+func (b *Bytes) releaseAllocation() {
+	b.bytes = nil
+	if b.deallocator != nil {
+		b.deallocator.Deallocate()
+		b.deallocator = nil
+	}
+	if b.reservation != nil {
+		b.reservation.release()
+		b.reservation = nil
 	}
 }
 
@@ -172,6 +188,7 @@ func (b *bytesAllocator) allocateCacheBytes(size int, hints malloc.Hints) *Bytes
 		bytes:       slice,
 		deallocator: dec,
 		owner:       b.owner,
+		doNotReuse:  hints&malloc.DoNotReuse != 0,
 	}
 	bytes.refs.Store(1)
 	return bytes

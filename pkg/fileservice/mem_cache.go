@@ -51,6 +51,25 @@ type MemCache struct {
 
 	capacityMu    sync.Mutex
 	reservedBytes int64
+
+	// idleCacheData contains native buffers whose capacity was reserved but
+	// which were released before FIFO insertion. Keeping these exact
+	// jemalloc-size-class buffers avoids a mallocx/dallocx round trip on the
+	// common read-buffer path without making physical capacity unaccounted.
+	idleCacheDataMu sync.Mutex
+	idleCacheData   sync.Map // map[int]*memoryCacheIdlePool, keyed by backing size
+}
+
+const (
+	// Keep only small transient read buffers. Retaining a large pending buffer
+	// would be capacity-correct, but can needlessly pin a meaningful share of a
+	// FileService cache after a one-off read.
+	maxIdleCacheDataBackingSize = 64 << 10
+	idleCacheDataPerClass       = 64
+)
+
+type memoryCacheIdlePool struct {
+	data chan *Bytes
 }
 
 // memoryCacheReservation accounts for an allocated buffer until FIFO insertion
@@ -70,6 +89,11 @@ const (
 
 var _ cacheDataReservation = (*memoryCacheReservation)(nil)
 
+type recyclableCacheDataReservation interface {
+	cacheDataReservation
+	recycle(*Bytes) bool
+}
+
 func (r *memoryCacheReservation) commit() {
 	if r.state.CompareAndSwap(memoryCacheReservationPending, memoryCacheReservationCommitted) {
 		r.cache.releaseReservedBytes(r.bytes)
@@ -80,6 +104,13 @@ func (r *memoryCacheReservation) release() {
 	if r.state.CompareAndSwap(memoryCacheReservationPending, memoryCacheReservationReleased) {
 		r.cache.releaseReservedBytes(r.bytes)
 	}
+}
+
+func (r *memoryCacheReservation) recycle(data *Bytes) bool {
+	if r.state.Load() != memoryCacheReservationPending {
+		return false
+	}
+	return r.cache.recycleReservedCacheData(data, int(r.bytes))
 }
 
 type memoryCacheMetricKey struct {
@@ -387,7 +418,11 @@ func (m *MemCache) BackingSize(size int) int {
 }
 
 func (m *MemCache) allocateCacheData(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
-	if reservation := m.reserveCacheData(ctx, m.allocator.BackingSize(size)); reservation != nil {
+	backingSize := m.allocator.BackingSize(size)
+	if data := m.reuseReservedCacheData(size, backingSize, hints); data != nil {
+		return data
+	}
+	if reservation := m.reserveCacheData(ctx, backingSize); reservation != nil {
 		ret := m.allocator.allocateCacheBytes(size, hints)
 		ret.reservation = reservation
 		return ret
@@ -417,6 +452,17 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 			m.capacityMu.Unlock()
 			return &memoryCacheReservation{cache: m, bytes: want}
 		}
+		m.capacityMu.Unlock()
+
+		// Idle entries are already charged to reservedBytes but do not appear in
+		// FIFO Used(). Release them before evicting live cache entries.
+		if m.releaseIdleCacheData() > 0 {
+			continue
+		}
+
+		m.capacityMu.Lock()
+		capacity = m.cache.Capacity()
+		used = m.cache.Used()
 		target := capacity - m.reservedBytes - want
 		m.capacityMu.Unlock()
 
@@ -427,6 +473,87 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 			return nil
 		}
 	}
+}
+
+func (m *MemCache) idlePool(backingSize int) *memoryCacheIdlePool {
+	if pool, ok := m.idleCacheData.Load(backingSize); ok {
+		return pool.(*memoryCacheIdlePool)
+	}
+
+	newPool := &memoryCacheIdlePool{
+		data: make(chan *Bytes, idleCacheDataPerClass),
+	}
+	pool, loaded := m.idleCacheData.LoadOrStore(backingSize, newPool)
+	if !loaded {
+		return newPool
+	}
+	return pool.(*memoryCacheIdlePool)
+}
+
+func (m *MemCache) reuseReservedCacheData(size, backingSize int, hints malloc.Hints) *Bytes {
+	if backingSize > maxIdleCacheDataBackingSize || hints&malloc.DoNotReuse != 0 || m.closed.Load() {
+		return nil
+	}
+
+	pool, ok := m.idleCacheData.Load(backingSize)
+	if !ok {
+		return nil
+	}
+	select {
+	case data := <-pool.(*memoryCacheIdlePool).data:
+		if cap(data.bytes) != backingSize {
+			panic("memory cache idle buffer backing size mismatch")
+		}
+		data.bytes = data.bytes[:size]
+		if hints&malloc.NoClear == 0 {
+			clear(data.bytes)
+		}
+		data.refs.Store(1)
+		return data
+	default:
+		return nil
+	}
+}
+
+func (m *MemCache) recycleReservedCacheData(data *Bytes, backingSize int) bool {
+	if backingSize > maxIdleCacheDataBackingSize || m.closed.Load() || cap(data.bytes) != backingSize {
+		return false
+	}
+
+	m.idleCacheDataMu.Lock()
+	defer m.idleCacheDataMu.Unlock()
+	if m.closed.Load() {
+		return false
+	}
+	select {
+	case m.idlePool(backingSize).data <- data:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseIdleCacheData frees pending buffers that were retained for reuse.
+// They already count against reservedBytes, so this must run before FIFO
+// eviction under allocation pressure and at explicit reclamation boundaries.
+func (m *MemCache) releaseIdleCacheData() int {
+	m.idleCacheDataMu.Lock()
+	defer m.idleCacheDataMu.Unlock()
+
+	released := 0
+	m.idleCacheData.Range(func(_, value any) bool {
+		pool := value.(*memoryCacheIdlePool)
+		for {
+			select {
+			case data := <-pool.data:
+				data.releaseAllocation()
+				released++
+			default:
+				return true
+			}
+		}
+	})
+	return released
 }
 
 func (m *MemCache) releaseReservedBytes(bytes int64) {
@@ -683,6 +810,7 @@ func (m *MemCache) admitCacheData(ctx context.Context, data fscache.Data) fscach
 }
 
 func (m *MemCache) Flush(ctx context.Context) {
+	m.releaseIdleCacheData()
 	m.cache.EvictToTargetWithWait(ctx, 0)
 	m.reclaimAllocator()
 }
@@ -700,6 +828,9 @@ func (m *MemCache) DeletePaths(
 }
 
 func (m *MemCache) Evict(ctx context.Context, done chan int64) {
+	if m.releaseIdleCacheData() > 0 {
+		m.reclaimAllocator()
+	}
 	m.cache.Evict(ctx, done)
 }
 
@@ -713,6 +844,9 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 	}
 	if percent > 100 {
 		percent = 100
+	}
+	if percent < 100 {
+		m.releaseIdleCacheData()
 	}
 	target := m.cache.Capacity() * percent / 100
 	used := m.EvictToTarget(ctx, target)

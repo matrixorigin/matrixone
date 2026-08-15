@@ -256,6 +256,117 @@ func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
 	require.Equal(t, int64(0), cache.reservedBytes)
 }
 
+func TestMemCacheReusesSmallPendingAllocation(t *testing.T) {
+	ctx := context.Background()
+	const request = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+	require.LessOrEqual(t, backing, maxIdleCacheDataBackingSize)
+
+	first := cache.AllocateCacheData(ctx, request).(*Bytes)
+	first.Release()
+	require.Equal(t, int64(backing), cache.reservedBytes)
+
+	second := cache.AllocateCacheData(ctx, request).(*Bytes)
+	require.Same(t, first, second)
+	require.Equal(t, int64(backing), cache.reservedBytes)
+	second.Release()
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		data := cache.AllocateCacheData(ctx, request)
+		data.Release()
+	})
+	require.Zero(t, allocations)
+}
+
+func TestMemCacheReusedPendingAllocationIsCleared(t *testing.T) {
+	ctx := context.Background()
+	const request = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	defer cache.Close(ctx)
+
+	first := cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear).(*Bytes)
+	for i := range first.Bytes() {
+		first.Bytes()[i] = 0xff
+	}
+	first.Release()
+
+	second := cache.AllocateCacheData(ctx, request).(*Bytes)
+	for _, value := range second.Bytes() {
+		require.Zero(t, value)
+	}
+	second.Release()
+}
+
+func TestMemCacheCapacityPressureDrainsIdlePendingAllocation(t *testing.T) {
+	ctx := context.Background()
+	const (
+		firstRequest  = 4 << 10
+		secondRequest = 8 << 10
+	)
+
+	cache := NewMemCache(fscache.ConstCapacity(8<<10), nil, nil, "")
+	defer cache.Close(ctx)
+	firstBacking := cache.BackingSize(firstRequest)
+	secondBacking := cache.BackingSize(secondRequest)
+	require.Less(t, firstBacking, secondBacking)
+	require.Equal(t, cache.cache.Capacity(), int64(secondBacking))
+
+	first := cache.AllocateCacheData(ctx, firstRequest).(*Bytes)
+	first.Release()
+	require.Equal(t, int64(firstBacking), cache.reservedBytes)
+
+	second := cache.AllocateCacheData(ctx, secondRequest).(*Bytes)
+	require.Same(t, cache.allocator.owner, second.CacheDataOwner())
+	require.Equal(t, int64(secondBacking), cache.reservedBytes)
+	second.Release()
+}
+
+func TestMemCacheFlushReleasesIdlePendingAllocation(t *testing.T) {
+	ctx := context.Background()
+	const request = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+
+	first := cache.AllocateCacheData(ctx, request).(*Bytes)
+	first.Release()
+	require.Equal(t, int64(backing), cache.reservedBytes)
+
+	cache.Flush(ctx)
+	require.Zero(t, cache.reservedBytes)
+
+	stats, err := cache.arenaAllocator.Stats()
+	require.NoError(t, err)
+	require.Zero(t, stats.Allocated)
+
+	second := cache.AllocateCacheData(ctx, request).(*Bytes)
+	require.NotSame(t, first, second)
+	second.Release()
+}
+
+func TestMemCacheForcedEvictionReleasesIdlePendingAllocation(t *testing.T) {
+	ctx := context.Background()
+	const request = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	defer cache.Close(ctx)
+	backing := cache.BackingSize(request)
+
+	data := cache.AllocateCacheData(ctx, request)
+	data.Release()
+	require.Equal(t, int64(backing), cache.reservedBytes)
+
+	done := make(chan int64, 1)
+	cache.Evict(ctx, done)
+	<-done
+	require.Zero(t, cache.reservedBytes)
+}
+
 func TestMemCacheCommitsReservationAfterFIFOUsageIsCharged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
