@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -200,12 +201,49 @@ func Test_buildShowCreateTableSpatialIndex(t *testing.T) {
 		IndexName: "idx_g",
 		Parts:     []string{"g"},
 		IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		Visible:   true,
 	})
 
 	var snapshot *plan.Snapshot
 	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `spatial_src` (\n  `id` int NOT NULL,\n  `g` point NOT NULL,\n  PRIMARY KEY (`id`),\n  SPATIAL KEY `idx_g` (`g`)\n)", got)
+}
+
+func TestShowCreateTablePreservesInvisibleIndexes(t *testing.T) {
+	got, err := buildTestShowCreateTable(`CREATE TABLE invisible_show_src (
+		id INT PRIMARY KEY,
+		name VARCHAR(191),
+		body TEXT,
+		KEY idx_name(name) INVISIBLE,
+		FULLTEXT KEY idx_body(body) INVISIBLE
+	)`)
+	require.NoError(t, err)
+	require.Contains(t, got, "KEY `idx_name` (`name`) INVISIBLE")
+	require.Contains(t, got, "FULLTEXT `idx_body`(`body`) INVISIBLE")
+}
+
+func TestShowCreateTableUsesVisibleSystemIndexWithoutCatalogRow(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE legacy_mo_tables (
+		id INT PRIMARY KEY,
+		rel_logical_id BIGINT,
+		UNIQUE KEY idx_rel_logical_id(rel_logical_id)
+	)`)
+	require.NoError(t, err)
+	tableDef.TblId = catalog.MO_TABLES_ID
+	tableDef.Indexes[0].Option = nil
+	tableDef.Indexes[0].Visible = false
+
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, tableDef.TblId, tableDef, nil))
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.True(t, visible)
+
+	got, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`)")
+	require.NotContains(t, got, "UNIQUE KEY `idx_rel_logical_id` (`rel_logical_id`) INVISIBLE")
 }
 
 func TestShowCreateTablePreservesIndexPrefixLengths(t *testing.T) {
@@ -250,7 +288,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 	require.False(t, visibility["uq_invisible"])
 
 	got, _, err := constructCreateTableSQL(
-		&mock.ctxt, tableDef, nil, true, nil, true, true,
+		&mock.ctxt, tableDef, nil, true, nil, true,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
@@ -267,6 +305,10 @@ func TestConstructCreateTableSQLDefaultsAmbiguousIndexVisibilityToVisible(t *tes
 	)`)
 	require.NoError(t, err)
 	require.NotEmpty(t, tableDef.Indexes)
+	// A formatter caller can have a table ID but still lack ownership of its
+	// source catalog (for example, a subscription or dump). It must not issue a
+	// local mo_indexes lookup merely because a compiler context was supplied.
+	tableDef.TblId = 272466
 
 	// A pre-upgrade default-visible IndexDef has the same false proto3 value as
 	// an explicitly invisible index. Public reconstruction callers cannot tell
@@ -296,6 +338,106 @@ func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
 	require.Equal(t, first, second)
 	require.Equal(t, "O'Reilly", tableDef.Indexes[0].Comment)
 	require.Contains(t, first, `COMMENT 'O''Reilly'`)
+}
+
+func TestConstructCreateTableSQLRoundTripsIndexCommentEscaping(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	const comment = `index's comment\with unicode 维度`
+	// The doubled backslash is the SQL spelling that the MySQL scanner reads as
+	// one semantic backslash on the inline CREATE path.
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE comment_roundtrip (
+		id INT PRIMARY KEY,
+		note VARCHAR(32),
+		KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度'
+	)`)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Indexes, 1)
+	require.Equal(t, comment, tableDef.Indexes[0].Comment)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, `COMMENT 'index''s comment\\with unicode 维度'`)
+
+	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
+	require.NoError(t, err)
+	require.Len(t, roundTripped.Indexes, 1)
+	require.Equal(t, comment, roundTripped.Indexes[0].Comment)
+}
+
+func TestShowCreateTableTransportPreservesIndexCommentBackslash(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	const comment = `index's comment\with unicode 维度`
+	tableDef, err := buildTestCreateTableStmt(mock, `CREATE TABLE show_transport_comment (
+		id INT PRIMARY KEY,
+		note VARCHAR(32),
+		KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度'
+	)`)
+	require.NoError(t, err)
+	ddl, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+
+	statements, err := mysql.Parse(mock.ctxt.GetContext(),
+		`SELECT `+sqlquote.String("show_transport_comment")+`, `+sqlquote.String(ddl), 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	selectStmt, ok := statements[0].(*tree.Select)
+	require.True(t, ok)
+	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, selectClause.Exprs, 2)
+	createValue, ok := selectClause.Exprs[1].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, ddl, createValue.String())
+
+	roundTripped, err := buildTestCreateTableStmt(mock, createValue.String())
+	require.NoError(t, err)
+	require.Len(t, roundTripped.Indexes, 1)
+	require.Equal(t, comment, roundTripped.Indexes[0].Comment)
+}
+
+func TestShowCreateTableTransportPreservesBackslashControls(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, tc := range []struct {
+		name    string
+		comment string
+	}{
+		{name: "before quote", comment: `backslash\"quote`},
+		{name: "trailing", comment: `trailing\`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tableDef, err := buildTestCreateTableStmt(mock,
+				"CREATE TABLE control_comment (id BIGINT, KEY idx_note(id) COMMENT "+sqlquote.String(tc.comment)+")")
+			require.NoError(t, err)
+			ddl, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+			require.NoError(t, err)
+			statements, err := mysql.Parse(mock.ctxt.GetContext(), "SELECT "+sqlquote.String(ddl), 1)
+			require.NoError(t, err)
+			selectStmt := statements[0].(*tree.Select)
+			selectClause := selectStmt.Select.(*tree.SelectClause)
+			value := selectClause.Exprs[0].Expr.(*tree.NumVal)
+			require.Equal(t, ddl, value.String())
+			roundTripped, err := buildTestCreateTableStmt(mock, value.String())
+			require.NoError(t, err)
+			require.Len(t, roundTripped.Indexes, 1)
+			require.Equal(t, tc.comment, roundTripped.Indexes[0].Comment)
+		})
+	}
+}
+
+func TestAlterAddIndexCommentParserPreservesBackslash(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	statements, err := mysql.Parse(mock.ctxt.GetContext(), `ALTER TABLE comment_roundtrip ADD KEY idx_note(note) COMMENT 'index''s comment\\with unicode 维度'`, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+
+	alter, ok := statements[0].(*tree.AlterTable)
+	require.True(t, ok)
+	require.Len(t, alter.Options, 1)
+	add, ok := alter.Options[0].(*tree.AlterOptionAdd)
+	require.True(t, ok)
+	index, ok := add.Def.(*tree.Index)
+	require.True(t, ok)
+	require.Equal(t, `index's comment\with unicode 维度`, index.IndexOption.Comment)
 }
 
 func Test_ShowCreateTableUsesIncludedColumnsFromIndexDef(t *testing.T) {

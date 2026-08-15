@@ -2568,6 +2568,22 @@ func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 		})
 	}
 
+	t.Run("alter rename remaps qualified source and destination", func(t *testing.T) {
+		outerSQL, err := rewriteSQL(ctx, ses,
+			`prepare rename_stmt from 'alter table src.t rename to src.t2'`)
+		require.NoError(t, err)
+		execCtx.sqlOfStmt = outerSQL
+		_, stmt, remap, err := prepareStringStatement(execCtx, ses,
+			"alter table src.t rename to src.t2")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "session_db", remap["src"])
+		formatted := tree.String(stmt, dialect.MYSQL)
+		require.Contains(t, formatted, "session_db.t")
+		require.Contains(t, formatted, "session_db.t2")
+		require.NotContains(t, formatted, "src.t")
+	})
+
 	t.Run("inner inline works without outer policy", func(t *testing.T) {
 		execCtx.sqlOfStmt = `prepare inline_only from 'select 1'`
 		_, stmt, remap, err := prepareStringStatement(execCtx, ses,

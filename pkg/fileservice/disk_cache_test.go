@@ -696,7 +696,10 @@ func TestDiskCacheDirSize(t *testing.T) {
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
-	data := bytes.Repeat([]byte("a"), capacity/128)
+	// Keep enough files to exercise repeated eviction, but avoid turning this
+	// invariant check into an O(n^2) test: dirSize walks the whole cache
+	// directory after every write.
+	data := bytes.Repeat([]byte("a"), capacity/4)
 	for i := 0; i < capacity/len(data)*2; i++ {
 		err := cache.Update(ctx, &IOVector{
 			FilePath: fmt.Sprintf("%v", i),

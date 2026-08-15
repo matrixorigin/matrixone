@@ -647,6 +647,17 @@ func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
 	)
 }
 
+// generatedCloneRestoreSnapshotTS returns the timestamp to put in nested clone
+// restore SQL. An explicit transaction must retain the shared transaction view
+// so it can read its own uncommitted source data and metadata. The caller still
+// keeps the generated timestamp for data-branch bookkeeping.
+func generatedCloneRestoreSnapshotTS(ses *Session, snapshotTS int64) int64 {
+	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
+		return 0
+	}
+	return snapshotTS
+}
+
 func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
 	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
 	if err != nil {
@@ -915,14 +926,7 @@ func handleCloneTable(
 			return
 		}
 	}
-	restoreSnapshotTS := snapshotTS
-	if ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN) {
-		// A timestamp hint resolves through a cloned snapshot transaction and
-		// cannot see tables created earlier in the current transaction. Keep
-		// snapshotTS for branch bookkeeping, but let the shared transaction
-		// resolve and scan its own uncommitted source table.
-		restoreSnapshotTS = 0
-	}
+	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
 	sql = cloneTableRestoreSQL(stmt, restoreSnapshotTS)
 
 	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
@@ -1136,11 +1140,12 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	restoreSnapshotTS := generatedCloneRestoreSnapshotTS(ses, snapshotTS)
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
-		if stmt.AtTsExpr == nil && snapshotTS != 0 {
-			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+		if stmt.AtTsExpr == nil && restoreSnapshotTS != 0 {
+			srcTable.AtTsExpr = newMoTimestampHint(restoreSnapshotTS)
 		}
 		dstTable := newQualifiedCloneTableName(dstDb, dstTbl, nil)
 		cloneStmt := &tree.CloneTable{
@@ -1213,7 +1218,7 @@ func handleCloneDatabaseWithSource(
 
 	// clone view table
 	if len(source.viewMap) != 0 {
-		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, snapshotTS)
+		viewSnapshot := prepareCloneViewSnapshot(source.snapshot, restoreSnapshotTS)
 		fromAccount := source.opAccountId
 		if viewSnapshot != nil && viewSnapshot.Tenant != nil {
 			fromAccount = viewSnapshot.Tenant.TenantID

@@ -30,6 +30,9 @@ func TestIndexDefIncludedColumnsRoundTripAndDeepCopy(t *testing.T) {
 		IndexAlgo:       "ivfflat",
 		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
 		IncludedColumns: []string{"title", "category"},
+		Option: &planpb.IndexOption{
+			Visibility: planpb.IndexOption_VISIBILITY_INVISIBLE,
+		},
 	}
 
 	data, err := indexDef.Marshal()
@@ -41,6 +44,7 @@ func TestIndexDefIncludedColumnsRoundTripAndDeepCopy(t *testing.T) {
 
 	copied := DeepCopyIndexDef(indexDef)
 	require.Equal(t, indexDef.IncludedColumns, copied.IncludedColumns)
+	require.Equal(t, planpb.IndexOption_VISIBILITY_INVISIBLE, copied.Option.Visibility)
 
 	indexDef.IncludedColumns[0] = "headline"
 	require.Equal(t, []string{"title", "category"}, copied.IncludedColumns)
