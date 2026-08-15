@@ -4764,6 +4764,21 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		// Keep the query-block aggregate state active while HAVING, SELECT
+		// projection, and ORDER BY are bound.  Correlated columns in a
+		// projection may be bound before the first SELECT aggregate is appended
+		// to ctx.aggregates; deriving this state from the AST makes the
+		// ONLY_FULL_GROUP_BY decision independent of SELECT-item order.  The
+		// aggregate-input correlation flag remains use-site-specific and prevents
+		// this state from classifying per-row aggregate arguments as bare output
+		// columns.
+		previousPendingAggregateQuery := ctx.pendingAggregateQuery
+		ctx.pendingAggregateQuery = previousPendingAggregateQuery ||
+			queryBlockHasPendingAggregate(selectClause.Exprs, selectClause.Having, astOrderBy)
+		defer func() {
+			ctx.pendingAggregateQuery = previousPendingAggregateQuery
+		}()
+
 		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
 			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
 			// the same parsed SELECT once per reference, so keep the declaration
@@ -7385,10 +7400,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		prevPendingAggregateQuery := ctx.pendingAggregateQuery
-		ctx.pendingAggregateQuery = queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
-		ctx.pendingAggregateQuery = prevPendingAggregateQuery
 		if err != nil {
 			return
 		}
