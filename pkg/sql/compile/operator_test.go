@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -363,6 +364,18 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	if dupOp.SpillThreshold != op.SpillThreshold {
 		t.Errorf("SpillThreshold mismatch: got %d, want %d", dupOp.SpillThreshold, op.SpillThreshold)
 	}
+}
+
+func TestDupOperatorOrderPreservesSpecsAndAllocationContract(t *testing.T) {
+	op := order.NewArgument()
+	defer op.Release()
+	op.OrderBySpec = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+
+	duplicated := dupOperator(op, 0, 1).(*order.Order)
+	defer duplicated.Release()
+	require.Equal(t, op.OrderBySpec, duplicated.OrderBySpec)
+	_, ownsAllocation := any(duplicated).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
 }
 
 func TestDupOperatorPartitionMultiUpdate(t *testing.T) {

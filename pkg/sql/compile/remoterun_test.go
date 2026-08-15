@@ -409,6 +409,21 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, vm.IntersectAll, restored.OpType())
 	})
 
+	t.Run("Order", func(t *testing.T) {
+		original := order.NewArgument()
+		original.OrderBySpec = []*planpb.OrderBySpec{{
+			Expr: plan.MakePlan2Int64ConstExprWithType(1),
+			Flag: planpb.OrderBySpec_DESC,
+		}}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredOrder, ok := restored.(*order.Order)
+		require.True(t, ok)
+		require.Equal(t, original.OrderBySpec, restoredOrder.OrderBySpec)
+		_, ownsAllocation := any(restoredOrder).(executionAllocationAccountOwner)
+		require.True(t, ownsAllocation)
+	})
+
 	t.Run("GroupByHashKey", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}

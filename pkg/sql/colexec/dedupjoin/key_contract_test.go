@@ -43,6 +43,13 @@ type dedupKeyContractMode struct {
 	wantReSpill      bool
 }
 
+func TestDedupJoinAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(82), uint8(dedupJoinAllocationSiteMatched))
+	require.Equal(t, uint8(88), uint8(dedupJoinAllocationSiteFinalizeSelections))
+	require.Equal(t, uint8(110), uint8(dedupJoinAllocationSiteResultData))
+	require.Equal(t, uint8(113), uint8(dedupJoinAllocationSiteResultGrouping))
+}
+
 type dedupKeyContractRow struct {
 	keyBits      uint64
 	captured     int32
@@ -101,7 +108,7 @@ func runDedupJoinDoubleSignedZeroContract(
 		if probeBatch != nil {
 			probeBatch.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()
@@ -369,7 +376,7 @@ func runDedupJoinRemainingKeyContract(
 		if probeBatch != nil {
 			probeBatch.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()

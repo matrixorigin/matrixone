@@ -173,7 +173,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 									int64(ctr.buildGroupCount),
 									proc.Mp(),
 									rightDedupJoin.allocationAccount,
-									hashbuild.HashBuildAllocationOwner,
+									mpool.AllocationOwnerHashBuild,
 									rightDedupJoinAllocationSiteMatched,
 								)
 							}
@@ -240,7 +240,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				NeedsProbeForEmptyBuild: true,
 				MergeProbeBatches:       true,
 				Budget:                  budget,
-			}, rightDedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			}, rightDedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -281,7 +281,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				int64(ctr.buildGroupCount),
 				proc.Mp(),
 				rightDedupJoin.allocationAccount,
-				hashbuild.HashBuildAllocationOwner,
+				mpool.AllocationOwnerHashBuild,
 				rightDedupJoinAllocationSiteMatched,
 			)
 			if err != nil {

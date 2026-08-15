@@ -185,18 +185,28 @@ func (timeWin *TimeWin) Release() {
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &timeWin.ctr
 	ctr.resetExes()
+	releaseInheritedAccount := ctr.hasAccountedBufferedVector()
 	// The last flushed batch and the aggregate executors belong to the finished
 	// generation. In the sliding path the batch owns its aggregate prefix (the
 	// boundaries belong to their expression executors and the partition keys to
 	// partOut); in the interval path every vector is a buffer that outlives the
 	// batch, so only the reference is dropped. Aggregates cannot be rewound
 	// once Flush has run (see makeAggExecutors), so they are discarded here and
-	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
-	// the cursors back at zero the next generation reuses them from index 0.
+	// rebuilt by Prepare. Unaccounted tsVec/aggVec/partVec buffers stay
+	// allocated: with the cursors back at zero the next generation reuses them
+	// from index 0. Account-owned buffers are released below because their
+	// lifetime cannot cross a statement-attempt generation.
 	if timeWin.EndExpr == nil {
 		ctr.freeFlushedAggVecs(proc.Mp())
 	}
 	ctr.bat = nil
+	if releaseInheritedAccount {
+		// Dup preserves the source vector's allocation selection. An upstream
+		// accounted Order/MergeOrder can therefore charge these reusable input
+		// caches to the current statement attempt. Such backing must not cross a
+		// prepared-statement generation; unaccounted caches retain legacy reuse.
+		ctr.freeVector(proc.Mp())
+	}
 	ctr.freeAgg()
 	ctr.aggs = nil
 	ctr.resetParam(timeWin)
@@ -411,6 +421,42 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		ctr.endVec.Free(mp)
 		ctr.endVec = nil
 	}
+}
+
+func (ctr *container) hasAccountedBufferedVector() bool {
+	if ctr == nil {
+		return false
+	}
+	hasAccount := func(vec *vector.Vector) bool {
+		return vec != nil && vec.AllocationAccountSelection() != nil
+	}
+	for _, vec := range ctr.tsVec {
+		if hasAccount(vec) {
+			return true
+		}
+	}
+	for _, aggregateVecs := range ctr.aggVec {
+		for _, vecs := range aggregateVecs {
+			for _, vec := range vecs {
+				if hasAccount(vec) {
+					return true
+				}
+			}
+		}
+	}
+	for _, vecs := range ctr.partVec {
+		for _, vec := range vecs {
+			if hasAccount(vec) {
+				return true
+			}
+		}
+	}
+	for _, vec := range ctr.partOut {
+		if hasAccount(vec) {
+			return true
+		}
+	}
+	return hasAccount(ctr.startVec) || hasAccount(ctr.endVec)
 }
 
 func (ctr *container) freePartOut(mp *mpool.MPool) {
