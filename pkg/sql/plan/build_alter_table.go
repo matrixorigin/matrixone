@@ -907,9 +907,8 @@ func isInplaceColumnDefinition(
 ) (ok bool, err error) {
 	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
-		err = moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			ctx, column.Name.ColNameOrigin(), tableDef.Name)
-		return
 	}
 
 	ok, err = positionMatched(ctx, position, tableDef, oCol)

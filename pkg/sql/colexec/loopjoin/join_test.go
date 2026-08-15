@@ -42,6 +42,15 @@ const (
 	BenchmarkRows = 100000 // default rows for benchmark
 )
 
+func TestLoopJoinAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(92), uint8(loopJoinAllocationSiteMatched))
+	require.Equal(t, uint8(93), uint8(loopJoinAllocationSiteBatchOffsets))
+	require.Equal(t, uint8(106), uint8(loopJoinAllocationSiteResultData))
+	require.Equal(t, uint8(109), uint8(loopJoinAllocationSiteResultGrouping))
+	require.Equal(t, uint8(118), uint8(loopJoinAllocationSiteConditionData))
+	require.Equal(t, uint8(121), uint8(loopJoinAllocationSiteConditionGrouping))
+}
+
 // add unit tests for cases
 type joinTestCase struct {
 	arg         *LoopJoin

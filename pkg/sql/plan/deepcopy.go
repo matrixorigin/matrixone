@@ -261,6 +261,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FillType:        node.FillType,
 		FillVal:         DeepCopyExprList(node.FillVal),
 		GapFillMode:     node.GapFillMode,
+		GapFillStart:    DeepCopyExpr(node.GapFillStart),
+		GapFillEnd:      DeepCopyExpr(node.GapFillEnd),
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),

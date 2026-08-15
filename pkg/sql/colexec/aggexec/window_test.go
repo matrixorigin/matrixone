@@ -2502,6 +2502,40 @@ func TestCumeDistWindowExec_UnmarshalFromReader(t *testing.T) {
 	exec2.Free()
 }
 
+func TestSingleWindowFailedUnmarshalPreservesOwnedState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	info := singleAggInfo{
+		aggID:     WinIdOfRowNumber,
+		retType:   types.T_int64.ToType(),
+		emptyNull: false,
+	}
+	input := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(
+		input, []int64{7, 8, 9}, nil, mp))
+	defer input.Free(mp)
+
+	target := makeRankDenseRankRowNumber(mp, info).(*singleWindowExec)
+	require.NoError(t, target.GroupGrow(1))
+	require.NoError(t, target.Fill(0, 0, []*vector.Vector{input}))
+
+	source := makeRankDenseRankRowNumber(mp, info).(*singleWindowExec)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.Fill(0, 1, []*vector.Vector{input}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &encoded))
+	broken := encoded.Bytes()[:encoded.Len()-1]
+
+	require.Error(t, target.UnmarshalFromReader(bytes.NewReader(broken), mp))
+	require.Equal(t, []i64Slice{{7}}, target.groups)
+	require.Len(t, target.ret.resultList, 1)
+	require.Equal(t, 1, target.ret.resultList[0].Length())
+
+	source.Free()
+	target.Free()
+}
+
 // TestCumeDistWindowExec_SizeWithData tests Size with actual data
 func TestCumeDistWindowExec_SizeWithData(t *testing.T) {
 	mp := mpool.MustNewZero()

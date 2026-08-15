@@ -17,6 +17,7 @@ package mpool
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/stretchr/testify/require"
@@ -138,6 +139,80 @@ func TestAccountedProfileUsesProvenanceAcrossProfilingToggle(t *testing.T) {
 	require.Equal(t, before[2], afterFree[2])
 	require.Equal(t, before[3], afterFree[3])
 	finalizeTestAllocationAccount(t, registry, account)
+}
+
+func TestAccountedProfileNoLockPoolTeardown(t *testing.T) {
+	DisableProfiling()
+	defer DisableProfiling()
+	registry, account := newTestAllocationAccount(t, 1024, 1)
+	mp := MustNewNoLock("accounted-profile-no-lock-teardown")
+	require.NoError(t, mp.BindAllocationAccount(account))
+	values := accountedProfileSample(testAllocationOwner, testAllocationSite)
+	before := values.Values()
+
+	EnableProfiling()
+	_, err := mp.AllocAccounted(
+		64,
+		account,
+		testAllocationOwner,
+		testAllocationSite,
+	)
+	require.NoError(t, err)
+	afterAlloc := values.Values()
+	require.Equal(t, int64(1), afterAlloc[2]-before[2])
+	require.Equal(t, int64(64), afterAlloc[3]-before[3])
+
+	// Pool teardown, like an ordinary Free, must retire the synthetic
+	// owner/site in-use sample even when profiling is disabled meanwhile.
+	DisableProfiling()
+	DeleteMPool(mp)
+	afterDelete := values.Values()
+	require.Equal(t, before[2], afterDelete[2])
+	require.Equal(t, before[3], afterDelete[3])
+	finalizeTestAllocationAccount(t, registry, account)
+}
+
+func TestPointerMetadataRejectsDuplicateAcrossKinds(t *testing.T) {
+	ptr := unsafe.Pointer(new(byte))
+	hdr := memHdr{allocSz: 1}
+	lease := allocationLease{}
+
+	t.Run("no-lock", func(t *testing.T) {
+		mp := &MPool{
+			noLock: true,
+			ptrs:   make(map[unsafe.Pointer]memHdr),
+		}
+		require.NoError(t, mp.recordPtrHdr(ptr, hdr))
+		require.Error(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
+
+		delete(mp.ptrs, ptr)
+		require.NoError(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
+		require.Error(t, mp.recordAccountedPtrMetadata(ptr, hdr, lease))
+		require.Error(t, mp.recordPtrHdr(ptr, hdr))
+	})
+
+	t.Run("global", func(t *testing.T) {
+		shard := getPtrShard(ptr)
+		shard.mu.Lock()
+		delete(shard.m, ptr)
+		delete(shard.accounted, ptr)
+		shard.mu.Unlock()
+		defer func() {
+			shard.mu.Lock()
+			delete(shard.m, ptr)
+			delete(shard.accounted, ptr)
+			shard.mu.Unlock()
+		}()
+
+		require.NoError(t, gRecordPtr(ptr, hdr))
+		require.Error(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
+		shard.mu.Lock()
+		delete(shard.m, ptr)
+		shard.mu.Unlock()
+		require.NoError(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
+		require.Error(t, gRecordAccountedPtrMetadata(ptr, hdr, lease))
+		require.Error(t, gRecordPtr(ptr, hdr))
+	})
 }
 
 func BenchmarkProfileAllocFree(b *testing.B) {

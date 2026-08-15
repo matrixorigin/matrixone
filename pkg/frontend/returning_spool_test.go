@@ -180,7 +180,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
 	spool := &returningSpool{}
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, spool.Close())
@@ -226,7 +226,7 @@ func TestReturningSpoolGenerationAndReplay(t *testing.T) {
 			return nil
 		}))
 		require.Equal(t, []int64{7, 8, 9}, got)
-		require.Zero(t, budget.Used(), "replay must not create an estimated HashBuild charge")
+		require.Zero(t, budget.Used(), "replay must not create an estimated execution-resource charge")
 	}
 }
 
@@ -408,7 +408,7 @@ func TestDeferredReturningClientDisconnectCleansSpool(t *testing.T) {
 	ses := newValidateSession(t)
 	ses.txnHandler = &TxnHandler{}
 	ses.SetMysqlResultSet(&MysqlResultSet{})
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	spool := &returningSpool{}
@@ -645,7 +645,7 @@ func TestReturningSpoolRejectsCorruptMagic(t *testing.T) {
 func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	spool := &returningSpool{}
 	bat := returningTestBatch(t, ses, 1)
@@ -665,7 +665,7 @@ func TestReturningSpoolReplayCancellationReleasesDecodeBudget(t *testing.T) {
 func TestReturningSpoolConcurrentTerminalTransitions(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
-	budget, err := ses.proc.GetHashBuildBudget()
+	budget, err := ses.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	for i := 0; i < 16; i++ {
 		spool := &returningSpool{}

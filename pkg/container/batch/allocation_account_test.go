@@ -91,6 +91,39 @@ func newBatchAllocationTestSource(
 	return bat
 }
 
+func TestBatchAccountedExtraBufferMoveAndClean(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 8)
+	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	require.ErrorIs(t, nilBatch.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	nilBatch.MoveExtraBufferFrom(nil)
+	empty := NewWithSize(0)
+	require.ErrorIs(t, empty.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	empty.MoveExtraBufferFrom(empty)
+	empty.Clean(mp)
+	buffer, err := mpool.NewAccountedBuffer(mp, state.account, 1, 5)
+	require.NoError(t, err)
+	_, err = buffer.Write(bytes.Repeat([]byte("x"), 4096))
+	require.NoError(t, err)
+	used := state.account.Snapshot().Used
+	require.Positive(t, used)
+
+	source := NewWithSize(0)
+	require.NoError(t, source.SetAccountedExtraBuffer(buffer))
+	buffer.Free() // ownership moved to source
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	destination := NewWithSize(0)
+	destination.MoveExtraBufferFrom(source)
+	require.Empty(t, source.ExtraBuf)
+	require.Len(t, destination.ExtraBuf, 4096)
+	source.Clean(mp)
+	require.Equal(t, used, state.account.Snapshot().Used)
+	destination.Clean(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
 func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()

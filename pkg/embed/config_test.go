@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTNConfig(t *testing.T) {
@@ -207,6 +208,47 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := newServiceConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestMongoDBEnablementConfigDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "omitted", input: "", wantEnabled: true},
+		{name: "explicit disable", input: "[cn.frontend.mongodb]\nenable = false\n", wantEnabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			assert.NoError(t, parseFromString(tc.input, &cfg))
+			assert.NoError(t, cfg.setDefaultValue())
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+			assert.False(t, cfg.CN.Frontend.MongoDB.EnablePerAccount)
+			assert.False(t, cfg.CN.Frontend.MongoDB.AllowLoopback)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedHostSuffixes)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedCIDRs)
+
+			cfg.CN.SetDefaultValue()
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+		})
+	}
+}
+
+func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
+	op := &operator{cfg: newServiceConfig()}
+	require.True(t, op.cfg.CN.Frontend.MongoDB.Enable)
+
+	// Model the public WithPreStart callback path.
+	op.Adjust(func(cfg *ServiceConfig) {
+		cfg.CN.Frontend.MongoDB.Enable = false
+	})
+
+	serviceCfg := op.GetServiceConfig()
+	cfg := serviceCfg.getCNServiceConfig()
+	cfg.SetDefaultValue()
+	cfg.Frontend.SetDefaultValues()
+	require.False(t, cfg.Frontend.MongoDB.Enable)
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

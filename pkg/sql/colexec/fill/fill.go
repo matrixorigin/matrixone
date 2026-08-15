@@ -21,16 +21,19 @@ import (
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const opName = "fill"
+const maxFillPendingBatches = 1024
 
 func (fill *Fill) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -50,6 +53,22 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 
 	ctr := &fill.ctr
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(fill.SpillThreshold)
+	if ctr.allocationAccount != nil {
+		ctr.budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+		ctr.prevPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
+		ctr.linEntryPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
+	}
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
@@ -61,7 +80,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, val := range fill.FillVal {
-				exe, err := colexec.NewExpressionExecutor(proc, val)
+				exe, err := colexec.NewExpressionExecutorWithAllocation(
+					proc, val, ctr.expressionAllocation,
+				)
 				if err != nil {
 					return err
 				}
@@ -102,7 +123,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, v := range fill.FillVal {
 				resetColRef(v, 0)
-				exe, err := colexec.NewExpressionExecutor(proc, v)
+				exe, err := colexec.NewExpressionExecutorWithAllocation(
+					proc, v, ctr.expressionAllocation,
+				)
 				if err != nil {
 					return err
 				}
@@ -115,7 +138,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	}
 
 	if fill.ProjectList != nil {
-		err := fill.PrepareProjection(proc)
+		err := fill.PrepareProjectionWithAllocation(
+			proc, ctr.expressionAllocation,
+		)
 		if err != nil {
 			return err
 		}
@@ -131,6 +156,44 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
 	return result, err
+}
+
+func cloneFillBatch(
+	source *batch.Batch,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	if source == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	attrs, attrTypes := source.GetSchema()
+	cloned := batch.NewWithSchema(selection != nil, attrs, attrTypes)
+	if selection != nil {
+		if err := cloned.SetAllocationAccount(selection); err != nil {
+			cloned.Clean(mp)
+			return nil, err
+		}
+	}
+	cloned.Recursive = source.Recursive
+	if err := source.CloneTo(cloned, mp); err != nil {
+		cloned.Clean(mp)
+		return nil, err
+	}
+	return cloned, nil
+}
+
+func (ctr *container) copyToOutput(
+	proc *process.Process,
+	source *batch.Batch,
+) error {
+	if ctr.buf == nil {
+		var err error
+		ctr.buf, err = cloneFillBatch(source, proc.Mp(), ctr.outputAllocation)
+		return err
+	}
+	ctr.buf.CleanOnlyData()
+	_, err := ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), source)
+	return err
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
@@ -156,11 +219,7 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-	if err != nil {
+	if err = ctr.copyToOutput(proc, result.Batch); err != nil {
 		return result, err
 	}
 
@@ -214,35 +273,43 @@ func samePartitionRows(partIdx []int32, batA *batch.Batch, rowA int, batB *batch
 
 // snapshotPartKey copies a row's partition key out of the batch, so the next
 // batch can detect a boundary after this one has been recycled.
-func (ctr *container) snapshotPartKey(partIdx []int32, bat *batch.Batch, row int) {
-	if cap(ctr.prevPartKey) < len(partIdx) {
-		ctr.prevPartKey = make([][]byte, len(partIdx))
-		ctr.prevPartNull = make([]bool, len(partIdx))
-	}
-	ctr.prevPartKey = ctr.prevPartKey[:len(partIdx)]
-	ctr.prevPartNull = ctr.prevPartNull[:len(partIdx)]
+func (ctr *container) snapshotPartKey(
+	partIdx []int32,
+	bat *batch.Batch,
+	row int,
+	proc *process.Process,
+) error {
+	ctr.prevPart.configure(
+		proc.Mp(),
+		ctr.allocationAccount,
+		fillAllocationSitePartitionSnapshot,
+	)
+	ctr.prevPart.ensureShape(len(partIdx))
 	for i, col := range partIdx {
 		val, isNull := partKeyAt(bat.Vecs[col], row)
-		ctr.prevPartNull[i] = isNull
-		ctr.prevPartKey[i] = append(ctr.prevPartKey[i][:0], val...)
+		ctr.prevPart.nulls[i] = isNull
+		if err := ctr.prevPart.setKey(i, val); err != nil {
+			return err
+		}
 	}
-	ctr.prevPartSet = true
+	ctr.prevPart.set = true
+	return nil
 }
 
 // matchesSnapshot compares a row against the saved cross-batch partition key.
 func (ctr *container) matchesSnapshot(partIdx []int32, bat *batch.Batch, row int) bool {
-	if !ctr.prevPartSet {
+	if !ctr.prevPart.set {
 		return true
 	}
 	for i, col := range partIdx {
 		val, isNull := partKeyAt(bat.Vecs[col], row)
-		if isNull || ctr.prevPartNull[i] {
-			if isNull != ctr.prevPartNull[i] {
+		if isNull || ctr.prevPart.nulls[i] {
+			if isNull != ctr.prevPart.nulls[i] {
 				return false
 			}
 			continue
 		}
-		if !bytes.Equal(val, ctr.prevPartKey[i]) {
+		if !bytes.Equal(val, ctr.prevPart.keys[i]) {
 			return false
 		}
 	}
@@ -256,30 +323,101 @@ func (ctr *container) batAt(seq int) *batch.Batch {
 
 // pullChild appends the next child batch to the pending FIFO and returns its
 // absolute sequence number, or eof when the child is drained.
-func (ctr *container) pullChild(ap *Fill, proc *process.Process, analyzer process.Analyzer) (seq int, eof bool, err error) {
+func (ctr *container) pullChild(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+) (seq int, eof bool, spilled bool, err error) {
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if result.Batch == nil {
-		return 0, true, nil
+		return 0, true, false, nil
 	}
-	dup, err := result.Batch.Dup(proc.Mp())
+	dup, err := cloneFillBatch(result.Batch, proc.Mp(), ctr.retainedAllocation)
 	if err != nil {
-		return 0, false, err
+		if ctr.allocationAccount == nil || !mpool.IsRetryableAllocationCapacity(err) {
+			return 0, false, false, err
+		}
+		err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
+		return 0, false, err == nil, err
 	}
-	if err = addOriginalNullMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
+	if err = addOriginalNullMarkers(
+		dup, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
+	); err != nil {
 		dup.Clean(proc.Mp())
-		return 0, false, err
+		if ctr.allocationAccount != nil && mpool.IsRetryableAllocationCapacity(err) {
+			err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
+			return 0, false, err == nil, err
+		}
+		return 0, false, false, err
 	}
 	if analyzer != nil {
 		analyzer.Alloc(int64(dup.Size()))
 	}
 	seq = ctr.baseSeq + len(ctr.bats)
-	ctr.bats = append(ctr.bats, dup)
+	ctr.appendPendingBatch(dup)
 	ctr.pendingBytes += int64(dup.Size())
 	ctr.pendingRows += int64(dup.RowCount())
-	return seq, false, nil
+	return seq, false, false, nil
+}
+
+func (ctr *container) appendPendingBatch(bat *batch.Batch) {
+	if len(ctr.bats) == cap(ctr.bats) {
+		capacity := max(16, cap(ctr.bats)*2)
+		capacity = min(capacity, maxFillPendingBatches)
+		next := make([]*batch.Batch, len(ctr.bats), capacity)
+		copy(next, ctr.bats)
+		ctr.bats = next
+	}
+	ctr.bats = append(ctr.bats, bat)
+}
+
+func (ctr *container) spillCurrentSource(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	source *batch.Batch,
+) error {
+	if err := ctr.beginSpill(ap, proc, analyzer, false); err != nil {
+		return err
+	}
+	if err := ctr.appendSpillSource(ap, proc, analyzer, source); err != nil {
+		ctr.cleanupSpill(proc)
+		return err
+	}
+	if ctr.spill.safeWatermark > ctr.spill.segmentStart {
+		if err := ctr.spill.finalizeSegment(ctr, ap, proc); err != nil {
+			ctr.cleanupSpill(proc)
+			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) appendCoordinate(
+	run *[]fillCoord,
+	coord fillCoord,
+	proc *process.Process,
+) error {
+	if ctr.allocationAccount == nil {
+		*run = append(*run, coord)
+		return nil
+	}
+	values, err := spillutil.GrowAccountedSlice(
+		*run,
+		len(*run)+1,
+		proc.Mp(),
+		ctr.spillAllocation,
+		fillAllocationSiteCoordinates,
+	)
+	if err != nil {
+		return err
+	}
+	values[len(values)-1] = coord
+	*run = values
+	return nil
 }
 
 // emitResolved pops and returns the resolved prefix of the FIFO one batch at a
@@ -314,7 +452,11 @@ func (ctr *container) advanceLinearEntry(ap *Fill, bat *batch.Batch, proc *proce
 	for row := 0; row < bat.RowCount(); row++ {
 		if len(ap.PartitionColIdx) > 0 {
 			wasSet := ctr.linEntryPart.set
-			if !ctr.linEntryPart.sameAndSet(ap.PartitionColIdx, bat, row) && wasSet {
+			same, err := ctr.linEntryPart.sameAndSet(ap.PartitionColIdx, bat, row)
+			if err != nil {
+				return err
+			}
+			if !same && wasSet {
 				clearEndpoints(ctr.linEntryValid)
 			}
 		}
@@ -322,7 +464,9 @@ func (ctr *container) advanceLinearEntry(ap *Fill, bat *batch.Batch, proc *proce
 			if originalNullAt(bat, ap.ColLen, col, row) {
 				continue
 			}
-			if err := setEndpoint(&ctr.linEntry[col], bat.Vecs[col], row, proc); err != nil {
+			if err := setEndpoint(
+				&ctr.linEntry[col], bat.Vecs[col], row, proc, ctr.retainedAllocation,
+			); err != nil {
 				return err
 			}
 			ctr.linEntryValid[col] = true
@@ -359,7 +503,11 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 		for c := 0; c < ap.ColLen; c++ {
 			vec := bat.Vecs[c]
 			if vec.IsNull(uint64(r)) {
-				ctr.nextRun[c] = append(ctr.nextRun[c], fillCoord{seq: seq, row: r})
+				if err := ctr.appendCoordinate(
+					&ctr.nextRun[c], fillCoord{seq: seq, row: r}, proc,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			run := ctr.nextRun[c]
@@ -371,6 +519,12 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 			if len(run) > 0 && run[len(run)-1].seq == seq && vec.GetType().IsVarlen() &&
 				len(vec.GetBytesAt(r)) > types.VarlenaInlineSize {
 				snapshot = vector.NewOffHeapVecWithType(*vec.GetType())
+				if ctr.retainedAllocation != nil {
+					if err := snapshot.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+						snapshot.Free(proc.Mp())
+						return err
+					}
+				}
 				if err := appendValue(snapshot, vec, r, proc); err != nil {
 					snapshot.Free(proc.Mp())
 					return err
@@ -392,7 +546,9 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rows > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+		if err := ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1, proc); err != nil {
+			return err
+		}
 	}
 	ctr.recomputeFlushableNext(ap)
 	return nil
@@ -421,11 +577,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		return result, nil
 	}
 
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-	if err != nil {
+	if err = ctr.copyToOutput(proc, result.Batch); err != nil {
 		return result, err
 	}
 
@@ -433,50 +585,47 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		ctr.prevValid = make([]bool, ap.ColLen)
 	}
 
-	// A previous value must not leak across a partition boundary, so find
-	// where new partitions start before filling: row 0 against the key saved
-	// from the previous batch, later rows against their predecessor.
+	// A previous value must not leak across a partition boundary. Processing
+	// rows first removes the old row-count-sized boundary scratch.
 	rowCount := ctr.buf.RowCount()
-	var newSegment []bool
-	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
-		newSegment = make([]bool, rowCount)
-		newSegment[0] = !ctr.matchesSnapshot(ap.PartitionColIdx, ctr.buf, 0)
-		for j := 1; j < rowCount; j++ {
-			newSegment[j] = !samePartitionRows(ap.PartitionColIdx, ctr.buf, j-1, ctr.buf, j)
+	for j := 0; j < rowCount; j++ {
+		if len(ap.PartitionColIdx) > 0 &&
+			((j == 0 && !ctr.matchesSnapshot(ap.PartitionColIdx, ctr.buf, 0)) ||
+				(j > 0 && !samePartitionRows(
+					ap.PartitionColIdx, ctr.buf, j-1, ctr.buf, j,
+				))) {
+			clearEndpoints(ctr.prevValid)
 		}
-	}
-
-	for i := 0; i < ap.ColLen; i++ {
-		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
-			if newSegment != nil && newSegment[j] {
-				// The new partition has no previous value yet. The vector is
-				// kept for reuse; only its validity is dropped.
-				ctr.prevValid[i] = false
-			}
+		for i := 0; i < ap.ColLen; i++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
 				if ctr.prevVecs[i] != nil && ctr.prevValid[i] {
 					if err = setValue(ctr.buf.Vecs[i], ctr.prevVecs[i], j, 0, proc); err != nil {
 						return result, err
 					}
 				}
-			} else {
-				if ctr.prevVecs[i] == nil {
-					ctr.prevVecs[i] = vector.NewVec(*ctr.buf.Vecs[i].GetType())
-					err = appendValue(ctr.prevVecs[i], ctr.buf.Vecs[i], j, proc)
-					if err != nil {
-						return result, err
-					}
-				} else {
-					if err = setValue(ctr.prevVecs[i], ctr.buf.Vecs[i], 0, j, proc); err != nil {
-						return result, err
-					}
-				}
-				ctr.prevValid[i] = true
+				continue
 			}
+			if ctr.prevVecs[i] == nil {
+				ctr.prevVecs[i], err = makeEndpoint(
+					ctr.buf.Vecs[i], j, proc, ctr.retainedAllocation,
+				)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				if err = setValue(ctr.prevVecs[i], ctr.buf.Vecs[i], 0, j, proc); err != nil {
+					return result, err
+				}
+			}
+			ctr.prevValid[i] = true
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, ctr.buf, rowCount-1)
+		if err = ctr.snapshotPartKey(
+			ap.PartitionColIdx, ctr.buf, rowCount-1, proc,
+		); err != nil {
+			return result, err
+		}
 	}
 	result.Batch = ctr.buf
 	return result, nil
@@ -503,7 +652,11 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 			if vec.IsNull(uint64(r)) {
 				seedValid := c < len(ctr.linSeedValid) && ctr.linSeedValid[c]
 				if ctr.linPre[c].seq >= 0 || seedValid {
-					ctr.linRun[c] = append(ctr.linRun[c], fillCoord{seq: seq, row: r})
+					if err := ctr.appendCoordinate(
+						&ctr.linRun[c], fillCoord{seq: seq, row: r}, proc,
+					); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -524,7 +677,9 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rows > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+		if err := ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1, proc); err != nil {
+			return err
+		}
 	}
 	ctr.recomputeFlushableLinear(ap)
 	return nil
@@ -541,7 +696,7 @@ func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int,
 		preBatch = ctr.batAt(pre.seq)
 	} else {
 		preBatch = batch.NewWithSize(col + 1)
-		preBatch.SetVector(int32(col), ctr.linSeed[col])
+		preBatch.Vecs[col] = ctr.linSeed[col]
 		preBatch.SetRowCount(1)
 		preRow = 0
 	}
@@ -593,6 +748,13 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	curVec := curBatch.Vecs[idx]
 	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
 		result := vector.NewVec(*preVec.GetType())
+		if ctr.expressionAllocation != nil {
+			result = vector.NewOffHeapVecWithType(*preVec.GetType())
+			if err := result.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+				result.Free(proc.Mp())
+				return nil, false, err
+			}
+		}
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
 		value, err := linearExactValue(left, right, 1, 2)
@@ -623,16 +785,25 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	}
 
 	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(*preVec.GetType())
-	if err := appendValue(b.Vecs[0], preVec, preRow, proc); err != nil {
+	if ctr.expressionAllocation != nil {
+		b = batch.NewOffHeapWithSize(2)
+		if err := b.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+			b.Clean(proc.Mp())
+			return nil, false, err
+		}
+	}
+	left, err := makeEndpoint(preVec, preRow, proc, ctr.expressionAllocation)
+	if err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
-	b.Vecs[1] = vector.NewVec(*curVec.GetType())
-	if err := appendValue(b.Vecs[1], curVec, curRow, proc); err != nil {
+	b.SetVector(0, left)
+	right, err := makeEndpoint(curVec, curRow, proc, ctr.expressionAllocation)
+	if err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
+	b.SetVector(1, right)
 	b.SetRowCount(1)
 	defer b.Clean(proc.Mp())
 	result, err := ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
@@ -1003,30 +1174,30 @@ func (ctr *container) driveFill(
 		ctr.toFree.Clean(proc.Mp())
 		ctr.toFree = nil
 	}
-	if ctr.spill != nil {
-		if !ctr.spill.ready {
-			if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+	for {
+		if ctr.spill != nil {
+			if !ctr.spill.ready {
+				if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+					ctr.cleanupSpill(proc)
+					return vm.NewCallResult(), err
+				}
+			}
+			bat, err := ctr.spill.replayNext(ctr, ap, proc)
+			if err == io.EOF {
+				if err = ctr.finishSpillReplay(ap, proc); err != nil {
+					return vm.NewCallResult(), err
+				}
+				continue
+			}
+			if err != nil {
 				ctr.cleanupSpill(proc)
 				return vm.NewCallResult(), err
 			}
+			result := vm.NewCallResult()
+			result.Batch = bat
+			result.Status = vm.ExecNext
+			return result, nil
 		}
-		bat, err := ctr.spill.replayNext(ctr, ap, proc)
-		if err == io.EOF {
-			if err = ctr.finishSpillReplay(ap, proc); err != nil {
-				return vm.NewCallResult(), err
-			}
-			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
-		}
-		if err != nil {
-			ctr.cleanupSpill(proc)
-			return vm.NewCallResult(), err
-		}
-		result := vm.NewCallResult()
-		result.Batch = bat
-		result.Status = vm.ExecNext
-		return result, nil
-	}
-	for {
 		if ctr.flushable > 0 {
 			return ctr.emitResolved(ap, proc)
 		}
@@ -1043,22 +1214,33 @@ func (ctr *container) driveFill(
 			ctr.flushable = len(ctr.bats)
 			continue
 		}
-		seq, eof, err := ctr.pullChild(ap, proc, analyzer)
+		seq, eof, spilled, err := ctr.pullChild(ap, proc, analyzer)
 		if err != nil {
 			return vm.NewCallResult(), err
+		}
+		if spilled {
+			continue
 		}
 		if eof {
 			ctr.childDone = true
 			continue
 		}
 		if err = consume(ctr, ap, ctr.batAt(seq), seq, proc); err != nil {
+			if ctr.allocationAccount != nil &&
+				mpool.IsRetryableAllocationCapacity(err) {
+				if spillErr := ctr.beginSpill(ap, proc, analyzer, true); spillErr != nil {
+					return vm.NewCallResult(), spillErr
+				}
+				continue
+			}
 			return vm.NewCallResult(), err
 		}
-		if ctr.flushable == 0 && ctr.shouldSpillPending() {
-			if err = ctr.beginSpill(ap, proc); err != nil {
+		if ctr.flushable == 0 &&
+			(ctr.shouldSpillPending() || len(ctr.bats) >= maxFillPendingBatches) {
+			if err = ctr.beginSpill(ap, proc, analyzer, true); err != nil {
 				return vm.NewCallResult(), err
 			}
-			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
+			continue
 		}
 	}
 }
