@@ -11801,7 +11801,7 @@ var supportedControlBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					typ := types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+					typ := types.T_timestamp.ToTypeWithScale(parameters[0].Scale)
 					if typ.Scale > 0 {
 						typ.Width = typ.Scale
 					}
