@@ -5763,6 +5763,15 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 	require.Equal(t, 2, destination.Length())
 	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(0))
 	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(1))
+
+	require.ErrorIs(t, destination.PreExtendSelectedBatch(
+		destination, 0, 2, []uint8{1, 0}, 3, mp),
+		mpool.ErrAllocationAccountInvalid,
+		"a preflight proof cannot retain an aliased source for publication")
+	require.ErrorIs(t, destination.UnionBatchPreflighted(
+		destination, 0, 2, []uint8{1, 0}, mp),
+		mpool.ErrAllocationAccountInvariant,
+		"a rejected aliased preflight must not leave a publishable proof")
 }
 
 func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {

@@ -4021,6 +4021,13 @@ func (v *Vector) preExtendSelectedBatch(
 	v.preflightAreaReady = false
 	v.preflightAreaBytes = 0
 	v.preflightRowCount = 0
+	// The preflight proof cannot retain an aliased source for publication.
+	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
+	// after the caller has committed its surrounding state transition.
+	if v.typ.IsVarlen() &&
+		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+		return mpool.ErrAllocationAccountInvalid
+	}
 
 	selectedRows := 0
 	if selectionValidated {
@@ -4087,6 +4094,11 @@ func (v *Vector) preExtendSelectedBatch(
 	}
 	if err := v.preflightUnionBatchPrepareParamKinds(
 		w, int64(offset), cnt, flags, selectedRows, mp,
+	); err != nil {
+		return err
+	}
+	if err := v.PreflightUnionBatchBinaryString(
+		w, int64(offset), cnt, flags, mp,
 	); err != nil {
 		return err
 	}
@@ -6738,9 +6750,9 @@ func (v *Vector) unionBatch(
 		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
 			return err
 		}
-	}
-	if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
-		return err
+		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
 	}
 
 	if preflighted {

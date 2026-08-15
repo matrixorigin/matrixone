@@ -859,6 +859,80 @@ func TestPreAllocateBuildChunkIncludesVectorBitmaps(t *testing.T) {
 	input.Clean(proc.Mp())
 }
 
+func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t,
+		vector.AppendBytes(input.Vecs[0], []byte("binary"), false, proc.Mp()))
+	require.NoError(t,
+		vector.AppendBytes(input.Vecs[0], []byte("text"), false, proc.Mp()))
+	require.NoError(t, input.Vecs[0].SetBinaryStringRowsWithMP(
+		[]bool{true, false}, proc.Mp()))
+	input.SetRowCount(2)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
+	generation, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+	require.NoError(t, err)
+	controller := &rejectNextGroupAllocationController{}
+	account, err := registry.OpenWithController(64<<20, controller)
+	require.NoError(t, err)
+	require.NoError(t, g.ctr.setAllocationAccount(account))
+	allocation := groupTestAllocation{
+		generation: generation,
+		registry:   registry,
+		account:    account,
+	}
+	require.NoError(t, g.Prepare(proc))
+	require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
+
+	require.NoError(t, g.ctr.hr.TxnItr.PreviewInsert(
+		0, input.RowCount(), g.ctr.hashKeyVectors(input.Vecs),
+		g.ctr.hr.Hash.GroupCount(), &g.ctr.hr.insertPlan))
+	preview := groupInsertPreview{
+		values:    g.ctr.hr.insertPlan.Values(),
+		inserted:  g.ctr.hr.insertPlan.Inserted(),
+		newGroups: int(g.ctr.hr.insertPlan.NewGroups()),
+	}
+	require.Equal(t, 2, preview.newGroups)
+	if !g.ctr.recoveryCapacityCovers(preview.newGroups) {
+		require.NoError(t,
+			g.ctr.ensureRecoveryCapacity(preview.newGroups, g.OpAnalyzer))
+	}
+	require.NoError(t, g.ctr.hr.Hash.PreAlloc(g.ctr.hr.insertPlan.NewGroups()))
+	require.NoError(t, g.ctr.preflightBuildChunk(
+		input.Vecs, 0, input.RowCount(), preview.inserted, preview.newGroups))
+	admitted := account.Snapshot().Used
+
+	controller.arm()
+	values, added, err := g.ctr.commitGroupByChunk(
+		input.Vecs, 0, input.RowCount(), preview)
+	require.NoError(t, err)
+	require.Equal(t, 2, added)
+	require.GreaterOrEqual(t, len(values), 2)
+	require.Equal(t, []uint64{1, 2}, values[:2])
+	require.Equal(t, admitted, account.Snapshot().Used)
+	_, rejected := controller.snapshot()
+	require.False(t, rejected,
+		"publication after hash commit must use only preflighted capacity")
+	require.Equal(t, uint64(2), g.ctr.hr.Hash.GroupCount())
+	require.Len(t, g.ctr.groupByBatches, 1)
+	keys := g.ctr.groupByBatches[0].Vecs[0]
+	require.True(t, keys.GetBinaryStringMetadataAt(0))
+	require.False(t, keys.GetBinaryStringMetadataAt(1))
+
+	g.Free(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+	used, _ := controller.snapshot()
+	require.Zero(t, used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	input.Clean(proc.Mp())
+}
+
 func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
