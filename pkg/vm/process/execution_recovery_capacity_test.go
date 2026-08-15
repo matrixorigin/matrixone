@@ -22,10 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
+func TestExecutionRecoveryCapacitySupports256Workers(t *testing.T) {
 	const workers = 256
 
-	budget := MustNewHashBuildBudget(1, 1)
+	budget := MustNewExecutionResourceBudget(1, 1)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
@@ -33,10 +33,10 @@ func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
 	account, err := registry.OpenWithController(1, generation)
 	require.NoError(t, err)
 
-	recoveries := make([]*HashBuildRecoveryCapacity, workers)
+	recoveries := make([]*ExecutionRecoveryCapacity, workers)
 	classes := make([]mpool.AllocationCapacityClass, workers)
 	for i := range workers {
-		recoveries[i], err = NewHashBuildRecoveryCapacity(generation)
+		recoveries[i], err = NewExecutionRecoveryCapacity(generation)
 		require.NoError(t, err)
 		classes[i], err = account.RegisterCapacityController(recoveries[i])
 		require.NoError(t, err)
@@ -51,15 +51,39 @@ func TestHashBuildRecoveryCapacitySupports256Workers(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHashBuildRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
-	budget := MustNewHashBuildBudget(1024, 1024)
+func TestExecutionRecoveryCapacitySlotActivationLifecycle(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1024, 1024)
+	first, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	second, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+
+	slot := NewExecutionRecoveryCapacitySlot()
+	require.ErrorIs(t, slot.EnsureCapacity(1), ErrExecutionSpillReservationInactive)
+	require.NoError(t, slot.Activate(first))
+	require.NoError(t, slot.Activate(first))
+	require.ErrorIs(t, slot.Activate(second), ErrExecutionResourceInvalid)
+	require.NoError(t, slot.EnsureCapacity(64))
+	require.Equal(t, uint64(64), first.Used())
+	require.NoError(t, slot.Close())
+	require.Zero(t, first.Used())
+
+	require.NoError(t, slot.Activate(second))
+	require.NoError(t, slot.EnsureCapacity(32))
+	require.Equal(t, uint64(32), second.Used())
+	require.NoError(t, slot.Close())
+	require.Zero(t, second.Used())
+}
+
+func TestExecutionRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1024, 1024)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(1024, generation)
 	require.NoError(t, err)
-	recovery, err := NewHashBuildRecoveryCapacity(generation)
+	recovery, err := NewExecutionRecoveryCapacity(generation)
 	require.NoError(t, err)
 	class, err := account.RegisterCapacityController(recovery)
 	require.NoError(t, err)
@@ -100,15 +124,15 @@ func TestHashBuildRecoveryCapacityTransfersPhysicalCharge(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHashBuildRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
-	budget := MustNewHashBuildBudget(300, 300)
+func TestExecutionRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(300, 300)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(300, generation)
 	require.NoError(t, err)
-	recovery, err := NewHashBuildRecoveryCapacity(generation)
+	recovery, err := NewExecutionRecoveryCapacity(generation)
 	require.NoError(t, err)
 	class, err := account.RegisterCapacityController(recovery)
 	require.NoError(t, err)
@@ -132,17 +156,17 @@ func TestHashBuildRecoveryCapacityRejectsUncoveredGrowth(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHashBuildRecoveryCapacityIsolatedAcrossWorkers(t *testing.T) {
-	budget := MustNewHashBuildBudget(512, 512)
+func TestExecutionRecoveryCapacityIsolatedAcrossWorkers(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(512, 512)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(512, generation)
 	require.NoError(t, err)
-	first, err := NewHashBuildRecoveryCapacity(generation)
+	first, err := NewExecutionRecoveryCapacity(generation)
 	require.NoError(t, err)
-	second, err := NewHashBuildRecoveryCapacity(generation)
+	second, err := NewExecutionRecoveryCapacity(generation)
 	require.NoError(t, err)
 	firstClass, err := account.RegisterCapacityController(first)
 	require.NoError(t, err)

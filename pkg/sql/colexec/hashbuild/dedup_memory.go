@@ -37,7 +37,7 @@ func makeDedupSlice[T any](
 		n,
 		mp,
 		hb.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		site,
 	)
 }
@@ -65,7 +65,7 @@ func (hb *HashmapBuilder) newDedupBitmap(
 		words,
 		mp,
 		hb.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		site,
 	)
 	if err != nil {
