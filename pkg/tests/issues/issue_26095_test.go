@@ -66,6 +66,12 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 		{name: "sys", id: 0, db: rootDB, roundCount: 3},
 		{name: "tenant", id: tenantID, db: tenantDB, roundCount: 1},
 	}
+	if testing.Short() {
+		// Each round covers the same three concurrent deletion contracts. Keep
+		// one system-account sample in CI and retain the full repetition for
+		// explicit stress runs.
+		accounts[0].roundCount = 1
+	}
 	base := strings.ToLower(testutils.GetDatabaseName(t))
 	for _, account := range accounts {
 		t.Run(account.name, func(t *testing.T) {

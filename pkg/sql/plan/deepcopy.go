@@ -698,6 +698,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		HasForeignKeyAction: qry.HasForeignKeyAction,
 		HasReturning:        qry.HasReturning,
 		ReturningStep:       qry.ReturningStep,
+		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
 		DetectSqls:          slices.Clone(qry.DetectSqls),
 		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 	}
