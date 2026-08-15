@@ -1103,7 +1103,7 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
-	require.Contains(t, viewData.Stmt, "sample 100.0 percent")
+	require.Contains(t, viewData.Stmt, "sample(*, 100.0 percent)")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
 	require.NotContains(t, viewData.Stmt, "`nation`.*")
 	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
