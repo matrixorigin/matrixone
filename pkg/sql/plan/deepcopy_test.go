@@ -18,10 +18,19 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeepCopyTypePreservesPadSpace(t *testing.T) {
+	source := &planpb.Type{Id: int32(types.T_varchar), PadSpace: true}
+	cloned := DeepCopyType(source)
+
+	require.Equal(t, source, cloned)
+	require.NotSame(t, source, cloned)
+}
 
 func TestCloneTableDefForPlan(t *testing.T) {
 	require.Nil(t, CloneTableDefForPlan(nil, true))
