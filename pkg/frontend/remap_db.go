@@ -65,10 +65,17 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 	case *tree.Insert:
 		remapDbInWith(s.With, remap)
 		remapDbInTableExpr(s.Table, remap)
+		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, remap)
 		if s.Rows != nil {
 			remapDbInSelect(s.Rows, remap)
 		}
 		remapDbInUpdateExprs(s.OnDuplicateUpdate, remap)
+	case *tree.Replace:
+		remapDbInTableExpr(s.Table, remap)
+		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, remap)
+		if s.Rows != nil {
+			remapDbInSelect(s.Rows, remap)
+		}
 	case *tree.Update:
 		remapDbInWith(s.With, remap)
 		remapDbInTableExprs(s.Tables, remap)
@@ -455,6 +462,20 @@ func remapColumnName(name *tree.UnresolvedName, remap map[string]string) {
 	}
 	if target, ok := remap[name.DbName()]; ok {
 		name.CStrParts[2] = tree.NewCStr(target, 1)
+	}
+}
+
+// remapInsertTarget keeps the user-visible logical target identity in sync
+// with the execution table rewritten by remapDbInTableExpr. TargetTableName is
+// unchanged because remapdb substitutes databases only.
+func remapInsertTarget(columnNames []*tree.UnresolvedName, databaseName *tree.Identifier, remap map[string]string) {
+	if databaseName != nil {
+		if target, ok := remap[string(*databaseName)]; ok {
+			*databaseName = tree.Identifier(target)
+		}
+	}
+	for _, name := range columnNames {
+		remapColumnName(name, remap)
 	}
 }
 

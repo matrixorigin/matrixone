@@ -23,11 +23,22 @@ import (
 )
 
 // use for on duplicate key update clause:  eg: insert into t1 values(1,1),(2,2) on duplicate key update a = a + abs(b), b = values(b)-2
-func NewOndupUpdateBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindContext, scanTag, selectTag int32, tableDef *plan.TableDef) *OndupUpdateBinder {
+func NewOndupUpdateBinder(
+	sysCtx context.Context,
+	builder *QueryBuilder,
+	ctx *BindContext,
+	scanTag, selectTag int32,
+	tableDef *plan.TableDef,
+	targetDBName, targetTableName string,
+	lowerCaseTableNames int64,
+) *OndupUpdateBinder {
 	b := &OndupUpdateBinder{
-		scanTag:   scanTag,
-		selectTag: selectTag,
-		tableDef:  tableDef,
+		scanTag:             scanTag,
+		selectTag:           selectTag,
+		tableDef:            tableDef,
+		targetDBName:        targetDBName,
+		targetTableName:     targetTableName,
+		lowerCaseTableNames: lowerCaseTableNames,
 	}
 	b.sysCtx = sysCtx
 	b.builder = builder
@@ -53,8 +64,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			if !ok {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", funcExpr.Exprs[0])
 			}
-			if col.NumParts != 1 {
-				return nil, moerr.NewBadFieldError(b.GetContext(), qualifiedInsertColumnName(col), "field list")
+			if err := validateInsertColumnQualifiers(
+				b.GetContext(), []*tree.UnresolvedName{col}, b.targetDBName, b.targetTableName, b.lowerCaseTableNames,
+			); err != nil {
+				return nil, err
 			}
 
 			colName := col.ColName()

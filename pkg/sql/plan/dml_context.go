@@ -23,10 +23,12 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	objRefs         []*plan.ObjectRef
+	tableDefs       []*plan.TableDef
+	aliases         []string
+	isClusterTable  []bool
+	targetDBName    string
+	targetTableName string
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	updatePartCol  []bool                 //If update cols contains col that Partition expr used

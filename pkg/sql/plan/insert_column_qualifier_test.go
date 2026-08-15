@@ -20,6 +20,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -77,4 +80,54 @@ func TestQualifiedInsertColumnName(t *testing.T) {
 	require.Equal(t, "id", qualifiedInsertColumnName(name("id")))
 	require.Equal(t, "t.id", qualifiedInsertColumnName(name("t", "id")))
 	require.Equal(t, "q1.t.id", qualifiedInsertColumnName(name("q1", "t", "id")))
+}
+
+func TestOndupValuesQualifiedTarget(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		Name:          "__mo_temp_t_physical",
+		Cols:          []*planpb.ColDef{{Name: "v"}},
+		Name2ColIndex: map[string]int32{"v": 0},
+	}
+	tests := []struct {
+		name    string
+		column  string
+		lower   int64
+		wantErr bool
+	}{
+		{name: "unqualified", column: "v"},
+		{name: "matching logical table", column: "t.v"},
+		{name: "matching logical database and table", column: "q1.t.v"},
+		{name: "case insensitive", column: "Q1.T.v", lower: 1},
+		{name: "wrong table", column: "other.v", wantErr: true},
+		{name: "wrong database", column: "q2.t.v", wantErr: true},
+		{name: "case sensitive", column: "Q1.t.v", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sql := "insert into q1.t(id, v) values (1, 2) on duplicate key update v = values(" + test.column + ")"
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, test.lower)
+			require.NoError(t, err)
+			insert := stmts[0].(*tree.Insert)
+			require.Equal(t, tree.Identifier("q1"), insert.TargetDatabaseName)
+			require.Equal(t, tree.Identifier("t"), insert.TargetTableName)
+			astExpr := insert.OnDuplicateUpdate[0].Expr
+			binder := NewOndupUpdateBinder(context.Background(), nil, nil, 0, 1, tableDef,
+				string(insert.TargetDatabaseName), string(insert.TargetTableName), test.lower)
+			_, err = binder.BindExpr(astExpr, 0, true)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), test.column)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestBuildInsertOndupValuesQualifiedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"insert into dept(deptno, loc) values (10, 'new') on duplicate key update loc = values(dept.loc)")
+	require.NoError(t, err)
 }

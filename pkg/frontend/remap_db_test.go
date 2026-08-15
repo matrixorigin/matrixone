@@ -113,6 +113,34 @@ func TestApplyRemapDb(t *testing.T) {
 		require.NotContains(t, out, "dbxxx")
 	})
 
+	t.Run("insert logical target and qualified columns", func(t *testing.T) {
+		ctx := context.Background()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL,
+			"insert into dbxxx.t(dbxxx.t.id, dbxxx.t.v) values (1, 2) on duplicate key update v = values(dbxxx.t.v)", 1)
+		require.NoError(t, err)
+		insert := stmts[0].(*tree.Insert)
+		applyRemapDb(stmts, remap)
+
+		require.Equal(t, tree.Identifier("dbyyy"), insert.TargetDatabaseName)
+		require.Equal(t, "dbyyy", insert.ColumnNames[0].DbNameOrigin())
+		valuesExpr := insert.OnDuplicateUpdate[0].Expr.(*tree.FuncExpr)
+		require.Equal(t, "dbyyy", valuesExpr.Exprs[0].(*tree.UnresolvedName).DbNameOrigin())
+		require.NotContains(t, tree.String(insert, dialect.MYSQL), "dbxxx")
+	})
+
+	t.Run("replace logical target and qualified columns", func(t *testing.T) {
+		ctx := context.Background()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL,
+			"replace into dbxxx.t(dbxxx.t.id, dbxxx.t.v) values (1, 2)", 1)
+		require.NoError(t, err)
+		replace := stmts[0].(*tree.Replace)
+		applyRemapDb(stmts, remap)
+
+		require.Equal(t, tree.Identifier("dbyyy"), replace.TargetDatabaseName)
+		require.Equal(t, "dbyyy", replace.ColumnNames[0].DbNameOrigin())
+		require.NotContains(t, tree.String(replace, dialect.MYSQL), "dbxxx")
+	})
+
 	t.Run("update", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "update dbxxx.t set v = 1 where id = 2", remap)
 		require.Contains(t, out, "dbyyy.t")

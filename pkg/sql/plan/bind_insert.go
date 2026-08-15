@@ -58,6 +58,8 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if targetDB == "" {
 		targetDB = builder.compCtx.DefaultDatabase()
 	}
+	dmlCtx.targetDBName = targetDB
+	dmlCtx.targetTableName = targetTable
 	if err = validateInsertColumnQualifiers(
 		builder.GetContext(), stmt.ColumnNames, targetDB, targetTable, builder.compCtx.GetLowerCaseTableNames(),
 	); err != nil {
@@ -1813,7 +1815,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	} else {
 		onDupAction = plan.Node_UPDATE
 
-		binder := NewOndupUpdateBinder(builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef)
+		binder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, scanTag, selectTag, tableDef,
+			dmlCtx.targetDBName, dmlCtx.targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		)
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()

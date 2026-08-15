@@ -94,6 +94,25 @@ values (1, 999, 'wrong_values')
 on duplicate key update value = values(qualified_insert_columns.other.value);
 select id, value, note from t where id = 1;
 
+insert into qualified_insert_columns.t(t.id, t.value, t.note)
+values (1, 20, 'values_table')
+on duplicate key update value = values(t.value);
+insert into qualified_insert_columns.t(
+    qualified_insert_columns.t.id,
+    qualified_insert_columns.t.value,
+    qualified_insert_columns.t.note
+) values (1, 30, 'values_database')
+on duplicate key update value = values(qualified_insert_columns.t.value);
+prepare qualified_values from
+    'insert into qualified_insert_columns.t(t.id, t.value, t.note) values (?, ?, ?)
+     on duplicate key update value = values(qualified_insert_columns.t.value)';
+set @id = 1;
+set @value = 40;
+set @note = 'values_prepared';
+execute qualified_values using @id, @value, @note;
+deallocate prepare qualified_values;
+select id, value, note from t where id = 1;
+
 create table temp_shadow (
     id int primary key,
     value int not null,
@@ -113,6 +132,15 @@ replace into temp_shadow set
     temp_shadow.id = 4,
     temp_shadow.value = 40,
     temp_shadow.note = 'replace_set';
+insert into temp_shadow(temp_shadow.id, temp_shadow.value, temp_shadow.note)
+values (1, 11, 'temp_values_table')
+on duplicate key update value = values(temp_shadow.value);
+insert into temp_shadow(
+    qualified_insert_columns.temp_shadow.id,
+    qualified_insert_columns.temp_shadow.value,
+    qualified_insert_columns.temp_shadow.note
+) values (1, 12, 'temp_values_database')
+on duplicate key update value = values(qualified_insert_columns.temp_shadow.value);
 select id, value, note from temp_shadow order by id;
 drop temporary table temp_shadow;
 select id, value, note from temp_shadow;

@@ -56,12 +56,30 @@ create database rdb_dml;
 create table rdb_dml.t(id int, v int);
 insert into rdb_dml.t values (1,10),(2,20),(3,30);
 create table rdb_dml.u(id int, v int);
+create table rdb_dml.q(id int primary key, v int);
 set remap_rewrites = '{"remapdb": {"rdb_src_dml": "rdb_dml"}}';
 insert into rdb_src_dml.u select * from rdb_src_dml.t where id <= 2;
+insert into rdb_src_dml.u(rdb_src_dml.u.id, rdb_src_dml.u.v) values (4,40);
+insert into rdb_src_dml.u set rdb_src_dml.u.id = 5, rdb_src_dml.u.v = 50;
+prepare remap_qualified_insert from
+'insert into rdb_src_dml.u(rdb_src_dml.u.id, rdb_src_dml.u.v) values (?, ?)';
+set @remap_id = 6;
+set @remap_v = 60;
+execute remap_qualified_insert using @remap_id, @remap_v;
+deallocate prepare remap_qualified_insert;
 select * from rdb_dml.u order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
-2  ¦  20
+2  ¦  20  𝄀
+4  ¦  40  𝄀
+5  ¦  50  𝄀
+6  ¦  60
+insert into rdb_src_dml.q(rdb_src_dml.q.id, rdb_src_dml.q.v) values (1,10);
+insert into rdb_src_dml.q(rdb_src_dml.q.id, rdb_src_dml.q.v) values (1,20)
+on duplicate key update v = values(rdb_src_dml.q.v);
+select * from rdb_dml.q;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20
 update rdb_src_dml.t set v = 999 where id = 3;
 select * from rdb_dml.t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
@@ -81,7 +99,7 @@ insert into rdb_src.t values (100,1000),(200,2000);
 set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
 use rdb_src;
 select database() as curdb;
-➤ curdb[12,-1,0]  𝄀
+➤ curdb[12,65535,0]  𝄀
 rdb_src
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
