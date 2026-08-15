@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -910,6 +911,22 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
+		if envelope.Allocation.GenerationCount != 0 {
+			if envelope.TerminalResourceVersion <
+				remoteAllocationOwnerResourceVersion {
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			} else if envelope.Delta.Quality&
+				resource.QualityMissingAllocationOwner == 0 &&
+				!envelope.Allocation.OwnerAttributionCoversTotals() {
+				// A mixed-version intermediate propagates an explicit missing-
+				// owner fact. Without it, absent or partial v4 attribution
+				// violates the terminal protocol contract.
+				envelope.Delta.Quality |= resource.QualityInvariantFailure
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			}
+		}
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,

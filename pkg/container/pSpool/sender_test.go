@@ -82,6 +82,41 @@ func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {
 	cache.free()
 }
 
+func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	payload, err := mpool.NewAccountedBuffer(mp, account, 1, 1)
+	require.NoError(t, err)
+	_, err = payload.Write([]byte("accounted partial aggregate state"))
+	require.NoError(t, err)
+	source := batch.NewWithSize(0)
+	require.NoError(t, source.SetAccountedExtraBuffer(payload))
+	require.Positive(t, account.Snapshot().Used)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, useCache)
+	require.Empty(t, source.ExtraBuf)
+	require.False(t, source.HasAccountedExtraBuffer())
+	require.Equal(t, "accounted partial aggregate state", string(copied.ExtraBuf))
+	require.True(t, copied.HasAccountedExtraBuffer())
+
+	// Returning the copied batch to the spool cache is the terminal owner
+	// transition for ExtraBuf and must release the physical charge exactly once.
+	cache.CacheBatch(useCache, cacheID, copied)
+	require.Zero(t, account.Snapshot().Used)
+	source.Clean(mp)
+	cache.free()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+}
+
 func TestCachedBatchHeterogeneousPrepareParamKindSingleCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)

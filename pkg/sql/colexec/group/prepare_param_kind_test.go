@@ -39,6 +39,21 @@ type unknownGroupServiceLockService struct {
 	cfg lockservice.Config
 }
 
+type prepareParamKindTestAccessor struct {
+	vecs []*vector.Vector
+}
+
+func (a *prepareParamKindTestAccessor) PrepareParamKindChunkCount() int {
+	return len(a.vecs)
+}
+
+func (a *prepareParamKindTestAccessor) PrepareParamKindVectorForChunk(chunk int) *vector.Vector {
+	if chunk < 0 || chunk >= len(a.vecs) {
+		return nil
+	}
+	return a.vecs[chunk]
+}
+
 func (s *unknownGroupServiceLockService) GetConfig() lockservice.Config {
 	return s.cfg
 }
@@ -90,37 +105,43 @@ func TestGroupSpillGroupKeyPrepareParamKindCodec(t *testing.T) {
 	require.NoError(t, prepared.Vecs[0].SetPrepareParamKindsWithMP(
 		[]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamInteger}, mp))
 
-	var payload bytes.Buffer
+	rows := []int32{0, 1}
+	newDestination := func() *batch.Batch {
+		decoded := batch.NewOffHeapWithSize(1)
+		decoded.Vecs[0] = vector.NewOffHeapVecWithType(types.T_text.ToType())
+		return decoded
+	}
 	var legacyRecord bytes.Buffer
-	require.NoError(t, appendSpillGroupByBatch(&legacyRecord, legacy, &payload))
-	decoded := batch.NewWithSize(0)
-	require.NoError(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(legacyRecord.Bytes())), decoded, mp))
+	require.NoError(t, appendSpillGroupByRows(&legacyRecord, legacy, rows))
+	decoded := newDestination()
+	require.NoError(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(legacyRecord.Bytes()), decoded, len(rows), mp))
 	require.False(t, decoded.Vecs[0].HasPrepareParamKind())
 	decoded.Clean(mp)
 
 	var preparedRecord bytes.Buffer
-	require.NoError(t, appendSpillGroupByBatch(&preparedRecord, prepared, &payload))
-	decoded = batch.NewWithSize(0)
-	require.NoError(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(preparedRecord.Bytes())), decoded, mp))
+	require.NoError(t, appendSpillGroupByRows(&preparedRecord, prepared, rows))
+	decoded = newDestination()
+	require.NoError(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(preparedRecord.Bytes()), decoded, len(rows), mp))
 	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(1))
 	decoded.Clean(mp)
 
 	truncated := append([]byte(nil), preparedRecord.Bytes()[:preparedRecord.Len()-1]...)
-	decoded = batch.NewWithSize(0)
-	require.Error(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(truncated)), decoded, mp))
+	decoded = newDestination()
+	require.Error(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(truncated), decoded, len(rows), mp))
 	decoded.Clean(mp)
 
 	invalid := append([]byte(nil), preparedRecord.Bytes()...)
-	trailer := bytes.Index(invalid, []byte{'P', 'P', 'B'})
-	require.Positive(t, trailer)
-	invalid[trailer] = 'X'
-	decoded = batch.NewWithSize(0)
-	require.Error(t, unmarshalSpillGroupByBatch(
-		bufio.NewReader(bytes.NewReader(invalid)), decoded, mp))
+	// column count (4 bytes), followed by selected row count (4 bytes), then
+	// the selected-vector metadata byte.
+	require.Greater(t, len(invalid), 8)
+	invalid[8] |= 0x80
+	decoded = newDestination()
+	require.ErrorContains(t, unmarshalSpillGroupByRows(
+		bytes.NewReader(invalid), decoded, len(rows), mp), "metadata")
 	decoded.Clean(mp)
 }
 
@@ -134,6 +155,159 @@ func prepareParamKindRowsTrailerForTest(rowCount int32, rows []byte) []byte {
 	buf.Write(types.EncodeInt32(&rowCount))
 	buf.Write(rows)
 	return buf.Bytes()
+}
+
+func makePrepareParamKindVectorForTest(
+	t *testing.T,
+	mp *mpool.MPool,
+	kinds []vector.PrepareParamKind,
+) *vector.Vector {
+	t.Helper()
+	values := make([]int64, len(kinds))
+	vec := testutil.MakeInt64Vector(values, nil, mp)
+	require.NoError(t, vec.SetPrepareParamKindsWithMP(kinds, mp))
+	return vec
+}
+
+func TestPrepareParamKindTrailerV1ScalarRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := testutil.MakeInt64Vector([]int64{1, 2}, nil, mp)
+	vec.SetPrepareParamKind(vector.PrepareParamFloat)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	}
+	var states aggexec.PrepareParamKindStates
+	states.Reset(aggs)
+	states.Observe(0, vector.PrepareParamFloat)
+	source, err := newPrepareParamKindRowsSource(vec, nil)
+	require.NoError(t, err)
+	require.Zero(t, source.rowCount)
+
+	var encoded bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &encoded, aggs, &states,
+		[]prepareParamKindRowsSource{source}))
+	require.Equal(t, prepareParamKindTrailerVersion, encoded.Bytes()[3])
+
+	var decoded aggexec.PrepareParamKindStates
+	decoded.Reset(aggs)
+	summaries, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(encoded.Bytes()), 1, &decoded,
+		[]prepareParamKindRowsTarget{{expectedRows: -1}}, mp, true)
+	require.NoError(t, err)
+	require.Equal(t, []prepareParamKindSummary{{
+		kind: vector.PrepareParamFloat,
+		seen: true,
+	}}, summaries)
+	kind, seen := decoded.GetState(0)
+	require.Equal(t, vector.PrepareParamFloat, kind)
+	require.True(t, seen)
+}
+
+func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *testing.T) {
+	mp := mpool.MustNewZero()
+	sourceA := makePrepareParamKindVectorForTest(t, mp, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+		vector.PrepareParamDecimal,
+		vector.PrepareParamBoolean,
+	})
+	sourceB := makePrepareParamKindVectorForTest(t, mp, []vector.PrepareParamKind{
+		vector.PrepareParamDecimal,
+		vector.PrepareParamInteger,
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+	})
+	destinationA := testutil.MakeInt64Vector([]int64{0, 0}, nil, mp)
+	destinationB := testutil.MakeInt64Vector([]int64{0, 0}, nil, mp)
+	defer func() {
+		sourceA.Free(mp)
+		sourceB.Free(mp)
+		destinationA.Free(mp)
+		destinationB.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	flags := []uint8{0, 1, 0, 1}
+	rowsA, err := newPrepareParamKindRowsSource(sourceA, flags)
+	require.NoError(t, err)
+	rowsB, err := newPrepareParamKindRowsSource(sourceB, flags)
+	require.NoError(t, err)
+	require.Equal(t, 2, rowsA.rowCount)
+	require.Equal(t, 2, rowsB.rowCount)
+
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, nil, nil),
+	}
+	var states aggexec.PrepareParamKindStates
+	states.Reset(aggs)
+	var encoded bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &encoded, aggs, &states,
+		[]prepareParamKindRowsSource{rowsA, rowsB}))
+	require.Equal(t, prepareParamKindTrailerRowsVersion, encoded.Bytes()[3])
+
+	targetA := &prepareParamKindTestAccessor{vecs: []*vector.Vector{destinationA}}
+	targetB := &prepareParamKindTestAccessor{vecs: []*vector.Vector{destinationB}}
+	var decoded aggexec.PrepareParamKindStates
+	decoded.Reset(aggs)
+	summaries, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(encoded.Bytes()), 2, &decoded,
+		[]prepareParamKindRowsTarget{
+			prepareParamKindChunkTarget(targetA, 0),
+			prepareParamKindChunkTarget(targetB, 0),
+		}, mp, true)
+	require.NoError(t, err)
+	require.True(t, summaries[0].rows)
+	require.True(t, summaries[1].rows)
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamBoolean,
+	}, destinationA.GetPrepareParamKinds())
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamInteger,
+		vector.PrepareParamNone,
+	}, destinationB.GetPrepareParamKinds())
+}
+
+func TestPrepareParamKindTrailerFailureDoesNotPublishCumulativeState(t *testing.T) {
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMax, false, nil, nil),
+	}
+	var states aggexec.PrepareParamKindStates
+	states.Reset(aggs)
+	states.Observe(0, vector.PrepareParamDecimal)
+	states.Observe(1, vector.PrepareParamBoolean)
+
+	var payload bytes.Buffer
+	payload.Write([]byte{
+		prepareParamKindTrailerMagic0,
+		prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2,
+		prepareParamKindTrailerVersion,
+	})
+	nAggs := int32(2)
+	payload.Write(types.EncodeInt32(&nAggs))
+	payload.WriteByte(byte(vector.PrepareParamFloat) + 1)
+	payload.WriteByte(255)
+
+	_, err := readPrepareParamKindTrailer(
+		context.Background(), bytes.NewReader(payload.Bytes()), nAggs, &states,
+		[]prepareParamKindRowsTarget{{expectedRows: -1}, {expectedRows: -1}}, nil, true)
+	require.ErrorContains(t, err, "invalid aggregate prepared parameter state")
+	kind, seen := states.GetState(0)
+	require.Equal(t, vector.PrepareParamDecimal, kind)
+	require.True(t, seen)
+	kind, seen = states.GetState(1)
+	require.Equal(t, vector.PrepareParamBoolean, kind)
+	require.True(t, seen)
 }
 
 func TestPrepareParamKindTrailerRejectsRowAmplificationBeforeAllocation(t *testing.T) {
@@ -169,8 +343,9 @@ func TestPrepareParamKindTrailerRejectsRowAmplificationBeforeAllocation(t *testi
 			localStates.Reset([]aggexec.AggFuncExecExpression{
 				aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 			})
-			_, _, _, _, err := readPrepareParamKindTrailer(
-				context.Background(), bytes.NewReader(tc.payload), 1, &localStates, []int{1}, true)
+			_, err := readPrepareParamKindTrailer(
+				context.Background(), bytes.NewReader(tc.payload), 1, &localStates,
+				[]prepareParamKindRowsTarget{{expectedRows: 1}}, nil, true)
 			require.Error(t, err)
 			require.ErrorContains(t, err, tc.wantErr)
 		})
@@ -183,8 +358,9 @@ func TestPrepareParamKindTrailerRejectsBufferedSpillAmplification(t *testing.T) 
 		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 	})
 	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
-	_, _, _, _, err := readPrepareParamKindTrailer(
-		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{1}, true)
+	_, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states,
+		[]prepareParamKindRowsTarget{{expectedRows: 1}}, nil, true)
 	require.ErrorContains(t, err, "row count 16777216 does not match 1")
 }
 
@@ -194,8 +370,9 @@ func TestPrepareParamKindTrailerRejectsRowsWithoutStateBound(t *testing.T) {
 		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
 	})
 	payload := prepareParamKindRowsTrailerForTest(1<<24, nil)
-	_, _, _, _, err := readPrepareParamKindTrailer(
-		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states, []int{-1}, true)
+	_, err := readPrepareParamKindTrailer(
+		context.Background(), bufio.NewReader(bytes.NewReader(payload)), 1, &states,
+		[]prepareParamKindRowsTarget{{expectedRows: -1}}, nil, true)
 	require.ErrorContains(t, err, "does not expose a prepared parameter row count")
 }
 
@@ -240,52 +417,4 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		require.False(t, seen)
 		require.Equal(t, vector.PrepareParamNone, kind)
 	}
-}
-
-func TestAggregateTrailerPreservesBinaryStringRows(t *testing.T) {
-	aggs := []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAny, false, nil, nil),
-	}
-	states := aggexec.PrepareParamKindStates{}
-	states.Reset(aggs)
-	var wire bytes.Buffer
-	require.NoError(t, writePrepareParamKindTrailer(
-		context.Background(), &wire, aggs, &states,
-		[][]vector.PrepareParamKind{nil}, []prepareParamKindSummary{{}},
-		[][]bool{{true, false}}, []bool{true},
-	))
-
-	restored := aggexec.PrepareParamKindStates{}
-	restored.Reset(aggs)
-	_, _, binaryRows, binarySummaries, err := readPrepareParamKindTrailer(
-		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, true)
-	require.NoError(t, err)
-	require.Equal(t, []bool{true, false}, binaryRows[0])
-	require.False(t, binarySummaries[0])
-
-	_, _, _, _, err = readPrepareParamKindTrailer(
-		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, false)
-	require.ErrorContains(t, err, "MORPCVersion18")
-}
-
-func TestAggregateTrailerRowModeUsesUniformBinarySummary(t *testing.T) {
-	aggs := []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAny, false, nil, nil),
-	}
-	states := aggexec.PrepareParamKindStates{}
-	states.Reset(aggs)
-	var wire bytes.Buffer
-	require.NoError(t, writePrepareParamKindTrailer(
-		context.Background(), &wire, aggs, &states,
-		[][]vector.PrepareParamKind{{vector.PrepareParamInteger, vector.PrepareParamFloat}},
-		[]prepareParamKindSummary{{}}, [][]bool{nil}, []bool{true},
-	))
-
-	restored := aggexec.PrepareParamKindStates{}
-	restored.Reset(aggs)
-	rows, _, binaryRows, _, err := readPrepareParamKindTrailer(
-		context.Background(), bytes.NewReader(wire.Bytes()), 1, &restored, []int{2}, true)
-	require.NoError(t, err)
-	require.Equal(t, []vector.PrepareParamKind{vector.PrepareParamInteger, vector.PrepareParamFloat}, rows[0])
-	require.Equal(t, []bool{true, true}, binaryRows[0])
 }
