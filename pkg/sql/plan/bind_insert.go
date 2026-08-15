@@ -3130,6 +3130,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
 func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, tableDef *TableDef) ([]string, error) {
+	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
+		return nil, err
+	}
+
 	var insertColNames []string
 	colToIdx := make(map[string]int)
 	for i, col := range tableDef.Cols {
@@ -3157,11 +3161,31 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 	return insertColNames, nil
 }
 
+func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.IdentifierList) error {
+	seen := make(map[string]struct{}, len(astCols))
+	for _, column := range astCols {
+		columnName := string(column)
+		key := strings.ToLower(columnName)
+		if _, ok := seen[key]; ok {
+			return moerr.NewFieldSpecifiedTwice(builder.GetContext(), columnName)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 // stripGeneratedDefaultCols removes generated columns from the INSERT column list
 // when their corresponding VALUES are all DEFAULT. This supports MySQL-compatible
 // syntax: INSERT INTO t(gen_col) VALUES(DEFAULT).
 // Non-DEFAULT values for generated columns still produce an error.
 func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierList, astRows *tree.Select, tableDef *plan.TableDef) (tree.IdentifierList, error) {
+	// Validate the original list before generated columns can be removed. This
+	// preserves the SQL-level duplicate-column contract independently of the
+	// generated-column DEFAULT rewrite below.
+	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
+		return nil, err
+	}
+
 	// Find positions of generated columns in the explicit column list
 	genPositions := make(map[int]bool)
 	for i, col := range astCols {
@@ -3447,8 +3471,10 @@ func (builder *QueryBuilder) proveInsertInputKeysUnique(
 		inputPos := -1
 		for i, insertColumn := range insertColumns {
 			if strings.EqualFold(catalog.ResolveAlias(insertColumn), name) {
+				if inputPos >= 0 {
+					return false
+				}
 				inputPos = i
-				break
 			}
 		}
 		if inputPos < 0 || inputPos >= len(lineage) {

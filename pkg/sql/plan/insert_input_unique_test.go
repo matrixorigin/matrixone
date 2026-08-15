@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -106,6 +107,20 @@ func TestProveInsertInputKeysUnique(t *testing.T) {
 			want:       false,
 		},
 		{
+			name:       "target key specified twice",
+			targetPK:   []string{"id"},
+			insertCols: []string{"id", "id", "payload"},
+			sourcePK:   []string{"id"},
+			want:       false,
+		},
+		{
+			name:       "target key specified twice with different case",
+			targetPK:   []string{"id"},
+			insertCols: []string{"id", "ID", "payload"},
+			sourcePK:   []string{"id"},
+			want:       false,
+		},
+		{
 			name:       "source composite key does not prove simple target key",
 			targetPK:   []string{"id"},
 			insertCols: []string{"id", "tenant", "payload"},
@@ -182,6 +197,52 @@ func TestProveInsertInputKeysUnique(t *testing.T) {
 				rootID = 1
 			}
 			require.Equal(t, tc.want, builder.proveInsertInputKeysUnique(rootID, tc.insertCols, target))
+		})
+	}
+}
+
+func TestInsertRejectsDuplicateTargetColumns(t *testing.T) {
+	tests := []struct {
+		name         string
+		query        string
+		duplicateCol string
+	}{
+		{
+			name:         "insert select exact case",
+			query:        "insert into constraint_test.emp (empno, empno, job) select empno, deptno, job from constraint_test.employees",
+			duplicateCol: "empno",
+		},
+		{
+			name:         "insert select different case",
+			query:        "insert into constraint_test.emp (empno, EMPNO, job) select empno, deptno, job from constraint_test.employees",
+			duplicateCol: "empno",
+		},
+		{
+			name:         "insert values non-key column",
+			query:        "insert into constraint_test.emp (empno, ename, ENAME) values (1, 'alice', 'bob')",
+			duplicateCol: "ename",
+		},
+		{
+			name:         "replace values",
+			query:        "replace into constraint_test.emp (empno, empno, job) values (1, 2, 'engineer')",
+			duplicateCol: "empno",
+		},
+		{
+			name:         "generated columns before rewrite",
+			query:        "insert into constraint_test.t_on_update_gen (g, G) values (default, default)",
+			duplicateCol: "g",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true), t, tc.query)
+			require.Error(t, err)
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, uint16(moerr.ER_FIELD_SPECIFIED_TWICE), moErr.MySQLCode())
+			require.Equal(t, "42000", moErr.SqlState())
+			require.Equal(t, "Column '"+tc.duplicateCol+"' specified twice", moErr.Error())
 		})
 	}
 }
