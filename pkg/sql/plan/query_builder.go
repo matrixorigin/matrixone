@@ -3773,6 +3773,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
@@ -3833,6 +3834,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			} else {
 				targetArgType = argsCastType[0]
+			}
+			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasVariableString := false, false
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_char:
+						hasChar = true
+					case types.T_varchar, types.T_text:
+						hasVariableString = true
+					}
+				}
+				setOperationKeyRequired[columnIdx] = hasChar && hasVariableString
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
@@ -3903,6 +3916,53 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		return projectList
 	}
+	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
+		requiresKeyList := false
+		for _, required := range setOperationKeyRequired {
+			requiresKeyList = requiresKeyList || required
+		}
+		if !requiresKeyList {
+			return nil, nil
+		}
+
+		keyList := make([]*plan.Expr, len(projectList))
+		for i, expr := range projectList {
+			keyList[i] = DeepCopyExpr(expr)
+			if setOperationKeyRequired[i] {
+				var err error
+				keyList[i], err = appendSetOperationCastBeforeExpr(
+					builder.GetContext(), keyList[i], keyList[i].Typ,
+				)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return keyList, nil
+	}
+	appendSetOperationNode := func(
+		nodeType plan.Node_NodeType,
+		leftNodeID, rightNodeID int32,
+		tag, thisTag int32,
+	) (int32, error) {
+		projectList := getProjectList(nodeType, leftNodeID, rightNodeID, tag, thisTag)
+		var keyList []*plan.Expr
+		var err error
+		switch nodeType {
+		case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+			keyList, err = getSetOperationKeyList(projectList)
+			if err != nil {
+				return 0, err
+			}
+		}
+		return builder.appendNode(&plan.Node{
+			NodeType:                nodeType,
+			Children:                []int32{leftNodeID, rightNodeID},
+			BindingTags:             []int32{thisTag},
+			ProjectList:             projectList,
+			PhysicalEqualityKeyList: keyList,
+		}, ctx), nil
+	}
 
 	// build intersect node first.  because intersect has higher precedence then UNION and MINUS
 	var newNodes []int32
@@ -3916,18 +3976,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			lastTag = builder.genNewBindTag()
 			leftNodeID := newNodes[lastNewNodeIdx]
 			leftNodeTag := builder.qry.Nodes[leftNodeID].BindingTags[0]
-			newNodeID := builder.appendNode(&plan.Node{
-				NodeType:    unionTypes[utIdx],
-				Children:    []int32{leftNodeID, nodes[i]},
-				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(
-					unionTypes[utIdx],
-					leftNodeID,
-					nodes[i],
-					leftNodeTag,
-					lastTag,
-				),
-			}, ctx)
+			newNodeID, err := appendSetOperationNode(
+				unionTypes[utIdx], leftNodeID, nodes[i], leftNodeTag, lastTag,
+			)
+			if err != nil {
+				return 0, err
+			}
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
 			newNodes = append(newNodes, nodes[i])
@@ -3942,18 +3996,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		lastTag = builder.genNewBindTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
 
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    newUnionType[utIdx],
-			Children:    []int32{lastNodeID, newNodes[i]},
-			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(
-				newUnionType[utIdx],
-				lastNodeID,
-				newNodes[i],
-				leftNodeTag,
-				lastTag,
-			),
-		}, ctx)
+		lastNodeID, err = appendSetOperationNode(
+			newUnionType[utIdx], lastNodeID, newNodes[i], leftNodeTag, lastTag,
+		)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -4239,7 +4287,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// its grouping provenance is still available. This final aggregate therefore
 	// sees ordinary values and performs one global visible-tuple de-duplication.
 	if distinct {
-		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
+		lastNodeID, err = builder.appendDistinctNode(ctx, lastNodeID)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	resultSourceTag := ctx.projectTag
@@ -5380,7 +5431,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// append DISTINCT node
 	resultSourceTag := ctx.projectTag
 	if ctx.isDistinct {
-		nodeID = builder.appendDistinctNode(ctx, nodeID)
+		nodeID, err = builder.appendDistinctNode(ctx, nodeID)
+		if err != nil {
+			return
+		}
 		if len(boundOrderBys) > 0 {
 			if nodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, nodeID, boundOrderBys); err != nil {
 				return
@@ -9633,11 +9687,37 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	return
 }
 
-func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) int32 {
+func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) (int32, error) {
+	projects := builder.qry.Nodes[nodeID].ProjectList
+	requiresPhysicalKeys := false
+	for _, project := range projects {
+		if hasPadSpaceStringProvenance(project) {
+			requiresPhysicalKeys = true
+			break
+		}
+	}
+
+	var physicalKeys []*plan.Expr
+	if requiresPhysicalKeys {
+		physicalKeys = make([]*plan.Expr, len(projects))
+		for i, project := range projects {
+			key := DeepCopyExpr(project)
+			if hasPadSpaceStringProvenance(project) {
+				var err error
+				key, err = appendSetOperationCastBeforeExpr(builder.GetContext(), key, key.Typ)
+				if err != nil {
+					return 0, err
+				}
+			}
+			physicalKeys[i] = key
+		}
+	}
+
 	return builder.appendNode(&plan.Node{
-		NodeType: plan.Node_DISTINCT,
-		Children: []int32{nodeID},
-	}, ctx)
+		NodeType:                plan.Node_DISTINCT,
+		Children:                []int32{nodeID},
+		PhysicalEqualityKeyList: physicalKeys,
+	}, ctx), nil
 }
 
 func (builder *QueryBuilder) appendSortNode(ctx *BindContext, nodeID int32, boundOrderBys []*plan.OrderBySpec) int32 {

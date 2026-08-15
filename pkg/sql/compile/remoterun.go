@@ -728,9 +728,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *top.Top:
 		in.Limit = t.Limit
 		in.OrderBy = t.Fs
-	// we reused ANTI to store the information here because of the lack of related structure.
-	case *intersect.Intersect, *minus.Minus, *intersectall.IntersectAll:
-		in.SetOp = &pipeline.SetOp{}
+	case *intersect.Intersect:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *intersectall.IntersectAll:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *merge.Merge:
 		in.Merge = &pipeline.Merge{
 			SinkScan: t.SinkScan,
@@ -1269,11 +1272,23 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			WithFs(opr.OrderBy)
 	// should change next day?
 	case vm.Intersect:
-		op = intersect.NewArgument()
+		arg := intersect.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.IntersectAll:
-		op = intersectall.NewArgument()
+		arg := intersectall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Minus:
-		op = minus.NewArgument()
+		arg := minus.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().

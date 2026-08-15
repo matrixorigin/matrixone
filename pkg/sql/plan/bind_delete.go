@@ -165,7 +165,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	// including the unique Row_ID, so exact-duplicate rows are guaranteed
 	// to be the same physical row.
 	if len(stmt.TableRefs) > 0 {
-		lastNodeID = builder.appendDistinctNode(selectCtx, lastNodeID)
+		lastNodeID, err = builder.appendDistinctNode(selectCtx, lastNodeID)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	var returningIrregularIndexes []*plan.IndexDef

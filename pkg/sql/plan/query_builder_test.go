@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -4144,7 +4145,8 @@ func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
 	inputID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, bindCtx)
 	projectID, err := builder.appendProjectionNode(bindCtx, inputID, false)
 	require.NoError(t, err)
-	distinctID := builder.appendDistinctNode(bindCtx, projectID)
+	distinctID, err := builder.appendDistinctNode(bindCtx, projectID)
+	require.NoError(t, err)
 	orderProjectID, orderTag, err := builder.appendDistinctOrderProjectionNode(bindCtx, distinctID, boundOrderBys)
 	require.NoError(t, err)
 	require.NotEqual(t, bindCtx.projectTag, orderTag)
@@ -4241,6 +4243,124 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			require.Equal(t, 1, len(sortNodes[0].OrderBy))
 			require.Equal(t, plan.OrderBySpec_DESC, sortNodes[0].OrderBy[0].Flag)
 			require.NotNil(t, sortNodes[0].OrderBy[0].Expr.GetCol())
+		})
+	}
+}
+
+func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+		wantKey  bool
+	}{
+		{
+			name:     "mixed union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as varchar(8))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
+			name:     "reversed mixed union",
+			sql:      "select cast('MO' as varchar(8)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "mixed char text union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as text)",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "varchar control",
+			sql:      "select cast('MO ' as varchar(8)) union select cast('MO' as varchar(8))",
+			nodeType: plan.Node_UNION,
+			wantKey:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var setNode *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.NotNil(t, setNode.ProjectList[0].GetCol())
+			if !tc.wantKey {
+				require.Empty(t, setNode.PhysicalEqualityKeyList)
+				return
+			}
+
+			require.Len(t, setNode.PhysicalEqualityKeyList, 1)
+			keyFn := setNode.PhysicalEqualityKeyList[0].GetF()
+			require.NotNil(t, keyFn)
+			require.Equal(t, "cast", keyFn.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantKey bool
+	}{
+		{
+			name:    "coalesce char varchar",
+			sql:     "select distinct coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: true,
+		},
+		{
+			name:    "coalesce varchar control",
+			sql:     "select distinct coalesce(cast(n_name as varchar(8)), cast(n_comment as varchar(8))) from nation",
+			wantKey: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			if !tc.wantKey {
+				require.Empty(t, distinctAgg.GroupByHashKey)
+				return
+			}
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+			keyFn := distinctAgg.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
 		})
 	}
 }
@@ -5052,7 +5172,8 @@ func TestQueryBuilder_appendDistinctNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), nodeID)
 
-	nodeID = builder.appendDistinctNode(bindCtx, nodeID)
+	nodeID, err = builder.appendDistinctNode(bindCtx, nodeID)
+	require.NoError(t, err)
 	require.Equal(t, int32(1), nodeID)
 
 	distinctNode := builder.qry.Nodes[1]

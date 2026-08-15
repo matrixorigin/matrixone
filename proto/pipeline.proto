@@ -299,7 +299,9 @@ message LoopJoin {
   int32 join_map_tag = 7;
 }
 
-message SetOp {}
+message SetOp {
+  repeated plan.Expr key_exprs = 1;
+}
 
 message DedupJoin {
   repeated int32 rel_list = 1;

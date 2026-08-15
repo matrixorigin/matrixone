@@ -17,10 +17,19 @@ insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
 
 drop table if exists pad_char_set8;
 drop table if exists pad_char_set4;
+drop table if exists pad_char_set_v8;
+drop table if exists pad_char_set_text;
+drop table if exists pad_char_promoted;
 create table pad_char_set8 (c char(8));
 create table pad_char_set4 (c char(4));
+create table pad_char_set_v8 (c varchar(8));
+create table pad_char_set_text (c text);
+create table pad_char_promoted (c char(8), v varchar(8));
 insert into pad_char_set8 values ('MO');
 insert into pad_char_set4 values ('MO');
+insert into pad_char_set_v8 values ('MO');
+insert into pad_char_set_text values ('MO');
+insert into pad_char_promoted values ('MO', null), (null, 'MO');
 
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
        char_length(unicode_c), length(unicode_c), hex(unicode_c),
@@ -40,6 +49,22 @@ join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
 select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -65,6 +90,22 @@ join pad_char_to_full_length_t as rhs on lhs.c = rhs.short_c;
 select count(*) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set4) i;
 select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;
@@ -77,3 +118,6 @@ set sql_mode = @saved_sql_mode;
 drop table pad_char_to_full_length_t;
 drop table pad_char_set8;
 drop table pad_char_set4;
+drop table pad_char_set_v8;
+drop table pad_char_set_text;
+drop table pad_char_promoted;

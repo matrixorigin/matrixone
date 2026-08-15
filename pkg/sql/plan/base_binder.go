@@ -4510,6 +4510,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 	}
+	if isPadSpaceComparisonFunction(name) {
+		for idx := range args {
+			argType := makeTypeByPlan2Expr(args[idx])
+			if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
+				hasPadSpaceStringProvenance(args[idx]) && !isCastOverload(args[idx], 2) {
+				args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], makePlan2Type(&argType))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
@@ -5325,6 +5337,41 @@ func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type
 
 func appendSetOperationCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 3)
+}
+
+// hasPadSpaceStringProvenance identifies value-selecting string expressions
+// that can expose representation-only CHAR padding after implicit promotion.
+// Do not recurse through byte-transforming functions such as CONCAT: spaces
+// produced there are part of the expression result rather than CHAR storage.
+func hasPadSpaceStringProvenance(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
+		fromType := makeTypeByPlan2Expr(fn.Args[0])
+		toType := makeTypeByPlan2Expr(expr)
+		return fromType.Oid == types.T_char &&
+			(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
+	}
+	switch fn.Func.ObjName {
+	case "coalesce", "ifnull":
+		for _, arg := range fn.Args {
+			if hasPadSpaceStringProvenance(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isCastOverload(expr *Expr, overloadID int32) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
+		return false
+	}
+	_, actualOverloadID := function.DecodeOverloadID(fn.Func.Obj)
+	return actualOverloadID == overloadID
 }
 
 func isPadSpaceComparisonFunction(name string) bool {

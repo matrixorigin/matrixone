@@ -941,6 +941,17 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 
 	node.NodeType = plan.Node_AGG
 	node.GroupBy = project.ProjectList
+	if len(node.PhysicalEqualityKeyList) > 0 {
+		visibleCount := len(node.GroupBy)
+		node.ProjectList = make([]*plan.Expr, visibleCount)
+		for i, expr := range project.ProjectList {
+			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
+		}
+		for i, key := range node.PhysicalEqualityKeyList {
+			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
+			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
+		}
+	}
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]

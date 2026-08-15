@@ -36,6 +36,11 @@ func (builder *QueryBuilder) determineGroupByHashKeys(nodeID int32) {
 // Keep this separate from the tree walk because optimizer rewrites can create a
 // new aggregate after the initial annotation pass.
 func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
+	// Some semantic rewrites provide an explicit physical key that differs from
+	// the user-visible grouping value. Preserve that stronger proof.
+	if len(node.GroupByHashKey) > 0 {
+		return
+	}
 	node.GroupByHashKey = nil
 	if node.NodeType != pbplan.Node_AGG || len(node.GroupBy) < 2 || hasInactiveGroupingColumn(node.GroupingFlag) {
 		return

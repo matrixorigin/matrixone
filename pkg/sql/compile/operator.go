@@ -362,15 +362,21 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
+		t := sourceOp.(*intersect.Intersect)
 		op := intersect.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Minus: // 2
+		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.IntersectAll:
+		t := sourceOp.(*intersectall.IntersectAll)
 		op := intersectall.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Merge:

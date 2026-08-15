@@ -3145,24 +3145,27 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 	}
 }
 
-func TestStrToStrTrimsCharPaddingOnlyForComparisonCast(t *testing.T) {
+func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
 	mp := mpool.MustNewZero()
-	input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
-	input.SetType(types.New(types.T_char, 8, 0))
-	defer input.Free(mp)
-	from := vector.GenerateFunctionStrParameter(input)
 
 	for _, test := range []struct {
-		name   string
-		toType types.Type
-		mode   castMode
-		want   string
+		name     string
+		fromType types.Type
+		toType   types.Type
+		mode     castMode
+		want     string
 	}{
-		{name: "ordinary varchar cast preserves padding", toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
-		{name: "comparison varchar cast drops padding", toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
-		{name: "comparison char cast preserves padding", toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
+		{name: "ordinary varchar cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
+		{name: "comparison varchar cast drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "comparison promoted varchar key drops padding", fromType: types.New(types.T_varchar, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "set-operation varchar key drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeSetOperation, want: "MO"},
+		{name: "comparison char cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+			input.SetType(test.fromType)
+			defer input.Free(mp)
+			from := vector.GenerateFunctionStrParameter(input)
 			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
 			defer result.Free()
 			require.NoError(t, result.PreExtendAndReset(1))

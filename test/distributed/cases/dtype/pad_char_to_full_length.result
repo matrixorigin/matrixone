@@ -10,19 +10,28 @@ short_c char(4)
 insert into pad_char_to_full_length_t values ('MO', '你好', 'MO', 'MO');
 drop table if exists pad_char_set8;
 drop table if exists pad_char_set4;
+drop table if exists pad_char_set_v8;
+drop table if exists pad_char_set_text;
+drop table if exists pad_char_promoted;
 create table pad_char_set8 (c char(8));
 create table pad_char_set4 (c char(4));
+create table pad_char_set_v8 (c varchar(8));
+create table pad_char_set_text (c text);
+create table pad_char_promoted (c char(8), v varchar(8));
 insert into pad_char_set8 values ('MO');
 insert into pad_char_set4 values ('MO');
+insert into pad_char_set_v8 values ('MO');
+insert into pad_char_set_text values ('MO');
+insert into pad_char_promoted values ('MO', null), (null, 'MO');
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
 char_length(unicode_c), length(unicode_c), hex(unicode_c),
 char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
-➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,49151,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,49151,0]  𝄀
+➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,65535,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,65535,0]  𝄀
 2  ¦  2  ¦  4D4F  ¦  >MO<  ¦  2  ¦  6  ¦  E4BDA0E5A5BD  ¦  2  ¦  2  ¦  4D4F
 select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
 from pad_char_to_full_length_t;
-➤ cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
+➤ cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
 MO  ¦  2  ¦  4D4F
 select count(*) from pad_char_to_full_length_t where length(c) = 2;
 ➤ count(*)[-5,64,0]  𝄀
@@ -56,6 +65,54 @@ select count(*) from (select c from pad_char_set8 intersect select c from pad_ch
 select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
 ➤ count(*)[-5,64,0]  𝄀
 0
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
+➤ count(*)[-5,64,0]  𝄀
+1
 prepare pad_char_stmt from
 'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
 cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
@@ -65,11 +122,11 @@ select char_length(c), length(c), hex(c), concat('>', c, '<'),
 char_length(unicode_c), length(unicode_c), hex(unicode_c),
 char_length(v), length(v), hex(v)
 from pad_char_to_full_length_t;
-➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,49151,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,49151,0]  𝄀
+➤ char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  char_length(unicode_c)[-5,64,0]  ¦  length(unicode_c)[-5,64,0]  ¦  hex(unicode_c)[12,65535,0]  ¦  char_length(v)[-5,64,0]  ¦  length(v)[-5,64,0]  ¦  hex(v)[12,65535,0]  𝄀
 8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  4  ¦  8  ¦  E4BDA0E5A5BD2020  ¦  2  ¦  2  ¦  4D4F
 select cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
 from pad_char_to_full_length_t;
-➤ cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
+➤ cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
 MO        ¦  8  ¦  4D4F202020202020
 select count(*) from pad_char_to_full_length_t where length(c) = 8;
 ➤ count(*)[-5,64,0]  𝄀
@@ -103,21 +160,72 @@ select count(*) from (select c from pad_char_set8 intersect select c from pad_ch
 select count(*) from (select c from pad_char_set8 minus select c from pad_char_set4) m;
 ➤ count(*)[-5,64,0]  𝄀
 0
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_v8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_v8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set8 intersect select c from pad_char_set_v8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+8  ¦  4D4F202020202020
+select count(*) from (select c from pad_char_set_v8 union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_v8 minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select length(c), hex(c) from (select c from pad_char_set_v8 intersect select c from pad_char_set8) i;
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
+2  ¦  4D4F
+select count(*) from (select c from pad_char_set8 union select c from pad_char_set_text) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 intersect select c from pad_char_set_text) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set8 minus select c from pad_char_set_text) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from (select c from pad_char_set_text union select c from pad_char_set8) u;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text intersect select c from pad_char_set8) i;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (select c from pad_char_set_text minus select c from pad_char_set8) m;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
+➤ count(*)[-5,64,0]  𝄀
+1
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
-➤ length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  𝄀
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
 8  ¦  4D4F202020202020
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
-➤ length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  𝄀
+➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
 8  ¦  4D4F202020202020
 execute pad_char_stmt;
-➤ c[1,6,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
+➤ c[1,8,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
 MO        ¦  8  ¦  8  ¦  4D4F202020202020  ¦  >MO      <  ¦  MO        ¦  8  ¦  4D4F202020202020
 set sql_mode = '';
 execute pad_char_stmt;
-➤ c[1,6,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,49151,0]  ¦  concat(>, c, <)[12,49151,0]  ¦  cast(c as varchar(8))[12,6,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,49151,0]  𝄀
+➤ c[1,8,0]  ¦  char_length(c)[-5,64,0]  ¦  length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  ¦  concat(>, c, <)[12,65535,0]  ¦  cast(c as varchar(8))[12,8,0]  ¦  length(cast(c as varchar(8)))[-5,64,0]  ¦  hex(cast(c as varchar(8)))[12,65535,0]  𝄀
 MO  ¦  2  ¦  2  ¦  4D4F  ¦  >MO<  ¦  MO  ¦  2  ¦  4D4F
 deallocate prepare pad_char_stmt;
 set sql_mode = @saved_sql_mode;
 drop table pad_char_to_full_length_t;
 drop table pad_char_set8;
 drop table pad_char_set4;
+drop table pad_char_set_v8;
+drop table pad_char_set_text;
+drop table pad_char_promoted;
