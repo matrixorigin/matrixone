@@ -86,7 +86,22 @@ func TestWaitTaskServiceReadyHonorsCancellation(t *testing.T) {
 }
 
 func TestWaitBasicClusterTaskServicesRejectsMissingCN(t *testing.T) {
-	err := waitBasicClusterTaskServices(context.Background(), &cluster{})
+	err := waitBasicClusterTaskServices(context.Background(), &cluster{}, 1)
+	require.ErrorContains(t, err, "service not found")
+}
+
+func TestWaitBasicClusterTaskServicesHonorsCNCount(t *testing.T) {
+	getter := newDelayedTaskServiceGetter()
+	service := taskservice.NewTaskService(
+		mruntime.DefaultRuntime(), taskservice.NewMemTaskStorage())
+	defer func() { require.NoError(t, service.Close()) }()
+	getter.set(service)
+
+	cn := &operator{sid: "cn-0", serviceType: metadata.ServiceType_CN}
+	cn.reset.svc = getter
+	c := &cluster{services: []*operator{cn}}
+
+	err := waitBasicClusterTaskServices(context.Background(), c, 2)
 	require.ErrorContains(t, err, "service not found")
 }
 
@@ -95,7 +110,7 @@ func TestWaitBasicClusterTaskServicesRejectsUnsupportedService(t *testing.T) {
 	cn.reset.svc = &closeTrackingService{}
 	c := &cluster{services: []*operator{cn}}
 
-	err := waitBasicClusterTaskServices(context.Background(), c)
+	err := waitBasicClusterTaskServices(context.Background(), c, 1)
 	require.ErrorContains(t, err, "does not expose its task service")
 }
 
@@ -107,7 +122,7 @@ func TestWaitBasicClusterTaskServicesReportsReadinessCancellation(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := waitBasicClusterTaskServices(ctx, c)
+	err := waitBasicClusterTaskServices(ctx, c, 1)
 	require.ErrorContains(t, err, "task service did not become ready")
 }
 

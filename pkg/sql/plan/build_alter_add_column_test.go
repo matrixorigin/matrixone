@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,6 +73,41 @@ func TestCheckGeometryKeyPartTypes(t *testing.T) {
 	err = checkUniqueKeyPartType(context.Background(), typ, "g")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
+}
+
+func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		option  *tree.IndexOption
+		visible bool
+	}{
+		{
+			name:    "default is visible",
+			visible: true,
+		},
+		{
+			name: "explicit invisible is preserved",
+			option: &tree.IndexOption{
+				Visible: tree.VISIBLE_TYPE_INVISIBLE,
+			},
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			indexDef, err := checkAddColumWithUniqueKey(context.Background(), &TableDef{}, &tree.UniqueIndex{
+				Name:        "idx_a",
+				KeyParts:    []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("a")}},
+				IndexOption: tc.option,
+			})
+			require.NoError(t, err)
+			got, isSet := catalog.GetIndexVisibility(indexDef)
+			require.True(t, isSet)
+			require.Equal(t, tc.visible, got)
+			require.Equal(t, tc.visible, indexDef.Visible)
+		})
+	}
 }
 
 // TestCheckVectorPrimaryKeyPartTypes verifies ALTER ... ADD PRIMARY KEY rejects
