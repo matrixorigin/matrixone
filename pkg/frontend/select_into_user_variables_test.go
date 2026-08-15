@@ -211,3 +211,11 @@ func TestSelectIntoDeprecatedWarning(t *testing.T) {
 	require.NotEmpty(t, info.msgs)
 	require.Contains(t, info.msgs[0], "The INTO clause is deprecated inside query blocks of query expressions")
 }
+
+func TestSelectIntoUserVariableNormalizesDisplayOnlyGeometryTypes(t *testing.T) {
+	for _, typ := range []types.Type{types.T_geometry.ToType(), types.T_geometry32.ToType()} {
+		value, planType := selectIntoUserVariableValueAndType([]byte("POINT(1 2)"), typ)
+		require.Equal(t, []byte("POINT(1 2)"), value)
+		require.Equal(t, int32(types.T_varchar), planType.Id)
+	}
+}

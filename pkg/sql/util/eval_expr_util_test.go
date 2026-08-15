@@ -142,6 +142,79 @@ func TestGenVectorByVarValueTimestampUsesSessionTimeZone(t *testing.T) {
 	require.Equal(t, "2026-01-01 00:00:00", utcGot.String2(time.UTC, typ.Scale))
 }
 
+func TestGenVectorByVarValueInternalFixedTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	blockid := types.BuildTestBlockid(11, 22)
+	rowid := types.NewRowid(&blockid, 7)
+	ts := types.BuildTS(123456789, 42)
+
+	testCases := []struct {
+		name  string
+		typ   types.Type
+		value any
+		check func(t *testing.T, vec *vector.Vector)
+	}{
+		{
+			name:  "rowid typed value",
+			typ:   types.T_Rowid.ToType(),
+			value: rowid,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, rowid, vector.MustFixedColNoTypeCheck[types.Rowid](vec)[0])
+			},
+		},
+		{
+			name:  "rowid encoded bytes",
+			typ:   types.T_Rowid.ToType(),
+			value: types.EncodeFixed(rowid),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, rowid, vector.MustFixedColNoTypeCheck[types.Rowid](vec)[0])
+			},
+		},
+		{
+			name:  "blockid typed value",
+			typ:   types.T_Blockid.ToType(),
+			value: blockid,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, blockid, vector.MustFixedColNoTypeCheck[types.Blockid](vec)[0])
+			},
+		},
+		{
+			name:  "blockid encoded bytes",
+			typ:   types.T_Blockid.ToType(),
+			value: types.EncodeFixed(blockid),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, blockid, vector.MustFixedColNoTypeCheck[types.Blockid](vec)[0])
+			},
+		},
+		{
+			name:  "ts typed value",
+			typ:   types.T_TS.ToType(),
+			value: ts,
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, ts, vector.MustFixedColNoTypeCheck[types.TS](vec)[0])
+			},
+		},
+		{
+			name:  "ts encoded bytes",
+			typ:   types.T_TS.ToType(),
+			value: types.EncodeFixed(ts),
+			check: func(t *testing.T, vec *vector.Vector) {
+				require.Equal(t, ts, vector.MustFixedColNoTypeCheck[types.TS](vec)[0])
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			vec, err := GenVectorByVarValue(proc, testCase.typ, testCase.value)
+			require.NoError(t, err)
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.Equal(t, testCase.typ.Oid, vec.GetType().Oid)
+			testCase.check(t, vec)
+		})
+	}
+}
+
 func TestHexToInt(t *testing.T) {
 	var val uint64
 	var err error

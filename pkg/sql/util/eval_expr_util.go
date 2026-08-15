@@ -136,6 +136,9 @@ func GenVectorByVarValueWithAllocation(
 		}
 		return vector.NewConstBytesWithAllocation(typ, value, 1, proc.Mp(), selection)
 	}
+	if vec, handled, err := genInternalFixedUserVariableVector(proc, typ, val, selection); handled {
+		return vec, err
+	}
 	strVal := getVal(val)
 	// JSON values are stored in the vector's binary JSON representation rather
 	// than as their display string.  Route them through the typed setter just
@@ -170,6 +173,81 @@ func GenVectorByVarValueWithAllocation(
 	return vector.NewConstBytesWithAllocation(
 		typ, []byte(strVal), 1, proc.Mp(), selection,
 	)
+}
+
+func genInternalFixedUserVariableVector(
+	proc *process.Process,
+	typ types.Type,
+	val any,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, bool, error) {
+	switch typ.Oid {
+	case types.T_Rowid:
+		switch v := val.(type) {
+		case types.Rowid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.RowidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Rowid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_Blockid:
+		switch v := val.(type) {
+		case types.Blockid:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.BlockidSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.Blockid](v), selection)
+				return vec, true, err
+			}
+		}
+	case types.T_TS:
+		switch v := val.(type) {
+		case types.TS:
+			vec, err := newConstInternalFixedVector(proc, typ, v, selection)
+			return vec, true, err
+		case []byte:
+			if len(v) == types.TxnTsSize {
+				vec, err := newConstInternalFixedVector(proc, typ, types.DecodeFixed[types.TS](v), selection)
+				return vec, true, err
+			}
+		}
+	default:
+		return nil, false, nil
+	}
+	return nil, true, moerr.NewInvalidArgNoCtx(typ.Oid.String()+" user variable value", fmt.Sprintf("%T", val))
+}
+
+func newConstInternalFixedVector[T types.FixedSizeT](
+	proc *process.Process,
+	typ types.Type,
+	val T,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	var vec *vector.Vector
+	var err error
+	if selection == nil {
+		vec = vector.NewVec(typ)
+	} else {
+		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = vec.PreExtend(1, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.SetLength(1)
+	if err = vector.SetFixedAtNoTypeCheck(vec, 0, val); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.ToConst()
+	return vec, nil
 }
 
 func arrayUserVariableValueToBytes(typ types.Type, val any) ([]byte, error) {

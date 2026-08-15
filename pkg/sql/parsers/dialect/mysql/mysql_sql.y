@@ -7576,11 +7576,16 @@ dedup_join:
 values_stmt:
     VALUES row_constructor_list order_by_opt query_limit_opt
     {
-        $$ = &tree.ValuesStatement{
+        stmt := &tree.ValuesStatement{
             Rows: $2,
             OrderBy: $3,
             Limit: $4,
         }
+        if intoErr := tree.ValidateValuesIntoPlacement(stmt); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = stmt
     }
 
 row_constructor_list:

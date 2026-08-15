@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -102,11 +103,24 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 		}
 		for i, vec := range bat.Vecs {
 			collector.rowIsBin[i] = vec.GetIsBin()
-			collector.rowType[i] = plan2.MakePlan2Type(vec.GetType())
+			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}
 	}
 	collector.rowCount += uint64(bat.RowCount())
 	return nil
+}
+
+func selectIntoUserVariableValueAndType(value any, typ types.Type) (any, plan2.Type) {
+	switch typ.Oid {
+	case types.T_geometry, types.T_geometry32:
+		// extractRowFromEveryVector converts geometry payloads to display text.
+		// Persist that text as a string user variable instead of retaining the
+		// geometry OID, otherwise a later @var read would treat WKT bytes as the
+		// internal geometry payload.
+		return value, plan2.Type{Id: int32(types.T_varchar)}
+	default:
+		return value, plan2.MakePlan2Type(&typ)
+	}
 }
 
 func (collector *selectIntoUserVariables) apply(ctx context.Context, ses FeSession, sql string) error {

@@ -1863,11 +1863,21 @@ func (s SampleExpr) Format(ctx *FmtCtx) {
 }
 
 func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
+	node = &s
 	newNode, skipChildren := v.Enter(node)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(node)
+	node = newNode.(*SampleExpr)
+	sample := node.(*SampleExpr)
+	for i, column := range sample.columns {
+		tmpNode, ok := column.Accept(v)
+		if !ok {
+			return sample, false
+		}
+		sample.columns[i] = tmpNode
+	}
+	return v.Exit(sample)
 }
 
 func (s SampleExpr) Valid() error {

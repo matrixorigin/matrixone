@@ -586,6 +586,21 @@ func ValidateSelectIntoPlacement(stmt *Select) string {
 	return ""
 }
 
+func ValidateValuesIntoPlacement(stmt *ValuesStatement) string {
+	if stmt == nil {
+		return ""
+	}
+	for _, row := range stmt.Rows {
+		if exprsHaveInto(row) {
+			return MisplacedIntoClauseMessage
+		}
+	}
+	if orderByHasInto(stmt.OrderBy) || limitHasInto(stmt.Limit) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
 func ValidatePerformSelectIntoPlacement(stmt *Select) string {
 	if stmt == nil {
 		return ""
@@ -656,6 +671,8 @@ func statementHasInto(stmt Statement) bool {
 			selectTreeHasExport(node.Select) || selectStatementHasNestedInto(node.Select) ||
 			timeWindowHasInto(node.TimeWindow) || orderByHasInto(node.OrderBy) ||
 			limitHasInto(node.Limit)
+	case *ValuesStatement:
+		return ValidateValuesIntoPlacement(node) != ""
 	default:
 		return false
 	}
@@ -690,6 +707,13 @@ func selectStatementHasNestedInto(stmt SelectStatement) bool {
 		return selectStatementHasNestedInto(node.Select)
 	case *UnionClause:
 		return selectStatementHasNestedInto(node.Left) || selectStatementHasNestedInto(node.Right)
+	case *ValuesClause:
+		for _, row := range node.Rows {
+			if exprsHaveInto(row) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -868,8 +892,18 @@ func exprHasNestedInto(expr Expr) bool {
 		return exprHasNestedInto(node.Expr)
 	case *UpdateVal:
 		return false
+	case *SampleExpr:
+		return exprsHaveInto(node.columns)
 	case *FullTextMatchExpr:
-		return exprHasNestedInto(node.Pattern)
+		if exprHasNestedInto(node.Pattern) {
+			return true
+		}
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil && (exprHasNestedInto(keyPart.ColName) || exprHasNestedInto(keyPart.Expr)) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}

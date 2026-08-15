@@ -22728,11 +22728,16 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:7578
 		{
-			yyLOCAL = &tree.ValuesStatement{
+			stmt := &tree.ValuesStatement{
 				Rows:    yyDollar[2].rowsExprsUnion(),
 				OrderBy: yyDollar[3].orderByUnion(),
 				Limit:   yyDollar[4].limitUnion(),
 			}
+			if intoErr := tree.ValidateValuesIntoPlacement(stmt); intoErr != "" {
+				yylex.Error(intoErr)
+				return 1
+			}
+			yyLOCAL = stmt
 		}
 		yyVAL.union = yyLOCAL
 	case 1116:
