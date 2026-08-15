@@ -21,7 +21,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -58,8 +57,6 @@ var kAlwaysFalseExpr = &plan.Expr{
 	},
 }
 
-var exactDecimalListGroupID atomic.Int32
-
 type prepareRuntimeParamsKey struct{}
 
 type prepareRuntimeParams struct {
@@ -78,14 +75,6 @@ func WithPrepareRuntimeParams(ctx context.Context, positions ...int32) context.C
 		}
 	}
 	return context.WithValue(ctx, prepareRuntimeParamsKey{}, params)
-}
-
-func nextExactDecimalListGroupID() int32 {
-	id := exactDecimalListGroupID.Add(-1)
-	if id == 0 {
-		id = exactDecimalListGroupID.Add(-1)
-	}
-	return id
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {

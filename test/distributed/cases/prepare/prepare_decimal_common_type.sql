@@ -230,7 +230,10 @@ DEALLOCATE PREPARE p_fractional_overflow;
 PREPARE p_fractional_overflow_ctas FROM
   'CREATE TABLE fractional_overflow_ctas AS SELECT COALESCE(?,CAST(0 AS DECIMAL(1,0))) AS v';
 EXECUTE p_fractional_overflow_ctas USING @overflow;
-SHOW CREATE TABLE fractional_overflow_ctas;
+SELECT COUNT(*) AS exact_decimal256_columns
+FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='fractional_overflow_ctas' AND column_name='v'
+  AND data_type='decimal' AND numeric_precision=66 AND numeric_scale=30;
 SELECT v FROM fractional_overflow_ctas;
 DEALLOCATE PREPARE p_fractional_overflow_ctas;
 DROP TABLE fractional_overflow_ctas;

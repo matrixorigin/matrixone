@@ -60,42 +60,55 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			"select nth_value(id, ?) over (order by id) from t",
 			"explain select nth_value(id, ?) over (order by id) from t",
 		} {
-			stmt, err := conn.PrepareContext(ctx, query)
-			require.NoError(t, err)
-			rows, err := stmt.QueryContext(ctx, int64(1))
-			require.NoError(t, err, query)
-			for rows.Next() {
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			require.NoError(t, stmt.Close())
+			func() {
+				stmt, err := conn.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				rows, err := stmt.QueryContext(ctx, int64(1))
+				require.NoError(t, err, query)
+				defer rows.Close()
+				for rows.Next() {
+				}
+				require.NoError(t, rows.Err())
+			}()
 		}
 		metadataStmt, err := conn.PrepareContext(ctx,
 			"select coalesce(?, cast(2 as decimal(10,2)))")
 		require.NoError(t, err)
 		defer metadataStmt.Close()
 		for _, arg := range []any{nil, "1.25"} {
-			rows, err := metadataStmt.QueryContext(ctx, arg)
-			require.NoError(t, err)
-			require.NoError(t, rows.Close())
+			func() {
+				rows, err := metadataStmt.QueryContext(ctx, arg)
+				require.NoError(t, err)
+				defer rows.Close()
+				require.NoError(t, rows.Err())
+			}()
 		}
-		floatRows, err := metadataStmt.QueryContext(ctx, float64(1.5))
-		require.NoError(t, err)
-		floatColumns, err := floatRows.ColumnTypes()
-		require.NoError(t, err)
-		require.Len(t, floatColumns, 1)
-		widenedDatabaseType := floatColumns[0].DatabaseTypeName()
-		widenedScanType := floatColumns[0].ScanType()
-		require.NoError(t, floatRows.Close())
+		var widenedDatabaseType string
+		var widenedScanType any
+		func() {
+			floatRows, err := metadataStmt.QueryContext(ctx, float64(1.5))
+			require.NoError(t, err)
+			defer floatRows.Close()
+			floatColumns, err := floatRows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, floatColumns, 1)
+			widenedDatabaseType = floatColumns[0].DatabaseTypeName()
+			widenedScanType = floatColumns[0].ScanType()
+			require.NoError(t, floatRows.Err())
+		}()
 		for _, arg := range []any{int64(1), nil} {
-			rows, err := metadataStmt.QueryContext(ctx, arg)
-			require.NoError(t, err)
-			columns, err := rows.ColumnTypes()
-			require.NoError(t, err)
-			require.Len(t, columns, 1)
-			require.Equal(t, widenedDatabaseType, columns[0].DatabaseTypeName())
-			require.Equal(t, widenedScanType, columns[0].ScanType())
-			require.NoError(t, rows.Close())
+			func() {
+				rows, err := metadataStmt.QueryContext(ctx, arg)
+				require.NoError(t, err)
+				defer rows.Close()
+				columns, err := rows.ColumnTypes()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				require.Equal(t, widenedDatabaseType, columns[0].DatabaseTypeName())
+				require.Equal(t, widenedScanType, columns[0].ScanType())
+				require.NoError(t, rows.Err())
+			}()
 		}
 
 		inStmt, err := conn.PrepareContext(ctx, "select id from t where d in (?,?) order by id")
@@ -119,61 +132,63 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			"select id from t where d = ?/1 order by id",
 			"select id from t where d in (?+0) order by id",
 		} {
-			stmt, err := conn.PrepareContext(ctx, query)
-			require.NoError(t, err)
-			require.Equal(t, []int{1, 2, 3},
-				queryIssue27088IDs(t, ctx, stmt, float64(9007199254740992)), query)
-			require.NoError(t, stmt.Close())
+			func() {
+				stmt, err := conn.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				require.Equal(t, []int{1, 2, 3},
+					queryIssue27088IDs(t, ctx, stmt, float64(9007199254740992)), query)
+			}()
 		}
 		mustExec(t, ctx, conn, "create table arithmetic_update as select * from t")
 		arithmeticUpdateStmt, err := conn.PrepareContext(ctx,
 			"update arithmetic_update set id=id+10 where d in (?+0)")
 		require.NoError(t, err)
+		defer arithmeticUpdateStmt.Close()
 		arithmeticResult, err := arithmeticUpdateStmt.ExecContext(ctx, float64(9007199254740992))
 		require.NoError(t, err)
 		arithmeticAffected, err := arithmeticResult.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(3), arithmeticAffected)
-		require.NoError(t, arithmeticUpdateStmt.Close())
 
 		singleInStmt, err := conn.PrepareContext(ctx, "select id from t where d in (?) order by id")
 		require.NoError(t, err)
+		defer singleInStmt.Close()
 		require.Empty(t, queryIssue27088IDs(t, ctx, singleInStmt, float64(9007199254740992)))
-		require.NoError(t, singleInStmt.Close())
 		singleUpdateStmt, err := conn.PrepareContext(ctx, "update t set id=id+100 where d in (?)")
 		require.NoError(t, err)
+		defer singleUpdateStmt.Close()
 		singleUpdateResult, err := singleUpdateStmt.ExecContext(ctx, float64(9007199254740992))
 		require.NoError(t, err)
 		singleAffected, err := singleUpdateResult.RowsAffected()
 		require.NoError(t, err)
 		require.Zero(t, singleAffected)
-		require.NoError(t, singleUpdateStmt.Close())
 		singleCTASStmt, err := conn.PrepareContext(ctx,
 			"create table single_selected as select id from t where d in (?)")
 		require.NoError(t, err)
+		defer singleCTASStmt.Close()
 		_, err = singleCTASStmt.ExecContext(ctx, float64(9007199254740992))
 		require.NoError(t, err)
-		require.NoError(t, singleCTASStmt.Close())
 		require.Empty(t, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from single_selected order by id"))
 
 		ctasStmt, err := conn.PrepareContext(ctx,
 			"create table selected as select id from t where d in (?,?)")
 		require.NoError(t, err)
+		defer ctasStmt.Close()
 		_, err = ctasStmt.ExecContext(ctx, exact, float64(0))
 		require.NoError(t, err)
-		require.NoError(t, ctasStmt.Close())
 		require.Equal(t, []int{2}, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from selected order by id"))
 
 		updateStmt, err := conn.PrepareContext(ctx, "update t set id=id+10 where d in (?,?)")
 		require.NoError(t, err)
+		defer updateStmt.Close()
 		result, err := updateStmt.ExecContext(ctx, exact, float64(0))
 		require.NoError(t, err)
 		affected, err := result.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(1), affected)
-		require.NoError(t, updateStmt.Close())
 		require.Equal(t, []int{1, 3, 4, 5, 6, 12}, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from t order by id"))
 
@@ -185,32 +200,34 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			"select id from fractional where d=?*1",
 			"select id from fractional where d=?/1",
 		} {
-			stmt, err := conn.PrepareContext(ctx, query)
-			require.NoError(t, err)
-			require.Equal(t, []int{1}, queryIssue27088IDs(t, ctx, stmt, float64(1.25)), query)
-			require.NoError(t, stmt.Close())
+			func() {
+				stmt, err := conn.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				require.Equal(t, []int{1}, queryIssue27088IDs(t, ctx, stmt, float64(1.25)), query)
+			}()
 		}
 		mustExec(t, ctx, conn, "create table fractional_update as select * from fractional")
 		fractionalUpdate, err := conn.PrepareContext(ctx,
 			"update fractional_update set id=id+10 where d=?+0")
 		require.NoError(t, err)
+		defer fractionalUpdate.Close()
 		result, err = fractionalUpdate.ExecContext(ctx, float64(1.25))
 		require.NoError(t, err)
 		affected, err = result.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(1), affected)
-		require.NoError(t, fractionalUpdate.Close())
 		require.Equal(t, []int{2, 3, 11}, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from fractional_update order by id"))
 		mustExec(t, ctx, conn, "create table fractional_delete as select * from fractional")
 		fractionalDelete, err := conn.PrepareContext(ctx, "delete from fractional_delete where d=?+0")
 		require.NoError(t, err)
+		defer fractionalDelete.Close()
 		result, err = fractionalDelete.ExecContext(ctx, float64(1.25))
 		require.NoError(t, err)
 		affected, err = result.RowsAffected()
 		require.NoError(t, err)
 		require.Equal(t, int64(1), affected)
-		require.NoError(t, fractionalDelete.Close())
 		require.Equal(t, []int{2, 3}, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from fractional_delete order by id"))
 
@@ -219,19 +236,19 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			"(2,12345678901234567890123456789012345.123456789012345678901234567890)")
 		exactCompare, err := conn.PrepareContext(ctx, "select id from exact_compare where d=?")
 		require.NoError(t, err)
+		defer exactCompare.Close()
 		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare, "1e-77"))
 		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare,
 			"12345678901234567890123456789012345.123456789012345678901234567890123456789012"))
-		require.NoError(t, exactCompare.Close())
 		wideCommon, err := conn.PrepareContext(ctx, "select coalesce(?, cast(2 as decimal(1,0)))")
 		require.NoError(t, err)
+		defer wideCommon.Close()
 		row := wideCommon.QueryRowContext(ctx,
 			"123456789012345678901234567890123456.12345678901234567890123456789012345678901")
 		var wideValue string
 		require.NoError(t, row.Scan(&wideValue))
 		require.Equal(t,
 			"123456789012345678901234567890123456.123456789012345678901234567890", wideValue)
-		require.NoError(t, wideCommon.Close())
 	})
 }
 
