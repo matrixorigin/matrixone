@@ -4057,6 +4057,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
+			args[0], err = appendPadSpaceComparisonCastIfNeeded(ctx, args[0])
+			if err != nil {
+				return nil, err
+			}
 			typLeft := makeTypeByPlan2Expr(args[0])
 			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
@@ -4071,6 +4075,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					inExpr, err = appendPadSpaceComparisonCastIfNeeded(ctx, inExpr)
 					if err != nil {
 						return nil, err
 					}
@@ -4512,13 +4520,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	}
 	if isPadSpaceComparisonFunction(name) {
 		for idx := range args {
-			argType := makeTypeByPlan2Expr(args[idx])
-			if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
-				hasPadSpaceStringProvenance(args[idx]) && !isCastOverload(args[idx], 2) {
-				args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], makePlan2Type(&argType))
-				if err != nil {
-					return nil, err
-				}
+			args[idx], err = appendPadSpaceComparisonCastIfNeeded(ctx, args[idx])
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -4526,6 +4530,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// return new expr
 	Typ := makePlan2Type(&returnType)
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if (returnType.Oid == types.T_varchar || returnType.Oid == types.T_text) &&
+		isPadSpaceValueSelectingFunction(name) {
+		for _, arg := range args {
+			if hasPadSpaceStringProvenance(arg) {
+				Typ.PadSpace = true
+				break
+			}
+		}
+	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -5344,6 +5357,12 @@ func appendSetOperationCastBeforeExpr(ctx context.Context, expr *Expr, toType Ty
 // Do not recurse through byte-transforming functions such as CONCAT: spaces
 // produced there are part of the expression result rather than CHAR storage.
 func hasPadSpaceStringProvenance(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.PadSpace {
+		return true
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
@@ -5354,8 +5373,7 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 		return fromType.Oid == types.T_char &&
 			(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	}
-	switch fn.Func.ObjName {
-	case "case", "coalesce", "if", "ifnull":
+	if isPadSpaceValueSelectingFunction(fn.Func.ObjName) {
 		for _, arg := range fn.Args {
 			if hasPadSpaceStringProvenance(arg) {
 				return true
@@ -5363,6 +5381,24 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 		}
 	}
 	return false
+}
+
+func isPadSpaceValueSelectingFunction(name string) bool {
+	switch name {
+	case "case", "coalesce", "if", "ifnull":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendPadSpaceComparisonCastIfNeeded(ctx context.Context, expr *Expr) (*Expr, error) {
+	argType := makeTypeByPlan2Expr(expr)
+	if (argType.Oid == types.T_varchar || argType.Oid == types.T_text) &&
+		hasPadSpaceStringProvenance(expr) && !isCastOverload(expr, 2) {
+		return appendComparisonCastBeforeExpr(ctx, expr, makePlan2Type(&argType))
+	}
+	return expr, nil
 }
 
 func isCastOverload(expr *Expr, overloadID int32) bool {
@@ -5386,6 +5422,8 @@ func isPadSpaceComparisonFunction(name string) bool {
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
+	fromPadSpace := expr != nil &&
+		(types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr))
 	expr, rewritten, err := rewriteMySQLSpecialTypeDisplayCast(ctx, expr, toType)
 	if err != nil {
 		return nil, err
@@ -5404,6 +5442,11 @@ func appendCastBeforeExprWithOverload(
 	}
 	// for 0xXXXX, if the value is over 1<<53-1, when covert it into float64,it will lost, so just change it into uint64
 	typ := toType
+	typ.PadSpace = false
+	if overloadID <= 1 && fromPadSpace &&
+		(types.T(typ.Id) == types.T_varchar || types.T(typ.Id) == types.T_text) {
+		typ.PadSpace = true
+	}
 	if len(isBin) == 2 && isBin[0] && isBin[1] {
 		typ.Id = int32(types.T_uint64)
 	}

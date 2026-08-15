@@ -34,6 +34,9 @@ message Type {
   string table = 6;
   string enumvalues = 7;
   uint32 charset = 8;
+  // Internal semantic marker for VARCHAR/TEXT values that can carry
+  // representation-only CHAR padding through a transparent query boundary.
+  bool pad_space = 9;
 }
 
 message msgHeader {

@@ -80,6 +80,11 @@ select count(*) from (
 ) m;
 select count(*) from pad_char_promoted where if(c is null, v, c) = 'MO';
 select count(*) from pad_char_promoted where case when c is null then v else c end = 'MO';
+select count(*) from (
+    select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
+) q;
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x in ('MO', 'XX');
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -136,6 +141,11 @@ select count(*) from (
 ) m;
 select count(*) from pad_char_promoted where if(c is null, v, c) = 'MO';
 select count(*) from pad_char_promoted where case when c is null then v else c end = 'MO';
+select count(*) from (
+    select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
+) q;
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x in ('MO', 'XX');
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;

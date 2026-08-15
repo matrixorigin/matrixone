@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,6 +125,39 @@ func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
 	result, ok := folded.GetLit().Value.(*planpb.Literal_Bval)
 	require.True(t, ok)
 	require.False(t, result.Bval)
+}
+
+func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{name: "in", fn: "in"},
+		{name: "not in", fn: "not_in"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := makePlan2StringConstExprWithType("MO      ")
+			left.Typ.PadSpace = true
+			right := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+					makePlan2StringConstExprWithType("MO"),
+					makePlan2StringConstExprWithType("XX"),
+				}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), tc.fn, []*planpb.Expr{left, right})
+			require.NoError(t, err)
+			inFunction := expr.GetF()
+			require.NotNil(t, inFunction)
+			require.Equal(t, tc.fn, inFunction.Func.ObjName)
+			leftCast := inFunction.Args[0].GetF()
+			require.NotNil(t, leftCast)
+			require.Equal(t, "cast", leftCast.Func.ObjName)
+			_, overloadID := function.DecodeOverloadID(leftCast.Func.Obj)
+			require.Equal(t, int32(2), overloadID)
+		})
+	}
 }
 
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {

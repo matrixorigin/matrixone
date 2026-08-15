@@ -3919,6 +3919,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					},
 				},
 			}
+			if setOperationKeyRequired[i] &&
+				(types.T(projectList[i].Typ.Id) == types.T_varchar ||
+					types.T(projectList[i].Typ.Id) == types.T_text) {
+				projectList[i].Typ.PadSpace = true
+			}
 			builder.nameByColRef[[2]int32{thisTag, int32(i)}] = ctx.headings[i]
 		}
 		return projectList

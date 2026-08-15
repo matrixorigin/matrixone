@@ -485,6 +485,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		Table:       typ.Table,
 		Enumvalues:  typ.Enumvalues,
 		Charset:     typ.Charset,
+		PadSpace:    typ.PadSpace,
 	}
 }
 

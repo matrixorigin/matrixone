@@ -4371,6 +4371,70 @@ func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	}
 }
 
+func TestDistinctPromotedCharKeepsPadSpaceKeyAcrossDerivedTable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select distinct x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select distinct x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation union all select cast(r_name as varchar(8)) from region) d",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
+func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "derived table",
+			sql:  "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x from d",
+		},
+		{
+			name: "union all",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union all select cast(r_name as varchar(8)) from region",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+			root := logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[0]]
+			require.NotEmpty(t, root.ProjectList)
+			require.True(t, root.ProjectList[0].Typ.PadSpace)
+		})
+	}
+}
+
 func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	logicPlan, err := runOneStmt(
 		NewMockOptimizer(true), t,
