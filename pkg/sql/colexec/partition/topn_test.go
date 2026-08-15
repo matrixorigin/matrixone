@@ -17,6 +17,7 @@ package partition
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -55,6 +56,121 @@ func TestPartitionTopNMatchesPerGroupSort(t *testing.T) {
 	child.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestPartitionTopNSQLOrderFloatNaNs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		make func() []any
+		flag plan.OrderBySpec_OrderByFlag
+		want []int32
+	}{
+		{
+			name: "float32 asc",
+			oid:  types.T_float32,
+			make: func() []any {
+				return []any{
+					float32(math.Float32frombits(0x7fc00002)), float32(math.Inf(1)), float32(1),
+					float32(0), float32(-1), float32(math.Inf(-1)), float32(math.Float32frombits(0x7fc00001)),
+				}
+			},
+			want: []int32{10, 20},
+		},
+		{
+			name: "float32 desc",
+			oid:  types.T_float32,
+			make: func() []any {
+				return []any{
+					float32(math.Float32frombits(0x7fc00002)), float32(math.Inf(1)), float32(1),
+					float32(0), float32(-1), float32(math.Inf(-1)), float32(math.Float32frombits(0x7fc00001)),
+				}
+			},
+			flag: plan.OrderBySpec_DESC,
+			want: []int32{60, 40},
+		},
+		{
+			name: "float64 asc",
+			oid:  types.T_float64,
+			make: func() []any {
+				return []any{
+					float64(math.Float64frombits(0x7ff8000000000002)), math.Inf(1), float64(1),
+					float64(0), float64(-1), math.Inf(-1), float64(math.Float64frombits(0x7ff8000000000001)),
+				}
+			},
+			want: []int32{10, 20},
+		},
+		{
+			name: "float64 desc",
+			oid:  types.T_float64,
+			make: func() []any {
+				return []any{
+					float64(math.Float64frombits(0x7ff8000000000002)), math.Inf(1), float64(1),
+					float64(0), float64(-1), math.Inf(-1), float64(math.Float64frombits(0x7ff8000000000001)),
+				}
+			},
+			flag: plan.OrderBySpec_DESC,
+			want: []int32{60, 40},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(tc.oid.ToType())
+			values := tc.make()
+			switch tc.oid {
+			case types.T_float32:
+				fixed := make([]float32, len(values))
+				for i, value := range values {
+					fixed[i] = value.(float32)
+				}
+				require.NoError(t, vector.AppendFixedList(input.Vecs[1], fixed, nil, proc.Mp()))
+			case types.T_float64:
+				fixed := make([]float64, len(values))
+				for i, value := range values {
+					fixed[i] = value.(float64)
+				}
+				require.NoError(t, vector.AppendFixedList(input.Vecs[1], fixed, nil, proc.Mp()))
+			default:
+				t.Fatalf("unexpected float type %v", tc.oid)
+			}
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{70, 60, 40, 31, 20, 10, 71}, nil, proc.Mp())
+			input.SetRowCount(7)
+
+			arg := &Partition{
+				OrderBySpecs: []*plan.OrderBySpec{
+					{Expr: topNCol(0, types.T_int32)},
+					{Expr: topNCol(1, tc.oid), Flag: tc.flag},
+					{Expr: topNCol(2, types.T_int32)},
+				},
+				Limit: &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}},
+				},
+				PartitionByCount: 1,
+			}
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+
+			got := make([]int32, 0, len(tc.want))
+			for {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+				got = append(got, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2])...)
+			}
+			require.Equal(t, tc.want, got)
+
+			arg.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestPartitionTopNCompositeNullableKeyAndReset(t *testing.T) {

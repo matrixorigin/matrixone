@@ -180,7 +180,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[i].GetType(), desc, nullsLast),
 				)
 			}
 

@@ -43,7 +43,20 @@ func ConstructCreateTableSQL(
 	useDbName bool,
 	cloneStmt *tree.CloneTable,
 ) (string, tree.Statement, error) {
+	// This formatter is also used by context-free consumers that do not own a
+	// source catalog snapshot (CDC, publication, and dump).  Keep it limited to
+	// rendering the supplied definition; planner entry points that resolve a
+	// local source table reconcile its visibility before calling here.
 	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, true)
+}
+
+func createTableIndexVisible(indexDef *plan.IndexDef) bool {
+	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
+		return visible
+	}
+	// A context-free caller cannot query mo_indexes. Preserve proto3's
+	// historical default rather than treating an omitted bool as INVISIBLE.
+	return true
 }
 
 func constructCreateTableSQL(
@@ -256,6 +269,7 @@ func constructCreateTableSQL(
 			}
 
 			var indexStr string
+			indexVisible := createTableIndexVisible(indexdef)
 			if !indexdef.Unique && (catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) || catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo)) {
 				if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
 					indexStr += " FULLTEXT2 "
@@ -335,7 +349,9 @@ func constructCreateTableSQL(
 						}
 					}
 				}
-
+				if !indexVisible {
+					indexStr += " INVISIBLE"
+				}
 			} else {
 				rewriteIndexStr := ""
 				if catalog.IsRTreeIndexAlgo(indexdef.IndexAlgo) {
@@ -401,6 +417,10 @@ func constructCreateTableSQL(
 				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
 				indexStr += includeList
 				rewriteIndexStr += includeList
+				if !indexVisible {
+					indexStr += " INVISIBLE"
+					rewriteIndexStr += " INVISIBLE"
+				}
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -409,7 +429,7 @@ func constructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				formattedComment := formatStr(indexdef.Comment)
+				formattedComment := formatStrInSingleQuotesForSQLMode(indexdef.Comment, sqlMode)
 				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {

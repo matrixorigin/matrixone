@@ -27,7 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-// FileService is a write-once file system
+// FileService is a write-once file system. File-targeting operations require a
+// non-empty file component and return ErrFileNotFound for the root path. List
+// deliberately accepts an empty directory path to address the service root.
 type FileService interface {
 	// Name is file service's name
 	// service name is case-insensitive

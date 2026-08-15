@@ -27,7 +27,7 @@ import (
 )
 
 func TestIcebergSQLEngineEmbeddedDDLAndRedaction(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		db := openIcebergTestDB(t, c)
 		defer db.Close()
 
@@ -75,7 +75,7 @@ func TestIcebergSQLEngineEmbeddedDDLAndRedaction(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedRejectsInlineCatalogSecret(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		db := openIcebergTestDB(t, c)
 		defer db.Close()
 

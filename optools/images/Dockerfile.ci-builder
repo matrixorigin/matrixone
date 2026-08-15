@@ -1,0 +1,112 @@
+# Nightly-refreshed CI builder image: a Go toolchain with every PR-invariant
+# build input prebuilt — the Go module cache, the Go build caches warmed in
+# the flavors PR CI compiles, and the compiled C thirdparties. PR CI mounts
+# its checkout into this image and runs make build: only packages that
+# changed since the nightly refresh recompile, and go build incrementally
+# downloads any modules newer than the baked cache, so a stale image only
+# costs speed, never correctness.
+#
+# amd64 only: it serves the shared BVT build (matrixorigin/CI build-mo.yaml)
+# and the UT/coverage-UT cache seeds. The arm64 SCA job has its own
+# actions/cache pipeline (see .github/workflows/sca-go-module-cache.yaml).
+#
+# Refreshed by the nightly image workflow (matrixorigin/CI image-build.yaml,
+# ci-builder job) as matrixorigin/matrixone:ci-builder. Keep the base image
+# in sync with optools/images/Dockerfile.
+FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS warm
+
+ENV GOWORK=off
+# Keep the module cache world-writable: the default read-only directory
+# layout breaks extracting the cache onto CI runners (a read-only parent
+# directory is created before its children can be copied in).
+ENV GOFLAGS=-modcacherw
+
+# PR-time builds must mount the repo at this same path: cgo compile-cache
+# entries hash the -I include paths, so a different workspace path would miss
+# the warm cache for every cgo-dependent package.
+WORKDIR /go/src/github.com/matrixorigin/matrixone
+
+# ENV (not `go env -w`): the Makefile exports its own GOPROXY default via
+# `GOPROXY ?=`, which only an environment variable overrides.
+ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOPROXY=${GOPROXY}
+
+COPY . .
+
+# Warm-flavor health ledger: soft-failed warms below record their outcome
+# here so consumers (and the canary) can see when a flavor has been broken
+# instead of silently paying cold compiles.
+RUN mkdir -p /mo-prebuilt && touch /mo-prebuilt/warm-status
+
+# Warm with the -cover flavor: it is the flavor PR CI builds, and coverage
+# instrumentation changes the compiled objects.
+RUN make build GOBUILD_OPT=-cover
+
+# Warm the UT compile flavors without running any test: -exec /bin/true
+# replaces test-binary execution and -vet=off keeps vet findings out of the
+# nightly warm (PR CI runs vet itself). The CGO_* values mirror
+# optools/run_ut.sh; their absolute paths only key the few cgo packages,
+# which PR runners recompile anyway — everything else is content-addressed
+# and hits the cache from any workspace path. Soft-fail on purpose: a
+# partial warm still speeds PR CI up, and PR CI never depends on these
+# layers for correctness.
+#
+# Flavor 1: race + matrixone_test, as optools/run_ut.sh compiles for the UT
+# job in ci.yaml.
+RUN if CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+      go test -mod=readonly -short -race -tags matrixone_test -vet=off -exec /bin/true ./...; then \
+      echo "warm-race=ok" >> /mo-prebuilt/warm-status; \
+    else \
+      echo "warm-race=FAILED" >> /mo-prebuilt/warm-status; \
+      echo "WARNING: race UT warm incomplete; PR CI will compile the misses"; \
+    fi
+
+# Flavor 2: covermode=set with the full coverpkg list, exactly as
+# coverage-ut.yaml compiles (the coverpkg value is part of the compile key,
+# so the package-list filter must match that workflow verbatim).
+RUN if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog') && \
+      cover_pkgs=$(printf '%s\n' "${cover_scope}" | paste -sd, -) && \
+      CGO_CFLAGS="-I${PWD}/cgo -I${PWD}/thirdparties/install/include" \
+      CGO_LDFLAGS="-Wl,-rpath,${PWD}/thirdparties/install/lib:${PWD}/cgo -L${PWD}/thirdparties/install/lib -L${PWD}/cgo -lmo -lusearch_c -lm" \
+      go test -mod=readonly -short -tags matrixone_test -vet=off -exec /bin/true \
+        -covermode=set -coverpkg="${cover_pkgs}" ${cover_scope}; then \
+      echo "warm-coverage=ok" >> /mo-prebuilt/warm-status; \
+    else \
+      echo "warm-coverage=FAILED" >> /mo-prebuilt/warm-status; \
+      echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
+    fi
+
+# Fingerprint the native inputs the prebuilt thirdparties were produced
+# from. Consumers restore thirdparties/install only on an exact match, so a
+# PR that changes thirdparties/, a different architecture, or a branch
+# whose native tree diverges from this image all rebuild from source
+# instead of silently testing stale native code. Bump schema= whenever the
+# native build contract (base image, compiler, layout) changes.
+RUN { \
+      echo "schema=1"; \
+      echo "os=$(uname -s)"; \
+      echo "arch=$(uname -m)"; \
+      echo "thirdparties_tree=$(git rev-parse HEAD:thirdparties)"; \
+    } > /mo-prebuilt/thirdparties.fingerprint && \
+    cat /mo-prebuilt/thirdparties.fingerprint
+
+# Keep only the caches and prebuilt native artifacts; dropping the source
+# tree (and its .git) keeps the nightly image as small as the caches allow.
+FROM matrixorigin/golang:1.26.4-ubuntu22.04
+
+ENV GOWORK=off
+ENV GOFLAGS=-modcacherw
+
+ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOPROXY=${GOPROXY}
+
+COPY --from=warm /go/pkg/mod /go/pkg/mod
+COPY --from=warm /root/.cache/go-build /root/.cache/go-build
+# Seeded into the PR tree before make build; the prerequisite-less file
+# targets in thirdparties/Makefile then treat the C libraries as up to date.
+# Consumers must verify thirdparties.fingerprint matches their checkout
+# before restoring the install tree.
+COPY --from=warm /go/src/github.com/matrixorigin/matrixone/thirdparties/install /mo-prebuilt/thirdparties/install
+COPY --from=warm /mo-prebuilt/thirdparties.fingerprint /mo-prebuilt/thirdparties.fingerprint
+COPY --from=warm /mo-prebuilt/warm-status /mo-prebuilt/warm-status

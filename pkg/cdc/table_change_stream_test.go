@@ -204,7 +204,7 @@ func readCounterValue(t *testing.T, counter prometheus.Counter) float64 {
 	return metric.GetCounter().GetValue()
 }
 
-func TestTableChangeStream_InitialSnapshotLimiterSharedAcrossTables(t *testing.T) {
+func TestTableChangeStream_InitialSnapshotBatchLimiterSharedAcrossTables(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -220,40 +220,44 @@ func TestTableChangeStream_InitialSnapshotLimiterSharedAcrossTables(t *testing.T
 		WithInitialSnapshotLimiter(limiter),
 	)
 
-	release1, err := stream1.acquireInitialSnapshotSlot(context.Background())
+	permit1, err := stream1.acquireInitialSnapshotPermit(context.Background())
 	require.NoError(t, err)
+	require.NotNil(t, permit1)
 
-	type acquireResult struct {
-		release func()
-		err     error
-	}
-	acquired := make(chan acquireResult, 1)
+	acquired := make(chan *snapshotPermit, 1)
+	errs := make(chan error, 1)
 	go func() {
-		release, acquireErr := stream2.acquireInitialSnapshotSlot(context.Background())
-		acquired <- acquireResult{release: release, err: acquireErr}
+		permit, acquireErr := stream2.acquireInitialSnapshotPermit(context.Background())
+		if acquireErr != nil {
+			errs <- acquireErr
+			return
+		}
+		acquired <- permit
 	}()
 
 	select {
-	case result := <-acquired:
-		if result.release != nil {
-			result.release()
-		}
-		t.Fatal("second table acquired the initial snapshot slot before the first released it")
+	case permit := <-acquired:
+		permit.Release()
+		t.Fatal("second table acquired a batch slot before the first released it")
+	case err := <-errs:
+		require.NoError(t, err)
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	release1()
+	permit1.Release()
+	permit1.Release() // Release must be idempotent across cleanup paths.
 	select {
-	case result := <-acquired:
-		require.NoError(t, result.err)
-		require.NotNil(t, result.release)
-		result.release()
+	case permit := <-acquired:
+		require.NotNil(t, permit)
+		permit.Release()
+	case err := <-errs:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("second table did not acquire the released initial snapshot slot")
+		t.Fatal("second table did not acquire the released batch slot")
 	}
 }
 
-func TestTableChangeStream_InitialSnapshotLimiterSkippedAfterFirstSync(t *testing.T) {
+func TestTableChangeStream_InitialSnapshotBatchLimiterSkippedAfterFirstSync(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -268,10 +272,9 @@ func TestTableChangeStream_InitialSnapshotLimiterSkippedAfterFirstSync(t *testin
 	)
 	stream.initialSyncPending.Store(false)
 
-	release, err := stream.acquireInitialSnapshotSlot(context.Background())
+	permit, err := stream.acquireInitialSnapshotPermit(context.Background())
 	require.NoError(t, err)
-	require.NotNil(t, release)
-	release()
+	require.Nil(t, permit)
 }
 
 func TestTableChangeStream_HandleSnapshotNoProgress_WarningAndReset(t *testing.T) {
