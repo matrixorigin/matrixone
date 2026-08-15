@@ -119,7 +119,9 @@ var PathExists = func(path string) (bool, bool, error) {
 }
 
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
-	sv := &mo_config.FrontendParameters{}
+	sv := &mo_config.FrontendParameters{
+		MongoDB: *mo_config.NewMongoDBParameters(),
+	}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
 	if err != nil {
