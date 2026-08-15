@@ -1623,6 +1623,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	irregularBaseStep := int32(-1)
 	for _, indexes := range inlineIrregularIndexes {
 		if len(indexes) > 0 {
+			// Acquire every base/regular-index lock before the final row image is
+			// fanned out to synchronous irregular-index maintenance. LOCK_OP is a
+			// pass-through gate here, so force remapping to keep the complete image
+			// needed by the shared SINK and RETURNING.
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_LOCK_OP,
+				Children:    []int32{lastNodeID},
+				TableDef:    dmlCtx.tableDefs[0],
+				BindingTags: []int32{finalProjTag},
+				LockTargets: lockTargets,
+			}, bindCtx)
+			if builder.preserveLockProjection == nil {
+				builder.preserveLockProjection = make(map[int32]struct{})
+			}
+			builder.preserveLockProjection[lastNodeID] = struct{}{}
 			globalSinkID := appendSinkNodeWithTag(builder, bindCtx, lastNodeID, finalProjTag)
 			irregularBaseStep = builder.appendStep(globalSinkID)
 			lastNodeID = builder.appendTaggedSinkScan(bindCtx, irregularBaseStep, finalProjTag)
@@ -1701,13 +1716,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		UpdateCtxList: updateCtxList,
 	}
 
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeID},
-		TableDef:    dmlCtx.tableDefs[0],
-		BindingTags: []int32{builder.genNewBindTag()},
-		LockTargets: lockTargets,
-	}, bindCtx)
+	if irregularBaseStep < 0 {
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    dmlCtx.tableDefs[0],
+			BindingTags: []int32{builder.genNewBindTag()},
+			LockTargets: lockTargets,
+		}, bindCtx)
+	}
 	reCheckifNeedLockWholeTable(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

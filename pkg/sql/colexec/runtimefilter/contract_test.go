@@ -33,18 +33,18 @@ import (
 func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
 	mpoolErr := mpool.ErrAllocationAccountCapacity
 	providerErr := errors.New("budget provider failed")
-	var nilBudgetErr *process.HashBuildBudgetError
+	var nilBudgetErr *process.ExecutionResourceError
 	budgetErr := func(
-		kind process.HashBuildBudgetErrorKind,
-		component process.HashBuildBudgetComponent,
+		kind process.ExecutionResourceErrorKind,
+		component process.ExecutionResourceComponent,
 	) error {
-		return &process.HashBuildBudgetError{Kind: kind, Component: component}
+		return &process.ExecutionResourceError{Kind: kind, Component: component}
 	}
 	marked := MarkOptionalAllocationError
 	memoryAdmission := func() error {
 		return budgetErr(
-			process.HashBuildBudgetErrorAdmission,
-			process.HashBuildBudgetComponentMemory,
+			process.ExecutionResourceErrorAdmission,
+			process.ExecutionResourceComponentMemory,
 		)
 	}
 
@@ -57,10 +57,10 @@ func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
 		{name: "typed nil budget error", err: nilBudgetErr, want: OptionalFallbackNone},
 		{name: "typed memory admission", err: memoryAdmission(), want: OptionalFallbackBudgetAdmission},
 		{name: "marked typed memory admission", err: marked(memoryAdmission()), want: OptionalFallbackBudgetAdmission},
-		{name: "typed spill disk admission", err: budgetErr(process.HashBuildBudgetErrorAdmission, process.HashBuildBudgetComponentSpillDisk), want: OptionalFallbackNone},
-		{name: "typed spill fd admission", err: budgetErr(process.HashBuildBudgetErrorAdmission, process.HashBuildBudgetComponentSpillFD), want: OptionalFallbackNone},
-		{name: "typed admission without component", err: budgetErr(process.HashBuildBudgetErrorAdmission, 0), want: OptionalFallbackNone},
-		{name: "joined admission and closed", err: errors.Join(memoryAdmission(), budgetErr(process.HashBuildBudgetErrorClosed, 0)), want: OptionalFallbackNone},
+		{name: "typed spill disk admission", err: budgetErr(process.ExecutionResourceErrorAdmission, process.ExecutionResourceComponentSpillDisk), want: OptionalFallbackNone},
+		{name: "typed spill fd admission", err: budgetErr(process.ExecutionResourceErrorAdmission, process.ExecutionResourceComponentSpillFD), want: OptionalFallbackNone},
+		{name: "typed admission without component", err: budgetErr(process.ExecutionResourceErrorAdmission, 0), want: OptionalFallbackNone},
+		{name: "joined admission and closed", err: errors.Join(memoryAdmission(), budgetErr(process.ExecutionResourceErrorClosed, 0)), want: OptionalFallbackNone},
 		{name: "marked mpool allocation", err: marked(mpoolErr), want: OptionalFallbackAllocation},
 		{name: "plain mpool error", err: mpoolErr, want: OptionalFallbackNone},
 		{name: "marked sealed", err: marked(mpool.ErrAllocationAccountSealed), want: OptionalFallbackNone},
@@ -71,18 +71,18 @@ func TestClassifyOptionalFallbackFatalFirst(t *testing.T) {
 		{name: "marked joined capacity and invariant", err: marked(errors.Join(mpool.ErrAllocationAccountCapacity, mpool.ErrAllocationAccountInvariant)), want: OptionalFallbackNone},
 		{name: "marked joined mpool capacity and invalid", err: marked(errors.Join(moerr.NewMPoolCapacityNoCtxf("test"), mpool.ErrAllocationAccountInvalid)), want: OptionalFallbackNone},
 		{name: "plain provider error", err: providerErr, want: OptionalFallbackNone},
-		{name: "raw admission sentinel", err: process.ErrHashBuildBudgetAdmission, want: OptionalFallbackNone},
-		{name: "typed closed", err: budgetErr(process.HashBuildBudgetErrorClosed, 0), want: OptionalFallbackNone},
-		{name: "marked typed closed", err: marked(budgetErr(process.HashBuildBudgetErrorClosed, 0)), want: OptionalFallbackNone},
-		{name: "typed invalid", err: budgetErr(process.HashBuildBudgetErrorInvalid, 0), want: OptionalFallbackNone},
-		{name: "marked typed invalid", err: marked(budgetErr(process.HashBuildBudgetErrorInvalid, 0)), want: OptionalFallbackNone},
-		{name: "typed ceiling missing", err: budgetErr(process.HashBuildBudgetErrorCeilingMissing, 0), want: OptionalFallbackNone},
-		{name: "marked typed ceiling missing", err: marked(budgetErr(process.HashBuildBudgetErrorCeilingMissing, 0)), want: OptionalFallbackNone},
+		{name: "raw admission sentinel", err: process.ErrExecutionResourceAdmission, want: OptionalFallbackNone},
+		{name: "typed closed", err: budgetErr(process.ExecutionResourceErrorClosed, 0), want: OptionalFallbackNone},
+		{name: "marked typed closed", err: marked(budgetErr(process.ExecutionResourceErrorClosed, 0)), want: OptionalFallbackNone},
+		{name: "typed invalid", err: budgetErr(process.ExecutionResourceErrorInvalid, 0), want: OptionalFallbackNone},
+		{name: "marked typed invalid", err: marked(budgetErr(process.ExecutionResourceErrorInvalid, 0)), want: OptionalFallbackNone},
+		{name: "typed ceiling missing", err: budgetErr(process.ExecutionResourceErrorCeilingMissing, 0), want: OptionalFallbackNone},
+		{name: "marked typed ceiling missing", err: marked(budgetErr(process.ExecutionResourceErrorCeilingMissing, 0)), want: OptionalFallbackNone},
 		{name: "marked canceled", err: marked(context.Canceled), want: OptionalFallbackNone},
 		{name: "marked deadline", err: marked(context.DeadlineExceeded), want: OptionalFallbackNone},
-		{name: "marked raw closed", err: marked(process.ErrHashBuildBudgetClosed), want: OptionalFallbackNone},
-		{name: "marked raw invalid", err: marked(process.ErrHashBuildBudgetInvalid), want: OptionalFallbackNone},
-		{name: "marked raw ceiling", err: marked(process.ErrHashBuildCeilingMissing), want: OptionalFallbackNone},
+		{name: "marked raw closed", err: marked(process.ErrExecutionResourceClosed), want: OptionalFallbackNone},
+		{name: "marked raw invalid", err: marked(process.ErrExecutionResourceInvalid), want: OptionalFallbackNone},
+		{name: "marked raw ceiling", err: marked(process.ErrExecutionMemoryCeilingMissing), want: OptionalFallbackNone},
 	}
 
 	for _, test := range tests {
@@ -289,7 +289,7 @@ func TestMarshalExactFilterVectorUsesWireSizedBudget(t *testing.T) {
 			vec, int8(i), false, mp))
 	}
 
-	aggregate := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	aggregate := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	budget, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -316,7 +316,7 @@ func TestMarshalExactFilterVectorAdmissionFailsBeforeAllocation(t *testing.T) {
 	}()
 	require.NoError(t, vector.AppendFixed(vec, int64(7), false, mp))
 
-	aggregate := process.MustNewHashBuildBudget(1, 1)
+	aggregate := process.MustNewExecutionResourceBudget(1, 1)
 	budget, err := aggregate.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -324,7 +324,7 @@ func TestMarshalExactFilterVectorAdmissionFailsBeforeAllocation(t *testing.T) {
 	account, err := registry.OpenWithController(1<<20, budget)
 	require.NoError(t, err)
 	data, release, err := MarshalExactFilterVector(vec, mp, account, 1, 1)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
 	require.Nil(t, data)
 	require.Nil(t, release)
 	require.Zero(t, budget.Used())

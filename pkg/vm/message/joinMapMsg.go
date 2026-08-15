@@ -68,7 +68,7 @@ func (sels *GroupSels) InitWithAllocation(
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if account == nil || account.Handle() == 0 ||
-		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerMax ||
+		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerCatalogMax ||
 		site < mpool.AllocationSiteMin {
 		return mpool.ErrAllocationAccountInvalid
 	}

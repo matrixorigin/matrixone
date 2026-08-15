@@ -32,7 +32,7 @@ func TestMaterializedDispatchAttributesSourceSpill(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { proc.SetStmtProfile(nil) })
 	proc.Base.Lim.SpillSize = 1 << 20
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	spillDir := t.TempDir()

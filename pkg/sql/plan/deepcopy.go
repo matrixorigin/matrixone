@@ -261,6 +261,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FillType:        node.FillType,
 		FillVal:         DeepCopyExprList(node.FillVal),
 		GapFillMode:     node.GapFillMode,
+		GapFillStart:    DeepCopyExpr(node.GapFillStart),
+		GapFillEnd:      DeepCopyExpr(node.GapFillEnd),
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
@@ -489,6 +491,7 @@ func DeepCopyIndexOption(indexOption *plan.IndexOption) *plan.IndexOption {
 	}
 	newIndexOption := &plan.IndexOption{
 		CreateExtraTable: indexOption.CreateExtraTable,
+		Visibility:       indexOption.Visibility,
 	}
 
 	return newIndexOption
@@ -697,6 +700,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		HasForeignKeyAction: qry.HasForeignKeyAction,
 		HasReturning:        qry.HasReturning,
 		ReturningStep:       qry.ReturningStep,
+		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
 		DetectSqls:          slices.Clone(qry.DetectSqls),
 		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 	}

@@ -603,7 +603,9 @@ type BindContext struct {
 	results    []*plan.Expr
 	windows    []*plan.Expr
 	times      []*plan.Expr
-
+	// timeBoundaryType is the public type for _wstart/_wend. It is filled once
+	// the time-window grouping key is bound, before the SELECT projection binds
+	// boundary column references.
 	timeBoundaryType *plan.Type
 
 	groupByAst          map[string]int32
@@ -615,6 +617,10 @@ type BindContext struct {
 	projectByExpr       map[string]int32
 	timeByAst           map[string]int32
 	whereFilters        []*plan.Expr
+	// gapFillWhereFilters preserves the complete bound WHERE tree before
+	// subqueries are flattened into joins. Bounded GAPFILL inference must see
+	// every timestamp predicate, including IN/ANY/ALL subquery operands.
+	gapFillWhereFilters []*plan.Expr
 
 	projectColByAst map[string]int32
 

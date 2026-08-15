@@ -795,7 +795,7 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
@@ -809,7 +809,7 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 			}, nil
 		},
 		ReserveFD: func(size uint64) (materialized.Reservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
@@ -1369,6 +1369,24 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		}
 		updateScopesLastFlag([]*Scope{rs})
 		c.setAnalyzeCurrent([]*Scope{rs}, c.anal.curNodeIdx)
+		// sql_select_limit belongs to a client session. Background and internal
+		// SQL use the default (unlimited) behavior even if they happen to carry a
+		// variable resolver from the calling session.
+		if qry.ApplySqlSelectLimit &&
+			c.proc.Base.SessionInfo.ApplySQLSelectLimit &&
+			c.proc.GetResolveVariableFunc() != nil {
+			limitExpr, err := c.makeSQLSelectLimitExpr()
+			if err != nil {
+				// compileSteps owns rs at this point. A merge scope owns all of
+				// its input scopes through PreScopes, so releasing this root also
+				// releases the complete compiled tree exactly once.
+				ReleaseScopes([]*Scope{rs})
+				return nil, err
+			}
+			if limitExpr != nil {
+				rs = c.compileLimit(&plan.Node{Limit: limitExpr}, []*Scope{rs})[0]
+			}
+		}
 
 		isAdaptive := c.isAdaptiveVectorSearch(qry)
 
@@ -1382,6 +1400,87 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 	}
 }
 
+type sqlSelectLimitMaterialization struct {
+	query         *plan.Query
+	root          *plan.Node
+	originalLimit *plan.Expr
+}
+
+func (m sqlSelectLimitMaterialization) restore() {
+	if m.query == nil {
+		return
+	}
+	m.query.ApplySqlSelectLimit = true
+	if m.root != nil {
+		m.root.Limit = m.originalLimit
+	}
+}
+
+// materializeSQLSelectLimit resolves an ordinary statement's session limit at
+// the post-optimizer compile boundary. A finite limit temporarily becomes part
+// of the final logical root so Sirius export and native physical compilation
+// share it. The returned token restores the dynamic cached-plan marker after
+// those consumers have finished reading the plan.
+func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimitMaterialization, error) {
+	if c == nil || c.isPrepare || queryPlan == nil {
+		return sqlSelectLimitMaterialization{}, nil
+	}
+	qry := queryPlan.GetQuery()
+	if qry == nil || !qry.ApplySqlSelectLimit ||
+		!c.proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		c.proc.GetResolveVariableFunc() == nil {
+		return sqlSelectLimitMaterialization{}, nil
+	}
+
+	limitExpr, err := c.makeSQLSelectLimitExpr()
+	if err != nil {
+		return sqlSelectLimitMaterialization{}, err
+	}
+	// Resolution succeeded, so compileSteps must not add a second limit.
+	materialization := sqlSelectLimitMaterialization{query: qry}
+	qry.ApplySqlSelectLimit = false
+	if limitExpr == nil || len(qry.Steps) == 0 {
+		return materialization, nil
+	}
+	finalStep := qry.Steps[len(qry.Steps)-1]
+	if finalStep < 0 || int(finalStep) >= len(qry.Nodes) || qry.Nodes[finalStep] == nil {
+		// Leave malformed-plan reporting to the existing compile/export
+		// validation rather than panicking at this optional materialization.
+		return materialization, nil
+	}
+	// A false marker is the normal representation of an explicit LIMIT. Keep
+	// the defensive check so an inconsistent plan still preserves SQL syntax.
+	if qry.Nodes[finalStep].Limit == nil {
+		materialization.root = qry.Nodes[finalStep]
+		materialization.originalLimit = materialization.root.Limit
+		materialization.root.Limit = limitExpr
+	}
+	return materialization, nil
+}
+
+// makeSQLSelectLimitExpr keeps prepared pipelines dynamic because they are
+// reused across EXECUTEs. Ordinary statements are compiled for one execution,
+// so resolve their value once and omit the default unlimited no-op entirely.
+func (c *Compile) makeSQLSelectLimitExpr() (*plan.Expr, error) {
+	if c.isPrepare {
+		return plan2.MakeSQLSelectLimitExpr(c.proc.Ctx)
+	}
+
+	value, err := c.proc.GetResolveVariableFunc()(plan2.SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return nil, err
+	}
+	limit, ok := value.(uint64)
+	if !ok {
+		return nil, moerr.NewInternalErrorf(c.proc.Ctx,
+			"unexpected %s type %T", plan2.SQLSelectLimitVariable, value)
+	}
+	if limit == ^uint64(0) {
+		return nil, nil
+	}
+	return plan2.MakePlan2Uint64ConstExprWithType(limit), nil
+}
+
 func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
 	if node == nil || len(node.OrderBy) > 0 || node.FilterIsBarrier ||
 		nodeHasUserLevelLockFunction(node) {
@@ -1393,6 +1492,61 @@ func streamingUnionAllDemand(node *plan.Node, outerDemand bool) bool {
 		return false
 	}
 	return outerDemand || node.Limit != nil
+}
+
+// orderedScalarUnionAll reports whether node is a UNION ALL tree whose leaves
+// are the single-row, tableless PROJECT -> VALUE_SCAN shape produced for
+// statements such as "SELECT 3 UNION ALL SELECT 1". Connector/ODBC uses this
+// shape to execute parameter arrays and maps returned rows back to parameter
+// sets by branch position, matching MySQL's left-to-right result order.
+//
+// Keep the recognition deliberately narrow. General UNION ALL inputs retain
+// their concurrent topology; only cheap scalar branches use sequential branch
+// activation to make that compatibility order deterministic.
+func orderedScalarUnionAll(nodeIdx int32, nodes []*plan.Node) bool {
+	if nodeIdx < 0 || int(nodeIdx) >= len(nodes) || nodes[nodeIdx] == nil {
+		return false
+	}
+
+	node := nodes[nodeIdx]
+	switch node.NodeType {
+	case plan.Node_UNION_ALL:
+		return len(node.Children) == 2 &&
+			orderedScalarUnionAll(node.Children[0], nodes) &&
+			orderedScalarUnionAll(node.Children[1], nodes)
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 {
+			return false
+		}
+		childIdx := node.Children[0]
+		if childIdx < 0 || int(childIdx) >= len(nodes) || nodes[childIdx] == nil {
+			return false
+		}
+		child := nodes[childIdx]
+		return child.NodeType == plan.Node_VALUE_SCAN &&
+			len(child.Children) == 0 && child.RowsetData == nil && child.TableDef == nil
+	default:
+		return false
+	}
+}
+
+// orderedScalarUnionAllResult keeps the compatibility behavior at the result
+// boundary. A scalar UNION ALL used as an input to a join or another blocking
+// operator must retain the normal concurrent topology: making that input lazy
+// can leave its consumer waiting for a branch that has not been started yet.
+func orderedScalarUnionAllResult(step, nodeIdx int32, qry *plan.Query) bool {
+	if qry == nil || step < 0 || int(step) >= len(qry.Steps) ||
+		nodeIdx < 0 || int(nodeIdx) >= len(qry.Nodes) {
+		return false
+	}
+
+	rootIdx := qry.Steps[step]
+	if rootIdx < 0 || int(rootIdx) >= len(qry.Nodes) || qry.Nodes[rootIdx] == nil {
+		return false
+	}
+	root := qry.Nodes[rootIdx]
+	return root.NodeType == plan.Node_PROJECT && len(root.Children) == 1 &&
+		root.Children[0] == nodeIdx && orderedScalarUnionAll(nodeIdx, qry.Nodes)
 }
 
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
@@ -1650,6 +1804,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return ss, nil
 	case plan.Node_UNION_ALL:
 		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
+		if !lazy && c.pn != nil {
+			lazy = orderedScalarUnionAllResult(step, curNodeIdx, c.pn.GetQuery())
+		}
 		left, err = c.compilePlanScopeWithUnionAllDemand(step, node.Children[0], nodes, lazy)
 		if err != nil {
 			return nil, err
