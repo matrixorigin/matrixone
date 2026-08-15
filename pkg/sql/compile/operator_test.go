@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
@@ -333,6 +334,16 @@ func TestDupHashBuildPreservesNullTracking(t *testing.T) {
 	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
 	defer duplicated.Release()
 	require.True(t, duplicated.TrackNullKeys)
+}
+
+func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
+	source := intersectall.NewArgument()
+	defer source.Release()
+	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(7)}
+
+	duplicated := dupOperator(source, 0, 1).(*intersectall.IntersectAll)
+	defer duplicated.Release()
+	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
 }
 
 func TestDupOperatorMergeTop(t *testing.T) {

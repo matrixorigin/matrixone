@@ -915,18 +915,18 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	return newCast(parameters, result, proc, length, selectList, castModeNormal, false)
 }
 
-// NewComparisonCast canonicalizes representation-only CHAR padding for
-// comparison operands. Keep this separate from ordinary and explicit casts:
-// PAD_CHAR_TO_FULL_LENGTH makes that padding observable to SQL expressions,
-// including CAST(CHAR AS VARCHAR), while comparisons and hash keys still use
+// NewComparisonCast canonicalizes representation-only CHAR padding for direct
+// and implicitly promoted comparison operands. Keep this separate from ordinary
+// and explicit casts: PAD_CHAR_TO_FULL_LENGTH makes that padding observable to
+// SQL expressions, including CAST(CHAR AS VARCHAR), while comparisons still use
 // PAD SPACE semantics.
 func NewComparisonCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeComparison, false)
 }
 
-// NewSetOperationCast keeps CHAR branches at the common set-operation width
-// when PAD_CHAR_TO_FULL_LENGTH is enabled. Set branches can run concurrently,
-// so UNION must not expose whichever physical padding happened to arrive first.
+// NewSetOperationCast canonicalizes physical equality keys without changing the
+// projected row. CHAR targets keep the common set-operation width; promoted
+// VARCHAR/TEXT keys discard representation-only trailing padding.
 func NewSetOperationCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeSetOperation, false)
 }
@@ -8127,8 +8127,10 @@ func strToStr(
 	mode castMode) error {
 	totype := to.GetType()
 	destLen := int(totype.Width)
-	trimCharPadding := mode == castModeComparison &&
-		from.GetSourceVector().GetType().Oid == types.T_char && toType.Oid == types.T_varchar
+	trimComparisonKey := mode == castModeComparison &&
+		(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
+	trimSetOperationKey := mode == castModeSetOperation &&
+		(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	padSetOperationChar := false
 	if mode == castModeSetOperation && toType.Oid == types.T_char {
 		var err error
@@ -8199,7 +8201,7 @@ func strToStr(
 				continue
 			}
 			// check the length.
-			if trimCharPadding {
+			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
 			}
 			s := convertByteSliceToString(v)
@@ -8263,7 +8265,7 @@ func strToStr(
 				}
 				continue
 			}
-			if trimCharPadding {
+			if trimComparisonKey || trimSetOperationKey {
 				v = bytes.TrimRight(v, " ")
 			}
 			if err := to.AppendBytes(v, false); err != nil {
