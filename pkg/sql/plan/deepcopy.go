@@ -642,6 +642,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		LoadWriteS3: qry.LoadWriteS3, DetectSqls: slices.Clone(qry.DetectSqls),
 		BackgroundQueries: make([]*plan.Query, len(qry.BackgroundQueries)), MaxDop: qry.MaxDop,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
+		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
 		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 		HasReturning:        qry.HasReturning, ReturningStep: qry.ReturningStep,
 	}

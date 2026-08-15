@@ -1393,6 +1393,11 @@ message Query {
   // transaction outcome. It is a step-array index, not a node id.
   bool has_returning = 13;
   int32 returning_step = 14;
+
+  // Apply the session sql_select_limit to the final result pipeline. This is
+  // false when the SELECT has an explicit top-level LIMIT, which takes
+  // precedence according to MySQL semantics.
+  bool apply_sql_select_limit = 15;
 }
 
 message TransationControl {
