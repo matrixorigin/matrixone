@@ -1881,6 +1881,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_TIME_WINDOW:
 		timeTag := node.BindingTags[0]
+		groupTag := node.BindingTags[1]
+
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		// Decide what survives before touching colRefCnt: a `_wstart`/`_wend`
 		// entry of AggList is a column reference to its own {timeTag, k}, so
@@ -2038,7 +2043,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		// selectable next to the window's aggregates. The operator always
 		// evaluates them to find its boundaries, so only their output is
 		// optional.
-		groupTag := node.BindingTags[1]
 		for p, slot := range layout.PartitionSlot {
 			if partitionSrc[p] < 0 {
 				continue
@@ -2064,6 +2068,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		outputMap := make(map[[2]int32][2]int32, len(newToOld)+len(layout.PartitionSlot))
+		for k, oldIdx := range newToOld {
+			slot := layout.Slot[k]
+			if slot == TimeWindowSlotNone {
+				continue
+			}
+			outputMap[[2]int32{timeTag, oldIdx}] = [2]int32{0, slot}
+		}
+		for p, slot := range layout.PartitionSlot {
+			if partitionSrc[p] < 0 {
+				continue
+			}
+			outputMap[[2]int32{groupTag, partitionSrc[p]}] = [2]int32{0, slot}
+		}
+
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.FilterList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(expr, outputMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	case plan.Node_WINDOW:

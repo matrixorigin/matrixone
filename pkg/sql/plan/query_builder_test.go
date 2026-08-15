@@ -2901,6 +2901,39 @@ func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.
 	assertBoundaryProjects(timeWindowNode)
 }
 
+func TestQueryBuilderTimeWindowOuterFilterKeepsBoundaryCarrier(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(6))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from ("+
+			"select _wstart, _wend, count(*) as n from tw_scale "+
+			"interval(ts, 1, hour) sliding(1, hour)"+
+			") q where _wend is null")
+	require.NoError(t, err)
+
+	var timeWindowNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TIME_WINDOW {
+			timeWindowNode = node
+			break
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.NotEqual(t, TimeWindowSlotNone, layout.WEndSlot)
+	for _, expr := range timeWindowNode.ProjectList {
+		col := expr.GetCol()
+		require.NotNil(t, col)
+		require.Less(t, col.ColPos, layout.ColCnt)
+	}
+	require.NotEmpty(t, timeWindowNode.FilterList)
+	wendFilterCol := timeWindowNode.FilterList[0].GetF().Args[0].GetCol()
+	require.NotNil(t, wendFilterCol)
+	require.Equal(t, layout.WEndSlot, wendFilterCol.ColPos)
+}
+
 func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
 	t.Helper()
 	tableName := "tw_scale"
