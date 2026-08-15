@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -3302,7 +3303,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		if !isReplace {
+		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
 			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
 		}
 		//ifInsertFromUniqueColMap = make(map[string]bool)
@@ -3316,7 +3317,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		if !isReplace {
+		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
 			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
 		}
 		// ifInsertFromUniqueColMap = make(map[string]bool)
@@ -3378,6 +3379,26 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
+}
+
+// localProtocolEnablesRightDedupInputKeysUnique reads the deployment-managed
+// rollout gate. It stays false until every participating CN can honor the
+// lookup-only operator bit, because the planner's memory proof depends on it.
+func (builder *QueryBuilder) localProtocolEnablesRightDedupInputKeysUnique() bool {
+	if builder == nil || builder.compCtx == nil {
+		return false
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion21
 }
 
 // insertSourceColumn identifies an output column that is still a direct

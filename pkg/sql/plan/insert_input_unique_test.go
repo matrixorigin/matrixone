@@ -17,7 +17,9 @@ package plan
 import (
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -190,6 +192,8 @@ func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
 			"select empno, ename, job from constraint_test.emp where empno > 0",
 		"insert into constraint_test.emp (empno, ename, job) " +
 			"select empno, ename, job from constraint_test.emp where empno > 0 order by empno",
+		"insert into constraint_test.emp (empno, ename, job) " +
+			"(select empno, ename, job from constraint_test.emp where empno > 0)",
 	}
 	for _, query := range queries {
 		t.Run(query, func(t *testing.T) {
@@ -208,6 +212,43 @@ func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
 			require.Equal(t, 1, marked, "only the target-PK DEDUP should use the proof")
 		})
 	}
+}
+
+func TestInsertSelectInputUniqueProofRequiresProtocolVersion21(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	countMarkedDedup := func(version int64) int {
+		t.Helper()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		logicPlan, err := runOneStmt(mock, t,
+			"insert into constraint_test.emp (empno, ename, job) "+
+				"select empno, ename, job from constraint_test.emp where empno > 0")
+		require.NoError(t, err)
+		require.NotNil(t, logicPlan.GetQuery())
+
+		marked := 0
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_DEDUP &&
+				node.DedupInputKeysUnique {
+				marked++
+			}
+		}
+		return marked
+	}
+
+	require.Zero(t, countMarkedDedup(defines.MORPCVersion20),
+		"the ordinary plan must remain active until every remote executor supports lookup-only RIGHT DEDUP")
+	require.Equal(t, 1, countMarkedDedup(defines.MORPCVersion21))
 }
 
 func TestProveInsertInputKeysUniqueRejectsKeyTypeChange(t *testing.T) {
