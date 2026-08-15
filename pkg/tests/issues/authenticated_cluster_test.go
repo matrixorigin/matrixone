@@ -73,7 +73,9 @@ func TestAuthenticatedTestsReuseBaseCluster(t *testing.T) {
 		}
 		return true
 	})
-	require.Equal(t, 3, cnCount)
+	// The shared base cluster keeps two CNs; dedicated topology tests opt into
+	// three CNs explicitly when that topology is part of the contract.
+	require.Equal(t, 2, cnCount)
 	require.Equal(t, 1, tnCount)
 	require.Equal(t, 1, logCount)
 }
