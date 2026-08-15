@@ -1035,7 +1035,13 @@ buildUnits:
 				}
 				if hb.OnDuplicateAction == plan.Node_IGNORE {
 					row := uint64(i + k)
-					if hb.IgnoreRows.Contains(row) || buildGroups[k] != v {
+					releasedByPriorCandidate := false
+					if hb.dedupDeleteMarkerColIdx >= 0 {
+						markerVec := hb.Batches.Buf[vecIdx1].Vecs[hb.dedupDeleteMarkerColIdx]
+						releasedByPriorCandidate = !markerVec.IsNull(uint64(vecIdx2+k)) &&
+							vector.GetFixedAtNoTypeCheck[bool](markerVec, vecIdx2+k)
+					}
+					if hb.IgnoreRows.Contains(row) || (!releasedByPriorCandidate && buildGroups[k] != v) {
 						continue
 					}
 				}

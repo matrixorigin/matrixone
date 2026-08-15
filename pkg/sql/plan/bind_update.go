@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -77,13 +78,13 @@ func (builder *QueryBuilder) makeUpdatedClusterByExpr(
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 }
 
-func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (int32, error) {
+func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext) (rootID int32, err error) {
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
+	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
 	if err != nil {
 		return 0, err
 	}
@@ -112,6 +113,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			hasRepeatedPhysicalTarget = hasRepeatedPhysicalTarget || physicalTargetCounts[tableID] > 1
 		}
 	}
+	defer func() {
+		if err == nil || !hasRepeatedPhysicalTarget {
+			return
+		}
+		route, reason, routedErr := classifyUpdatePlannerError(err)
+		if route == updatePlannerLegacy {
+			err = newUpdatePlannerRouteError(updatePlannerRejected, reason, routedErr)
+		}
+	}()
 	if err = validateRepeatedPhysicalTargetPrimaryKeyUpdate(builder.GetContext(), dmlCtx); err != nil {
 		return 0, err
 	}
@@ -2269,6 +2279,7 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignments(
 	}
 
 	sourceSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+	builder.qry.Nodes[sourceSinkID].ExtraOptions = materialized.CTESinkOption
 	if builder.preserveSinkProjection == nil {
 		builder.preserveSinkProjection = make(map[int32]struct{})
 	}
@@ -2651,6 +2662,7 @@ func (builder *QueryBuilder) mergeRepeatedPhysicalTargetAssignmentsWithUniqueFal
 			return 0, nil, err
 		}
 		currentSinkID := appendSinkNode(builder, bindCtx, currentID)
+		builder.qry.Nodes[currentSinkID].ExtraOptions = materialized.CTESinkOption
 		builder.preserveSinkProjection[currentSinkID] = struct{}{}
 		currentStep := int32(candidateStepBase + len(targets) - 1 - targetPos)
 		builder.qry.Steps[currentStep] = currentSinkID
@@ -2774,13 +2786,15 @@ func (builder *QueryBuilder) mergeRepeatedPhysicalTargetAssignmentsWithUniqueFal
 		}
 		candidateID, candidateNode, err = builder.appendMergedPhysicalTargetUniqueChecks(
 			bindCtx,
+			currentStep,
+			currentNode,
 			candidateID,
 			candidateNode,
 			dmlCtx,
 			targets,
-			candidateOldColName2Idx,
-			candidateNewColName2Idx,
 			assignedColsByTarget,
+			candidateSource.oldValuePosByCol,
+			candidateSource.currentPosByCol,
 		)
 		if err != nil {
 			return 0, nil, err
@@ -3001,17 +3015,18 @@ func (builder *QueryBuilder) recomputeMergedPhysicalTargetGeneratedColumns(
 
 func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 	bindCtx *BindContext,
+	currentStep int32,
+	currentNode *plan.Node,
 	lastNodeID int32,
 	selectNode *plan.Node,
 	dmlCtx *DMLContext,
 	targets []int,
-	oldColName2Idx map[string]int32,
-	newColName2Idx map[string]int32,
 	assignedColsByTarget map[int]map[string]struct{},
+	physicalOldPosByCol map[string]int32,
+	currentPosByCol map[string]int32,
 ) (int32, *plan.Node, error) {
 	ownerIdx := targets[0]
 	tableDef := dmlCtx.tableDefs[ownerIdx]
-	ownerAlias := dmlCtx.aliases[ownerIdx]
 	baseWidth := len(selectNode.ProjectList)
 	updatedCols := make(map[string]struct{})
 	for _, targetIdx := range targets {
@@ -3050,11 +3065,11 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if err != nil {
 			return 0, nil, err
 		}
-		makePartExpr := func(pos int32, partName string) (*plan.Expr, error) {
+		makePartExpr := func(node *plan.Node, tag int32, pos int32, partName string) (*plan.Expr, error) {
 			input := &plan.Expr{
-				Typ: selectNode.ProjectList[pos].Typ,
+				Typ: node.ProjectList[pos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{
-					RelPos: selectNodeTag,
+					RelPos: tag,
 					ColPos: pos,
 					Name:   partName,
 				}},
@@ -3065,22 +3080,17 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		newParts := make([]*plan.Expr, len(idxDef.Parts))
 		for partPos, rawPart := range idxDef.Parts {
 			part := catalog.ResolveAlias(rawPart)
-			oldPos, ok := oldColName2Idx[ownerAlias+"."+part]
+			oldPos, ok := physicalOldPosByCol[part]
 			if !ok {
 				return 0, nil, moerr.NewInternalErrorf(
 					builder.GetContext(), "bind update err, can not find colName = %s", part)
 			}
-			newPos := oldPos
-			if _, assigned := updatedCols[part]; assigned {
-				if pos, exists := newColName2Idx[ownerAlias+"."+part]; exists {
-					newPos = pos
-				}
-			}
-			oldParts[partPos], err = makePartExpr(oldPos, part)
+			newPos := currentPosByCol[part]
+			oldParts[partPos], err = makePartExpr(selectNode, selectNodeTag, oldPos, part)
 			if err != nil {
 				return 0, nil, err
 			}
-			newParts[partPos], err = makePartExpr(newPos, part)
+			newParts[partPos], err = makePartExpr(selectNode, selectNodeTag, newPos, part)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -3097,7 +3107,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 				return 0, nil, err
 			}
 		}
-		project := make([]*plan.Expr, 0, len(selectNode.ProjectList)+2)
+		project := make([]*plan.Expr, 0, len(selectNode.ProjectList)+3)
 		for pos, expr := range selectNode.ProjectList {
 			project = append(project, &plan.Expr{
 				Typ: expr.Typ,
@@ -3111,6 +3121,8 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		project = append(project, oldKey)
 		newKeyPos := int32(len(project))
 		project = append(project, newKey)
+		releaseMarkerPos := int32(len(project))
+		project = append(project, makePlan2BoolConstExprWithType(false))
 		projectTag := builder.genNewBindTag()
 		projectNode := &plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -3119,6 +3131,76 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			BindingTags: []int32{projectTag},
 		}
 		lastNodeID = builder.appendNode(projectNode, bindCtx)
+
+		// Add delete-only build rows for keys released by aliases accepted in
+		// earlier candidate stages. They carry a NULL new key, so they cannot
+		// become update candidates themselves; their old key only marks a real
+		// candidate bucket as released from the statement snapshot.
+		releaseScanID := builder.appendPositionalSinkScan(bindCtx, currentStep)
+		releaseTag := builder.genNewBindTag()
+		releaseProject := make([]*plan.Expr, len(project))
+		for pos, expr := range currentNode.ProjectList {
+			releaseProject[pos] = &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(pos)}},
+			}
+		}
+		releaseOldParts := make([]*plan.Expr, len(idxDef.Parts))
+		releaseCurrentParts := make([]*plan.Expr, len(idxDef.Parts))
+		for partPos, rawPart := range idxDef.Parts {
+			part := catalog.ResolveAlias(rawPart)
+			oldPos := physicalOldPosByCol[part]
+			currentPos := currentPosByCol[part]
+			releaseOldParts[partPos], err = makePartExpr(currentNode, 0, oldPos, part)
+			if err != nil {
+				return 0, nil, err
+			}
+			releaseCurrentParts[partPos], err = makePartExpr(currentNode, 0, currentPos, part)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		releaseOldKey := releaseOldParts[0]
+		releaseCurrentKey := releaseCurrentParts[0]
+		if len(idxDef.Parts) > 1 {
+			releaseOldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseOldParts)
+			if err != nil {
+				return 0, nil, err
+			}
+			releaseCurrentKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseCurrentParts)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		releaseProject[oldKeyPos] = releaseOldKey
+		releaseProject[newKeyPos] = nullUpdateProjectionExpr(newKey.Typ)
+		changed, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "!=", []*plan.Expr{releaseOldKey, releaseCurrentKey})
+		if buildErr != nil {
+			return 0, nil, buildErr
+		}
+		releaseProject[releaseMarkerPos] = changed
+		rowIDPos := physicalOldPosByCol[catalog.Row_ID]
+		releaseProject[rowIDPos] = nullUpdateProjectionExpr(releaseProject[rowIDPos].Typ)
+		releaseNode := &plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{releaseScanID},
+			ProjectList: releaseProject, BindingTags: []int32{releaseTag},
+		}
+		releaseID := builder.appendNode(releaseNode, bindCtx)
+
+		unionProject := make([]*plan.Expr, len(project))
+		for pos, expr := range projectNode.ProjectList {
+			unionProject[pos] = &plan.Expr{
+				Typ:  expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: int32(pos)}},
+			}
+		}
+		unionTag := builder.genNewBindTag()
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_UNION_ALL, Children: []int32{lastNodeID, releaseID},
+			ProjectList: unionProject, BindingTags: []int32{unionTag},
+		}, bindCtx)
+		projectTag = unionTag
 
 		idxTag := builder.genNewBindTag()
 		idxScanID := builder.appendNode(&plan.Node{
@@ -3164,10 +3246,23 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			OnDuplicateAction: plan.Node_IGNORE,
 			DedupColName:      dedupName,
 			DedupColTypes:     dedupTypes,
-			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{{
-				RelPos: projectTag,
-				ColPos: oldKeyPos,
-			}}},
+			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{
+				{RelPos: projectTag, ColPos: oldKeyPos},
+				{RelPos: projectTag, ColPos: releaseMarkerPos},
+			}},
+		}, bindCtx)
+		candidateRowID := &plan.Expr{
+			Typ:  projectNode.ProjectList[rowIDPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: rowIDPos}},
+		}
+		candidatePresent, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*plan.Expr{candidateRowID})
+		if buildErr != nil {
+			return 0, nil, buildErr
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_FILTER, Children: []int32{lastNodeID}, FilterList: []*plan.Expr{candidatePresent},
+			ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
 		}, bindCtx)
 		selectNode = projectNode
 		selectNodeTag = projectTag
@@ -3291,20 +3386,26 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		branchScanID := builder.appendPositionalSinkScan(bindCtx, sourceStep)
 		branchScanTag := builder.genNewBindTag()
 		builder.qry.Nodes[branchScanID].BindingTags = []int32{branchScanTag}
-		activePos := targetBranchActivePos[sourceIdx]
-		activeExpr := &plan.Expr{
-			Typ: selectNode.ProjectList[activePos].Typ,
+		rowIDPos := oldColName2Idx[sourceAlias+"."+catalog.Row_ID]
+		rowIDExpr := &plan.Expr{
+			Typ: selectNode.ProjectList[rowIDPos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: branchScanTag,
-				ColPos: activePos,
+				RelPos: branchScanTag, ColPos: rowIDPos,
 			}},
+		}
+		// Preserve every writable physical row. The branch-local row_number below
+		// chooses one complete source tuple per Rowid; filtering by the earlier
+		// alias selector here would hide sibling Rowids from later greedy stages.
+		activeExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "isnotnull", []*plan.Expr{rowIDExpr})
+		if err != nil {
+			return 0, nil, err
 		}
 		branchScanID = builder.appendNode(&plan.Node{
 			NodeType:   plan.Node_FILTER,
 			Children:   []int32{branchScanID},
 			FilterList: []*plan.Expr{activeExpr},
 		}, bindCtx)
-		rowIDPos := oldColName2Idx[sourceAlias+"."+catalog.Row_ID]
 		dedupInputProject := make([]*plan.Expr, 0, len(selectNode.ProjectList)+1)
 		for pos, expr := range selectNode.ProjectList {
 			dedupInputProject = append(dedupInputProject, &plan.Expr{
@@ -3491,7 +3592,6 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 			finalProject[outputPos] = canonicalResultExpr(filler.canonicalPos)
 		}
 	}
-	rowIDExpr := canonicalResultExpr(rowIDCanonicalPos)
 	activeMarkerByTarget := make(map[int]int32, len(targets))
 	for _, contribution := range contributions {
 		if _, ok := activeMarkerByTarget[contribution.targetIdx]; !ok {
@@ -3502,17 +3602,14 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		if activePos < 0 {
 			continue
 		}
-		activeInput := DeepCopyExpr(rowIDExpr)
+		activeInput := canonicalResultExpr(rowIDCanonicalPos)
 		operator := "isnull"
 		if markerPos, ok := activeMarkerByTarget[targetIdx]; ok {
 			activeInput = canonicalResultExpr(markerPos)
 			operator = "isnotnull"
 		}
 		activeExpr, err := BindFuncExprImplByPlanExpr(
-			builder.GetContext(),
-			operator,
-			[]*plan.Expr{activeInput},
-		)
+			builder.GetContext(), operator, []*plan.Expr{activeInput})
 		if err != nil {
 			return 0, nil, err
 		}

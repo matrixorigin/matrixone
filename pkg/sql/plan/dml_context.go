@@ -124,15 +124,55 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
 	}
-	for idx, columnMap := range dmlCtx.updateCol2Expr {
-		if len(columnMap) > 0 {
-			dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
-		}
-	}
+	dmlCtx.collectUpdateTargetOrder(stmt.Tables)
 
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
 
 	return nil
+}
+
+func (dmlCtx *DMLContext) collectUpdateTargetOrder(tableExprs tree.TableExprs) {
+	var collect func(tree.TableExpr)
+	collect = func(tableExpr tree.TableExpr) {
+		for {
+			switch tbl := tableExpr.(type) {
+			case *tree.ParenTableExpr:
+				tableExpr = tbl.Expr
+				continue
+			case *tree.AliasedTableExpr:
+				if alias := string(tbl.As.Alias); alias != "" {
+					if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+						dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+					}
+					return
+				}
+				tableExpr = tbl.Expr
+				continue
+			case *tree.JoinTableExpr:
+				if tbl.JoinType == tree.JOIN_TYPE_RIGHT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+					collect(tbl.Right)
+					collect(tbl.Left)
+				} else {
+					collect(tbl.Left)
+					if tbl.Right != nil {
+						collect(tbl.Right)
+					}
+				}
+				return
+			case *tree.TableName:
+				alias := string(tbl.ObjectName)
+				if idx, ok := dmlCtx.aliasMap[alias]; ok && len(dmlCtx.updateCol2Expr[idx]) > 0 {
+					dmlCtx.updateTargetOrder = append(dmlCtx.updateTargetOrder, idx)
+				}
+				return
+			default:
+				return
+			}
+		}
+	}
+	for _, tableExpr := range tableExprs {
+		collect(tableExpr)
+	}
 }
 
 type foreignKeyResolvePolicy uint8

@@ -144,5 +144,45 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		result = exec("update ignore no_action_parent_t a join no_action_parent_t b on a.id=b.id set a.k=2,b.x=9 where a.id=1")
 		assertAffected(result, 1)
 		require.Equal(t, []int64{1, 9}, queryInts("select k,x from no_action_parent_t", 2))
+
+		exec("create table right_join_t (id int primary key, u int, v int, x int, unique key uk_uv(u,v))")
+		exec("insert into right_join_t values (1,1,1,0),(2,2,2,0)")
+		result = exec("update ignore right_join_t b right join right_join_t a on b.id=a.id set a.u=2,b.v=2 where a.id=1")
+		assertAffected(result, 1)
+		require.Equal(t, []int64{2, 1}, queryInts("select u,v from right_join_t where id=1", 2))
+
+		exec("update right_join_t set u=1,v=1 where id=1")
+		result = exec("update ignore right_join_t b natural right join right_join_t a set b.v=?,a.u=? where a.id=1", 2, 2)
+		assertAffected(result, 1)
+		require.Equal(t, []int64{2, 1}, queryInts("select u,v from right_join_t where id=1", 2),
+			"RIGHT JOIN target order must not depend on SET order or COM_STMT")
+
+		exec("create table released_unique_t (id int primary key, u int unique, x int)")
+		exec("insert into released_unique_t values (1,1,0),(2,2,0),(3,3,0)")
+		result = exec("update ignore released_unique_t b join released_unique_t a on b.id=2 and a.id=1 set a.u=2,b.u=4")
+		require.Equal(t, []int64{2}, queryInts("select u from released_unique_t where id=1", 1))
+		require.Equal(t, []int64{4}, queryInts("select u from released_unique_t where id=2", 1))
+		assertAffected(result, 2)
+
+		exec("update released_unique_t set u=id where id in (1,2)")
+		result = exec("update ignore released_unique_t b join released_unique_t a on b.id=2 and a.id=1 set a.u=?,b.u=?", 2, 4)
+		require.Equal(t, []int64{2}, queryInts("select u from released_unique_t where id=1", 1))
+		require.Equal(t, []int64{4}, queryInts("select u from released_unique_t where id=2", 1))
+		assertAffected(result, 2)
+
+		exec("create table released_composite_t (id int primary key, u int, v int, unique key uk_uv(u,v))")
+		exec("insert into released_composite_t values (1,1,1),(2,2,2),(3,3,3)")
+		result = exec("update ignore released_composite_t b join released_composite_t a on b.id=2 and a.id=1 set a.u=2,a.v=2,b.u=4,b.v=4")
+		require.Equal(t, []int64{2, 2}, queryInts("select u,v from released_composite_t where id=1", 2))
+		require.Equal(t, []int64{4, 4}, queryInts("select u,v from released_composite_t where id=2", 2))
+		assertAffected(result, 2)
+
+		exec("create table legacy_fk_t (id int primary key, k int unique, parent_k int, x int, foreign key(parent_k) references legacy_fk_t(k) on update cascade)")
+		exec("insert into legacy_fk_t values (1,10,null,0),(2,20,10,0)")
+		_, execErr := conn.ExecContext(ctx,
+			"update ignore legacy_fk_t a join legacy_fk_t b on a.id=b.id set a.k=11,b.x=9 where a.id=1")
+		require.Error(t, execErr)
+		require.NotContains(t, execErr.Error(), "panic")
+		require.Equal(t, []int64{10, 0}, queryInts("select k,x from legacy_fk_t where id=1", 2))
 	})
 }

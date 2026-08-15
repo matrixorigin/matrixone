@@ -232,11 +232,15 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		cantPushdown = append(cantPushdown, filters...)
 
 	case plan.Node_JOIN:
-		if node.JoinType == plan.Node_DEDUP && node.OnDuplicateAction == plan.Node_UPDATE {
+		dedupIgnoreHasReleaseRows := node.JoinType == plan.Node_DEDUP &&
+			node.OnDuplicateAction == plan.Node_IGNORE && node.DedupJoinCtx != nil &&
+			len(node.DedupJoinCtx.OldColList) > 1
+		if node.JoinType == plan.Node_DEDUP &&
+			(node.OnDuplicateAction == plan.Node_UPDATE || dedupIgnoreHasReleaseRows) {
 			// DEDUP UPDATE mutates columns from its right input into the final row
-			// image. A predicate above it must observe that image; pushing it to
-			// either child would evaluate pre-update values or change conflict
-			// detection.
+			// image. DEDUP IGNORE can also carry delete-only rows that release keys
+			// for later candidates. A predicate above either form must stay above
+			// the join or it can change conflict detection.
 			for i, child := range node.Children {
 				childID, cantPushdownChild := builder.pushdownFilters(child, nil, separateNonEquiConds)
 				if len(cantPushdownChild) > 0 {
