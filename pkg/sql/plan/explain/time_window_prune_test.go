@@ -17,6 +17,7 @@ package explain
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -255,4 +256,113 @@ func TestTimeWindowPartitionShape(t *testing.T) {
 		require.Len(t, node.OrderBy, 1)
 		requireSlotsWithinLayout(t, node)
 	})
+}
+
+func TestGapFillInfersHalfOpenQueryBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" and updated_at < '2026-01-01 00:06:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+	require.NotNil(t, node.GapFillStart)
+	require.NotNil(t, node.GapFillEnd)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
+}
+
+func TestGapFillInfersDateBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from orders"+
+			" where o_orderdate >= '1992-01-01'"+
+			" and o_orderdate < '1992-01-03'"+
+			" interval(o_orderdate, 1, day) gapfill(partition)")
+
+	require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+	require.NotNil(t, node.GapFillStart)
+	require.NotNil(t, node.GapFillEnd)
+	require.Equal(t, int32(types.T_datetime), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), node.GapFillEnd.Typ.Id)
+}
+
+func TestGapFillLeavesOneSidedPredicateUnbounded(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Nil(t, node.GapFillStart)
+	require.Nil(t, node.GapFillEnd)
+}
+
+func TestGapFillDoesNotInferVolatileBounds(t *testing.T) {
+	queries := map[string]string{
+		"volatile range": " where updated_at >= sysdate(6)" +
+			" and updated_at < date_add(sysdate(6), interval 5 minute)",
+		"volatile repeated lower bound": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at >= sysdate(6)" +
+			" and updated_at < '2026-01-01 00:05:00'",
+		"volatile repeated upper bound": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:05:00'" +
+			" and updated_at < date_add(sysdate(6), interval 5 minute)",
+	}
+	for name, predicates := range queries {
+		t.Run(name, func(t *testing.T) {
+			node := timeWindowNode(t,
+				"select _wstart, count(*) from "+twTable+predicates+
+					" interval(updated_at, 1, second) gapfill(partition)")
+
+			require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+			require.Nil(t, node.GapFillStart)
+			require.Nil(t, node.GapFillEnd)
+		})
+	}
+}
+
+func TestGapFillDoesNotInferFromPartialTimeRange(t *testing.T) {
+	queries := map[string]string{
+		"strict lower contradiction": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at > '2026-01-01 00:10:00'" +
+			" and updated_at < '2026-01-01 00:06:00'",
+		"inclusive upper edge": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at <= '2026-01-01 00:05:00'" +
+			" and updated_at < '2026-01-01 00:06:00'",
+		"nested timestamp predicate": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and date(updated_at) = '2026-01-02'" +
+			" and updated_at < '2026-01-01 00:06:00'",
+		"timestamp in subquery": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:06:00'" +
+			" and updated_at in (select updated_at from " + twTable + " where 1 = 0)",
+		"timestamp in correlated exists": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:06:00'" +
+			" and exists (select 1 from " + twTable + " inner_tw" +
+			" where inner_tw.updated_at = t_on_update.updated_at and 1 = 0)",
+	}
+	for name, predicates := range queries {
+		t.Run(name, func(t *testing.T) {
+			node := timeWindowNode(t,
+				"select _wstart, count(*) from "+twTable+predicates+
+					" interval(updated_at, 1, minute) gapfill(partition)")
+
+			require.Equal(t, plan.Node_GAP_FILL_PARTITION, node.GapFillMode)
+			require.Nil(t, node.GapFillStart)
+			require.Nil(t, node.GapFillEnd)
+		})
+	}
+}
+
+func TestGapFillCombinesRepeatedBounds(t *testing.T) {
+	node := timeWindowNode(t,
+		"select _wstart, count(*) from "+twTable+
+			" where updated_at >= '2026-01-01 00:00:00'"+
+			" and updated_at >= '2026-01-01 00:01:00'"+
+			" and updated_at < '2026-01-01 00:06:00'"+
+			" and updated_at < '2026-01-01 00:05:00'"+
+			" interval(updated_at, 1, minute) gapfill(partition)")
+
+	require.Equal(t, "greatest", node.GapFillStart.GetF().Func.ObjName)
+	require.Equal(t, "least", node.GapFillEnd.GetF().Func.ObjName)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillStart.Typ.Id)
+	require.Equal(t, int32(types.T_timestamp), node.GapFillEnd.Typ.Id)
 }

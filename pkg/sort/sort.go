@@ -24,6 +24,15 @@ import (
 	mopartition "github.com/matrixorigin/matrixone/pkg/partition"
 )
 
+// ByVectorsScratch carries caller-owned, row-scaled work storage for
+// SortByVectorsWithScratch. Retaining operators can place that storage under
+// their execution allocation account; callers that do not need this control
+// keep using SortByVectors unchanged.
+type ByVectorsScratch struct {
+	Partitions []int64
+	Diffs      []bool
+}
+
 const (
 	unknownHint sortedHint = iota
 	increasingHint
@@ -398,6 +407,19 @@ func SortByVectors(
 	desc []bool,
 	nullsLast []bool,
 ) {
+	SortByVectorsWithScratch(os, vectors, desc, nullsLast, nil)
+}
+
+// SortByVectorsWithScratch sorts row selectors like SortByVectors and reuses
+// the supplied buffers when sorting by multiple keys. The buffers must be
+// large enough for os; passing nil retains the legacy allocation behavior.
+func SortByVectorsWithScratch(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+	scratch *ByVectorsScratch,
+) {
 	if len(os) < 2 || len(vectors) == 0 {
 		return
 	}
@@ -410,8 +432,19 @@ func SortByVectors(
 		return
 	}
 
-	partitions := make([]int64, 0, 16)
-	diffs := make([]bool, len(os))
+	var partitions []int64
+	var diffs []bool
+	if scratch == nil {
+		partitions = make([]int64, 0, 16)
+		diffs = make([]bool, len(os))
+	} else {
+		if cap(scratch.Partitions) < len(os) || cap(scratch.Diffs) < len(os) {
+			panic("sort: insufficient multi-column scratch capacity")
+		}
+		partitions = scratch.Partitions[:0]
+		diffs = scratch.Diffs[:len(os)]
+		clear(diffs)
+	}
 	previous := vectors[0]
 	for i := 1; i < len(vectors); i++ {
 		partitions = mopartition.PartitionForOrder(os, diffs, partitions, previous)
@@ -427,6 +460,10 @@ func SortByVectors(
 			}
 		}
 		previous = vec
+	}
+	if scratch != nil {
+		scratch.Partitions = partitions
+		scratch.Diffs = diffs
 	}
 }
 

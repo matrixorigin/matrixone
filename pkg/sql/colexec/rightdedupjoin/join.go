@@ -174,7 +174,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 									int64(ctr.buildGroupCount),
 									proc.Mp(),
 									rightDedupJoin.allocationAccount,
-									hashbuild.HashBuildAllocationOwner,
+									mpool.AllocationOwnerHashBuild,
 									rightDedupJoinAllocationSiteMatched,
 								)
 							}
@@ -241,7 +241,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				NeedsProbeForEmptyBuild: true,
 				MergeProbeBatches:       !rightDedupJoin.InputKeysUnique,
 				Budget:                  budget,
-			}, rightDedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			}, rightDedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -283,7 +283,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				int64(ctr.buildGroupCount),
 				proc.Mp(),
 				rightDedupJoin.allocationAccount,
-				hashbuild.HashBuildAllocationOwner,
+				mpool.AllocationOwnerHashBuild,
 				rightDedupJoinAllocationSiteMatched,
 			)
 			if err != nil {
@@ -335,7 +335,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	}
 
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
-	var targetMatches int64
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := min(count-i, hashmap.UnitLimit)
 		var vals []uint64
@@ -356,7 +355,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 			if ap.InputKeysUnique {
 				if v != 0 {
-					targetMatches++
 					var rowStr string
 					if len(ap.DedupColTypes) == 1 && ap.DedupColName == catalog.IndexTableIndexColName && ctr.vecs[0].GetType().Oid == types.T_varchar {
 						t, _, schema, decodeErr := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
@@ -435,7 +433,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	}
 	if ap.InputKeysUnique {
 		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueRows", int64(count))
-		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueTargetMatches", targetMatches)
 	}
 
 	if err := ap.resetResultBatch(); err != nil {

@@ -45,7 +45,7 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 	require.NoError(t, err)
 	err = disk.Grow(65)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
-	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 	require.Contains(t, err.Error(), "spill disk")
 	require.Contains(t, err.Error(), "requested=65")
 	require.Contains(t, err.Error(), "used=64")
@@ -54,19 +54,19 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 
 	_, err = budget.ReserveDisk(129)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
-	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 
 	memory, err := budget.ReserveMemory(1)
 	require.NoError(t, err)
 	require.True(t, memory.Release())
 
-	processBudget, err := proc.GetHashBuildBudget()
+	processBudget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	fdLimit := processBudget.SpillFDCap()
 	require.NotZero(t, fdLimit)
 	_, err = budget.ReserveFD(fdLimit + 1)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
-	require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 	require.Contains(t, err.Error(), "spill file descriptor")
 	require.Contains(t, err.Error(), "requested=")
 	require.Contains(t, err.Error(), "limit=")
@@ -78,10 +78,10 @@ func TestMaterializedSpillBudgetUsesProcessLimits(t *testing.T) {
 
 	invalidBudget := newMaterializedSpillBudget(&process.Process{Ctx: context.Background()})
 	_, err = invalidBudget.ReserveDisk(1)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 	_, err = invalidBudget.ReserveFD(1)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 	require.False(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 }
 

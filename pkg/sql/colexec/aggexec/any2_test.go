@@ -35,6 +35,7 @@ func TestAnyValueBatchFillReturnsSetRawBytesAtError(t *testing.T) {
 
 	err := exec.BatchFill(0, []uint64{1}, []*vector.Vector{input})
 	require.Error(t, err)
+	require.True(t, exec.state[0].vecs[0].IsNull(0))
 }
 
 func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
@@ -54,6 +55,7 @@ func TestAnyValueBatchMergeReturnsSetRawBytesAtError(t *testing.T) {
 
 	err := target.BatchMerge(source, 0, []uint64{1})
 	require.Error(t, err)
+	require.True(t, target.state[0].vecs[0].IsNull(0))
 }
 
 func TestAnyValuePreservesFirstPrepareParamKind(t *testing.T) {

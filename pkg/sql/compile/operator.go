@@ -1658,6 +1658,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	arg.GapFillStart = node.GapFillStart
+	arg.GapFillEnd = node.GapFillEnd
 	// A tumbling window normally uses the interval fast path (EndExpr != nil),
 	// which forwards only groups already produced by the child aggregate. That
 	// path cannot synthesize absent buckets. GAPFILL therefore uses the general

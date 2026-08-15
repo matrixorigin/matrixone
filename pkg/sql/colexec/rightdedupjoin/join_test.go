@@ -216,7 +216,6 @@ func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool
 		require.Equal(t, uint64(1), arg.ctr.mp.GetGroupCount(), "lookup-only probes must not grow the target map")
 		extra := arg.OpAnalyzer.GetOpStats().ExtraStats
 		require.Equal(t, int64(len(probeValues)), extra["RightDedupInputUniqueRows"])
-		require.Zero(t, extra["RightDedupInputUniqueTargetMatches"])
 		res, err = vm.Exec(arg, proc)
 		require.NoError(t, err)
 		require.Equal(t, vm.ExecStop, res.Status)
@@ -230,7 +229,7 @@ func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool
 func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches, inputKeysUnique bool) {
 	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
 	defer ctrl.Finish()
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
@@ -378,13 +377,13 @@ func TestRightDedupEmptyMapUsesEvaluatedKeyType(t *testing.T) {
 	proc.Free()
 }
 
-func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
+func TestRightDedupEmptyBuildProbeMapHonorsExecutionResourceBudget(t *testing.T) {
 	proc, ctrl := newRightDedupTestProcess(t, false)
 	defer ctrl.Finish()
 
 	initialBytes := hashtable.Int64HashMapInitialAllocationBytes()
 	proc.Base.Lim.Size = int64(initialBytes)
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 
 	const rows = 2_048
@@ -437,9 +436,9 @@ func TestRightDedupEmptyBuildProbeMapHonorsHashBuildBudget(t *testing.T) {
 	_, callErr = arg.Call(proc)
 	require.Error(t, callErr)
 	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
-	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, callErr, process.ErrExecutionResourceAdmission)
 	require.NotContains(t, callErr.Error(), "convert go error")
-	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.NotContains(t, callErr.Error(), process.ErrExecutionResourceAdmission.Error())
 	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
 	require.Zero(t, budget.Used(),
 		"failed probe-map construction must roll back its physical allocation")

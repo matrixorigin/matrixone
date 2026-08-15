@@ -2012,7 +2012,7 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 		// roughly one eighth of CN memory after the file-cache reservation.
 		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
 		workers := uint64(system.GoMaxProcs())
-		budget := maxUint64
+		var budget uint64
 		if workers == 0 || perWorkerBudget > maxUint64/workers {
 			budget = 0
 		} else {

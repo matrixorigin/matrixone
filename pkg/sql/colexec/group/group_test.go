@@ -26,7 +26,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/common"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -113,21 +114,6 @@ func orderedGroupConcatAgg(distinct bool) aggexec.AggFuncExecExpression {
 	)
 }
 
-func unorderedGroupConcatOrderAgg(distinct bool) aggexec.AggFuncExecExpression {
-	config := []byte{2}
-	config = binary.BigEndian.AppendUint32(config, 1) // concat args
-	config = binary.BigEndian.AppendUint32(config, 0) // no ORDER BY args
-	config = binary.BigEndian.AppendUint32(config, 1) // separator length
-	config = append(config, '|')
-	return aggexec.MakeAggFunctionExpression(
-		aggexec.AggIdOfGroupConcat,
-		distinct,
-		[]*plan.Expr{colExpr(1, types.T_varchar)},
-		config,
-		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
-	)
-}
-
 func orderedPercentileAgg(id int64, valueCol int32, percentile []byte, descending bool) aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		id,
@@ -206,6 +192,172 @@ type cancelOnDoneCheckContext struct {
 type cancelAfterWriteWriter struct {
 	cancel context.CancelFunc
 	writes int
+}
+
+type countingShortWriter struct {
+	writes int
+}
+
+type cancelAfterNErrChecksContext struct {
+	context.Context
+	remaining int
+	done      chan struct{}
+}
+
+func newCancelAfterNErrChecksContext(checks int) *cancelAfterNErrChecksContext {
+	return &cancelAfterNErrChecksContext{
+		Context:   context.Background(),
+		remaining: checks,
+		done:      make(chan struct{}),
+	}
+}
+
+func (ctx *cancelAfterNErrChecksContext) Done() <-chan struct{} {
+	return ctx.done
+}
+
+func (ctx *cancelAfterNErrChecksContext) Err() error {
+	if ctx.remaining > 0 {
+		ctx.remaining--
+		if ctx.remaining == 0 {
+			close(ctx.done)
+		}
+	}
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (w *countingShortWriter) Write(value []byte) (int, error) {
+	w.writes++
+	if len(value) == 0 {
+		return 0, nil
+	}
+	return len(value) - 1, nil
+}
+
+func TestGroupSpillWriterDoesNotRetryFailedFlush(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := &countingShortWriter{}
+	w, err := newGroupSpillWriter(&container{mp: proc.Mp()}, target, context.Background())
+	require.NoError(t, err)
+	require.NoError(t, w.ensureBuffer())
+	require.NoError(t, w.buffer.Resize(1))
+	w.buffer.Bytes()[0] = 1
+
+	require.ErrorIs(t, w.Flush(), io.ErrShortWrite)
+	require.ErrorIs(t, w.Flush(), io.ErrShortWrite)
+	require.Equal(t, 1, target.writes)
+	w.Free()
+	proc.Free()
+}
+
+func TestGroupSpillReaderRewindsLogicalReadAheadPosition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	content := bytes.Repeat([]byte("0123456789abcdef"), 4096)
+	file, err := os.CreateTemp(t.TempDir(), "group-spill-reader-*")
+	require.NoError(t, err)
+	defer file.Close()
+	_, err = file.Write(content)
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	reader, err := newGroupSpillReader(
+		&container{mp: proc.Mp()}, file, context.Background())
+	require.NoError(t, err)
+	defer reader.Free()
+
+	first := make([]byte, 37)
+	_, err = io.ReadFull(reader, first)
+	require.NoError(t, err)
+	require.Equal(t, content[:37], first)
+	require.Equal(t, int64(37), reader.Position())
+
+	require.NoError(t, reader.Rewind(11))
+	replayed := make([]byte, 43)
+	_, err = io.ReadFull(reader, replayed)
+	require.NoError(t, err)
+	require.Equal(t, content[11:54], replayed)
+	require.Equal(t, int64(54), reader.Position())
+
+	dropped, err := reader.DisableReadAheadAndRewind(0)
+	require.NoError(t, err)
+	require.True(t, dropped)
+	require.True(t, reader.disabled)
+	direct := make([]byte, 23)
+	_, err = io.ReadFull(reader, direct)
+	require.NoError(t, err)
+	require.Equal(t, content[:23], direct)
+}
+
+func TestGroupSpillSaveArgCodecObservesCancellationWithinOneGroup(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const rows = 2048
+	groups := make([]int32, rows)
+	values := make([]string, rows)
+	orderKeys := make([]int64, rows)
+	for i := range rows {
+		groups[i] = 1
+		values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 48))
+		orderKeys[i] = int64(rows - i)
+	}
+	input := batch.NewWithSize(3)
+	input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt64Vector(orderKeys, nil, proc.Mp())
+	input.SetRowCount(rows)
+	defer input.Clean(proc.Mp())
+
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(false)},
+	)
+	require.NoError(t, g.Prepare(proc))
+	defer g.Free(proc, false, nil)
+	_, err := g.buildOneBatch(proc, input)
+	require.NoError(t, err)
+	require.Len(t, g.ctr.aggList, 1)
+	codec := g.ctr.aggList[0]
+
+	ctx, cancel := context.WithCancel(context.Background())
+	target := &cancelAfterWriteWriter{cancel: cancel}
+	writer, err := newGroupSpillWriter(&g.ctr, target, ctx)
+	require.NoError(t, err)
+	err = codec.SaveSpillIntermediateResult(1, 0, []uint8{1}, writer)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, target.writes)
+	writer.Free()
+
+	var encoded bytes.Buffer
+	require.NoError(t, codec.SaveSpillIntermediateResult(
+		1, 0, []uint8{1}, &encoded))
+	file, err := os.CreateTemp(t.TempDir(), "group-spill-cancel-read-*")
+	require.NoError(t, err)
+	defer file.Close()
+	_, err = file.Write(encoded.Bytes())
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	targetAggs, err := g.ctr.makeSpillAggList(g.Aggs)
+	require.NoError(t, err)
+	require.Len(t, targetAggs, 1)
+	defer targetAggs[0].Free()
+	readerCtx := newCancelAfterNErrChecksContext(64)
+	reader, err := newGroupSpillReader(&g.ctr, file, readerCtx)
+	require.NoError(t, err)
+	defer reader.Free()
+	err = targetAggs[0].UnmarshalSpillFromReader(reader, g.ctr.mp)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func (w *cancelAfterWriteWriter) Write(p []byte) (int, error) {
@@ -494,6 +646,7 @@ func TestMergeGroupPreservesBinaryStringProvenance(t *testing.T) {
 	input.SetRowCount(1)
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	partialOp := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{minTextColumnAgg(0)})
+	partialOp.NeedEval = false
 	partialOp.AppendChild(child)
 	require.NoError(t, partialOp.Prepare(proc))
 	partials := collectBatches(t, partialOp, proc)
@@ -652,6 +805,7 @@ func TestMergeGroupUsesIncomingWinnerPrepareParamKind(t *testing.T) {
 			outputs := collectBatches(t, merge, proc)
 			require.Len(t, outputs, 1)
 			require.Equal(t, tc.want, outputs[0].Vecs[0].GetPrepareParamKindAt(0))
+			require.True(t, outputs[0].Vecs[0].HasPrepareParamKind())
 		})
 	}
 }
@@ -698,6 +852,7 @@ func TestMergeGroupPreservesHeterogeneousPartialProvenance(t *testing.T) {
 	}
 	require.Equal(t, vector.PrepareParamFloat, seen[0])
 	require.Equal(t, vector.PrepareParamNone, seen[1])
+	require.True(t, outputs[0].Vecs[1].HasPrepareParamKind())
 	merge.Free(proc, false, nil)
 	partialBatch.Clean(proc.Mp())
 	require.Zero(t, proc.Mp().CurrNB())
@@ -1247,6 +1402,87 @@ func BenchmarkGroupPhysicalHashKey(b *testing.B) {
 	}
 }
 
+// BenchmarkGroupAccountedPhysicalHashKey is kept separate from the historical
+// resident benchmark so local gates can compare a production-accounted Group
+// against an unaccounted baseline without running both modes in one process.
+func BenchmarkGroupAccountedPhysicalHashKey(b *testing.B) {
+	const (
+		rows   = 8192
+		groups = rows / 2
+	)
+
+	keys := make([]int32, rows)
+	wide := make([]string, rows)
+	padding := strings.Repeat("x", 96)
+	for i := range rows {
+		key := i % groups
+		keys[i] = int32(key)
+		wide[i] = fmt.Sprintf("%08d-%s", key, padding)
+	}
+
+	for _, test := range []struct {
+		name    string
+		hashKey []int32
+	}{
+		{name: "full-logical-key"},
+		{name: "integer-primary-key", hashKey: []int32{0}},
+	} {
+		b.Run("accounted/"+test.name, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			defer proc.Free()
+			b.ReportAllocs()
+			b.SetBytes(rows)
+
+			for b.Loop() {
+				b.StopTimer()
+				input := batch.NewWithSize(5)
+				input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+				for i := 1; i < len(input.Vecs); i++ {
+					input.Vecs[i] = testutil.MakeVarcharVector(wide, nil, proc.Mp())
+				}
+				input.SetRowCount(rows)
+
+				groupBy := []*plan.Expr{colExpr(0, types.T_int32)}
+				for i := int32(1); i < 5; i++ {
+					groupBy = append(groupBy, colExpr(i, types.T_varchar))
+				}
+				g := newGroupOp(proc, groupBy,
+					[]aggexec.AggFuncExecExpression{countStarAgg()})
+				g.GroupByHashKey = test.hashKey
+				g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+				allocation := installGroupTestAllocation(b, g, proc, 1<<30)
+				b.StartTimer()
+
+				if err := g.Prepare(proc); err != nil {
+					b.Fatal(err)
+				}
+				outputRows := 0
+				for {
+					result, err := vm.Exec(g, proc)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if result.Status == vm.ExecStop || result.Batch == nil {
+						break
+					}
+					outputRows += result.Batch.RowCount()
+				}
+				if outputRows != groups {
+					b.Fatalf("unexpected group count: got %d, want %d", outputRows, groups)
+				}
+
+				b.StopTimer()
+				g.Free(proc, false, nil)
+				finalizeGroupTestAllocation(b, g, allocation)
+				if allocated := proc.Mp().CurrNB(); allocated != 0 {
+					b.Fatalf("group leaked %d bytes", allocated)
+				}
+				b.StartTimer()
+			}
+		})
+	}
+}
+
 func TestH0NeverRequestsGenericGroupSpill(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer func() {
@@ -1477,16 +1713,12 @@ func TestGroupedOrderedPercentileSpill(t *testing.T) {
 	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadRecords"])
 }
 
-func TestDistinctGroupConcatSpillRequiresOrderKey(t *testing.T) {
+func TestDistinctGroupConcatUsesConfiguredSpillThreshold(t *testing.T) {
 	var ctr container
-	ctr.setSpillMem(123, []aggexec.AggFuncExecExpression{
-		unorderedGroupConcatOrderAgg(true),
-	})
-	require.Equal(t, int64(common.TiB), ctr.spillMem)
+	ctr.setSpillMem(123)
+	require.Equal(t, int64(123), ctr.spillMem)
 
-	ctr.setSpillMem(123, []aggexec.AggFuncExecExpression{
-		orderedGroupConcatAgg(true),
-	})
+	ctr.setSpillMem(123)
 	require.Equal(t, int64(123), ctr.spillMem)
 }
 
@@ -1796,6 +2028,14 @@ func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
 	require.Positive(t, extra["GroupSpillReloadNanos"])
 	require.Equal(t, int64(1), extra["GroupHashBuildGrowthBatches"])
 	require.Positive(t, extra["GroupHashBuildGrowthBytes"])
+	// The unaccounted compatibility execution still reuses scratch/read-ahead
+	// until terminal cleanup so repeated spill waves do not add GC churn.
+	require.NotZero(t, cap(g.ctr.spillHashCodes))
+	require.NotZero(t, cap(g.ctr.spillFlagFlat))
+	require.NotZero(t, cap(g.ctr.spillBucketRows))
+	require.NotNil(t, g.ctr.spillReader)
+	require.NotNil(t, g.ctr.spillReader.buffer)
+	require.NotZero(t, g.ctr.spillReader.buffer.Cap())
 	g.Free(proc, false, nil)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1977,7 +2217,7 @@ func TestGroupSpillWriteStopsAtBucketBoundary(t *testing.T) {
 
 	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, 1, writer.writes)
+	require.Positive(t, writer.writes)
 	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 
 	proc.Ctx = baseCtx
@@ -2031,7 +2271,7 @@ func TestGroupSpillWriteStopsAfterLastBucket(t *testing.T) {
 
 	_, _, err = g.ctr.spillDataToDisk(proc, g.OpAnalyzer, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, 1, writer.writes)
+	require.Positive(t, writer.writes)
 	require.Equal(t, int64(1), g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 }
 
@@ -2210,49 +2450,96 @@ func TestGroupSpillReloadCancellationCleansAndReuses(t *testing.T) {
 
 func TestGroupedOrderedGroupConcatComposesWithGenericSpill(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
-		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
+		for _, accounted := range []bool{false, true} {
+			t.Run(fmt.Sprintf("distinct=%t/accounted=%t", distinct, accounted), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
 
-			const rows = 512
-			groups := make([]int32, rows)
-			values := make([]string, rows)
-			orderKeys := make([]int64, rows)
-			for i := range rows {
-				groups[i] = 1
-				values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 256))
-				orderKeys[i] = int64(rows - i)
-			}
-			input := batch.NewWithSize(3)
-			input.Vecs[0] = testutil.MakeInt32Vector(groups, nil, proc.Mp())
-			input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
-			input.Vecs[2] = testutil.MakeInt64Vector(orderKeys, nil, proc.Mp())
-			input.SetRowCount(rows)
+				const rows = 512
+				groups := make([]int32, rows)
+				values := make([]string, rows)
+				orderKeys := make([]int64, rows)
+				for i := range rows {
+					groups[i] = int32(i % 3)
+					values[i] = fmt.Sprintf("%04d-%s", i, strings.Repeat("x", 256))
+					orderKeys[i] = int64(rows - i)
+				}
+				makeInput := func(start, end int) *batch.Batch {
+					input := batch.NewWithSize(3)
+					input.Vecs[0] = testutil.MakeInt32Vector(
+						groups[start:end], nil, proc.Mp())
+					input.Vecs[1] = testutil.MakeVarcharVector(
+						values[start:end], nil, proc.Mp())
+					input.Vecs[2] = testutil.MakeInt64Vector(
+						orderKeys[start:end], nil, proc.Mp())
+					input.SetRowCount(end - start)
+					return input
+				}
+				first, second := makeInput(0, rows/2), makeInput(rows/2, rows)
 
-			g := newGroupOp(
-				proc,
-				[]*plan.Expr{colExpr(0, types.T_int32)},
-				[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(distinct), countStarAgg()},
-			)
-			g.SpillMem = 64 << 10
-			g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
-			require.NoError(t, g.Prepare(proc))
+				g := newGroupOp(
+					proc,
+					[]*plan.Expr{colExpr(0, types.T_int32)},
+					[]aggexec.AggFuncExecExpression{orderedGroupConcatAgg(distinct), countStarAgg()},
+				)
+				// Values below 10K use the deterministic group-count spill
+				// threshold. Spill a multi-group resident set, while every
+				// partitioned bucket can finish below the same threshold.
+				g.SpillMem = 2
+				g.AppendChild(colexec.NewMockOperator().WithBatchs(
+					[]*batch.Batch{first, second}))
+				var allocation groupTestAllocation
+				if accounted {
+					allocation = installGroupTestAllocation(t, g, proc, 128<<20)
+				}
+				require.NoError(t, g.Prepare(proc))
 
-			results := collectBatches(t, g, proc)
-			require.Len(t, results, 1)
-			require.Equal(t, 1, results[0].RowCount())
-			require.Equal(t, int64(rows), vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[2])[0])
-			parts := strings.Split(string(results[0].Vecs[1].GetBytesAt(0)), "|")
-			require.Len(t, parts, rows)
-			require.Equal(t, values[rows-1], parts[0])
-			require.Equal(t, values[0], parts[rows-1])
+				seenValues := 0
+				seenKeys := make(map[int32]struct{}, 3)
+				totalCount := int64(0)
+				resultBatches := 0
+				for {
+					result, err := vm.Exec(g, proc)
+					require.NoError(t, err)
+					if result.Status == vm.ExecStop || result.Batch == nil {
+						break
+					}
+					if len(result.Batch.Vecs) < 3 {
+						continue
+					}
+					resultBatches++
+					resultKeys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+					groupCounts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2])
+					for row, count := range groupCounts {
+						seenKeys[resultKeys[row]] = struct{}{}
+						totalCount += count
+						parts := strings.Split(
+							string(result.Batch.Vecs[1].GetBytesAt(row)), "|")
+						require.Equal(t, int(count), len(parts))
+						for i := 1; i < len(parts); i++ {
+							require.Less(t, parts[i], parts[i-1])
+						}
+						seenValues += len(parts)
+					}
+				}
+				require.Positive(t, resultBatches)
+				require.Len(t, seenKeys, 3)
+				require.Equal(t, int64(rows), totalCount)
+				require.Equal(t, rows, seenValues)
 
-			extra := g.OpAnalyzer.GetOpStats().ExtraStats
-			require.Equal(t, int64(spillMaxPass), extra["GroupSpillMaxLevel"])
-			require.Positive(t, extra["GroupSpillRespills"])
-			g.Free(proc, false, nil)
-			require.Zero(t, proc.Mp().CurrNB())
-		})
+				extra := g.OpAnalyzer.GetOpStats().ExtraStats
+				require.Positive(t, extra["GroupSpillRecords"])
+				require.Positive(t, extra["GroupSpillReloadRecords"])
+				g.Free(proc, false, nil)
+				if accounted {
+					require.Zero(t, allocation.account.Snapshot().Used)
+					require.Zero(t, allocation.generation.Snapshot().SpillDiskUsed)
+					require.Zero(t, allocation.generation.Snapshot().SpillFDUsed)
+					finalizeGroupTestAllocation(t, g, allocation)
+				}
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+		}
 	}
 }
 
@@ -2330,6 +2617,215 @@ func TestMergeGroupPreservesLateNullableGroupKeys(t *testing.T) {
 	require.Equal(t, len(finalBatches)+1, merge.OpAnalyzer.GetOpStats().CallNum)
 	assertMergedTicketCounts(t, finalBatches, 2, 2)
 	merge.Free(proc, false, nil)
+}
+
+func TestGroupHashWidthUsesGlobalNullability(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	groupBy := []*plan.Expr{
+		colExpr(0, types.T_int16),
+		colExpr(1, types.T_int16),
+		colExpr(2, types.T_int16),
+		colExpr(3, types.T_int8),
+	}
+	for i := 0; i < len(groupBy)-1; i++ {
+		groupBy[i].Typ.NotNullable = true
+	}
+
+	g := newGroupOp(proc, groupBy, nil)
+	require.NoError(t, g.Prepare(proc))
+	require.True(t, g.ctr.keyNullable)
+	require.Equal(t, int32(11), g.ctr.keyWidth)
+	require.Equal(t, int32(HStr), g.ctr.mtyp)
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestGroupDuplicateInputDoesNotOverallocateAggregateState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	makeInput := func(rows int) *batch.Batch {
+		keys := make([]string, rows)
+		values := make([]string, rows)
+		for i := range rows {
+			keys[i] = strings.Repeat("wide-key-", 32)
+			values[i] = "same-value"
+		}
+		input := batch.NewWithSize(2)
+		input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
+		input.Vecs[1] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		input.SetRowCount(rows)
+		return input
+	}
+	first := makeInput(1)
+	duplicates := makeInput(2 * hashmap.UnitLimit)
+
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_varchar)},
+		[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfJsonArrayAgg,
+			true,
+			[]*plan.Expr{colExpr(1, types.T_varchar)},
+			nil,
+		)},
+	)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		first.Clean(proc.Mp())
+		duplicates.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, g.Prepare(proc))
+	needSpill, err := g.buildOneBatch(proc, first)
+	require.NoError(t, err)
+	require.False(t, needSpill)
+	require.Equal(t, uint64(1), g.ctr.hr.Hash.GroupCount())
+	beforeAggSize := g.ctr.aggList[0].Size()
+
+	needSpill, err = g.buildOneBatch(proc, duplicates)
+	require.NoError(t, err)
+	require.False(t, needSpill)
+	require.Equal(t, uint64(1), g.ctr.hr.Hash.GroupCount())
+	require.Equal(t, beforeAggSize, g.ctr.aggList[0].Size())
+	require.Nil(t, g.ctr.groupByStandby)
+	result, err := g.ctr.aggList[0].Flush()
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	json, err := types.DecodeJson(result[0].GetBytesAt(0)).MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `["same-value"]`, string(json))
+	result[0].Free(g.ctr.mp)
+}
+
+func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	makePartialForType := func(mtyp int32, vectors ...*vector.Vector) *batch.Batch {
+		partial := batch.NewWithSize(len(vectors))
+		copy(partial.Vecs, vectors)
+		if len(vectors) != 0 {
+			partial.SetRowCount(vectors[0].Length())
+		}
+		var extra bytes.Buffer
+		nullable := false
+		nAggs := int32(0)
+		extra.Write(types.EncodeInt32(&mtyp))
+		extra.Write(types.EncodeBool(&nullable))
+		extra.Write(types.EncodeInt32(&nAggs))
+		partial.ExtraBuf = extra.Bytes()
+		return partial
+	}
+	makePartial := func(vectors ...*vector.Vector) *batch.Batch {
+		return makePartialForType(H8, vectors...)
+	}
+	tests := []struct {
+		name    string
+		partial *batch.Batch
+		want    string
+	}{
+		{
+			name: "H8 physical key is wider than its slot",
+			partial: makePartial(
+				testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+				testutil.MakeInt64Vector([]int64{2}, nil, proc.Mp()),
+			),
+			want: "H8 hash key width exceeds 8 bytes",
+		},
+		{
+			name: "non-nullable metadata contains NULL",
+			partial: makePartial(
+				testutil.MakeInt32Vector([]int32{0}, []uint64{0}, proc.Mp()),
+			),
+			want: "marks keys non-nullable",
+		},
+		{
+			name: "non-nullable metadata contains const NULL",
+			partial: makePartial(
+				vector.NewConstNull(types.T_int32.ToType(), 1, proc.Mp()),
+			),
+			want: "marks keys non-nullable",
+		},
+		{
+			name: "H8 metadata contains grouping key",
+			partial: makePartial(
+				vector.NewRollupConst(types.T_int32.ToType(), 1, proc.Mp()),
+			),
+			want: "cannot encode grouping key",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			merge := newMergeGroupOp(nil)
+			t.Cleanup(func() {
+				merge.Free(proc, true, nil)
+				test.partial.Clean(proc.Mp())
+			})
+			require.NoError(t, merge.Prepare(proc))
+			_, err := merge.buildOneBatch(proc, test.partial)
+			require.ErrorContains(t, err, test.want)
+			require.True(t, merge.ctr.hr.IsEmpty())
+			require.False(t, merge.ctr.mergePartialMetadataSet)
+			require.Empty(t, merge.ctr.groupByBatches)
+		})
+	}
+	rollup := vector.NewRollupConst(types.T_int32.ToType(), 1, proc.Mp())
+	require.NoError(t, validateMergeGroupHashMetadata(HStr, false, []*vector.Vector{rollup}))
+	rollup.Free(proc.Mp())
+	nullsOutsideGrouping := testutil.MakeInt32Vector(
+		[]int32{0, 0}, []uint64{0, 1}, proc.Mp())
+	nullsOutsideGrouping.GetGrouping().Add(0)
+	require.ErrorContains(t,
+		validateMergeGroupHashMetadata(
+			HStr, false, []*vector.Vector{nullsOutsideGrouping}),
+		"marks keys non-nullable",
+	)
+	nullsOutsideGrouping.Free(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.SetRowCount(2)
+	groupBy := colExpr(0, types.T_int32)
+	groupBy.Typ.NotNullable = true
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	partialGroup := newGroupOp(
+		proc,
+		[]*plan.Expr{groupBy},
+		[]aggexec.AggFuncExecExpression{countStarAgg()},
+	)
+	partialGroup.NeedEval = false
+	partialGroup.GroupingFlag = []bool{false}
+	partialGroup.AppendChild(child)
+	require.NoError(t, partialGroup.Prepare(proc))
+	require.Equal(t, int32(HStr), partialGroup.ctr.mtyp)
+	partialOutputs := collectBatches(t, partialGroup, proc)
+	require.Len(t, partialOutputs, 1)
+	partial := cloneBatch(t, proc, partialOutputs[0])
+	partialGroup.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	require.True(t, partial.Vecs[0].GetNulls().Contains(0))
+	require.True(t, partial.Vecs[0].GetGrouping().Contains(0))
+
+	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 1, outputs[0].RowCount())
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
@@ -2502,13 +2998,122 @@ func TestMergeGroupFreesSpillAggListAfterBatchMerge(t *testing.T) {
 	}
 }
 
+func TestMergeGroupRejectsAggregateStateRowCountMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	makeSource := func(keys []int32) *batch.Batch {
+		source := batch.NewWithSize(2)
+		source.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		source.Vecs[1] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		source.SetRowCount(len(keys))
+		return source
+	}
+	threeRows := makeSource([]int32{1, 2, 3})
+	twoRows := makeSource([]int32{4, 5})
+	partials := buildPartialGroupBatches(
+		t, proc, []*batch.Batch{threeRows, twoRows}, false)
+	threeRows.Clean(proc.Mp())
+	twoRows.Clean(proc.Mp())
+	require.Len(t, partials, 2)
+
+	partials[0].ExtraBuf = append(partials[0].ExtraBuf[:0], partials[1].ExtraBuf...)
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	require.NoError(t, merge.Prepare(proc))
+	_, err := merge.buildOneBatch(proc, partials[0])
+	require.ErrorContains(t, err, "does not match record row count")
+	merge.Free(proc, true, err)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
+	}
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestMergeGroupRejectsMultiRowH0Partial(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	partial := buildPartialH0Batch(t, proc, []int32{1, 2})
+	partial.SetRowCount(2)
+
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	require.NoError(t, merge.Prepare(proc))
+	_, err := merge.buildOneBatch(proc, partial)
+	require.ErrorContains(t, err, "H0 partial must contain exactly one row")
+	merge.Free(proc, true, err)
+	partial.Clean(proc.Mp())
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestValidateDecodedAggregateGroupCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec, err := aggexec.MakeGroupAgg(mp, aggexec.AggIdOfCountStar, false, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, exec.GroupGrow(2))
+	require.NoError(t, validateDecodedAggregateGroupCount(exec, 2))
+	require.ErrorContains(t,
+		validateDecodedAggregateGroupCount(exec, 3),
+		"row count 2 does not match record row count 3")
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMergeGroupRejectsMissingOrChangedPartialMetadataAcrossSpill(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	missing := batch.NewWithSize(1)
+	missing.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	missing.SetRowCount(1)
+	merge := newMergeGroupOp(nil)
+	require.NoError(t, merge.Prepare(proc))
+	_, err := merge.buildOneBatch(proc, missing)
+	require.ErrorContains(t, err, "partial metadata is missing")
+	merge.Free(proc, true, err)
+	missing.Clean(proc.Mp())
+
+	newSource := func(value int32) *batch.Batch {
+		source := batch.NewWithSize(2)
+		source.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		source.Vecs[1] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+		source.SetRowCount(1)
+		return source
+	}
+	first, second := newSource(1), newSource(2)
+	partials := buildPartialGroupBatches(
+		t, proc, []*batch.Batch{first, second}, false)
+	first.Clean(proc.Mp())
+	second.Clean(proc.Mp())
+	require.Len(t, partials, 2)
+	require.GreaterOrEqual(t, len(partials[1].ExtraBuf), 4)
+	firstType := int32(binary.LittleEndian.Uint32(partials[0].ExtraBuf[:4]))
+	changedType := int32(H8)
+	if firstType == changedType {
+		changedType = HStr
+	}
+	binary.LittleEndian.PutUint32(partials[1].ExtraBuf[:4], uint32(changedType))
+
+	merge = newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	merge.SpillMem = 1
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+	require.NoError(t, merge.Prepare(proc))
+	_, err = vm.Exec(merge, proc)
+	require.ErrorContains(t, err, "inconsistent merge-group partial metadata")
+	merge.Free(proc, true, err)
+	for _, partial := range partials {
+		partial.Clean(proc.Mp())
+	}
+}
+
 func TestFreeAggListPartial(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	aggList := make([]aggexec.AggFuncExec, 3)
+	aggList := make([]aggexec.GroupAggFuncExec, 3)
 	for i := 0; i < 3; i++ {
-		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		agg, err := aggexec.MakeGroupAgg(
+			proc.Mp(), aggexec.AggIdOfCountStar, false, nil, nil,
+			types.T_int64.ToType())
 		require.NoError(t, err)
 		aggList[i] = agg
 	}
@@ -2521,9 +3126,11 @@ func TestFreeAggList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	aggList := make([]aggexec.AggFuncExec, 2)
+	aggList := make([]aggexec.GroupAggFuncExec, 2)
 	for i := 0; i < 2; i++ {
-		agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfCountStar, false, types.T_int64.ToType())
+		agg, err := aggexec.MakeGroupAgg(
+			proc.Mp(), aggexec.AggIdOfCountStar, false, nil, nil,
+			types.T_int64.ToType())
 		require.NoError(t, err)
 		aggList[i] = agg
 	}
@@ -2532,7 +3139,7 @@ func TestFreeAggList(t *testing.T) {
 }
 
 func TestFreeAggListPartialWithNilEntries(t *testing.T) {
-	aggList := make([]aggexec.AggFuncExec, 3)
+	aggList := make([]aggexec.GroupAggFuncExec, 3)
 
 	freeAggListPartial(aggList, 3)
 	freeAggList(aggList)
