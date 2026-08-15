@@ -232,7 +232,7 @@ func (bat *Batch) AppendPrepareParamKindMetadata(w io.Writer) error {
 			}
 			for row := 0; row < vec.Length(); row++ {
 				kind := vec.GetPrepareParamKindAt(row)
-				if kind > vector.PrepareParamBoolean {
+				if kind > vector.PrepareParamKindMax {
 					return moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
 				encoded := byte(kind)
@@ -282,13 +282,13 @@ func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
 				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
 			}
 			for row := 0; row < vec.Length(); row++ {
-				if vec.GetPrepareParamKindAt(row) > vector.PrepareParamBoolean {
+				if vec.GetPrepareParamKindAt(row) > vector.PrepareParamKindMax {
 					return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
 			}
 			total += uint64(1 + 4 + vec.Length())
 		} else if vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone {
-			if vec.GetPrepareParamKind() > vector.PrepareParamBoolean {
+			if vec.GetPrepareParamKind() > vector.PrepareParamKindMax {
 				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 			}
 			total += 2
@@ -684,7 +684,7 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 				return fail(err)
 			}
 			if vector.PrepareParamKind(kind) == vector.PrepareParamNone ||
-				vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
+				vector.PrepareParamKind(kind) > vector.PrepareParamKindMax {
 				return fail(moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind"))
 			}
 			bat.Vecs[i].SetPrepareParamKind(vector.PrepareParamKind(kind))
@@ -842,7 +842,7 @@ func parsePrepareParamKindBatchTrailer(
 		case prepareParamKindBatchModeUniform:
 			kind, err := types.ReadByte(reader)
 			if err != nil || vector.PrepareParamKind(kind) == vector.PrepareParamNone ||
-				vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
+				vector.PrepareParamKind(kind) > vector.PrepareParamKindMax {
 				return nil, 0, moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind")
 			}
 			records[i].kind = vector.PrepareParamKind(kind)
@@ -865,7 +865,7 @@ func parsePrepareParamKindBatchTrailer(
 			records[i].encodedRows = ext[rowStart:rowEnd]
 			for _, encoded := range records[i].encodedRows {
 				kind := encoded &^ prepareParamKindBatchBinaryFlag
-				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
+				if vector.PrepareParamKind(kind) > vector.PrepareParamKindMax {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}
 			}

@@ -926,13 +926,17 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
-	resultType := result.GetType()
-	if len(expr.flowControlBinaryStrings) == 0 &&
-		(resultType.Charset == types.CharsetBinary || resultType.Oid == types.T_binary ||
-			resultType.Oid == types.T_varbinary || resultType.Oid == types.T_blob) {
-		expr.ensureFlowControlBinaryStringRows(rows)
+	// COALESCE keeps the semantics of the first non-NULL value. IF/CASE/IFNULL
+	// instead use their statically resolved common string domain, so a binary
+	// arm makes every selected row binary regardless of which arm supplied it.
+	if expr.fid == function.COALESCE && len(expr.flowControlBinaryStrings) == 0 {
+		resultType := result.GetType()
+		if resultType.Charset == types.CharsetBinary || resultType.Oid == types.T_binary ||
+			resultType.Oid == types.T_varbinary || resultType.Oid == types.T_blob {
+			expr.ensureFlowControlBinaryStringRows(rows)
+		}
 	}
-	if len(expr.flowControlBinaryStrings) != 0 {
+	if expr.fid == function.COALESCE && len(expr.flowControlBinaryStrings) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
 		if err := result.SetSelectedValueBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
 			return err

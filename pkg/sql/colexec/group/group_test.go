@@ -836,7 +836,7 @@ func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 		{
 			name: "out-of-range",
 			mutate: func(extra []byte, stateOffset int) []byte {
-				extra[stateOffset] = byte(vector.PrepareParamBoolean) + 2
+				extra[stateOffset] = byte(vector.PrepareParamKindMax) + 2
 				return extra
 			},
 		},
@@ -888,9 +888,9 @@ func TestMergeGroupRejectsInvalidPrepareParamKindState(t *testing.T) {
 				require.ErrorIs(t, err, tc.wantErr)
 			} else {
 				if partial.ExtraBuf[trailerOffset+3] == prepareParamKindTrailerRowsVersion {
-					require.ErrorContains(t, err, "invalid aggregate prepared parameter row kind 6")
+					require.ErrorContains(t, err, "invalid aggregate prepared parameter row kind 8")
 				} else {
-					require.ErrorContains(t, err, "invalid aggregate prepared parameter state 6")
+					require.ErrorContains(t, err, "invalid aggregate prepared parameter state 8")
 				}
 			}
 		})

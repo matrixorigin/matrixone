@@ -233,7 +233,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.True(t, cw.proc.GetPrepareParamIsBinaryString(0))
 	require.False(t, cw.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, plan2.ParamValue{
-		Value: "AB\x00\x00", BinaryString: true, PrepareParamKind: vector.PrepareParamBinaryUserVariable,
+		Value: "AB\x00\x00", BinaryString: true, PrepareParamKind: vector.PrepareParamBinaryProtocol,
 	}, cw.paramVals[0])
 	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
 

@@ -7642,7 +7642,7 @@ func strToBit(
 				var inRange bool
 				var err error
 				switch kind {
-				case vector.PrepareParamInteger:
+				case vector.PrepareParamInteger, vector.PrepareParamBinaryUserVariable, vector.PrepareParamBinaryProtocol:
 					value, inRange, err = preparedIntegerToBit(input, bitSize)
 				case vector.PrepareParamFloat:
 					value, inRange, err = preparedFloatToBit(input, bitSize)

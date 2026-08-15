@@ -55,7 +55,11 @@ const (
 	PrepareParamDecimal
 	PrepareParamBoolean
 	PrepareParamBinaryUserVariable
-	prepareParamKindMax = PrepareParamBinaryUserVariable
+	// PrepareParamBinaryProtocol is the parameter-marker form of a binary user
+	// variable.  It retains numeric/JSON conversion provenance while REGEXP
+	// applies the same latin1 boundary as a COM_STMT BLOB parameter.
+	PrepareParamBinaryProtocol
+	PrepareParamKindMax = PrepareParamBinaryProtocol
 )
 
 // MergePrepareParamKinds folds two observed source categories.  Equal
@@ -654,7 +658,7 @@ func (v *Vector) SetPrepareParamKindsFromReader(r io.Reader, n int, mp *mpool.MP
 			return err
 		}
 		kind := PrepareParamKind(one[0])
-		if kind > prepareParamKindMax {
+		if kind > PrepareParamKindMax {
 			if owner != nil {
 				mpool.FreeSlice(owner, kinds)
 			}
@@ -719,7 +723,7 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 			"prepared parameter row count %d does not match vector length %d", n, v.length)
 	}
 	if binaryMask == 0 || binaryMask&(binaryMask-1) != 0 ||
-		binaryMask <= byte(prepareParamKindMax) {
+		binaryMask <= byte(PrepareParamKindMax) {
 		return moerr.NewInvalidInputNoCtxf("invalid binary-string row mask %d", binaryMask)
 	}
 	if n == 0 {
@@ -743,7 +747,7 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 			return err
 		}
 		kind := PrepareParamKind(one[0] &^ binaryMask)
-		if kind > prepareParamKindMax {
+		if kind > PrepareParamKindMax {
 			releaseKinds()
 			return moerr.NewInvalidInputNoCtxf(
 				"invalid prepared parameter row kind %d", kind)

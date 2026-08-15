@@ -921,6 +921,10 @@ func initExecuteStmtParamWithResolverInSession(
 				kinds[i] = kind
 			}
 			if mysqlPrepareParamIsBinaryString(mysqlType) {
+				if kinds == nil {
+					kinds = make([]vector.PrepareParamKind, paramCount)
+				}
+				kinds[i] = vector.PrepareParamBinaryProtocol
 				if binaryString == nil {
 					binaryString = make([]bool, paramCount)
 				}
@@ -1162,6 +1166,10 @@ func buildExecuteUserParams(
 			if err != nil {
 				return
 			}
+		}
+		if paramBinaryString[i] {
+			paramKinds[i] = vector.PrepareParamBinaryProtocol
+			paramIsBin[i] = false
 		}
 		err = util.AppendAnyToStringVector(proc, param, params)
 		if err != nil {

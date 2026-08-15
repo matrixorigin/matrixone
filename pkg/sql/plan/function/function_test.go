@@ -640,8 +640,8 @@ func TestConcatFunctionsPreserveStringCollation(t *testing.T) {
 			name:        "binary string keeps varbinary result",
 			function:    "concat",
 			inputs:      []types.Type{general, types.T_varbinary.ToType()},
-			wantOID:     types.T_varbinary,
-			wantCharset: types.T_varbinary.ToType().Charset,
+			wantOID:     types.T_blob,
+			wantCharset: types.T_blob.ToType().Charset,
 		},
 	}
 

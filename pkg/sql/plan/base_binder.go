@@ -4330,7 +4330,24 @@ func bindConvertUsingCharset(ctx context.Context, args []*plan.Expr) error {
 	}
 	if charset == uint32(types.CharsetBinary) && !types.T(args[0].Typ.Id).IsMySQLString() {
 		target := types.T_varchar.ToType()
-		target.Width = 4
+		sourceType := makeTypeByPlan2Expr(args[0])
+		width, known := controlFlowStringWidth(args[0], sourceType)
+		if !known {
+			width, known = temporalDisplayWidthForVarchar(sourceType)
+		}
+		if !known {
+			switch sourceType.Oid {
+			case types.T_bool:
+				width = 5
+			case types.T_year:
+				width = 4
+			case types.T_uuid:
+				width = 36
+			default:
+				width = types.MaxVarcharLen
+			}
+		}
+		target.Width = width
 		target.Charset = types.CharsetBinary
 		casted, err := appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
 		if err != nil {
@@ -4418,7 +4435,7 @@ func regexpOperandsHaveCharacterSetMismatch(left, right *Expr) bool {
 }
 
 func regexpOperandIsBinaryString(expr *Expr) bool {
-	if expr == nil || expr.GetP() != nil {
+	if expr == nil || expr.GetP() != nil || expr.GetV() != nil {
 		return false
 	}
 	// MySQL excludes NULL_ITEM itself, but not a typed expression such as
@@ -4447,7 +4464,7 @@ func regexpOperandIsBinaryString(expr *Expr) bool {
 }
 
 func regexpOperandIsBinaryCompatible(expr *Expr) bool {
-	if expr == nil || expr.GetP() != nil || regexpOperandIsBinaryString(expr) {
+	if expr == nil || expr.GetP() != nil || expr.GetV() != nil || regexpOperandIsBinaryString(expr) {
 		return true
 	}
 	if lit := expr.GetLit(); lit != nil && lit.Isnull {

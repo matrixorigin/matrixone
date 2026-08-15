@@ -212,6 +212,8 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		{name: "float", kind: vector.PrepareParamFloat, seen: true, encoded: 3},
 		{name: "decimal", kind: vector.PrepareParamDecimal, seen: true, encoded: 4},
 		{name: "boolean", kind: vector.PrepareParamBoolean, seen: true, encoded: 5},
+		{name: "binary-user-variable", kind: vector.PrepareParamBinaryUserVariable, seen: true, encoded: 6},
+		{name: "binary-protocol", kind: vector.PrepareParamBinaryProtocol, seen: true, encoded: 7},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,7 +228,7 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		})
 	}
 	for _, kind := range []vector.PrepareParamKind{
-		vector.PrepareParamBoolean + 1,
+		vector.PrepareParamKindMax + 1,
 		vector.PrepareParamKind(255),
 	} {
 		encoded, ok := encodePrepareParamKindState(kind, true)
@@ -234,7 +236,7 @@ func TestPrepareParamKindStateCodec(t *testing.T) {
 		require.Zero(t, encoded)
 	}
 
-	for _, encoded := range []byte{6, 255} {
+	for _, encoded := range []byte{8, 255} {
 		kind, seen, ok := decodePrepareParamKindState(encoded)
 		require.False(t, ok)
 		require.False(t, seen)

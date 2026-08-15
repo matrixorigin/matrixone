@@ -149,7 +149,9 @@ func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(result, []byte("binary"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
 
-	expr := &FunctionExpressionExecutor{}
+	expr := &FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{fid: function.COALESCE},
+	}
 	expr.resetFlowControlPrepareParamKind()
 	expr.observeFlowControlPrepareParamKind(binary, []bool{true, false})
 	expr.observeFlowControlPrepareParamKind(text, []bool{false, true})

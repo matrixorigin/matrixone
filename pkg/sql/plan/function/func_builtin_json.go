@@ -2165,6 +2165,8 @@ func preparedTextToJSONValue(
 			return nil, moerr.NewInvalidInputf(ctx, "invalid prepared boolean JSON value %q", value)
 		}
 		return boolean, nil
+	case vector.PrepareParamBinaryUserVariable, vector.PrepareParamBinaryProtocol:
+		return value, nil
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "unsupported prepared parameter kind %d", kind)
 	}

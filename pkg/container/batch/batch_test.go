@@ -756,7 +756,7 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("5"), false, mp))
 	source.Vecs[0].SetPrepareParamKinds([]vector.PrepareParamKind{
-		vector.PrepareParamFloat,
+		vector.PrepareParamBinaryUserVariable,
 		vector.PrepareParamNone,
 	})
 	require.NoError(t, source.Vecs[0].SetBinaryStringRows([]bool{true, false}))
@@ -774,7 +774,7 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 
 	decoded := NewOffHeapEmpty()
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
-	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamBinaryUserVariable, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
 	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))

@@ -1169,6 +1169,7 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 }
 
 func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	defer result.GetResultVector().SetIsBinaryString(true)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// After builtInCharCheck, parameters are either integer or string types.
@@ -4337,37 +4338,6 @@ func opUnaryBytesToBytesByBinaryRow(
 			return err
 		}
 		if err := setBinaryStringResultAt(result, row, binaryString, proc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func opBinaryBytesBytesToFixedByBinaryRow[Tr types.FixedSizeTExceptStrType](
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	length int,
-	fn func([]byte, []byte, bool) (Tr, error),
-	selectList *FunctionSelectList,
-) error {
-	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	p2 := vector.GenerateFunctionStrParameter(parameters[1])
-	rs := vector.MustFunctionResult[Tr](result)
-	var zero Tr
-	for row := 0; row < length; row++ {
-		v1, null1 := p1.GetStrValue(uint64(row))
-		v2, null2 := p2.GetStrValue(uint64(row))
-		if null1 || null2 || selectList != nil && selectList.Contains(uint64(row)) {
-			if err := rs.Append(zero, true); err != nil {
-				return err
-			}
-			continue
-		}
-		value, err := fn(v1, v2, parameters[0].GetIsBinaryStringAt(row))
-		if err != nil {
-			return err
-		}
-		if err = rs.Append(value, false); err != nil {
 			return err
 		}
 	}

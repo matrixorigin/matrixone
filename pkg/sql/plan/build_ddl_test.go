@@ -1835,14 +1835,16 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 			char(65) char_value,
 			_binary 'a' binary_introducer,
 			char(228, 189, 160 using utf8mb4) char_using,
-			convert(X'61' using binary) converted`, 1)
+			convert(X'61' using binary) converted,
+			convert(123456 using binary) converted_integer,
+			lpad(X'61', 70000, 'x') padded_blob`, 1)
 	require.NoError(t, err)
 	defer stmt.Free()
 
 	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
 	require.NoError(t, err)
 	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
-	require.GreaterOrEqual(t, len(cols), 8)
+	require.GreaterOrEqual(t, len(cols), 10)
 	require.Equal(t, int32(types.T_varbinary), cols[0].Typ.Id)
 	require.Equal(t, int32(5), cols[0].Typ.Width)
 	require.Equal(t, int32(types.T_varbinary), cols[1].Typ.Id)
@@ -1851,12 +1853,16 @@ func TestBuildCTASUsesBinaryFunctionResultWidth(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), cols[idx+2].Typ.Id, "column %d", idx+2)
 		require.Equal(t, width, cols[idx+2].Typ.Width, "column %d", idx+2)
 	}
-	require.Equal(t, int32(types.T_varchar), cols[4].Typ.Id)
+	require.Equal(t, int32(types.T_varbinary), cols[4].Typ.Id)
+	require.Equal(t, int32(4), cols[4].Typ.Width)
 	require.Equal(t, int32(types.T_varbinary), cols[5].Typ.Id)
 	require.Equal(t, int32(1), cols[5].Typ.Width)
 	require.Equal(t, int32(types.T_varchar), cols[6].Typ.Id)
 	require.Equal(t, int32(types.T_varbinary), cols[7].Typ.Id)
 	require.Equal(t, int32(1), cols[7].Typ.Width)
+	require.Equal(t, int32(types.T_varbinary), cols[8].Typ.Id)
+	require.Equal(t, int32(7), cols[8].Typ.Width)
+	require.Equal(t, int32(types.T_blob), cols[9].Typ.Id)
 	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL,
 		p.GetDdl().GetCreateTable().GetCreateAsSelectSql(), 1)
 	require.NoError(t, err)

@@ -315,8 +315,8 @@ func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
 	require.NoError(t, regexpResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
 		[]*vector.Vector{binary, dot}, regexpResult, proc, binary.Length(), nil))
-	require.True(t, regexpResult.GetResultVector().GetIsBinaryString())
-	require.Equal(t, []string{string([]byte{0xe4}), string([]byte{0xff})},
+	require.False(t, regexpResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []string{"ä", "ÿ"},
 		vector.InefficientMustStrCol(regexpResult.GetResultVector()))
 
 	regPatterns := testutil.MakeVarlenaVector(
@@ -348,7 +348,7 @@ func TestBinaryStringFunctionsUseByteSemantics(t *testing.T) {
 	require.NoError(t, regexpReplaceResult.PreExtendAndReset(binary.Length()))
 	require.NoError(t, newOpBuiltInRegexp().builtInRegexpReplace(
 		[]*vector.Vector{binary, dot, replacements}, regexpReplaceResult, proc, binary.Length(), nil))
-	require.True(t, regexpReplaceResult.GetResultVector().GetIsBinaryString())
+	require.False(t, regexpReplaceResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []string{"xxxx", "xx"}, vector.InefficientMustStrCol(regexpReplaceResult.GetResultVector()))
 
 	delimiters := testutil.MakeVarlenaVector(
@@ -445,7 +445,7 @@ func TestBinaryStringScalarResultsPropagateMetadata(t *testing.T) {
 	require.NoError(t, charResult.PreExtendAndReset(1))
 	require.NoError(t, builtInChar(
 		[]*vector.Vector{charInput}, charResult, proc, 1, nil))
-	require.False(t, charResult.GetResultVector().GetIsBinaryString())
+	require.True(t, charResult.GetResultVector().GetIsBinaryString())
 	require.Equal(t, []byte{0xe4, 0xbd, 0xa0}, charResult.GetResultVector().GetBytesAt(0))
 
 	charset := testutil.MakeScalarVarchar("utf8mb4", 1, mp)
@@ -537,8 +537,8 @@ func TestBinaryAuxiliaryArgumentsDoNotChangeSubjectSemantics(t *testing.T) {
 	require.NoError(t, regexpResult.PreExtendAndReset(1))
 	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
 		[]*vector.Vector{regexpSubject, pattern}, regexpResult, proc, 1, nil))
-	require.Equal(t, []byte{'?'}, regexpResult.GetResultVector().GetBytesAt(0))
-	require.False(t, regexpResult.GetResultVector().GetIsBinaryString())
+	require.Equal(t, []byte{0xe4}, regexpResult.GetResultVector().GetBytesAt(0))
+	require.True(t, regexpResult.GetResultVector().GetIsBinaryString())
 }
 
 func TestCoalescePreservesSelectedRowBinarySemantics(t *testing.T) {

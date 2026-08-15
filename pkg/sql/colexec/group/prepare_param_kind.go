@@ -128,7 +128,7 @@ func writePrepareParamKindTrailer(
 		// preserving aggregate supplies a more precise per-chunk summary
 		// below.  This keeps malformed internal state from being silently
 		// hidden by the exact-row fast path.
-		if seen && kind > vector.PrepareParamBoolean {
+		if seen && kind > vector.PrepareParamKindMax {
 			return moerr.NewInternalErrorf(ctx,
 				"invalid aggregate prepared parameter kind %d", kind)
 		}
@@ -155,7 +155,7 @@ func writePrepareParamKindTrailer(
 				if i < len(rows) && len(rows[i]) != 0 {
 					kind = rows[i][row]
 				}
-				if kind > vector.PrepareParamBoolean {
+				if kind > vector.PrepareParamKindMax {
 					return moerr.NewInternalErrorf(ctx,
 						"invalid aggregate prepared parameter row kind %d", kind)
 				}
@@ -302,7 +302,7 @@ func readPrepareParamKindTrailer(
 					binary[row] = encodedRow&prepareParamKindTrailerRowsMarker != 0
 					kind &^= prepareParamKindTrailerRowsMarker
 				}
-				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
+				if vector.PrepareParamKind(kind) > vector.PrepareParamKindMax {
 					return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
 						"invalid aggregate prepared parameter row kind %d", kind)
 				}
@@ -365,7 +365,7 @@ func encodePrepareParamKindState(kind vector.PrepareParamKind, seen bool) (byte,
 	if !seen {
 		return 0, true
 	}
-	if kind > vector.PrepareParamBoolean {
+	if kind > vector.PrepareParamKindMax {
 		return 0, false
 	}
 	return byte(kind) + 1, true
@@ -380,7 +380,7 @@ func decodePrepareParamKindState(encoded byte) (
 		return vector.PrepareParamNone, false, true
 	}
 	kind := vector.PrepareParamKind(encoded - 1)
-	if kind > vector.PrepareParamBoolean {
+	if kind > vector.PrepareParamKindMax {
 		return vector.PrepareParamNone, false, false
 	}
 	return kind, true, true

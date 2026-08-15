@@ -466,6 +466,13 @@ func ctasBinaryStringType(ctx CompilerContext, expr *Expr) (types.Type, bool) {
 		}
 		return ctasBinaryStringType(ctx, fn.Args[0])
 	}
+	if name == "char" {
+		width := int64(len(fn.Args)) * utf8.UTFMax
+		if width > int64(types.MaxVarBinaryLen) {
+			return types.T_blob.ToType(), true
+		}
+		return types.New(types.T_varbinary, int32(width), 0), true
+	}
 	var resultType types.Type
 	found := false
 	for idx, arg := range fn.Args {
@@ -509,16 +516,17 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 	if result.Oid != types.T_varbinary {
 		result = types.New(types.T_varbinary, sourceType.Width, 0)
 	}
-	limitWidth := func(arg int) {
+	limitWidth := func(arg int) bool {
 		if arg >= len(args) {
-			return
+			return false
 		}
 		if width, ok := literalNonNegativeInt64(args[arg]); ok {
 			if width > int64(types.MaxVarBinaryLen) {
-				width = int64(types.MaxVarBinaryLen)
+				return true
 			}
 			result.Width = int32(width)
 		}
+		return false
 	}
 	switch name {
 	case "left", "right":
@@ -536,7 +544,40 @@ func ctasBinaryFunctionResultType(name string, args []*Expr, exprType, sourceTyp
 			}
 		}
 	case "lpad", "rpad":
-		limitWidth(1)
+		if limitWidth(1) {
+			return types.T_blob.ToType()
+		}
+	case "replace":
+		if len(args) >= 3 {
+			searchType := makeTypeByPlan2Expr(args[1])
+			replacementType := makeTypeByPlan2Expr(args[2])
+			if binaryType, ok := nestedBinaryLiteralStringType(args[1]); ok {
+				searchType = binaryType
+			}
+			if binaryType, ok := nestedBinaryLiteralStringType(args[2]); ok {
+				replacementType = binaryType
+			}
+			if result.Width < 0 || searchType.Width <= 0 || replacementType.Width < 0 ||
+				replacementType.Oid == types.T_blob || replacementType.Oid == types.T_text {
+				return types.T_blob.ToType()
+			}
+			replacementWidth := int64(replacementType.Width)
+			if replacementType.Oid == types.T_char || replacementType.Oid == types.T_varchar {
+				replacementWidth *= utf8.UTFMax
+			}
+			searchWidth := int64(searchType.Width)
+			if searchType.Oid == types.T_char || searchType.Oid == types.T_varchar {
+				searchWidth *= utf8.UTFMax
+			}
+			width := int64(result.Width)
+			if replacementWidth > searchWidth {
+				width = width / searchWidth * replacementWidth
+			}
+			if width > int64(types.MaxVarBinaryLen) {
+				return types.T_blob.ToType()
+			}
+			result.Width = int32(width)
+		}
 	case "insert":
 		if len(args) >= 4 {
 			if literalType, ok := nestedBinaryLiteralStringType(args[0]); ok {

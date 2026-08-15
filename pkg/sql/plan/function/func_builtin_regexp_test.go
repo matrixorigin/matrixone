@@ -493,7 +493,7 @@ func Test_BuiltIn_RegularReplace(t *testing.T) {
 		{pat: "[0-9]", str: "abcdefg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcdefgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 4, ocr: 0, expected: "abcDEfgABC"},
 		{pat: "[0-9]", str: "abcDEfg123456ABC", repl: "", pos: 7, ocr: 0, expected: "abcDEfgABC"},
-		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefgABC"},
+		{pat: "[0-9]", str: "abcDefg123456ABC", repl: "", pos: 10, ocr: 0, expected: "abcDefg12ABC"},
 	}
 
 	for i, c := range cs {
@@ -544,7 +544,7 @@ func runBinaryStringRegexpCase(
 
 	if checkResultMarker {
 		result := tcc.GetResultVectorDirectly()
-		require.True(t, result.GetIsBinaryStringAt(0))
+		require.False(t, result.GetIsBinaryStringAt(0))
 		require.False(t, result.GetIsBinaryStringAt(1))
 		require.False(t, result.GetIsBinaryStringAt(2))
 	}
@@ -813,7 +813,7 @@ func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nulls),
 				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
 			},
-			expected: []string{string([]byte{0xe4}), "你", ""},
+			expected: []string{"ä", "你", ""},
 		},
 		{
 			name: "three arguments",
@@ -822,7 +822,7 @@ func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), patterns, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 			},
-			expected: []string{string([]byte{0xbd}), string([]byte{0xbd}), ""},
+			expected: []string{"½", "a", ""},
 		},
 		{
 			name: "four arguments",
@@ -832,7 +832,7 @@ func Test_BuiltIn_BinaryStringRegexpSubstrArities(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 			},
-			expected: []string{string([]byte{0xbd}), "a", ""},
+			expected: []string{"½", "a", ""},
 		},
 	}
 
@@ -851,6 +851,7 @@ func TestBinaryProtocolBlobRegexpUsesParameterMarkerSemantics(t *testing.T) {
 	require.NoError(t, err)
 	defer input.Free(proc.Mp())
 	input.SetIsBinaryString(true)
+	input.SetPrepareParamKind(vector.PrepareParamBinaryProtocol)
 	pattern, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("."), 1, proc.Mp())
 	require.NoError(t, err)
 	defer pattern.Free(proc.Mp())
@@ -862,10 +863,11 @@ func TestBinaryProtocolBlobRegexpUsesParameterMarkerSemantics(t *testing.T) {
 	require.Equal(t, []byte{0xc3, 0xa4}, result.GetResultVector().GetBytesAt(0))
 
 	input.SetIsBin(true)
+	input.SetPrepareParamKind(vector.PrepareParamBinaryUserVariable)
 	require.NoError(t, result.PreExtendAndReset(1))
 	require.NoError(t, newOpBuiltInRegexp().builtInRegexpSubstr(
 		[]*vector.Vector{input, pattern}, result, proc, 1, nil))
-	require.Equal(t, []byte{0xe4}, result.GetResultVector().GetBytesAt(0))
+	require.Equal(t, []byte{0xc3, 0xa4}, result.GetResultVector().GetBytesAt(0))
 }
 
 func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {
@@ -904,7 +906,7 @@ func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 			},
-			expected: []int64{2, 4, 0},
+			expected: []int64{2, 2, 0},
 		},
 		{
 			name: "five arguments",
@@ -915,7 +917,7 @@ func Test_BuiltIn_BinaryStringRegexpInstrArities(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 				NewFunctionTestInput(types.T_int8.ToType(), []int8{1, 1, 1}, nil),
 			},
-			expected: []int64{3, 5, 0},
+			expected: []int64{3, 3, 0},
 		},
 	}
 
@@ -960,7 +962,7 @@ func Test_BuiltIn_BinaryStringRegexpReplaceArities(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), replacements, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 			},
-			expected: []string{string([]byte{0xe4}) + "xxx", "xx", ""},
+			expected: []string{"äxxx", "你x", ""},
 		},
 		{
 			name: "five arguments",
@@ -971,7 +973,7 @@ func Test_BuiltIn_BinaryStringRegexpReplaceArities(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1, 1}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, nil),
 			},
-			expected: []string{string([]byte{0xe4, 'x', 0xa0, 'a'}), "你x", ""},
+			expected: []string{"äx\u00a0a", "你x", ""},
 		},
 	}
 
