@@ -60,7 +60,8 @@ const (
 	MORPCVersion22     int64 = 22 // typed user-defined variable migration
 	MORPCVersion23     int64 = 23 // explicit-text runtime string provenance
 	MORPCVersion24     int64 = 24 // per-target affected-row selectors for repeated physical UPDATE targets
-	MORPCLatestVersion       = MORPCVersion24
+	MORPCVersion25     int64 = 25 // PAD SPACE comparison casts and set-operation equality keys
+	MORPCLatestVersion       = MORPCVersion25
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
