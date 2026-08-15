@@ -696,10 +696,10 @@ func sqlTaskInt64(v any) int64 {
 %type <orderBy> order_list order_by_clause order_by_opt within_group_opt
 %type <limit> limit_opt limit_clause query_limit_opt offset_clause
 %type <rankOption> rank_opt
-%type <unresolvedName> insert_column
+%type <unresolvedName> insert_target_column
 %type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
 %type <insertColumns> insert_column_list
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
@@ -5756,6 +5756,9 @@ replace_stmt:
     {
         rep := $5
         rep.Table = $3
+		target := $3.(*tree.TableName)
+		rep.TargetDatabaseName = target.SchemaName
+		rep.TargetTableName = target.ObjectName
         rep.PartitionNames = $4
         rep.Returning = $6
         $$ = rep
@@ -5857,6 +5860,9 @@ insert_no_with_stmt:
     {
         ins := $4
         ins.Table = $2
+		target := $2.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $3 != nil {
             ins.PartitionNames = $3.Names
             ins.PartitionValues = $3.Values
@@ -5869,6 +5875,9 @@ insert_no_with_stmt:
     {
         ins := $5
         ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $4 != nil {
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
@@ -5881,6 +5890,9 @@ insert_no_with_stmt:
     {
         ins := $5
         ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $4 != nil {
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
@@ -5959,13 +5971,13 @@ merge_when_clause:
             Action: tree.MergeActionDelete,
         }
     }
-|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' insert_column_list ')' VALUES '(' expression_list ')'
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
     {
         $$ = &tree.MergeClause{
             Matched: false,
             Condition: $4,
             Action: tree.MergeActionInsert,
-            InsertColumns: $8.Identifiers,
+            InsertColumns: $8,
             InsertValues: $12,
         }
     }
@@ -6096,7 +6108,7 @@ set_value_list:
     }
 
 set_value:
-    insert_column '=' expr_or_default
+    insert_target_column '=' expr_or_default
     {
         $$ = &tree.Assignment{
             Column: tree.Identifier($1.ColName()),
@@ -6106,21 +6118,21 @@ set_value:
     }
 
 insert_column_list:
-    insert_column
+    insert_target_column
     {
         $$ = tree.InsertColumns{
             Identifiers: tree.IdentifierList{tree.Identifier($1.ColName())},
             Names: []*tree.UnresolvedName{$1},
         }
     }
-|   insert_column_list ',' insert_column
+|   insert_column_list ',' insert_target_column
     {
 		$$ = $1
         $$.Identifiers = append($1.Identifiers, tree.Identifier($3.ColName()))
         $$.Names = append($1.Names, $3)
     }
 
-insert_column:
+insert_target_column:
     ident
     {
         $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
@@ -6135,6 +6147,16 @@ insert_column:
         dbName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
         tblName := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
         $$ = tree.NewUnresolvedName(dbName, tblName, $5)
+    }
+
+merge_insert_column_list:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+    }
+|   merge_insert_column_list ',' ident
+    {
+        $$ = append($1, tree.Identifier($3.Compare()))
     }
 
 values_list:
@@ -13173,14 +13195,13 @@ function_call_generic:
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
-|   VALUES '(' insert_column ')'
+|   VALUES '(' column_name_unresolved ')'
     {
-		column := tree.NewUnresolvedColName($3.ColNameOrigin())
         name := tree.NewUnresolvedColName($1)
     	$$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{column},
+            Exprs: tree.Exprs{$3},
         }
     }
 

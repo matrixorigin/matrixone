@@ -24,10 +24,10 @@ import (
 )
 
 func TestValidateInsertColumnQualifiers(t *testing.T) {
-	name := func(parts ...string) *tree.UnresolvedName {
+	name := func(lower int64, parts ...string) *tree.UnresolvedName {
 		cstrs := make([]*tree.CStr, len(parts))
 		for i, part := range parts {
-			cstrs[i] = tree.NewCStr(part, 1)
+			cstrs[i] = tree.NewCStr(part, lower)
 		}
 		return tree.NewUnresolvedName(cstrs...)
 	}
@@ -35,21 +35,24 @@ func TestValidateInsertColumnQualifiers(t *testing.T) {
 	tests := []struct {
 		name       string
 		columnName *tree.UnresolvedName
+		lower      int64
 		wantErr    string
 	}{
 		{name: "nil metadata"},
-		{name: "unqualified", columnName: name("id")},
-		{name: "matching table", columnName: name("t", "id")},
-		{name: "matching database and table", columnName: name("q1", "t", "id")},
-		{name: "case insensitive qualifiers", columnName: name("Q1", "T", "id")},
-		{name: "wrong table", columnName: name("other", "id"), wantErr: "other.id"},
-		{name: "wrong database", columnName: name("q2", "t", "id"), wantErr: "q2.t.id"},
+		{name: "unqualified", columnName: name(0, "id")},
+		{name: "matching table", columnName: name(0, "t", "id")},
+		{name: "matching database and table", columnName: name(0, "q1", "t", "id")},
+		{name: "case insensitive mode", columnName: name(1, "Q1", "T", "id"), lower: 1},
+		{name: "case sensitive table", columnName: name(0, "T", "id"), wantErr: "T.id"},
+		{name: "case sensitive database", columnName: name(0, "Q1", "t", "id"), wantErr: "Q1.t.id"},
+		{name: "wrong table", columnName: name(0, "other", "id"), wantErr: "other.id"},
+		{name: "wrong database", columnName: name(0, "q2", "t", "id"), wantErr: "q2.t.id"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := validateInsertColumnQualifiers(
-				context.Background(), []*tree.UnresolvedName{test.columnName}, "q1", "t",
+				context.Background(), []*tree.UnresolvedName{test.columnName}, "q1", "t", test.lower,
 			)
 			if test.wantErr == "" {
 				require.NoError(t, err)

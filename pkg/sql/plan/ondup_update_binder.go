@@ -53,6 +53,9 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			if !ok {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", funcExpr.Exprs[0])
 			}
+			if col.NumParts != 1 {
+				return nil, moerr.NewBadFieldError(b.GetContext(), qualifiedInsertColumnName(col), "field list")
+			}
 
 			colName := col.ColName()
 			idx, ok := b.tableDef.Name2ColIndex[colName]

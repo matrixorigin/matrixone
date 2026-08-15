@@ -215,6 +215,8 @@ func TestInsertColumnQualification(t *testing.T) {
 
 			insert, ok := stmt.(*tree.Insert)
 			require.True(t, ok)
+			require.Equal(t, tree.Identifier("db1"), insert.TargetDatabaseName)
+			require.Equal(t, tree.Identifier("t1"), insert.TargetTableName)
 			require.Equal(t, tree.IdentifierList{"id", "value"}, insert.Columns)
 			require.Len(t, insert.ColumnNames, 2)
 			for _, columnName := range insert.ColumnNames {
@@ -233,8 +235,41 @@ func TestInsertColumnQualification(t *testing.T) {
 		})
 	}
 
-	_, err := ParseOne(context.Background(),
+	caseSensitive, err := ParseOne(context.Background(),
+		"insert into CaseMode.T (CaseMode.T.id) values (1)", 0)
+	require.NoError(t, err)
+	defer caseSensitive.Free()
+	caseSensitiveInsert := caseSensitive.(*tree.Insert)
+	require.Equal(t, tree.Identifier("CaseMode"), caseSensitiveInsert.TargetDatabaseName)
+	require.Equal(t, tree.Identifier("T"), caseSensitiveInsert.TargetTableName)
+	require.Equal(t, "CaseMode", caseSensitiveInsert.ColumnNames[0].DbName())
+	require.Equal(t, "T", caseSensitiveInsert.ColumnNames[0].TblName())
+
+	_, err = ParseOne(context.Background(),
 		"insert into db1.t1 (catalog.db1.t1.id) values (1)", 1)
+	require.Error(t, err)
+}
+
+func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"insert into t(id, v) values (1, 2) on duplicate key update v = values(other.wrong.v)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	insert := stmt.(*tree.Insert)
+	valuesCall := insert.OnDuplicateUpdate[0].Expr.(*tree.FuncExpr)
+	valuesColumn := valuesCall.Exprs[0].(*tree.UnresolvedName)
+	require.Equal(t, 3, valuesColumn.NumParts)
+	require.Equal(t, "other", valuesColumn.DbNameOrigin())
+	require.Equal(t, "wrong", valuesColumn.TblNameOrigin())
+	require.Equal(t, "v", valuesColumn.ColNameOrigin())
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (id, v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (other.wrong.id, v) values (s.id, s.v)", 1)
 	require.Error(t, err)
 }
 

@@ -53,7 +53,17 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
-	if err = validateInsertColumnQualifiers(ctx.GetContext(), stmt.ColumnNames, dbName, tblName); err != nil {
+	qualifierDB := string(stmt.TargetDatabaseName)
+	if qualifierDB == "" {
+		qualifierDB = dbName
+	}
+	qualifierTable := string(stmt.TargetTableName)
+	if qualifierTable == "" {
+		qualifierTable = tblName
+	}
+	if err = validateInsertColumnQualifiers(
+		ctx.GetContext(), stmt.ColumnNames, qualifierDB, qualifierTable, ctx.GetLowerCaseTableNames(),
+	); err != nil {
 		return nil, err
 	}
 	if t.TableType == catalog.SystemSourceRel {
@@ -359,15 +369,18 @@ func validateInsertColumnQualifiers(
 	columnNames []*tree.UnresolvedName,
 	dbName string,
 	tableName string,
+	lowerCaseTableNames int64,
 ) error {
+	dbName = tree.NewCStr(dbName, lowerCaseTableNames).Compare()
+	tableName = tree.NewCStr(tableName, lowerCaseTableNames).Compare()
 	for _, columnName := range columnNames {
 		if columnName == nil {
 			continue
 		}
-		if qualifier := columnName.TblName(); qualifier != "" && !strings.EqualFold(qualifier, tableName) {
+		if qualifier := columnName.TblName(); qualifier != "" && qualifier != tableName {
 			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
 		}
-		if qualifier := columnName.DbName(); qualifier != "" && !strings.EqualFold(qualifier, dbName) {
+		if qualifier := columnName.DbName(); qualifier != "" && qualifier != dbName {
 			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
 		}
 	}
@@ -754,11 +767,13 @@ func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSel
 	}
 
 	replaceStmt := &tree.Replace{
-		Table:          stmt.Table,
-		PartitionNames: stmt.PartitionNames,
-		Columns:        stmt.Columns,
-		ColumnNames:    stmt.ColumnNames,
-		Rows:           stmt.Rows,
+		Table:              stmt.Table,
+		TargetDatabaseName: stmt.TargetDatabaseName,
+		TargetTableName:    stmt.TargetTableName,
+		PartitionNames:     stmt.PartitionNames,
+		Columns:            stmt.Columns,
+		ColumnNames:        stmt.ColumnNames,
+		Rows:               stmt.Rows,
 	}
 	return replaceStmt
 }

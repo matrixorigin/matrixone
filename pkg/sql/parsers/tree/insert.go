@@ -20,6 +20,10 @@ import "strings"
 type Insert struct {
 	statementImpl
 	Table TableExpr
+	// TargetDatabaseName and TargetTableName preserve the user-visible target
+	// identity even when resolution rewrites Table to a temporary physical name.
+	TargetDatabaseName Identifier
+	TargetTableName    Identifier
 
 	Accounts          IdentifierList
 	PartitionNames    IdentifierList

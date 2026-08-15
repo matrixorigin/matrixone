@@ -27,12 +27,14 @@ func init() {
 // the REPLACE statement.
 type Replace struct {
 	statementImpl
-	Table          TableExpr
-	PartitionNames IdentifierList
-	Columns        IdentifierList
-	ColumnNames    []*UnresolvedName
-	Rows           *Select
-	Returning      SelectExprs
+	Table              TableExpr
+	TargetDatabaseName Identifier
+	TargetTableName    Identifier
+	PartitionNames     IdentifierList
+	Columns            IdentifierList
+	ColumnNames        []*UnresolvedName
+	Rows               *Select
+	Returning          SelectExprs
 	// IsSetFormat marks the `REPLACE ... SET col = expr` form. The parser
 	// lowers it to the same Columns + ValuesClause shape as the VALUES form,
 	// so this flag is needed to keep the SET-only semantics where an RHS
