@@ -201,6 +201,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesProbeLayout(t *testing.T) {
 }
 
 func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
+	physicalKey := MakePlan2Int64ConstExprWithType(7)
 	buildSpec := &planpb.RuntimeFilterSpec{
 		Tag:         8,
 		BuildExpr:   MakePlan2Int64ConstExprWithType(1),
@@ -211,12 +212,13 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 		Expr: MakePlan2Int64ConstExprWithType(1),
 	}
 	source := &planpb.Node{
-		NodeType:               planpb.Node_FUZZY_FILTER,
-		FuzzyBuildSide:         planpb.Node_FUZZY_BUILD_SIDE_SINK,
-		IfInsertFromUnique:     true,
-		SpillMem:               64 << 10,
-		RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{probeSpec},
-		RuntimeFilterBuildList: []*planpb.RuntimeFilterSpec{buildSpec},
+		NodeType:                planpb.Node_FUZZY_FILTER,
+		FuzzyBuildSide:          planpb.Node_FUZZY_BUILD_SIDE_SINK,
+		IfInsertFromUnique:      true,
+		SpillMem:                64 << 10,
+		PhysicalEqualityKeyList: []*planpb.Expr{physicalKey},
+		RuntimeFilterProbeList:  []*planpb.RuntimeFilterSpec{probeSpec},
+		RuntimeFilterBuildList:  []*planpb.RuntimeFilterSpec{buildSpec},
 		Fuzzymessage: &planpb.OriginTableMessageForFuzzy{
 			ParentTableName:  "parent",
 			ParentUniqueCols: []*planpb.ColDef{{Name: "uk"}},
@@ -228,6 +230,7 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.FuzzyBuildSide, cloned.FuzzyBuildSide)
 	require.Equal(t, source.IfInsertFromUnique, cloned.IfInsertFromUnique)
 	require.Equal(t, source.SpillMem, cloned.SpillMem)
+	require.Equal(t, source.PhysicalEqualityKeyList, cloned.PhysicalEqualityKeyList)
 	require.Equal(t, source.RuntimeFilterProbeList,
 		cloned.RuntimeFilterProbeList)
 	require.Equal(t, source.RuntimeFilterBuildList,
@@ -235,6 +238,8 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, source.Fuzzymessage, cloned.Fuzzymessage)
 	require.NotSame(t, source.RuntimeFilterProbeList[0],
 		cloned.RuntimeFilterProbeList[0])
+	require.NotSame(t, source.PhysicalEqualityKeyList[0],
+		cloned.PhysicalEqualityKeyList[0])
 	require.NotSame(t, source.RuntimeFilterBuildList[0],
 		cloned.RuntimeFilterBuildList[0])
 	require.NotSame(t, source.Fuzzymessage, cloned.Fuzzymessage)
@@ -243,11 +248,15 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 
 	cloned.FuzzyBuildSide = planpb.Node_FUZZY_BUILD_SIDE_TABLE
 	cloned.SpillMem = 1
+	cloned.PhysicalEqualityKeyList[0].Typ.Scale = 9
 	cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale = 9
 	cloned.Fuzzymessage.ParentUniqueCols[0].Name = "changed"
 	require.Equal(t, planpb.Node_FUZZY_BUILD_SIDE_SINK,
 		source.FuzzyBuildSide)
 	require.Equal(t, int64(64<<10), source.SpillMem)
+	require.NotEqual(t,
+		cloned.PhysicalEqualityKeyList[0].Typ.Scale,
+		source.PhysicalEqualityKeyList[0].Typ.Scale)
 	require.NotEqual(t,
 		cloned.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale,
 		source.RuntimeFilterBuildList[0].BuildExpr.Typ.Scale)
