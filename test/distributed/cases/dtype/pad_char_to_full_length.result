@@ -145,10 +145,37 @@ select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
 ) q;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d
+union select c from pad_char_set_v8
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select coalesce(c, v) as x from pad_char_promoted
+union all select c from pad_char_set_v8
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
 ➤ count(*)[-5,64,0]  𝄀
 2
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+0
 prepare pad_char_stmt from
 'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
 cast(c as varchar(8)), length(cast(c as varchar(8))), hex(cast(c as varchar(8)))
@@ -276,10 +303,37 @@ select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
 ) q;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select x from (select coalesce(c, v) as x from pad_char_promoted) d
+union select c from pad_char_set_v8
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select coalesce(c, v) as x from pad_char_promoted
+union all select c from pad_char_set_v8
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
 ➤ count(*)[-5,64,0]  𝄀
 2
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
+➤ count(*)[-5,64,0]  𝄀
+0
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 ➤ length(c)[-5,64,0]  ¦  hex(c)[12,65535,0]  𝄀
 8  ¦  4D4F202020202020
