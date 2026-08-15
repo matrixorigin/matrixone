@@ -611,10 +611,24 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 }
 
 func (ctr *container) windowValue(vecIdx, rowIdx int) types.Datetime {
-	if ctr.tsOid == types.T_timestamp {
-		return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](ctr.tsVec[vecIdx])[rowIdx])
+	// The planner's timestamp window expression (mo_win_truncate) produces
+	// DATETIME keys even when the source column is TIMESTAMP.  Those keys are
+	// already in the raw-instant coordinate used by the window operator; use
+	// the vector's physical type rather than TsType to decode them.  TsType is
+	// the logical/output type and cannot be used as a cast contract here.
+	vec := ctr.tsVec[vecIdx]
+	switch vec.GetType().Oid {
+	case types.T_timestamp:
+		return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[rowIdx])
+	case types.T_date:
+		return vector.MustFixedColWithTypeCheck[types.Date](vec)[rowIdx].ToDatetime()
+	case types.T_datetime:
+		return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[rowIdx]
+	default:
+		// Keep the existing fail-fast behavior for an invalid time-window key
+		// type, while making the supported physical representations explicit.
+		panic(moerr.NewInternalErrorNoCtxf("time window key has non-temporal type %s", vec.GetType().Oid.String()))
 	}
-	return vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[vecIdx])[rowIdx]
 }
 
 func (ctr *container) zeroWindowValue() types.Datetime {
@@ -1100,7 +1114,29 @@ func appendTimestampIntervalBoundaryVector(
 			vec = nil
 		}
 	}()
-	values := vector.MustFixedColWithTypeCheck[types.Timestamp](starts)
+	// Timestamp windows may receive DATETIME keys from mo_win_truncate.  The
+	// values are already raw timestamp instants in that representation, so
+	// normalize the physical vector before applying interval arithmetic.
+	var values []types.Timestamp
+	switch starts.GetType().Oid {
+	case types.T_timestamp:
+		values = vector.MustFixedColWithTypeCheck[types.Timestamp](starts)
+	case types.T_datetime:
+		datetimeValues := vector.MustFixedColWithTypeCheck[types.Datetime](starts)
+		values = make([]types.Timestamp, len(datetimeValues))
+		for i, value := range datetimeValues {
+			values[i] = types.Timestamp(value)
+		}
+	case types.T_date:
+		dateValues := vector.MustFixedColWithTypeCheck[types.Date](starts)
+		values = make([]types.Timestamp, len(dateValues))
+		for i, value := range dateValues {
+			values[i] = types.Timestamp(value.ToDatetime())
+		}
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"timestamp window key has non-temporal type %s", starts.GetType().Oid.String())
+	}
 	for i, value := range values {
 		if starts.IsNull(uint64(i)) {
 			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
