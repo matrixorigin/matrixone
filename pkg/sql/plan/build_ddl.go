@@ -4481,21 +4481,29 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
-					err = checkFkColsAreValid(ctx, fkData, tableDef)
+					err = checkFkColsAreValid(ctx, fkData, currentTableDef)
 					if err != nil {
 						return nil, err
 					}
 					sqls, err := genSqlsForCheckFKSelfRefer(
 						ctx.GetContext(),
 						databaseName,
-						tableDef.Name,
-						tableDef.Cols,
+						currentTableDef.Name,
+						currentTableDef.Cols,
 						[]*plan.ForeignKeyDef{fkData.Def},
 					)
 					if err != nil {
 						return nil, err
 					}
 					detectSqls = append(detectSqls, sqls...)
+					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
+						return tableID == 0 || tableID == currentTableDef.TblId
+					}) {
+						// Keep the planner-only evolving parent/child state in sync.
+						// The executor materializes this relationship after the ALTER,
+						// but later actions in this statement must already observe it.
+						currentTableDef.RefChildTbls = append(currentTableDef.RefChildTbls, 0)
+					}
 				} else {
 					// get table def of parent table
 					_, parentTableDef, err := ctx.Resolve(

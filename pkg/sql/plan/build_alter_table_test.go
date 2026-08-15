@@ -575,6 +575,70 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
 }
 
+func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
+	newMock := func(withUniqueIndex, withForeignKey bool) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		tableDef := mock.ctxt.tables["t1"]
+		tableDef.TblId = 100
+		tableDef.Cols[1].Typ = tableDef.Cols[0].Typ
+		if withUniqueIndex {
+			tableDef.Indexes = []*plan.IndexDef{{
+				IndexName:  "idx_b",
+				Parts:      []string{"b"},
+				Unique:     true,
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			}}
+		}
+		if withForeignKey {
+			tableDef.Fkeys = []*plan.ForeignKeyDef{{
+				Name:                "fk_old",
+				Cols:                []uint64{tableDef.Cols[0].ColId},
+				ForeignTbl:          0,
+				ForeignCols:         []uint64{tableDef.Cols[1].ColId},
+				ReferencedIndexName: "idx_b",
+			}}
+			tableDef.RefChildTbls = []uint64{0}
+		}
+		return mock
+	}
+
+	failedMock := newMock(true, false)
+	_, err := buildSingleStmt(failedMock, t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
+		DROP INDEX idx_b`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	require.Empty(t, failedMock.ctxt.tables["t1"].Fkeys)
+	require.Equal(t, "idx_b", failedMock.ctxt.tables["t1"].Indexes[0].IndexName)
+
+	logicPlan, err := buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
+		DROP FOREIGN KEY fk_old,
+		DROP INDEX idx_b`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+
+	logicPlan, err = buildSingleStmt(newMock(true, false), t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
+		DROP FOREIGN KEY fk_new,
+		DROP INDEX idx_b`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 3)
+
+	logicPlan, err = buildSingleStmt(newMock(false, false), t, `ALTER TABLE t1
+		ADD UNIQUE KEY idx_b(b),
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b)`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+	require.Equal(t, "idx_b",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[1].GetAddFk().GetFkey().GetReferencedIndexName())
+
+	_, err = buildSingleStmt(newMock(true, false), t, `ALTER TABLE t1
+		DROP INDEX idx_b,
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b)`)
+	require.ErrorContains(t, err, "failed to add the foreign key constraint")
+}
+
 func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {

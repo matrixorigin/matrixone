@@ -199,4 +199,23 @@ alter table seq_fk drop foreign key fk_seq,
 show create table seq_fk;
 drop table seq_fk;
 
+-- ordered self-FK/index dependency state
+drop table if exists seq_self_fk_index;
+create table seq_self_fk_index(a int, b int, unique key idx_b(b));
+
+-- adding a self FK before dropping its selected unique index is rejected atomically
+alter table seq_self_fk_index
+    add constraint fk_new foreign key (a) references seq_self_fk_index(b),
+    drop index idx_b;
+show create table seq_self_fk_index;
+
+-- after the old self FK is dropped, its formerly selected index is droppable
+alter table seq_self_fk_index
+    add constraint fk_old foreign key (a) references seq_self_fk_index(b);
+alter table seq_self_fk_index
+    drop foreign key fk_old,
+    drop index idx_b;
+show create table seq_self_fk_index;
+drop table seq_self_fk_index;
+
 drop database if exists fk_self_refer4;
