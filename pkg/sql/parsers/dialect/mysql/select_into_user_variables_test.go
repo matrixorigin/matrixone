@@ -117,6 +117,7 @@ func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 		"select exists(select 1 into @bad_exists)",
 		"values row((select 1 into @bad_values))",
 		"select * from (values row((select 1 into @bad_derived_values))) d",
+		"select * from unnest((select 1 into @bad_table_function)) as u",
 		"select sample((select 1 into @bad_sample), 1 rows)",
 		"select match(((select 1 into @bad_match))) against ('x')",
 		"select 1 order by (select 1 into @bad_order)",

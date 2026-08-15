@@ -751,6 +751,9 @@ func tableExprHasInto(expr TableExpr) bool {
 		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right) || joinCondHasInto(node.Cond)
 	case *ApplyTableExpr:
 		return tableExprHasInto(node.Left) || tableExprHasInto(node.Right)
+	case *TableFunction:
+		return exprHasNestedInto(node.Func) ||
+			(node.SelectStmt != nil && selectStatementHasInto(node.SelectStmt))
 	case *StatementSource:
 		return statementHasInto(node.Statement)
 	case SelectStatement:
