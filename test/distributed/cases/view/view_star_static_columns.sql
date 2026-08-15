@@ -11,15 +11,19 @@ create table one_col(id int primary key);
 insert into one_col values (1),(2);
 create view v_expr_scalar as select (select * from one_col where id = 1) as x;
 create view v_expr_in as select a from t where a in (select * from one_col);
+create view v_expr_join as select t.a from t join one_col on t.a = one_col.id and t.a in (select * from one_col);
 
 select rel_createsql not like '%*%' as no_star, rel_createsql like '%`t`.`a`%' as has_a, rel_createsql like '%`t`.`b`%' as has_b from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname = 'v_star';
 select column_name, ordinal_position from information_schema.columns where table_schema = 'view_star_static_columns' and table_name = 'v_star' order by ordinal_position;
-select relname, rel_createsql not like '%*%' as no_star, rel_createsql like '%`one_col`.`id`%' as has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname in ('v_expr_scalar','v_expr_in') order by relname;
+select relname, rel_createsql not like '%*%' as no_star, rel_createsql like '%`one_col`.`id`%' as has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname in ('v_expr_scalar','v_expr_in','v_expr_join') order by relname;
 alter view v_expr_scalar as select (select * from one_col where id = 1) as x;
+alter view v_expr_join as select t.a from t join one_col on t.a = one_col.id and t.a in (select * from one_col);
 select rel_createsql not like '%*%' as alter_no_star, rel_createsql like '%`one_col`.`id`%' as alter_has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname = 'v_expr_scalar';
+select rel_createsql not like '%*%' as alter_no_star, rel_createsql like '%`one_col`.`id`%' as alter_has_id from mo_catalog.mo_tables where reldatabase = 'view_star_static_columns' and relname = 'v_expr_join';
 alter table one_col add column extra int default 9;
 select * from v_expr_scalar;
 select * from v_expr_in order by a;
+select * from v_expr_join order by a;
 
 alter table t add column z int default 9 first;
 alter table t add column c int default 7 after a;
@@ -46,6 +50,7 @@ alter table t drop column z2;
 select * from v_star order by a;
 
 drop view v_nested;
+drop view v_expr_join;
 drop view v_expr_in;
 drop view v_expr_scalar;
 drop view v_named;

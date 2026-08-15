@@ -355,7 +355,7 @@ func selectStatementHasStar(stmt tree.SelectStatement) bool {
 	case *tree.SelectClause:
 		return selectClauseHasStar(selectStmt)
 	case *tree.Select:
-		return selectWithHasStar(selectStmt.With) || selectStatementHasStar(selectStmt.Select)
+		return viewSelectHasStar(selectStmt)
 	case *tree.ParenSelect:
 		return selectStatementHasStar(selectStmt.Select)
 	case *tree.UnionClause:
@@ -421,15 +421,22 @@ func tableExprHasStar(table tree.TableExpr) bool {
 	case *tree.ParenTableExpr:
 		return tableExprHasStar(tableExpr.Expr)
 	case *tree.JoinTableExpr:
-		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right)
+		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right) || joinCondHasStar(tableExpr.Cond)
 	case *tree.ApplyTableExpr:
 		return tableExprHasStar(tableExpr.Left) || tableExprHasStar(tableExpr.Right)
 	case *tree.StatementSource:
 		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
 			return viewSelectHasStar(selectStmt)
 		}
+	case *tree.TableFunction:
+		return exprHasStar(tableExpr.Func)
 	}
 	return false
+}
+
+func joinCondHasStar(cond tree.JoinCond) bool {
+	onCond, ok := cond.(*tree.OnJoinCond)
+	return ok && exprHasStar(onCond.Expr)
 }
 
 func whereHasStar(where *tree.Where) bool {
@@ -652,15 +659,22 @@ func tableExprHasSampleStar(table tree.TableExpr) bool {
 	case *tree.ParenTableExpr:
 		return tableExprHasSampleStar(tableExpr.Expr)
 	case *tree.JoinTableExpr:
-		return tableExprHasSampleStar(tableExpr.Left) || tableExprHasSampleStar(tableExpr.Right)
+		return tableExprHasSampleStar(tableExpr.Left) || tableExprHasSampleStar(tableExpr.Right) || joinCondHasSampleStar(tableExpr.Cond)
 	case *tree.ApplyTableExpr:
 		return tableExprHasSampleStar(tableExpr.Left) || tableExprHasSampleStar(tableExpr.Right)
 	case *tree.StatementSource:
 		if selectStmt, ok := tableExpr.Statement.(*tree.Select); ok {
 			return viewSelectHasSampleStar(selectStmt)
 		}
+	case *tree.TableFunction:
+		return exprHasSampleStar(tableExpr.Func)
 	}
 	return false
+}
+
+func joinCondHasSampleStar(cond tree.JoinCond) bool {
+	onCond, ok := cond.(*tree.OnJoinCond)
+	return ok && exprHasSampleStar(onCond.Expr)
 }
 
 func whereHasSampleStar(where *tree.Where) bool {
@@ -794,11 +808,18 @@ func viewSelectWithExpandedStars(
 	stableWith, withRewritten := viewWithWithExpandedStars(stmt.With, expandedSelectLists)
 	stableSelect.With = stableWith
 	stableStatement, statementRewritten := viewSelectStatementWithExpandedStars(stmt.Select, expandedSelectLists)
-	if stableStatement == nil || (!withRewritten && !statementRewritten) {
+	stableSelect.Select = stableStatement
+	stableOrderBy, orderByRewritten := viewOrderByWithExpandedStars(stmt.OrderBy, expandedSelectLists)
+	stableSelect.OrderBy = stableOrderBy
+	stableLimit, limitRewritten := viewLimitWithExpandedStars(stmt.Limit, expandedSelectLists)
+	stableSelect.Limit = stableLimit
+	stableTimeWindow, timeWindowRewritten := viewTimeWindowWithExpandedStars(stmt.TimeWindow, expandedSelectLists)
+	stableSelect.TimeWindow = stableTimeWindow
+	rewritten := withRewritten || statementRewritten || orderByRewritten || limitRewritten || timeWindowRewritten
+	if stableStatement == nil || !rewritten {
 		return nil, false
 	}
-	stableSelect.Select = stableStatement
-	return &stableSelect, withRewritten || statementRewritten
+	return &stableSelect, rewritten
 }
 
 func viewSelectStatementWithExpandedStars(
@@ -1248,9 +1269,11 @@ func viewTableExprWithExpandedStars(
 		stableJoin := *tableExpr
 		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
 		right, rightRewritten := viewTableExprWithExpandedStars(tableExpr.Right, expandedSelectLists)
+		cond, condRewritten := viewJoinCondWithExpandedStars(tableExpr.Cond, expandedSelectLists)
 		stableJoin.Left = left
 		stableJoin.Right = right
-		return &stableJoin, leftRewritten || rightRewritten
+		stableJoin.Cond = cond
+		return &stableJoin, leftRewritten || rightRewritten || condRewritten
 	case *tree.ApplyTableExpr:
 		stableApply := *tableExpr
 		left, leftRewritten := viewTableExprWithExpandedStars(tableExpr.Left, expandedSelectLists)
@@ -1268,9 +1291,30 @@ func viewTableExprWithExpandedStars(
 			}
 		}
 		return &stableSource, false
+	case *tree.TableFunction:
+		stableFunction := *tableExpr
+		stableFunc, rewritten := viewExprWithExpandedStars(tableExpr.Func, expandedSelectLists)
+		if funcExpr, ok := stableFunc.(*tree.FuncExpr); ok {
+			stableFunction.Func = funcExpr
+		}
+		return &stableFunction, rewritten
 	default:
 		return table, false
 	}
+}
+
+func viewJoinCondWithExpandedStars(
+	cond tree.JoinCond,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (tree.JoinCond, bool) {
+	onCond, ok := cond.(*tree.OnJoinCond)
+	if !ok {
+		return cond, false
+	}
+	stableCond := *onCond
+	stableExpr, rewritten := viewExprWithExpandedStars(onCond.Expr, expandedSelectLists)
+	stableCond.Expr = stableExpr
+	return &stableCond, rewritten
 }
 
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {

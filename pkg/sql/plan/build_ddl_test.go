@@ -1327,6 +1327,13 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 			headings:  []string{"n_nationkey"},
 			stableCol: "`one_col`.`id`",
 		},
+		{
+			name:      "in subquery in join on",
+			viewName:  "v_join_star",
+			rootSQL:   "create view v_join_star as select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey and n.n_nationkey in (select * from one_col)",
+			headings:  []string{"n_nationkey"},
+			stableCol: "`one_col`.`id`",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1369,6 +1376,54 @@ func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
 			require.Equal(t, tt.headings, selectPlan.GetQuery().GetHeadings())
 		})
 	}
+}
+
+func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
+	const alterSQL = "alter view v_join_star as select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey and n.n_nationkey in (select * from one_col)"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             alterSQL,
+	}
+	addOneColViewStarTestTable(ctx.MockCompilerContext)
+	ctx.tables["v_join_star"] = &plan.TableDef{
+		Name:      "v_join_star",
+		TableType: catalog.SystemViewRel,
+		Cols: []*plan.ColDef{
+			{Name: "n_nationkey", OriginName: "n_nationkey", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+		},
+		ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v_join_star as select n_nationkey from nation","DefaultDatabase":"tpch","SecurityType":"DEFINER"}`},
+	}
+	ctx.objects["v_join_star"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_join_star"}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, alterSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetAlterView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Contains(t, viewData.Stmt, "`one_col`.`id`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_join_star"] = DeepCopyTableDef(tableDef, true)
+	appendOneColExtraColumn(ctx.MockCompilerContext)
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_join_star", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey"}, selectPlan.GetQuery().GetHeadings())
 }
 
 func TestStableViewSQLWithExpandedStarsRewritesAlterExpressionSubquery(t *testing.T) {
