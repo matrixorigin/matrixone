@@ -124,7 +124,9 @@ func TestTransferTable(t *testing.T) {
 
 	table.RunTTL()
 	assert.Equal(t, 1, table.Len())
-	time.Sleep(2 * time.Second)
+	// Advance the page's logical age instead of making the test depend on wall
+	// clock scheduling. The first RunTTL above still covers the unexpired path.
+	page1.SetBornTS(time.Now().Add(-page1.diskTTL - time.Second))
 	table.RunTTL()
 	assert.Equal(t, 0, table.Len())
 
