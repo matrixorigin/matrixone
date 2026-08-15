@@ -122,6 +122,7 @@ func (c RuntimeConfig) EnabledFor(accountID uint32) bool {
 
 func DefaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
+		Enable:                 true,
 		ConnectTimeout:         10 * time.Second,
 		ServerSelectionTimeout: 10 * time.Second,
 		SocketTimeout:          30 * time.Second,
