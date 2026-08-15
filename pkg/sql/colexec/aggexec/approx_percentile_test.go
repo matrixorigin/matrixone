@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"math"
 	"math/big"
+	"math/rand"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -177,6 +179,140 @@ func TestInterpolateFloat64(t *testing.T) {
 			require.True(t, math.IsInf(interpolateFloat64(test.lo, test.hi, test.frac), wantInf))
 		})
 	}
+}
+
+func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
+	if util.RaceDetectorEnabled {
+		t.Skip("allocation counts include race-detector instrumentation")
+	}
+	p := new(big.Rat)
+	_, ok := p.SetString("0.12345678901234567890123456789012345678")
+	require.True(t, ok)
+	var scratch percentileArithmeticScratch
+	loDecimal, err := types.ParseDecimal128(
+		"-9999999999999999999999999999999999999", 37, 0)
+	require.NoError(t, err)
+	hiDecimal, err := types.ParseDecimal128(
+		"9999999999999999999999999999999999999", 37, 0)
+	require.NoError(t, err)
+
+	// Warm the fixed scratch to its maximum operand sizes before measuring the
+	// steady-state group loop.
+	for range 4 {
+		_, _, fraction := scratch.ranks(math.MaxUint64, p)
+		_ = interpolateNumericWithScratch(
+			&scratch, int64(math.MinInt64), int64(math.MaxInt64), fraction)
+		_, err = scratch.interpolateDecimal(
+			loDecimal, hiDecimal, fraction, 1)
+		require.NoError(t, err)
+	}
+
+	measure := func(groups int) float64 {
+		return testing.AllocsPerRun(100, func() {
+			for group := range groups {
+				count := uint64(group%1024 + 2)
+				_, _, fraction := scratch.ranks(count, p)
+				_ = interpolateNumericWithScratch(
+					&scratch, int64(math.MinInt64), int64(math.MaxInt64), fraction)
+				_, arithmeticErr := scratch.interpolateDecimal(
+					loDecimal, hiDecimal, fraction, 1)
+				if arithmeticErr != nil {
+					panic(arithmeticErr)
+				}
+			}
+		})
+	}
+	oneGroup := measure(1)
+	manyGroups := measure(AggBatchSize)
+	require.LessOrEqual(t, manyGroups, oneGroup+1,
+		"percentile finalization arithmetic must not allocate per group")
+}
+
+func TestRationalToFloat64MatchesBigRat(t *testing.T) {
+	tests := []struct {
+		name        string
+		numerator   string
+		denominator string
+	}{
+		{
+			name:        "known integer interpolation double-rounding case",
+			numerator:   "85350208989652838370",
+			denominator: "10",
+		},
+		{
+			name:        "known positive one-ulp case",
+			numerator:   "69300763989800657980",
+			denominator: "10",
+		},
+		{
+			name:        "known retained-significand case",
+			numerator:   "1097667843359950403",
+			denominator: "1119748502510018494",
+		},
+		{
+			name:        "negative",
+			numerator:   "-12345678901234567890123456789012345678",
+			denominator: "99999999999999999999999999999999999999",
+		},
+		{
+			name:        "38-digit fraction",
+			numerator:   "12345678901234567890123456789012345678",
+			denominator: "100000000000000000000000000000000000000",
+		},
+	}
+
+	check := func(t *testing.T, numerator, denominator *big.Int) {
+		t.Helper()
+		want, exact := new(big.Rat).SetFrac(
+			new(big.Int).Set(numerator),
+			new(big.Int).Set(denominator),
+		).Float64()
+		var quotient, scaledDenominator, remainder big.Int
+		got := rationalToFloat64(
+			numerator, denominator,
+			&quotient, &scaledDenominator, &remainder)
+		require.Equal(t, want, got)
+		_ = exact
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			numerator, ok := new(big.Int).SetString(test.numerator, 10)
+			require.True(t, ok)
+			denominator, ok := new(big.Int).SetString(test.denominator, 10)
+			require.True(t, ok)
+			check(t, numerator, denominator)
+		})
+	}
+
+	// Deterministic differential coverage spans the exact SQL integer domain
+	// and percentile denominators without introducing a probabilistic test.
+	random := rand.New(rand.NewSource(25866))
+	for range 10_000 {
+		lo := int64(random.Uint64())
+		hi := int64(random.Uint64())
+		numerator := new(big.Int).SetInt64(lo)
+		difference := new(big.Int).Sub(
+			new(big.Int).SetInt64(hi), new(big.Int).SetInt64(lo))
+		fraction := random.Uint64()
+		denominator := random.Uint64() | 1
+		if fraction > denominator {
+			fraction %= denominator + 1
+		}
+		numerator.Mul(numerator, new(big.Int).SetUint64(denominator))
+		numerator.Add(numerator,
+			difference.Mul(difference, new(big.Int).SetUint64(fraction)))
+		check(t, numerator, new(big.Int).SetUint64(denominator))
+	}
+
+	// The exact reviewer counterexample is expressed as interpolation to make
+	// accidental changes to the numerator construction visible.
+	lo := new(big.Int).SetUint64(6502130858936245017)
+	hi := new(big.Int).SetUint64(8641858559155348922)
+	numerator := new(big.Int).Mul(lo, big.NewInt(10))
+	numerator.Add(numerator,
+		new(big.Int).Mul(new(big.Int).Sub(hi, lo), big.NewInt(2)))
+	check(t, numerator, big.NewInt(10))
 }
 
 func TestPercentileDecimal64Vals(t *testing.T) {
@@ -1300,9 +1436,9 @@ func TestQuantileSketchMPoolLifecycle(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	left := newQuantileSketch[int64](mp, orderedCompare[int64])
-	right := newQuantileSketch[int64](mp, orderedCompare[int64])
-	restored := newQuantileSketch[int64](mp, orderedCompare[int64])
+	left := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	right := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	restored := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
 	defer left.Free()
 	defer right.Free()
 	defer restored.Free()
@@ -1315,11 +1451,17 @@ func TestQuantileSketchMPoolLifecycle(t *testing.T) {
 
 	require.NoError(t, left.Merge(right))
 	beforeQuantile := mp.CurrNB()
-	_, _, _, err := left.Quantile(big.NewRat(1, 2))
+	var arithmetic percentileArithmeticScratch
+	loRank, hiRank, _ := arithmetic.ranks(left.count, big.NewRat(1, 2))
+	_, _, err := left.QuantileAtRanks(loRank, hiRank)
 	require.NoError(t, err)
 	require.Equal(t, beforeQuantile, mp.CurrNB(), "quantile scratch space must be released")
 	encoded, err := left.MarshalBinary()
 	require.NoError(t, err)
+	var streamed bytes.Buffer
+	require.Equal(t, len(encoded), left.MarshaledSize())
+	require.NoError(t, left.MarshalTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
 	require.NoError(t, restored.UnmarshalBinary(encoded))
 	require.Equal(t, left.count, restored.count)
 	require.Equal(t, left.retained(), restored.retained())
@@ -1336,8 +1478,8 @@ func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
-	dst := newQuantileSketch[int64](mp, orderedCompare[int64])
-	src := newQuantileSketch[int64](mp, orderedCompare[int64])
+	dst := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
+	src := newQuantileSketch[int64](mp, orderedCompare[int64], nil)
 	defer dst.Free()
 	defer src.Free()
 

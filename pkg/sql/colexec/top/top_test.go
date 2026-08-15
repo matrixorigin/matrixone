@@ -17,6 +17,7 @@ package top
 import (
 	"bytes"
 	"context"
+	"io"
 	"math"
 	"testing"
 
@@ -51,6 +52,16 @@ type cancelOnDoneCheckContext struct {
 	remaining int
 	done      chan struct{}
 }
+
+type shortTopSpillWriter struct{}
+
+func (shortTopSpillWriter) Write(value []byte) (int, error) {
+	return len(value) - 1, nil
+}
+
+func (shortTopSpillWriter) Flush() error { return nil }
+
+func (shortTopSpillWriter) Free() {}
 
 func newCancelOnDoneCheckContext(parent context.Context, checks int) *cancelOnDoneCheckContext {
 	return &cancelOnDoneCheckContext{
@@ -296,27 +307,40 @@ func TestTopSpill(t *testing.T) {
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	arg := &Top{
+		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
+		Fs: []*plan.OrderBySpec{{
+			Expr: newExpression(0),
+		}},
+	}
 	src := batch.NewWithSize(1)
 	vec := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
-	require.NoError(t, vector.AppendBytes(vec, []byte("5"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("1"), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte("2"), false, mp))
 	vec.SetPrepareParamKinds([]vector.PrepareParamKind{
 		vector.PrepareParamInteger, vector.PrepareParamNone,
 	})
 	require.NoError(t, vec.SetIsBinaryStringAt(0, true))
 	src.Vecs[0] = vec
 	src.SetRowCount(2)
-	defer src.Clean(mp)
-	var encoded bytes.Buffer
-	withMetadata, err := src.MarshalBinaryWithPrepareParamKinds(&encoded, false)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{src})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
-	decoded := batch.NewWithSize(1)
-	defer decoded.Clean(mp)
-	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(withMetadata, mp))
-	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[0].GetPrepareParamKindAt(0))
-	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))
-	require.True(t, decoded.Vecs[0].GetIsBinaryStringAt(0))
-	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
+	require.NotNil(t, result.Batch)
+	require.Equal(t, vector.PrepareParamInteger,
+		result.Batch.Vecs[0].GetPrepareParamKindAt(0))
+	require.Equal(t, vector.PrepareParamNone,
+		result.Batch.Vecs[0].GetPrepareParamKindAt(1))
+	require.True(t, result.Batch.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, result.Batch.Vecs[0].GetIsBinaryStringAt(1))
+
+	child.Free(proc, false, nil)
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
@@ -351,7 +375,7 @@ func TestTopSpillEvalHonorsCancellationAfterInput(t *testing.T) {
 
 	tc.arg.Reset(tc.proc, true, context.Canceled)
 	require.Nil(t, tc.arg.ctr.spillFile)
-	require.Nil(t, tc.arg.ctr.orderedRefs)
+	require.False(t, tc.arg.ctr.spillOrdered)
 	child.Free(tc.proc, true, context.Canceled)
 
 	tc.proc.Ctx = baseCtx
@@ -401,7 +425,7 @@ func TestTopSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result.Batch)
 	require.Nil(t, tc.arg.ctr.spillFile)
-	require.Empty(t, tc.arg.ctr.spillIndex)
+	require.Zero(t, tc.arg.ctr.spillOffset)
 }
 
 func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
@@ -421,15 +445,35 @@ func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
 	})
 
 	// The entry check passes. Cancellation is then observed after
-	// serialization but before the first file write.
+	// sizing and file admission but before the first streamed byte.
 	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 2)
-	err := arg.ctr.spillBatch(src, proc, analyzer)
+	_, err := arg.ctr.spillBatch(src, proc, analyzer)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, arg.ctr.spillFile)
 	info, statErr := arg.ctr.spillFile.Stat()
 	require.NoError(t, statErr)
 	require.Zero(t, info.Size())
-	require.Empty(t, arg.ctr.spillIndex)
+	require.Zero(t, arg.ctr.spillOffset)
+}
+
+func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &Top{}
+	arg.ctr.n = 1
+	arg.ctr.spillWriter = shortTopSpillWriter{}
+	src := newBatch([]types.Type{types.T_int64.ToType()}, proc, 1)
+	_, err := arg.ctr.spillBatch(
+		src,
+		proc,
+		process.NewAnalyzer(0, false, false, "top-short-write"),
+	)
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	require.Zero(t, arg.ctr.spillOffset)
+
+	arg.Free(proc, true, err)
+	src.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
@@ -448,17 +492,14 @@ func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 
-	// Entry and pre-write checks pass. The post-write boundary observes
-	// cancellation before the spill index or heap state is published.
+	// Entry and pre-write checks pass. The post-encode boundary observes
+	// cancellation before a row reference or heap state is published.
 	proc.Ctx = newCancelOnDoneCheckContext(baseCtx, 3)
-	err := arg.ctr.spillBatch(src, proc, analyzer)
+	_, err := arg.ctr.spillBatch(src, proc, analyzer)
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotNil(t, arg.ctr.spillFile)
-	info, statErr := arg.ctr.spillFile.Stat()
-	require.NoError(t, statErr)
-	require.Positive(t, info.Size())
-	require.Empty(t, arg.ctr.spillIndex)
-	require.Zero(t, arg.ctr.spillBatIdx)
+	require.Positive(t, arg.ctr.spillOffset)
+	require.Empty(t, arg.ctr.rowRefs)
 }
 
 func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
@@ -476,10 +517,17 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 			arg := &Top{}
 			arg.ctr.n = 1
-			arg.ctr.orderedRefs = []rowRef{{batchIdx: 0, rowIdx: 0}}
 			analyzer := process.NewAnalyzer(0, false, false, "top-cancel-eval")
 			src := newBatch([]types.Type{types.T_int64.ToType()}, proc, 1)
-			require.NoError(t, arg.ctr.spillBatch(src, proc, analyzer))
+			record, err := arg.ctr.spillBatch(src, proc, analyzer)
+			require.NoError(t, err)
+			arg.ctr.sels = []int64{0}
+			arg.ctr.rowRefs = []rowRef{{
+				offset: record.offset,
+				size:   record.size,
+				rowIdx: 0,
+			}}
+			arg.ctr.spillOrdered = true
 			src.Clean(proc.Mp())
 			baseCtx := proc.Ctx
 
@@ -531,12 +579,12 @@ func TestTopSpillHeapCancellationCheckpoint(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, done)
 	require.Nil(t, result.Batch)
-	require.Len(t, tc.arg.ctr.orderedRefs, originalRefs)
 	require.Len(t, tc.arg.ctr.sels, originalRefs-evalSpillChunkSize)
+	require.Len(t, tc.arg.ctr.rowRefs, originalRefs)
 
 	tc.arg.Reset(tc.proc, true, context.Canceled)
 	require.Nil(t, tc.arg.ctr.spillFile)
-	require.Nil(t, tc.arg.ctr.orderedRefs)
+	require.False(t, tc.arg.ctr.spillOrdered)
 }
 
 func TestTopSpillInsufficientRows(t *testing.T) {

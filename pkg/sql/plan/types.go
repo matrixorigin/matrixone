@@ -611,6 +611,10 @@ type BindContext struct {
 	projectByExpr       map[string]int32
 	timeByAst           map[string]int32
 	whereFilters        []*plan.Expr
+	// gapFillWhereFilters preserves the complete bound WHERE tree before
+	// subqueries are flattened into joins. Bounded GAPFILL inference must see
+	// every timestamp predicate, including IN/ANY/ALL subquery operands.
+	gapFillWhereFilters []*plan.Expr
 
 	projectColByAst map[string]int32
 

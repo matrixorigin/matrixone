@@ -812,7 +812,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where
 
-	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0)
+	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), newNodeID)
 	require.Equal(t, 1, len(boundFilterList))
@@ -2706,7 +2706,7 @@ func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *test
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2778,7 +2778,7 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2841,6 +2841,101 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
 		})
+	}
+}
+
+func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oid   types.T
+		scale int32
+		make  func(int64) *plan.Expr
+	}{
+		{
+			name:  "time",
+			oid:   types.T_time,
+			scale: 6,
+			make: func(value int64) *plan.Expr {
+				return MakePlan2TimeConstExprWithType(value)
+			},
+		},
+		{
+			name:  "year",
+			oid:   types.T_year,
+			scale: 0,
+			make: func(value int64) *plan.Expr {
+				expr := makePlan2Int16ConstExprWithType(int16(value))
+				expr.Typ = plan.Type{Id: int32(types.T_year)}
+				return expr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			timestamp := &plan.Expr{
+				Typ: plan.Type{Id: int32(tc.oid), Scale: tc.scale},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			boundFilter := func(op string, bound *plan.Expr) *plan.Expr {
+				return &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: op},
+						Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+					}},
+				}
+			}
+
+			start, finish, err := inferGapFillBounds(
+				context.Background(),
+				[]*plan.Expr{
+					boundFilter(">=", tc.make(1)),
+					boundFilter("<", tc.make(2)),
+				},
+				timestamp,
+			)
+			require.NoError(t, err)
+			for _, bound := range []*plan.Expr{start, finish} {
+				require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+				require.Equal(t, timestamp.Typ.Scale, bound.Typ.Scale)
+				require.Equal(t, "cast", bound.GetF().Func.ObjName)
+				require.Equal(t, int32(tc.oid), bound.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
+func TestInferGapFillBoundsPreservesTimestampInstantBounds(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	boundFilter := func(op string, value int64) *plan.Expr {
+		bound := makePlan2TimestampConstExprWithType(value)
+		bound.Typ.Scale = timestamp.Typ.Scale
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: op},
+				Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		boundFilter(">=", 1),
+		boundFilter("<", 2),
+	}, timestamp)
+
+	require.NoError(t, err)
+	for _, bound := range []*plan.Expr{start, finish} {
+		require.Equal(t, int32(types.T_timestamp), bound.Typ.Id)
+		require.Equal(t, int32(types.T_timestamp), bound.GetF().Args[0].Typ.Id)
 	}
 }
 
@@ -2908,6 +3003,60 @@ func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type)
 			{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}},
 		},
 	}
+}
+
+func TestGapFillBoundContainsColumnTraversesExpressionTrees(t *testing.T) {
+	timestamp := &plan.ColRef{RelPos: 1, ColPos: 2}
+	timestampExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: timestamp.RelPos, ColPos: timestamp.ColPos}},
+	}
+	otherColumn := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 3, ColPos: 4}},
+	}
+
+	require.False(t, gapFillBoundContainsColumn(nil, timestamp))
+	require.True(t, gapFillBoundContainsColumn(timestampExpr, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.False(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn}}},
+	}, timestamp))
+}
+
+func TestInferGapFillBoundsAcceptsReversedHalfOpenEdges(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	}
+	bound := func(value int64) *plan.Expr {
+		expr := makePlan2Int64ConstExprWithType(value)
+		expr.Typ = timestamp.Typ
+		return expr
+	}
+	filter := func(name string, left, right *plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: []*plan.Expr{left, right},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		filter("<=", bound(1), DeepCopyExpr(timestamp)),
+		filter(">", bound(2), DeepCopyExpr(timestamp)),
+	}, timestamp)
+
+	require.NoError(t, err)
+	require.NotNil(t, start)
+	require.NotNil(t, finish)
+	require.Equal(t, int32(types.T_datetime), start.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), finish.Typ.Id)
 }
 
 func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
@@ -3051,7 +3200,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
 			// Call bindTimeWindow
-			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, _, _, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -3142,7 +3291,7 @@ func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-	_, _, _, _, sliding, ts, wEnd, _, err := builder.bindTimeWindow(
+	_, _, _, _, sliding, ts, wEnd, _, _, _, err := builder.bindTimeWindow(
 		bindCtx,
 		projectionBinder,
 		astTimeWindow,
@@ -3236,7 +3385,7 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-			fillType, fillVals, fillCols, _, _, _, _, _, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -4591,7 +4740,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	require.Equal(t, int32(0), nodeID)
 
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
-	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID)
+	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID, false)
 	require.NoError(t, err)
 
 	nodeID = builder.appendWhereNode(bindCtx, nodeID, boundFilterList, notCacheable)
