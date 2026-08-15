@@ -954,31 +954,34 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterIndex
 			constraintName := tableAlterIndex.IndexName
-			for i, indexdef := range oTableDef.Indexes {
-				if indexdef.IndexName == constraintName {
-					alterIndex = indexdef
-					catalog.SetIndexVisibility(alterIndex, tableAlterIndex.Visible)
-					catalog.SetIndexVisibility(oTableDef.Indexes[i], tableAlterIndex.Visible)
-					// update the index visibility in mo_catalog.mo_indexes.
-					// Escape the index name the same as the AUTO_UPDATE / REINDEX
-					// branches: it is user-supplied and a backticked identifier may
-					// contain single quotes or backslashes (the scanner still treats
-					// backslash as an escape inside '...'), which could corrupt or
-					// break out of name = '...'.
-					var updateSql string
-					visible := 0
-					if alterIndex.Visible {
-						visible = 1
-					}
-					updateSql = fmt.Sprintf(updateMoIndexesVisibleFormat, visible, oTableDef.TblId,
-						sqlquote.EscapeString(indexdef.IndexName))
-					if err = c.runSqlWithOptions(
-						updateSql, executor.StatementOption{}.WithDisableLog(),
-					); err != nil {
-						return err
-					}
-
-					break
+			matchedIndex := false
+			for _, indexDef := range oTableDef.Indexes {
+				if indexDef.IndexName != constraintName {
+					continue
+				}
+				catalog.SetIndexVisibility(indexDef, tableAlterIndex.Visible)
+				matchedIndex = true
+			}
+			if matchedIndex {
+				// update the index visibility in mo_catalog.mo_indexes once for
+				// the logical index. Multi-table indexes have several physical
+				// IndexDefs with the same name, while the catalog statement
+				// updates all of their rows.
+				// Escape the index name the same as the AUTO_UPDATE / REINDEX
+				// branches: it is user-supplied and a backticked identifier may
+				// contain single quotes or backslashes (the scanner still treats
+				// backslash as an escape inside '...'), which could corrupt or
+				// break out of name = '...'.
+				visible := 0
+				if tableAlterIndex.Visible {
+					visible = 1
+				}
+				updateSql := fmt.Sprintf(updateMoIndexesVisibleFormat, visible, oTableDef.TblId,
+					sqlquote.EscapeString(constraintName))
+				if err = c.runSqlWithOptions(
+					updateSql, executor.StatementOption{}.WithDisableLog(),
+				); err != nil {
+					return err
 				}
 			}
 		case *plan.AlterTable_Action_AlterAutoUpdate:
