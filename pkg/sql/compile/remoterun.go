@@ -91,6 +91,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -182,6 +185,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -1959,6 +1965,28 @@ func validateRemoteUpdateChangedRowsPipelineProtocol(
 		if err := validateRemoteUpdateChangedRowsPipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateRemotePadSpacePipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	modeEnabled, err := process.ResolvePadCharToFullLength(proc)
+	if err != nil {
+		return err
+	}
+	if !modeEnabled && !pipelineContainsPadSpaceCast(p) {
+		return nil
+	}
+	if proc == nil || !supportsRemotePadSpaceSemantics(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"PAD SPACE remote execution requires MORPC protocol version 26",
+		)
 	}
 	return nil
 }
