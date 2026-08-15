@@ -1582,6 +1582,31 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestSelectedRowsBinaryStringDecodeAllocationFailureIsAtomic(t *testing.T) {
+	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("text"), false, mp))
+	require.NoError(t,
+		source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+
+	destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	err := destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, destination.Length())
+	require.False(t, destination.HasBinaryStringMetadata())
+	require.Equal(t, uint64(twoVarlenaRowsBytes), state.account.Snapshot().Used)
+
+	destination.Free(mp)
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBinaryStringConstantMarkerStaysScalar(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, types.VarlenaSize, 4)
 	mp := mpool.MustNewZero()

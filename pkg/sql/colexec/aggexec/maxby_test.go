@@ -409,6 +409,43 @@ func TestMaxByPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 	}
 }
 
+func TestMaxBySpillPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{
+		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType(),
+	}
+	inputs := maxByInputs(t, mp,
+		[]string{"binary", "text"}, nil, []int64{1, 1}, []string{"a", "b"})
+	require.NoError(t,
+		inputs[0].SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+
+	source := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
+	require.NoError(t, source.GroupGrow(2))
+	require.NoError(t, source.Fill(0, 0, inputs))
+	require.NoError(t, source.Fill(1, 1, inputs))
+	require.True(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(0))
+	require.False(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(1))
+	var spill bytes.Buffer
+	require.NoError(t, source.SaveSpillIntermediateResult(
+		2, 0, []uint8{1, 1}, &spill))
+
+	restored := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
+	require.NoError(t, restored.UnmarshalSpillFromReader(
+		bytes.NewReader(spill.Bytes()), mp))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.True(t, result[0].GetBinaryStringMetadataAt(0))
+	require.False(t, result[0].GetBinaryStringMetadataAt(1))
+
+	result[0].Free(mp)
+	source.Free()
+	restored.Free()
+	for _, input := range inputs {
+		input.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}

@@ -1116,6 +1116,64 @@ func TestAccountedGroupResidentAndSpillMatchForH8AndHStr(t *testing.T) {
 	}
 }
 
+func TestAccountedGroupSpillPreservesBinaryStringProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const groups = 1024
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	binaryRows := make([]bool, 0, groups*2)
+	wantBinary := make(map[string]bool, groups)
+	for pass := 0; pass < 2; pass++ {
+		for group := 0; group < groups; group++ {
+			key := "key-" + strconv.Itoa(group) + "-binary-provenance"
+			require.NoError(t,
+				vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
+			binary := group%2 == 0
+			binaryRows = append(binaryRows, binary)
+			wantBinary[key] = binary
+		}
+	}
+	require.NoError(t,
+		input.Vecs[0].SetBinaryStringRowsWithMP(binaryRows, proc.Mp()))
+	input.SetRowCount(groups * 2)
+
+	g := newGroupOp(
+		proc,
+		[]*plan.Expr{colExpr(0, types.T_text)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()},
+	)
+	g.SpillMem = 128
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
+	require.NoError(t, g.Prepare(proc))
+
+	seen := 0
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		for row, count := range counts {
+			key := string(result.Batch.Vecs[0].GetBytesAt(row))
+			require.Equal(t, int64(2), count)
+			require.Equal(t, wantBinary[key],
+				result.Batch.Vecs[0].GetBinaryStringMetadataAt(row), "key=%s", key)
+			seen++
+		}
+	}
+	require.Equal(t, groups, seen)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+
+	g.Free(proc, false, nil)
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, g, allocation)
+	input.Clean(proc.Mp())
+}
+
 func testAllocationColumnExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
