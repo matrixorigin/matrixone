@@ -162,7 +162,10 @@ func TestSingleCNCluster(t *testing.T) {
 }
 
 func TestClusterCanStartNewCNServices(t *testing.T) {
-	c, err := StartTestCluster(WithCNCount(3))
+	c, err := StartTestCluster(
+		WithCNCount(3),
+		WithPreStart(adjustClusterStartupRetryIntervals),
+	)
 	if c != nil {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
@@ -199,7 +202,7 @@ func TestMultiClusterCanWork(t *testing.T) {
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			validCNCanWork(t, c, 0)
 		},
@@ -219,13 +222,17 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 
 func TestBaseClusterOnlyStartOnce(t *testing.T) {
 	var id1, id2 uint64
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			id1 = c.ID()
+			_, err := c.GetCNService(0)
+			require.NoError(t, err)
+			_, err = c.GetCNService(1)
+			require.Error(t, err)
 		},
 	)
 
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			id2 = c.ID()
 		},
@@ -236,7 +243,7 @@ func TestBaseClusterOnlyStartOnce(t *testing.T) {
 
 func TestRestartCN(t *testing.T) {
 	t.SkipNow()
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			svc, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -249,7 +256,7 @@ func TestRestartCN(t *testing.T) {
 }
 
 func TestRunSQLWithFrontend(t *testing.T) {
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -269,7 +276,7 @@ func TestRunSQLWithFrontend(t *testing.T) {
 }
 
 func TestRowCountOverMySQLProtocol(t *testing.T) {
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -599,7 +606,7 @@ func validCNCanWork(
 }
 
 func TestCreateDB(t *testing.T) {
-	RunBaseClusterTests(t,
+	RunSingleCNBaseClusterTests(t,
 		func(c Cluster) {
 			cn0, err := c.GetCNService(0)
 			require.NoError(t, err)
