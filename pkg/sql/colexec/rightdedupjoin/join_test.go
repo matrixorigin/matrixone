@@ -324,10 +324,91 @@ func TestRightDedupSpilledEmptyBuild(t *testing.T) {
 
 func TestRightDedupSpilledInputKeysUnique(t *testing.T) {
 	for _, pessimistic := range []bool{false, true} {
-		t.Run(fmt.Sprintf("pessimistic_%t", pessimistic), func(t *testing.T) {
+		t.Run(fmt.Sprintf("empty_target_pessimistic_%t", pessimistic), func(t *testing.T) {
 			runRightDedupSpilledEmptyBuild(t, pessimistic, false, true)
 		})
+		t.Run(fmt.Sprintf("nonempty_target_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledInputKeysUniqueWithBuild(t, pessimistic)
+		})
 	}
+}
+
+func runRightDedupSpilledInputKeysUniqueWithBuild(t *testing.T, pessimistic bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	proc.Base.Lim.Size = 8 << 20
+	proc.Base.Lim.SpillSize = 64 << 20
+
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	buildBat.SetRowCount(2)
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	probeBat.SetRowCount(1)
+
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:       true,
+		Conditions:        conditions[1],
+		IsShuffle:         true,
+		ShuffleIdx:        0,
+		SpillThreshold:    2,
+		JoinMapTag:        curTag,
+		JoinMapRefCnt:     1,
+		RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: curTag + 9000},
+	}
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+	rightDedupArg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		IsShuffle:         true,
+		ShuffleIdx:        0,
+		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   true,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+		SpillThreshold:    2,
+	}
+	rightDedupArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+	installTestAllocation(t, rightDedupArg, buildArg)
+
+	var execErr error
+	defer func() {
+		failed := execErr != nil
+		rightDedupArg.Free(proc, failed, execErr)
+		buildArg.Free(proc, failed, execErr)
+		buildBat.Clean(proc.Mp())
+		probeBat.Clean(proc.Mp())
+		budget, budgetErr := proc.GetExecutionResourceBudget()
+		var used, diskUsed, fdUsed uint64
+		if budgetErr == nil {
+			used = budget.Used()
+			diskUsed = budget.SpillDiskUsed()
+			fdUsed = budget.SpillFDUsed()
+		}
+		proc.Free()
+		require.NoError(t, budgetErr)
+		require.Zero(t, used)
+		require.Zero(t, diskUsed)
+		require.Zero(t, fdUsed)
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, rightDedupArg.Prepare(proc))
+	_, execErr = vm.Exec(buildArg, proc)
+	require.NoError(t, execErr)
+	require.Positive(t, buildArg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildSpillStarts"],
+		"the regression must exercise a nonempty spilled target payload")
+	_, execErr = vm.Exec(rightDedupArg, proc)
+	require.Error(t, execErr)
+	require.Contains(t, execErr.Error(), "Duplicate entry")
 }
 
 func TestRightDedupResetAndPrepareRetry(t *testing.T) {

@@ -65,6 +65,24 @@ func TestProveInsertInputKeysUnique(t *testing.T) {
 			want: true,
 		},
 		{
+			name:       "stacked projects preserve uniqueness",
+			targetPK:   []string{"id"},
+			insertCols: []string{"id", "payload"},
+			sourcePK:   []string{"id"},
+			shape: func(_ *planpb.Node) *planpb.Node {
+				return &planpb.Node{
+					NodeType:    planpb.Node_PROJECT,
+					Children:    []int32{1},
+					BindingTags: []int32{30},
+					ProjectList: []*planpb.Expr{
+						insertProofColExpr(20, 0),
+						insertProofColExpr(20, 1),
+					},
+				}
+			},
+			want: true,
+		},
+		{
 			name:       "composite target contains source key",
 			targetPK:   []string{"id", "tenant"},
 			insertCols: []string{"id", "tenant", "payload"},
@@ -167,22 +185,29 @@ func TestProveInsertInputKeysUnique(t *testing.T) {
 }
 
 func TestInsertSelectMarksTargetPKDedupInputUnique(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	logicPlan, err := runOneStmt(mock, t,
-		"insert into constraint_test.emp (empno, ename, job) "+
-			"select empno, ename, job from constraint_test.emp where empno > 0")
-	require.NoError(t, err)
-	require.NotNil(t, logicPlan.GetQuery())
-
-	var marked int
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_DEDUP {
-			if node.DedupInputKeysUnique {
-				marked++
-			}
-		}
+	queries := []string{
+		"insert into constraint_test.emp (empno, ename, job) " +
+			"select empno, ename, job from constraint_test.emp where empno > 0",
+		"insert into constraint_test.emp (empno, ename, job) " +
+			"select empno, ename, job from constraint_test.emp where empno > 0 order by empno",
 	}
-	require.Equal(t, 1, marked, "only the target-PK DEDUP should use the proof")
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			logicPlan, err := runOneStmt(mock, t, query)
+			require.NoError(t, err)
+			require.NotNil(t, logicPlan.GetQuery())
+
+			var marked int
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_DEDUP &&
+					node.DedupInputKeysUnique {
+					marked++
+				}
+			}
+			require.Equal(t, 1, marked, "only the target-PK DEDUP should use the proof")
+		})
+	}
 }
 
 func TestProveInsertInputKeysUniqueRejectsKeyTypeChange(t *testing.T) {
@@ -192,7 +217,7 @@ func TestProveInsertInputKeysUniqueRejectsKeyTypeChange(t *testing.T) {
 	target.Cols[0].Typ = planpb.Type{Id: int32(types.T_int32)}
 	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
 		{NodeType: planpb.Node_TABLE_SCAN, TableDef: source, BindingTags: []int32{10}},
-		{NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*planpb.Expr{
+		{NodeType: planpb.Node_PROJECT, Children: []int32{0}, BindingTags: []int32{20}, ProjectList: []*planpb.Expr{
 			insertProofColExpr(10, 0), insertProofColExpr(10, 1),
 		}},
 	}}}

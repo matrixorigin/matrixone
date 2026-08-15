@@ -3383,11 +3383,12 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // insertSourceColumn identifies an output column that is still a direct
 // column of one source table.  Keeping this lineage separate from expression
 // rewriting makes the uniqueness proof fail closed for casts, functions, and
-// row-multiplying operators.
+// row-multiplying operators. table and colPos identify the origin;
+// outputTag advances at each PROJECT so stacked projections remain traceable.
 type insertSourceColumn struct {
 	table     *plan.TableDef
 	colPos    int32
-	sourceTag int32
+	outputTag int32
 }
 
 // proveInsertInputKeysUnique proves that every incoming target-PK key is
@@ -3475,7 +3476,7 @@ func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceCo
 		if len(node.ProjectList) == 0 {
 			lineage := make([]insertSourceColumn, len(node.TableDef.Cols))
 			for i := range node.TableDef.Cols {
-				lineage[i] = insertSourceColumn{table: node.TableDef, colPos: int32(i), sourceTag: sourceTag}
+				lineage[i] = insertSourceColumn{table: node.TableDef, colPos: int32(i), outputTag: sourceTag}
 			}
 			return lineage, node.TableDef, true
 		}
@@ -3488,7 +3489,7 @@ func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceCo
 			if col.RelPos != sourceTag {
 				return nil, nil, false
 			}
-			lineage[i] = insertSourceColumn{table: node.TableDef, colPos: col.ColPos, sourceTag: col.RelPos}
+			lineage[i] = insertSourceColumn{table: node.TableDef, colPos: col.ColPos, outputTag: sourceTag}
 		}
 		return lineage, node.TableDef, true
 
@@ -3499,7 +3500,7 @@ func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceCo
 		return builder.insertSourceLineage(node.Children[0])
 
 	case plan.Node_PROJECT:
-		if len(node.Children) != 1 || len(node.ProjectList) == 0 {
+		if len(node.Children) != 1 || len(node.ProjectList) == 0 || len(node.BindingTags) != 1 {
 			return nil, nil, false
 		}
 		childID := node.Children[0]
@@ -3513,10 +3514,11 @@ func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceCo
 			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childLineage) {
 				return nil, nil, false
 			}
-			if col.RelPos != childLineage[col.ColPos].sourceTag {
+			if col.RelPos != childLineage[col.ColPos].outputTag {
 				return nil, nil, false
 			}
 			lineage[i] = childLineage[col.ColPos]
+			lineage[i].outputTag = node.BindingTags[0]
 		}
 		return lineage, sourceTable, true
 	}

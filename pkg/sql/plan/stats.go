@@ -1948,8 +1948,10 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 // This pass runs immediately before swapJoinChildren. At this point a DEDUP's
 // logical left child is the existing target and its logical right child is the
 // incoming row stream. Input-unique candidates only retain the target map;
-// ordinary candidates retain both sides. An unsafe class is reverted to normal
-// DEDUP independently so a safe lookup-only candidate can remain right-sided.
+// ordinary candidates retain both sides. The lookup-only class is evaluated
+// first. If it remains right-sided, its retained map is included in the
+// ordinary class's shared pipeline budget; if it is reverted, ordinary
+// candidates are evaluated without it.
 func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 	const maxUint64 = ^uint64(0)
 
@@ -1984,46 +1986,56 @@ func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
 
 	// InputUnique candidates retain only the target map. Ordinary candidates
 	// retain the existing target+source accounting and all-or-nothing fallback.
-	// Keeping the two aggregates independent allows a safe PK right-DEDUP to
-	// coexist with an unsafe secondary-unique right-DEDUP in the same chain.
 	inputUniqueBytes, inputUniqueRows, inputUniqueUnsafe := builder.rightDedupMemoryTotals(inputUniqueCandidates, true, maxUint64)
 	ordinaryBytes, ordinaryRows, ordinaryUnsafe := builder.rightDedupMemoryTotals(ordinaryCandidates, false, maxUint64)
 
-	if builder.joinSpillMem != 0 {
-		const maxInt64 = uint64(^uint64(0) >> 1)
-		if !inputUniqueUnsafe {
-			inputUniqueUnsafe = colexec.ShouldSpill(
-				int64(min(inputUniqueBytes, maxInt64)),
-				int64(min(inputUniqueRows, maxInt64)),
-				builder.joinSpillMem,
-			)
-		}
-		if !ordinaryUnsafe {
-			ordinaryUnsafe = colexec.ShouldSpill(
-				int64(min(ordinaryBytes, maxInt64)),
-				int64(min(ordinaryRows, maxInt64)),
-				builder.joinSpillMem,
-			)
-		}
-	} else {
+	var budget uint64
+	if builder.joinSpillMem == 0 {
 		// ResolveSpillThreshold is per worker. RIGHT DEDUP is forced onto one
 		// CN with DOP 1, but this guard budgets the complete chained stage. The
 		// aggregate default therefore restores the GOMAXPROCS factor, yielding
 		// roughly one eighth of CN memory after the file-cache reservation.
 		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
 		workers := uint64(system.GoMaxProcs())
-		var budget uint64
-		if workers == 0 || perWorkerBudget > maxUint64/workers {
-			budget = 0
-		} else {
+		if workers != 0 && perWorkerBudget <= maxUint64/workers {
 			budget = perWorkerBudget * workers
 		}
-		if !inputUniqueUnsafe {
-			inputUniqueUnsafe = inputUniqueBytes > budget
+	}
+	memoryUnsafe := func(totalBytes, totalRows uint64) bool {
+		if builder.joinSpillMem == 0 {
+			return totalBytes > budget
 		}
-		if !ordinaryUnsafe {
-			ordinaryUnsafe = ordinaryBytes > budget
+		const maxInt64 = uint64(^uint64(0) >> 1)
+		if builder.joinSpillMem <= 100000 {
+			if totalRows > maxInt64 {
+				return true
+			}
+		} else if totalBytes > maxInt64 {
+			return true
 		}
+		return colexec.ShouldSpill(
+			int64(totalBytes),
+			int64(totalRows),
+			builder.joinSpillMem,
+		)
+	}
+
+	// A safe lookup-only map still consumes the same resident pipeline budget
+	// as ordinary maps. Include it in both the byte and row threshold checks.
+	// If it is independently unsafe, it will be reverted and no longer coexists
+	// with the ordinary class.
+	if !inputUniqueUnsafe {
+		inputUniqueUnsafe = memoryUnsafe(inputUniqueBytes, inputUniqueRows)
+	}
+	if !ordinaryUnsafe && !inputUniqueUnsafe {
+		var ok bool
+		ordinaryBytes, ordinaryRows, ok = addRightDedupMemoryTotals(
+			ordinaryBytes, ordinaryRows, inputUniqueBytes, inputUniqueRows, maxUint64,
+		)
+		ordinaryUnsafe = !ok
+	}
+	if !ordinaryUnsafe {
+		ordinaryUnsafe = memoryUnsafe(ordinaryBytes, ordinaryRows)
 	}
 
 	if !inputUniqueUnsafe && !ordinaryUnsafe {
@@ -2076,13 +2088,28 @@ func (builder *QueryBuilder) rightDedupMemoryTotals(
 		} else {
 			mapBytes = hashtable.EstimateStringHashMapSize(keyCount)
 		}
-		if mapBytes == maxUint64 || totalBytes > maxUint64-mapBytes || totalRows > maxUint64-keyCount {
+		if mapBytes == maxUint64 {
 			return 0, 0, true
 		}
-		totalBytes += mapBytes
-		totalRows += keyCount
+		var ok bool
+		totalBytes, totalRows, ok = addRightDedupMemoryTotals(
+			totalBytes, totalRows, mapBytes, keyCount, maxUint64,
+		)
+		if !ok {
+			return 0, 0, true
+		}
 	}
 	return totalBytes, totalRows, false
+}
+
+func addRightDedupMemoryTotals(
+	totalBytes, totalRows, extraBytes, extraRows, maxUint64 uint64,
+) (uint64, uint64, bool) {
+	if extraBytes > maxUint64 || extraRows > maxUint64 ||
+		totalBytes > maxUint64-extraBytes || totalRows > maxUint64-extraRows {
+		return 0, 0, false
+	}
+	return totalBytes + extraBytes, totalRows + extraRows, true
 }
 
 // estimatedLogicalDedupOutputRows returns the incoming-side cardinality for a

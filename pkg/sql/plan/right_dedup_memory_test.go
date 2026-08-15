@@ -86,14 +86,76 @@ func TestDisableMemoryUnsafeRightDedupRejectsUnknownCardinality(t *testing.T) {
 	}
 }
 
-func TestDisableMemoryUnsafeRightDedupSeparatesInputUniqueCandidates(t *testing.T) {
-	builder, joins := makeChainedRightDedupBuilder(127 * 1024)
+func TestDisableMemoryUnsafeRightDedupSharesBudgetWithInputUniqueCandidates(t *testing.T) {
+	const sharedBudget = 150 * 1024
+	builder, joins := makeChainedRightDedupBuilder(sharedBudget)
+	joins[0].DedupInputKeysUnique = true
+	// Raise the lookup-only target to the next int-map growth step. Both
+	// classes then fit 150 KiB independently, while their resident sum does not.
+	builder.qry.Nodes[1].Stats = &planpb.Stats{Outcnt: 1100}
+	inputUniqueBytes, inputUniqueRows, inputUniqueUnsafe := builder.rightDedupMemoryTotals(
+		joins[:1], true, math.MaxUint64,
+	)
+	ordinaryBytes, ordinaryRows, ordinaryUnsafe := builder.rightDedupMemoryTotals(
+		joins[1:], false, math.MaxUint64,
+	)
+	require.False(t, inputUniqueUnsafe)
+	require.False(t, ordinaryUnsafe)
+	require.LessOrEqual(t, inputUniqueBytes, uint64(sharedBudget))
+	require.LessOrEqual(t, ordinaryBytes, uint64(sharedBudget))
+	require.Greater(t, inputUniqueBytes+ordinaryBytes, uint64(sharedBudget),
+		"each class fits independently, but their resident maps exceed the shared budget")
+
+	builder.disableMemoryUnsafeRightDedup(4)
+
+	require.True(t, joins[0].IsRightJoin, "the flagged PK candidate only retains its target map")
+	require.False(t, joins[1].IsRightJoin, "the ordinary candidate must include the retained lookup-only map")
+	require.Equal(t, uint64(1100), inputUniqueRows)
+	require.Equal(t, uint64(1100), ordinaryRows)
+}
+
+func TestDisableMemoryUnsafeRightDedupCombinesInputUniqueRows(t *testing.T) {
+	const sharedRowBudget = 1150
+	builder, joins := makeChainedRightDedupBuilder(sharedRowBudget)
 	joins[0].DedupInputKeysUnique = true
 
 	builder.disableMemoryUnsafeRightDedup(4)
 
-	require.True(t, joins[0].IsRightJoin, "the flagged PK candidate only retains its 100-row target map")
-	require.False(t, joins[1].IsRightJoin, "the ordinary unique-index candidate still accounts for incoming rows")
+	require.True(t, joins[0].IsRightJoin)
+	require.False(t, joins[1].IsRightJoin,
+		"100 lookup-only rows plus 1100 ordinary rows reach the shared row limit")
+}
+
+func TestDisableMemoryUnsafeRightDedupUnknownClassDoesNotPoisonRevertedPeer(t *testing.T) {
+	t.Run("unknown input-unique class", func(t *testing.T) {
+		builder, joins := makeChainedRightDedupBuilder(1 << 30)
+		joins[0].DedupInputKeysUnique = true
+		builder.qry.Nodes[1].Stats = &planpb.Stats{Outcnt: math.NaN()}
+
+		builder.disableMemoryUnsafeRightDedup(4)
+
+		require.False(t, joins[0].IsRightJoin)
+		require.True(t, joins[1].IsRightJoin)
+	})
+
+	t.Run("unknown ordinary class", func(t *testing.T) {
+		builder, joins := makeChainedRightDedupBuilder(1 << 30)
+		joins[0].DedupInputKeysUnique = true
+		builder.qry.Nodes[3].Stats = &planpb.Stats{Outcnt: math.Inf(1)}
+
+		builder.disableMemoryUnsafeRightDedup(4)
+
+		require.True(t, joins[0].IsRightJoin)
+		require.False(t, joins[1].IsRightJoin)
+	})
+}
+
+func TestAddRightDedupMemoryTotalsRejectsOverflow(t *testing.T) {
+	_, _, ok := addRightDedupMemoryTotals(math.MaxUint64-1, 1, 2, 1, math.MaxUint64)
+	require.False(t, ok)
+
+	_, _, ok = addRightDedupMemoryTotals(1, math.MaxUint64, 1, 1, math.MaxUint64)
+	require.False(t, ok)
 }
 
 func makeChainedRightDedupBuilder(joinSpillMem int64) (*QueryBuilder, []*planpb.Node) {
