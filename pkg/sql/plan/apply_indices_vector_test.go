@@ -96,9 +96,9 @@ func TestVectorRewritesRejectMissingResultPagination(t *testing.T) {
 		name  string
 		apply func() (int32, error)
 	}{
-		{name: "hnsw", apply: func() (int32, error) { return builder.applyIndicesForSortUsingHnsw(7, ctx, nil) }},
-		{name: "cagra", apply: func() (int32, error) { return builder.applyIndicesForSortUsingCagra(7, ctx, nil) }},
-		{name: "ivfpq", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfpq(7, ctx, nil) }},
+		{name: "hnsw", apply: func() (int32, error) { return builder.applyIndicesForSortUsingHnsw(7, ctx, nil, nil) }},
+		{name: "cagra", apply: func() (int32, error) { return builder.applyIndicesForSortUsingCagra(7, ctx, nil, nil) }},
+		{name: "ivfpq", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfpq(7, ctx, nil, nil) }},
 		{name: "ivfflat", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfflat(7, ctx, nil, nil, nil) }},
 	}
 	for _, tt := range tests {

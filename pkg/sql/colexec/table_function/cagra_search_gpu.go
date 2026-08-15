@@ -37,6 +37,8 @@ import (
 )
 
 type cagraSearchState struct {
+	// slots caches the pk/score output positions for the current result layout.
+	slots     vectorSearchSlots
 	inited    bool
 	param     vectorindex.CagraParam
 	tblcfg    vectorindex.IndexTableConfig
@@ -100,8 +102,13 @@ func (u *cagraSearchState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 	nkeys := len(u.keys)
 	n := 0
 	for i := u.offset; i < nkeys && n < 8192; i++ {
-		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		// Positions resolved by name: the planner may prune either column.
+		if pkPos := u.slots.pk; pkPos >= 0 {
+			vector.AppendFixed[int64](u.batch.Vecs[pkPos], u.keys[i], false, proc.Mp())
+		}
+		if scorePos := u.slots.score; scorePos >= 0 {
+			vector.AppendFixed[float64](u.batch.Vecs[scorePos], u.distances[i], false, proc.Mp())
+		}
 		n++
 	}
 	u.offset += n
@@ -244,6 +251,8 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		u.batch = tf.createResultBatch()
+		// Resolve the output slots once for this layout (see vector_search_layout.go).
+		u.slots = resolveVectorSearchSlots(u.batch.Attrs, nil, "")
 		u.inited = true
 	}
 
