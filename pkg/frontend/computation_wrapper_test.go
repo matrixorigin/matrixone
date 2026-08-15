@@ -25,7 +25,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -458,8 +457,8 @@ func TestPreparedDecimalBindingUsesStableNonNarrowingCategories(t *testing.T) {
 		{name: "76 integral digits remain exact", width: 76, full: true, wantMode: preparedNumericExact, wantWidth: 76},
 		{name: "complete huge exponent", width: 101, full: true, exponent: true, wantMode: preparedNumericTextFloat},
 		{name: "complete 77 digit ordinary", width: 77, full: true, wantMode: preparedNumericTextFloat},
-		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericTextFloat},
-		{name: "77 digit fractional prefix", width: 77, scale: 41, wantMode: preparedNumericTextFloat},
+		{name: "complete 77 digit fractional", width: 77, scale: 41, full: true, wantMode: preparedNumericExact, wantWidth: 66, wantScale: 30},
+		{name: "77 digit fractional prefix", width: 77, scale: 41, wantMode: preparedNumericExact, wantWidth: 66, wantScale: 30},
 		{name: "36 integral plus 10 scale", width: 46, scale: 10, full: true, wantMode: preparedNumericExact, wantWidth: 46, wantScale: 10},
 		{name: "36 integral plus 9 scale", width: 45, scale: 9, full: true, wantMode: preparedNumericExact, wantWidth: 45, wantScale: 9},
 	}
@@ -522,7 +521,7 @@ func TestPreparedNumericTextDomainIsBoundedAndClassified(t *testing.T) {
 		{value: "10000000000000000000000000000000000000000000000000000000000000000000000000000", wantWidth: 77, wantFull: true, wantBindingMode: preparedNumericTextFloat},
 		{value: "1e35", wantWidth: 36, wantFull: true, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "999999999999999999999999999999999999tail", wantWidth: 36, wantBindingMode: preparedNumericExact},
-		{value: "999999999999999999999999999999999999.11111111111111111111111111111111111111111tail", wantWidth: 77, wantScale: 41, wantBindingMode: preparedNumericTextFloat},
+		{value: "999999999999999999999999999999999999.11111111111111111111111111111111111111111tail", wantWidth: 77, wantScale: 41, wantBindingMode: preparedNumericExact, wantBindWidth: 66, wantBindScale: 30},
 		{value: "1e67tail", wantWidth: 68, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "1e75tail", wantWidth: 76, wantExponent: true, wantBindingMode: preparedNumericExact},
 		{value: "1e76tail", wantWidth: 77, wantExponent: true, wantBindingMode: preparedNumericTextFloat},
@@ -702,7 +701,7 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 	}
 }
 
-func TestInitExecuteStmtParamRejectsNativeDecimalBeyondDecimal256(t *testing.T) {
+func TestInitExecuteStmtParamAcceptsNativeDecimalBeyondDecimal256(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 121, "select coalesce(?, cast(2 as decimal(1,0)))")
 	defer func() {
@@ -721,8 +720,7 @@ func TestInitExecuteStmtParamRejectsNativeDecimalBeyondDecimal256(t *testing.T) 
 					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
 				prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
 				_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
-				require.Error(t, err)
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+				require.NoError(t, err)
 			})
 		}
 	}

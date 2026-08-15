@@ -176,6 +176,62 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.NoError(t, updateStmt.Close())
 		require.Equal(t, []int{1, 3, 4, 5, 6, 12}, queryIssue27088QueryIDs(t, ctx, conn,
 			"select id from t order by id"))
+
+		mustExec(t, ctx, conn, "create table fractional (id int primary key, d decimal(20,4))")
+		mustExec(t, ctx, conn, "insert into fractional values (1,1.2500),(2,-1.2500),(3,1.0000)")
+		for _, query := range []string{
+			"select id from fractional where d=?+0",
+			"select id from fractional where d=?-0",
+			"select id from fractional where d=?*1",
+			"select id from fractional where d=?/1",
+		} {
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			require.Equal(t, []int{1}, queryIssue27088IDs(t, ctx, stmt, float64(1.25)), query)
+			require.NoError(t, stmt.Close())
+		}
+		mustExec(t, ctx, conn, "create table fractional_update as select * from fractional")
+		fractionalUpdate, err := conn.PrepareContext(ctx,
+			"update fractional_update set id=id+10 where d=?+0")
+		require.NoError(t, err)
+		result, err = fractionalUpdate.ExecContext(ctx, float64(1.25))
+		require.NoError(t, err)
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), affected)
+		require.NoError(t, fractionalUpdate.Close())
+		require.Equal(t, []int{2, 3, 11}, queryIssue27088QueryIDs(t, ctx, conn,
+			"select id from fractional_update order by id"))
+		mustExec(t, ctx, conn, "create table fractional_delete as select * from fractional")
+		fractionalDelete, err := conn.PrepareContext(ctx, "delete from fractional_delete where d=?+0")
+		require.NoError(t, err)
+		result, err = fractionalDelete.ExecContext(ctx, float64(1.25))
+		require.NoError(t, err)
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), affected)
+		require.NoError(t, fractionalDelete.Close())
+		require.Equal(t, []int{2, 3}, queryIssue27088QueryIDs(t, ctx, conn,
+			"select id from fractional_delete order by id"))
+
+		mustExec(t, ctx, conn, "create table exact_compare (id int primary key, d decimal(65,30))")
+		mustExec(t, ctx, conn, "insert into exact_compare values (1,0),"+
+			"(2,12345678901234567890123456789012345.123456789012345678901234567890)")
+		exactCompare, err := conn.PrepareContext(ctx, "select id from exact_compare where d=?")
+		require.NoError(t, err)
+		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare, "1e-77"))
+		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare,
+			"12345678901234567890123456789012345.123456789012345678901234567890123456789012"))
+		require.NoError(t, exactCompare.Close())
+		wideCommon, err := conn.PrepareContext(ctx, "select coalesce(?, cast(2 as decimal(1,0)))")
+		require.NoError(t, err)
+		row := wideCommon.QueryRowContext(ctx,
+			"123456789012345678901234567890123456.12345678901234567890123456789012345678901")
+		var wideValue string
+		require.NoError(t, row.Scan(&wideValue))
+		require.Equal(t,
+			"123456789012345678901234567890123456.123456789012345678901234567890", wideValue)
+		require.NoError(t, wideCommon.Close())
 	})
 }
 

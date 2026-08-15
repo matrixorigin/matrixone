@@ -27,6 +27,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -424,6 +425,13 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 				// marker lets multi-operand coercion distinguish it from SQL text.
 				expr.ExactDecimalParam = true
 				if b.numericParamType != nil {
+					if stringValue, ok := value.(string); ok && !b.decimalParamCommonTypeTarget {
+						_, width, _, numeric := canonicalPreparedDecimalString(stringValue)
+						if numeric && width > 76 {
+							expr.Typ.Enumvalues = "mo_prepared_decimal_value:" + stringValue
+							return expr, nil
+						}
+					}
 					cast, castErr := appendCastBeforeExpr(b.GetContext(), expr, *b.numericParamType)
 					if castErr != nil {
 						return nil, castErr
@@ -1127,6 +1135,14 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if isNumericBinaryOp(astExpr.Op) && b.hasRuntimePreparedFloat(astExpr) {
+		previous := b.numericParamType
+		typ := types.T_float64.ToType()
+		floatType := makePlan2Type(&typ)
+		b.numericParamType = &floatType
+		defer func() { b.numericParamType = previous }()
+		return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+	}
 	if (isNumericBinaryOp(astExpr.Op) || isBitwiseBinaryOp(astExpr.Op)) &&
 		(b.mysqlSpecialTypeInAst(astExpr.Left) || b.mysqlSpecialTypeInAst(astExpr.Right)) {
 		return b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
@@ -1140,6 +1156,25 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) hasRuntimePreparedFloat(astExpr tree.Expr) bool {
+	switch typed := astExpr.(type) {
+	case *tree.ParamExpr:
+		if b.builder == nil || b.builder.compCtx == nil {
+			return false
+		}
+		proc := b.builder.compCtx.GetProcess()
+		return proc != nil && proc.GetPrepareParamKind(int(typed.Offset)-1) == vector.PrepareParamFloat
+	case *tree.ParenExpr:
+		return b.hasRuntimePreparedFloat(typed.Expr)
+	case *tree.UnaryExpr:
+		return b.hasRuntimePreparedFloat(typed.Expr)
+	case *tree.BinaryExpr:
+		return b.hasRuntimePreparedFloat(typed.Left) || b.hasRuntimePreparedFloat(typed.Right)
+	default:
+		return false
+	}
 }
 
 func isBitwiseBinaryOp(op tree.BinaryOp) bool {
@@ -3610,6 +3645,26 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	foldSingleInDecimalComparisonStringConstants(proc, name, args)
 	foldDecimalComparisonStringConstants(proc, name, args)
+	preparedFloatArithmetic := false
+	if isPreparedFloatArithmetic(name) {
+		for _, arg := range args {
+			if containsPreparedFloatSource(arg) {
+				preparedFloatArithmetic = true
+				break
+			}
+		}
+	}
+	if preparedFloatArithmetic {
+		typ := types.T_float64.ToType()
+		floatType := makePlan2Type(&typ)
+		for i := range args {
+			var err error
+			args[i], err = appendCastBeforeExpr(ctx, args[i], floatType)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	retExpr, err := bindFuncExprImplByPlanExpr(
 		ctx, name, args, preparedDecimalPrefixCastEnabled(proc))
 	if err != nil {
@@ -3634,11 +3689,6 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			// a bare literal loses the distinction from a direct parameter, whose
 			// single-comparison DECIMAL contract is intentionally different.
 			if preparedFloatSource {
-				floatType := types.T_float64.ToType()
-				retExpr, err = appendCastBeforeExpr(ctx, retExpr, makePlan2Type(&floatType))
-				if err != nil {
-					return nil, err
-				}
 				retExpr.ExactDecimalParam = true
 				break
 			}
@@ -3908,6 +3958,15 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 			"percentile argument of %s must be a non-null constant", name)
 	}
 	return nil
+}
+
+func isPreparedFloatArithmetic(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsPreparedFloatSource(expr *Expr) bool {
@@ -5547,9 +5606,15 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 				}
 				return nil
 			}
-			normalized, err := normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
+			normalized, err := preparedDecimalComparisonRepresentative(ctx, args[paramPos], args[peerPos].Typ)
 			if err != nil {
 				return err
+			}
+			if normalized == args[paramPos] {
+				normalized, err = normalizeTuplePreparedDecimalValue(ctx, args[paramPos])
+				if err != nil {
+					return err
+				}
 			}
 			args[paramPos] = normalized
 			return nil
@@ -5566,6 +5631,153 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 		return nil
 	}
 	return nil
+}
+
+func preparedDecimalComparisonRepresentative(
+	ctx context.Context, expr *plan.Expr, peer plan.Type,
+) (*plan.Expr, error) {
+	value, ok := preparedDecimalLiteralString(expr)
+	if !ok {
+		return expr, nil
+	}
+	canonical, width, scale, ok := canonicalPreparedDecimalString(value)
+	if !ok || width <= 76 {
+		return expr, nil
+	}
+	sourceIntegral := max(width-scale, int32(0))
+	peerIntegral := max(peer.Width-peer.Scale, int32(0))
+	capacityScale := int32(76) - max(sourceIntegral, peerIntegral)
+	if capacityScale <= peer.Scale || capacityScale <= 0 {
+		return expr, nil
+	}
+	sign := ""
+	if canonical[0] == '-' || canonical[0] == '+' {
+		sign, canonical = canonical[:1], canonical[1:]
+	}
+	dot := strings.IndexByte(canonical, '.')
+	if dot < 0 {
+		return expr, nil
+	}
+	integral, fraction := canonical[:dot], canonical[dot+1:]
+	if int32(len(fraction)) <= capacityScale {
+		return expr, nil
+	}
+	retained, discarded := []byte(fraction[:capacityScale]), fraction[capacityScale:]
+	discardedNonZero := strings.IndexFunc(discarded, func(r rune) bool { return r != '0' }) >= 0
+	if discardedNonZero {
+		peerScale := min(peer.Scale, int32(len(retained)))
+		gridAligned := true
+		for _, digit := range retained[peerScale:] {
+			if digit != '0' {
+				gridAligned = false
+				break
+			}
+		}
+		if gridAligned {
+			retained[len(retained)-1] = '1'
+		}
+	}
+	representative := sign + integral + "." + string(retained)
+	decimal, exact, err := makePlan2ExactDecimalStringExprWithType(ctx, representative)
+	if err != nil || !exact {
+		return expr, err
+	}
+	decimal.ExactDecimalParam = true
+	return decimal, nil
+}
+
+func canonicalPreparedDecimalString(value string) (string, int32, int32, bool) {
+	if canonical, width, scale, ok := canonicalExactDecimalString(value); ok {
+		return canonical, width, scale, true
+	}
+	if value == "" {
+		return "", 0, 0, false
+	}
+	i, negative := 0, false
+	if value[i] == '+' || value[i] == '-' {
+		negative = value[i] == '-'
+		i++
+	}
+	start, integerDigits, seenDot := i, 0, false
+	var digits strings.Builder
+	for i < len(value) && value[i] != 'e' && value[i] != 'E' {
+		switch {
+		case value[i] >= '0' && value[i] <= '9':
+			digits.WriteByte(value[i])
+			if !seenDot {
+				integerDigits++
+			}
+		case value[i] == '.' && !seenDot:
+			seenDot = true
+		default:
+			return "", 0, 0, false
+		}
+		i++
+	}
+	if i == start || digits.Len() == 0 {
+		return "", 0, 0, false
+	}
+	exponent := 0
+	if i < len(value) {
+		parsed, err := strconv.Atoi(value[i+1:])
+		if err != nil || parsed < -10000 || parsed > 10000 {
+			return "", 0, 0, false
+		}
+		exponent = parsed
+	}
+	coefficient := digits.String()
+	leading := len(coefficient) - len(strings.TrimLeft(coefficient, "0"))
+	coefficient = coefficient[leading:]
+	if coefficient == "" {
+		return "0", 1, 0, true
+	}
+	point := integerDigits - leading + exponent
+	for len(coefficient) > point && coefficient[len(coefficient)-1] == '0' {
+		coefficient = coefficient[:len(coefficient)-1]
+	}
+	var result strings.Builder
+	if negative {
+		result.WriteByte('-')
+	}
+	var width, scale int
+	switch {
+	case point <= 0:
+		result.WriteString("0.")
+		result.WriteString(strings.Repeat("0", -point))
+		result.WriteString(coefficient)
+		scale = -point + len(coefficient)
+		width = scale
+	case point >= len(coefficient):
+		result.WriteString(coefficient)
+		result.WriteString(strings.Repeat("0", point-len(coefficient)))
+		width = point
+	default:
+		result.WriteString(coefficient[:point])
+		result.WriteByte('.')
+		result.WriteString(coefficient[point:])
+		width, scale = len(coefficient), len(coefficient)-point
+	}
+	return result.String(), int32(width), int32(scale), true
+}
+
+func preparedDecimalLiteralString(expr *plan.Expr) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+	const marker = "mo_prepared_decimal_value:"
+	if strings.HasPrefix(expr.Typ.Enumvalues, marker) {
+		return strings.TrimPrefix(expr.Typ.Enumvalues, marker), true
+	}
+	if literal := expr.GetLit(); literal != nil && !literal.Isnull && !literal.IsBin {
+		value, ok := literal.Value.(*plan.Literal_Sval)
+		if ok {
+			return value.Sval, true
+		}
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
+		return preparedDecimalLiteralString(fn.Args[0])
+	}
+	return "", false
 }
 
 // A direct prepared parameter is represented as TEXT for transport, but MySQL

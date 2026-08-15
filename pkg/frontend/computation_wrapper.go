@@ -774,9 +774,6 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 }
 
 func preparedNativeDecimalBindingType(width, scale int32) types.Type {
-	// Native DECIMAL is already an exact source.  Values below the supported
-	// scale follow the target DECIMAL's rounding contract instead of being
-	// reclassified as DOUBLE merely because their spelling is wider than 76.
 	if width > 76 && max(width-scale, 0) <= 35 {
 		return preparedProtocolExactBindingType()
 	}
@@ -798,10 +795,13 @@ func preparedDecimalBindingType(width, scale int32, full, exponent bool) types.T
 	switch {
 	case integral > 76:
 		binding.Size = preparedNumericTextFloat
+	case width > 76 && integral >= 36 && integral <= 46:
+		// MySQL's prepared DECIMAL result domain keeps at most 30 fractional
+		// digits. Source digits beyond that result scale do not force the whole
+		// expression into DOUBLE when its integral part still fits Decimal256.
+		binding.Size = preparedNumericExact
+		binding.Width, binding.Scale = max(int32(65), integral+30), 30
 	case width > 76:
-		// A non-zero fractional digit beyond Decimal256's maximum scale cannot
-		// survive an exact cast. Preserve it through the approximate numeric
-		// domain instead of rounding the prepared value to zero.
 		binding.Size = preparedNumericTextFloat
 	case integral <= 35:
 		binding.Size = preparedNumericTextPrefix
@@ -1213,13 +1213,6 @@ func initPreparedExecuteParams(
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
-			if kind == vector.PrepareParamDecimal {
-				value := normalizePreparedDecimalPayload(prepareStmt.params.GetRawBytesAt(i))
-				width, scale := preparedNativeDecimalDomain(value)
-				if width-scale > 76 {
-					return nil, moerr.NewOutOfRangef(reqCtx, "DECIMAL", "value '%s'", value)
-				}
-			}
 			if kind != vector.PrepareParamNone {
 				if kinds == nil {
 					kinds = make([]vector.PrepareParamKind, paramCount)

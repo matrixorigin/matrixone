@@ -234,13 +234,71 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 	}
 }
 
-// DeepCopyNode uses protobuf's generated field traversal so newly added plan
-// fields cannot silently disappear from execution-time copies.
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	if node == nil {
 		return nil
 	}
-	return proto.Clone(node).(*plan.Node)
+	ret := &plan.Node{
+		NodeType: node.NodeType, NodeId: node.NodeId, Stats: DeepCopyStats(node.Stats),
+		Children: slices.Clone(node.Children), ProjectList: DeepCopyExprList(node.ProjectList),
+		JoinType: node.JoinType, OnList: DeepCopyExprList(node.OnList), IsRightJoin: node.IsRightJoin,
+		FilterList: DeepCopyExprList(node.FilterList), GroupBy: DeepCopyExprList(node.GroupBy),
+		GroupingFlag: slices.Clone(node.GroupingFlag), AggList: DeepCopyExprList(node.AggList),
+		WinSpecList: DeepCopyExprList(node.WinSpecList), OrderBy: DeepCopyOrderBySpecList(node.OrderBy),
+		Limit: DeepCopyExpr(node.Limit), Offset: DeepCopyExpr(node.Offset), RankOption: DeepCopyRankOption(node.RankOption),
+		TableDef: DeepCopyTableDef(node.TableDef, true), ObjRef: DeepCopyObjectRef(node.ObjRef),
+		ParentObjRef: DeepCopyObjectRef(node.ParentObjRef), ExtraOptions: node.ExtraOptions,
+		DeleteCtx: DeepCopyDeleteCtx(node.DeleteCtx), BindingTags: slices.Clone(node.BindingTags),
+		AnalyzeInfo: DeepCopyAnalyzeInfo(node.AnalyzeInfo), TblFuncExprList: DeepCopyExprList(node.TblFuncExprList),
+		SourceStep: slices.Clone(node.SourceStep), ClusterTable: DeepCopyClusterTable(node.ClusterTable),
+		NotCacheable: node.NotCacheable, InsertCtx: DeepCopyInsertCtx(node.InsertCtx),
+		IndexReaderParam: DeepCopyIndexReaderParam(node.IndexReaderParam), PreInsertCtx: DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx: DeepCopyPreInsertUkCtx(node.PreInsertUkCtx), IsEnd: node.IsEnd,
+		BlockFilterList:        DeepCopyExprList(node.BlockFilterList),
+		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(node.RuntimeFilterProbeList),
+		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(node.RuntimeFilterBuildList),
+		Uuid:                   slices.Clone(node.Uuid), RecursiveSink: node.RecursiveSink,
+		PreInsertSkCtx: DeepCopyPreInsertUkCtx(node.PreInsertSkCtx), Interval: DeepCopyExpr(node.Interval),
+		Sliding: DeepCopyExpr(node.Sliding), Timestamp: DeepCopyExpr(node.Timestamp), WEnd: DeepCopyExpr(node.WEnd),
+		FillType: node.FillType, FillVal: DeepCopyExprList(node.FillVal), SampleFunc: DeepCopySampleFuncSpec(node.SampleFunc),
+		WindowIdx: node.WindowIdx, OnUpdateExprs: DeepCopyExprList(node.OnUpdateExprs),
+		IfInsertFromUnique: node.IfInsertFromUnique, SendMsgList: slices.Clone(node.SendMsgList),
+		RecvMsgList: slices.Clone(node.RecvMsgList), DedupJoinCtx: DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		UpdateCtxList: DeepCopyUpdateCtxList(node.UpdateCtxList), ScanSnapshot: DeepCopySnapshot(node.ScanSnapshot),
+		RecursiveCte: node.RecursiveCte, ApplyType: node.ApplyType, OnDuplicateAction: node.OnDuplicateAction,
+		DedupColName: node.DedupColName, DedupColTypes: slices.Clone(node.DedupColTypes), RollupFilter: node.RollupFilter,
+		SpillMem: node.SpillMem, OriginViews: slices.Clone(node.OriginViews), DirectView: node.DirectView,
+		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
+		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos), GapFillMode: node.GapFillMode,
+		RecursiveUnionDistinct: node.RecursiveUnionDistinct, FuzzyBuildSide: node.FuzzyBuildSide,
+		GroupByHashKey: slices.Clone(node.GroupByHashKey), FilterIsBarrier: node.FilterIsBarrier,
+		PartitionByCount: node.PartitionByCount,
+	}
+	ret.LockTargets = make([]*plan.LockTarget, len(node.LockTargets))
+	for i := range node.LockTargets {
+		ret.LockTargets[i] = DeepCopyLockTarget(node.LockTargets[i])
+	}
+	if node.RowsetData != nil {
+		ret.RowsetData = &plan.RowsetData{Cols: make([]*plan.ColData, len(node.RowsetData.Cols)), RowCount: node.RowsetData.RowCount}
+		for i := range node.RowsetData.Cols {
+			ret.RowsetData.Cols[i] = DeepCopyColData(node.RowsetData.Cols[i])
+		}
+	}
+	ret.IndexScanInfo = plan.IndexScanInfo{
+		IsIndexScan: node.IndexScanInfo.IsIndexScan, IndexName: node.IndexScanInfo.IndexName,
+		BelongToTable: node.IndexScanInfo.BelongToTable, Parts: slices.Clone(node.IndexScanInfo.Parts),
+		IsUnique: node.IndexScanInfo.IsUnique, IndexTableName: node.IndexScanInfo.IndexTableName,
+	}
+	if node.ExternScan != nil {
+		ret.ExternScan = proto.Clone(node.ExternScan).(*plan.ExternScan)
+	}
+	if node.Fuzzymessage != nil {
+		ret.Fuzzymessage = proto.Clone(node.Fuzzymessage).(*plan.OriginTableMessageForFuzzy)
+	}
+	if node.PostDmlCtx != nil {
+		ret.PostDmlCtx = proto.Clone(node.PostDmlCtx).(*plan.PostDmlCtx)
+	}
+	return ret
 }
 
 func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {
@@ -578,14 +636,41 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	if qry == nil {
 		return nil
 	}
-	return proto.Clone(qry).(*plan.Query)
+	ret := &plan.Query{
+		StmtType: qry.StmtType, Steps: slices.Clone(qry.Steps), Nodes: make([]*plan.Node, len(qry.Nodes)),
+		Params: DeepCopyExprList(qry.Params), Headings: slices.Clone(qry.Headings), LoadTag: qry.LoadTag,
+		LoadWriteS3: qry.LoadWriteS3, DetectSqls: slices.Clone(qry.DetectSqls),
+		BackgroundQueries: make([]*plan.Query, len(qry.BackgroundQueries)), MaxDop: qry.MaxDop,
+		HasForeignKeyAction: qry.HasForeignKeyAction,
+		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
+		HasReturning:        qry.HasReturning, ReturningStep: qry.ReturningStep,
+	}
+	for i := range qry.Nodes {
+		ret.Nodes[i] = DeepCopyNode(qry.Nodes[i])
+	}
+	for i := range qry.BackgroundQueries {
+		ret.BackgroundQueries[i] = DeepCopyQuery(qry.BackgroundQueries[i])
+	}
+	for i := range qry.CatalogDependencies {
+		ret.CatalogDependencies[i] = DeepCopyObjectRef(qry.CatalogDependencies[i])
+	}
+	return ret
 }
 
 func DeepCopyPlan(pl *Plan) *Plan {
 	if pl == nil {
 		return nil
 	}
-	return proto.Clone(pl).(*plan.Plan)
+	ret := &plan.Plan{TryRunTimes: pl.TryRunTimes, IsPrepare: pl.IsPrepare}
+	switch typed := pl.Plan.(type) {
+	case *plan.Plan_Query:
+		ret.Plan = &plan.Plan_Query{Query: DeepCopyQuery(typed.Query)}
+	case *plan.Plan_Ddl:
+		ret.Plan = &plan.Plan_Ddl{Ddl: DeepCopyDataDefinition(typed.Ddl)}
+	default:
+		return proto.Clone(pl).(*plan.Plan)
+	}
+	return ret
 }
 
 func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {

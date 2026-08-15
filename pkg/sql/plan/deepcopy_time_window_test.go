@@ -25,15 +25,20 @@ import (
 func TestDeepCopyPlanPreservesCompleteProtoSemantics(t *testing.T) {
 	original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 		DdlType: plan.DataDefinition_CREATE_TABLE,
-		Query: &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{{
-			NodeType:          plan.Node_JOIN,
-			ApplyType:         plan.Node_OUTERAPPLY,
-			OnDuplicateAction: plan.Node_UPDATE,
-			ScanSnapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{
-				TenantName: "snapshot-tenant", TenantID: 42,
-			}},
-			SendMsgList: []plan.MsgHeader{{MsgTag: 17, MsgType: 3}},
-		}}},
+		Query: &plan.Query{Steps: []int32{0}, LoadTag: true, LoadWriteS3: true, MaxDop: 8,
+			Headings: []string{"h"}, BackgroundQueries: []*plan.Query{{Steps: []int32{1}}}, Nodes: []*plan.Node{{
+				NodeType:          plan.Node_JOIN,
+				ApplyType:         plan.Node_OUTERAPPLY,
+				OnDuplicateAction: plan.Node_UPDATE,
+				RecursiveSink:     true,
+				RecursiveCte:      true,
+				RollupFilter:      true,
+				PartitionByCount:  2,
+				ScanSnapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{
+					TenantName: "snapshot-tenant", TenantID: 42,
+				}},
+				SendMsgList: []plan.MsgHeader{{MsgTag: 17, MsgType: 3}},
+			}}},
 		Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{
 			Database: "db", CreateAsSelectSql: "insert into dst select * from src",
 		}},
@@ -48,6 +53,51 @@ func TestDeepCopyPlanPreservesCompleteProtoSemantics(t *testing.T) {
 	copied.GetDdl().GetCreateTable().CreateAsSelectSql = "changed"
 	require.Equal(t, "snapshot-tenant", original.GetDdl().Query.Nodes[0].ScanSnapshot.Tenant.TenantName)
 	require.Equal(t, "insert into dst select * from src", original.GetDdl().GetCreateTable().CreateAsSelectSql)
+}
+
+func TestDeepCopyQueryPlanPreservesCompleteProtoSemantics(t *testing.T) {
+	original := &plan.Plan{TryRunTimes: 3, IsPrepare: true, Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT, Steps: []int32{0}, Params: []*plan.Expr{twTestColExpr(9, 9)},
+		Headings: []string{"h"}, LoadTag: true, LoadWriteS3: true, DetectSqls: []string{"detect"},
+		BackgroundQueries: []*plan.Query{{Steps: []int32{1}}}, MaxDop: 8,
+		HasForeignKeyAction: true, HasReturning: true, ReturningStep: 1,
+		CatalogDependencies: []*plan.ObjectRef{{ObjName: "dependency"}},
+		Nodes: []*plan.Node{{NodeType: plan.Node_AGG, RecursiveSink: true, RecursiveCte: true,
+			RollupFilter: true, PartitionByCount: 2, GroupByHashKey: []int32{0},
+			PreInsertSkCtx: &plan.PreInsertUkCtx{}, PostDmlCtx: &plan.PostDmlCtx{},
+			SendMsgList: []plan.MsgHeader{{MsgTag: 1}}, RecvMsgList: []plan.MsgHeader{{MsgTag: 2}},
+		}},
+	}}}
+	copied := DeepCopyPlan(original)
+	require.True(t, proto.Equal(original, copied))
+	require.NotSame(t, original.GetQuery(), copied.GetQuery())
+	require.NotSame(t, original.GetQuery().Nodes[0], copied.GetQuery().Nodes[0])
+	copied.GetQuery().BackgroundQueries[0].Steps[0] = 9
+	copied.GetQuery().CatalogDependencies[0].ObjName = "changed"
+	require.Equal(t, int32(1), original.GetQuery().BackgroundQueries[0].Steps[0])
+	require.Equal(t, "dependency", original.GetQuery().CatalogDependencies[0].ObjName)
+}
+
+func BenchmarkDeepCopyNode(b *testing.B) {
+	node := &plan.Node{NodeType: plan.Node_AGG, Children: []int32{1},
+		GroupBy: []*plan.Expr{twTestColExpr(1, 0)}, AggList: []*plan.Expr{twTestColExpr(1, 1)},
+		OrderBy: []*plan.OrderBySpec{{Expr: twTestColExpr(1, 2)}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = DeepCopyNode(node)
+	}
+}
+
+func BenchmarkDeepCopyPlan(b *testing.B) {
+	pl := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{{
+		NodeType: plan.Node_SORT, Children: []int32{1}, OrderBy: []*plan.OrderBySpec{{Expr: twTestColExpr(1, 0)}},
+	}}}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = DeepCopyPlan(pl)
+	}
 }
 
 func twTestColExpr(relPos, colPos int32) *plan.Expr {
