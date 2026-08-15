@@ -1,0 +1,87 @@
+drop database if exists clone_index_visibility_src;
+drop database if exists clone_index_visibility_table_dst;
+drop database if exists clone_index_visibility_db_dst;
+create database clone_index_visibility_src;
+create database clone_index_visibility_table_dst;
+use clone_index_visibility_src;
+create table src (
+id int primary key,
+visible_key varchar(32),
+invisible_key varchar(32),
+key idx_visible(visible_key),
+key idx_invisible(invisible_key) comment 'kept-invisible'
+);
+insert into src values (1, 'visible-1', 'invisible-1'), (2, 'visible-2', 'invisible-2');
+alter table src alter index idx_invisible invisible;
+show index from src;
+➤ Table[12,2,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
+src  ¦  1  ¦  idx_visible  ¦  1  ¦  visible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  visible_key  𝄀
+src  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+src  ¦  1  ¦  idx_invisible  ¦  1  ¦  invisible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  kept-invisible  ¦    ¦  NO  ¦  invisible_key
+show create table src;
+➤ Table[12,2,0]  ¦  Create Table[12,197,0]  𝄀
+src  ¦  CREATE TABLE `src` (
+  `id` int NOT NULL,
+  `visible_key` varchar(32) DEFAULT NULL,
+  `invisible_key` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_visible` (`visible_key`),
+  KEY `idx_invisible` (`invisible_key`) INVISIBLE COMMENT 'kept-invisible'
+)
+create table clone_index_visibility_table_dst.table_clone clone clone_index_visibility_src.src;
+show index from clone_index_visibility_table_dst.table_clone;
+➤ Table[12,8,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
+table_clone  ¦  1  ¦  idx_visible  ¦  1  ¦  visible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  visible_key  𝄀
+table_clone  ¦  1  ¦  idx_invisible  ¦  1  ¦  invisible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  kept-invisible  ¦    ¦  NO  ¦  invisible_key  𝄀
+table_clone  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+show create table clone_index_visibility_table_dst.table_clone;
+➤ Table[12,8,0]  ¦  Create Table[12,203,0]  𝄀
+table_clone  ¦  CREATE TABLE `table_clone` (
+  `id` int NOT NULL,
+  `visible_key` varchar(32) DEFAULT NULL,
+  `invisible_key` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_visible` (`visible_key`),
+  KEY `idx_invisible` (`invisible_key`) INVISIBLE COMMENT 'kept-invisible'
+)
+select id, visible_key, invisible_key from clone_index_visibility_table_dst.table_clone where invisible_key = 'invisible-2';
+➤ id[4,32,0]  ¦  visible_key[12,24,0]  ¦  invisible_key[12,24,0]  𝄀
+2  ¦  visible-2  ¦  invisible-2
+create table clone_index_visibility_table_dst.like_clone like clone_index_visibility_src.src;
+show index from clone_index_visibility_table_dst.like_clone;
+➤ Table[12,7,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
+like_clone  ¦  1  ¦  idx_visible  ¦  1  ¦  visible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  visible_key  𝄀
+like_clone  ¦  1  ¦  idx_invisible  ¦  1  ¦  invisible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  kept-invisible  ¦    ¦  NO  ¦  invisible_key  𝄀
+like_clone  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+show create table clone_index_visibility_table_dst.like_clone;
+➤ Table[12,7,0]  ¦  Create Table[12,202,0]  𝄀
+like_clone  ¦  CREATE TABLE `like_clone` (
+  `id` int NOT NULL,
+  `visible_key` varchar(32) DEFAULT NULL,
+  `invisible_key` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_visible` (`visible_key`),
+  KEY `idx_invisible` (`invisible_key`) INVISIBLE COMMENT 'kept-invisible'
+)
+create database clone_index_visibility_db_dst clone clone_index_visibility_src;
+show index from clone_index_visibility_db_dst.src;
+➤ Table[12,2,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
+src  ¦  1  ¦  idx_visible  ¦  1  ¦  visible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  visible_key  𝄀
+src  ¦  1  ¦  idx_invisible  ¦  1  ¦  invisible_key  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦  kept-invisible  ¦    ¦  NO  ¦  invisible_key  𝄀
+src  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+show create table clone_index_visibility_db_dst.src;
+➤ Table[12,2,0]  ¦  Create Table[12,197,0]  𝄀
+src  ¦  CREATE TABLE `src` (
+  `id` int NOT NULL,
+  `visible_key` varchar(32) DEFAULT NULL,
+  `invisible_key` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_visible` (`visible_key`),
+  KEY `idx_invisible` (`invisible_key`) INVISIBLE COMMENT 'kept-invisible'
+)
+select id, visible_key, invisible_key from clone_index_visibility_db_dst.src where visible_key = 'visible-1';
+➤ id[4,32,0]  ¦  visible_key[12,24,0]  ¦  invisible_key[12,24,0]  𝄀
+1  ¦  visible-1  ¦  invisible-1
+drop database if exists clone_index_visibility_src;
+drop database if exists clone_index_visibility_table_dst;
+drop database if exists clone_index_visibility_db_dst;

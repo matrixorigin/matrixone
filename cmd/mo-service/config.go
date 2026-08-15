@@ -170,6 +170,9 @@ func NewConfig() *Config {
 		LogService:    logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
+			Frontend: config.FrontendParameters{
+				MongoDB: *config.NewMongoDBParameters(),
+			},
 		},
 	}
 }
