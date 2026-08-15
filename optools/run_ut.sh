@@ -135,7 +135,6 @@ function run_plan_race_shards(){
     local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
     local build_log="${G_WKSP}/${G_TS}-plan-race-build.out"
     local plan_test_binary="${G_WKSP}/${G_TS}-plan-race.test"
-    local plan_package_metadata=""
     local plan_package_dir=""
     local plan_package_import=""
     local build_status=0
@@ -153,12 +152,16 @@ function run_plan_race_shards(){
         return 2
     fi
 
-    if ! plan_package_metadata=$(go list ${GO_MODULE_MODE} \
-        -f '{{.Dir}}\t{{.ImportPath}}' "${plan_package}"); then
+    if ! plan_package_dir=$(go list ${GO_MODULE_MODE} \
+        -f '{{.Dir}}' "${plan_package}"); then
         logger "ERR" "Failed to resolve package metadata for ${plan_package}"
         return 2
     fi
-    IFS=$'\t' read -r plan_package_dir plan_package_import <<< "${plan_package_metadata}"
+    if ! plan_package_import=$(go list ${GO_MODULE_MODE} \
+        -f '{{.ImportPath}}' "${plan_package}"); then
+        logger "ERR" "Failed to resolve package import path for ${plan_package}"
+        return 2
+    fi
 
     # Compile and link the race-instrumented test binary once. Each shard still
     # runs in a fresh process, preserving race-detector and package-global

@@ -1072,7 +1072,6 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, cases []notHAKeeperTestCase) {
 	}, 10*time.Second, 10*time.Millisecond,
 		"service2 did not become HAKeeper leader")
 	for _, testCase := range cases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			// Each operation starts from a fresh client generation connected to
 			// service1, which deliberately is not the HAKeeper. The two services

@@ -350,10 +350,8 @@ func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) 
 	}
 
 	for _, shape := range shapes {
-		shape := shape
 		t.Run(shape.name, func(t *testing.T) {
 			for _, policy := range []string{"skip", "accept", "fail"} {
-				policy := policy
 				t.Run(policy, func(t *testing.T) {
 					src := fmt.Sprintf("src_%s_%s", shape.name, policy)
 					dst := fmt.Sprintf("dst_%s_%s", shape.name, policy)
