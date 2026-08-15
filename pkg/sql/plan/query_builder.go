@@ -3515,7 +3515,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
-		builder.optimizeDistinctAgg(rootID)
+		if err = builder.optimizeDistinctAgg(rootID); err != nil {
+			return nil, err
+		}
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
 		builder.disableMemoryUnsafeRightDedup(rootID)

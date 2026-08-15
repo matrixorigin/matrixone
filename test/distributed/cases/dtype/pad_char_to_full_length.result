@@ -119,6 +119,15 @@ select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
 select count(*) from (
 select coalesce(c, v) from pad_char_promoted
 union select c from pad_char_set_v8
@@ -283,6 +292,15 @@ select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 1
 select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
 ➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
+1
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct 1)[-5,64,0]  𝄀
+1
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
+➤ count(distinct coalesce(c, v))[-5,64,0]  𝄀
 1
 select count(*) from (
 select coalesce(c, v) from pad_char_promoted

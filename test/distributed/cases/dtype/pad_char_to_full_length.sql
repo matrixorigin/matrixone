@@ -69,6 +69,9 @@ select count(*) from (select c from pad_char_set_text minus select c from pad_ch
 select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
 select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
 select count(*) from (
     select coalesce(c, v) from pad_char_promoted
     union select c from pad_char_set_v8
@@ -152,6 +155,9 @@ select count(*) from (select c from pad_char_set_text minus select c from pad_ch
 select count(*) from pad_char_promoted where coalesce(c, v) = 'MO';
 select count(*) from (select distinct coalesce(c, v) from pad_char_promoted) d;
 select count(*) from (select coalesce(c, v) from pad_char_promoted group by coalesce(c, v)) g;
+select count(distinct coalesce(c, v)) from pad_char_promoted;
+select count(distinct 1) from pad_char_promoted group by coalesce(c, v);
+select count(distinct coalesce(c, v)) from pad_char_promoted group by coalesce(c, v);
 select count(*) from (
     select coalesce(c, v) from pad_char_promoted
     union select c from pad_char_set_v8

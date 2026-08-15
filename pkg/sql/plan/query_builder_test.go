@@ -4524,6 +4524,61 @@ func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	}
 }
 
+func TestDistinctAggregatePromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name        string
+		sql         string
+		wantGroupBy int
+		wantHashKey []int32
+		castPos     []int
+	}{
+		{
+			name:        "count distinct",
+			sql:         "select count(distinct " + value + ") from nation",
+			wantGroupBy: 2,
+			wantHashKey: []int32{1},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and count distinct",
+			sql:         "select " + value + ", count(distinct n_regionkey) from nation group by " + value,
+			wantGroupBy: 3,
+			wantHashKey: []int32{1, 2},
+			castPos:     []int{1},
+		},
+		{
+			name:        "promoted group and promoted count distinct",
+			sql:         "select " + value + ", count(distinct " + value + ") from nation group by " + value,
+			wantGroupBy: 4,
+			wantHashKey: []int32{1, 3},
+			castPos:     []int{1, 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var innerAggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 && len(node.GroupByHashKey) > 0 {
+					innerAggregate = node
+					break
+				}
+			}
+			require.NotNil(t, innerAggregate)
+			require.Len(t, innerAggregate.GroupBy, tc.wantGroupBy)
+			require.Equal(t, tc.wantHashKey, innerAggregate.GroupByHashKey)
+			for _, pos := range tc.castPos {
+				keyFn := innerAggregate.GroupBy[pos].GetF()
+				require.NotNil(t, keyFn)
+				_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+				require.Equal(t, int32(3), overloadID)
+			}
+		})
+	}
+}
+
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
 		NewMockOptimizer(true),

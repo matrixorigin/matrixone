@@ -15,59 +15,107 @@
 package plan
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
+func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 	node := builder.qry.Nodes[nodeID]
 
 	for _, childID := range node.Children {
-		builder.optimizeDistinctAgg(childID)
+		if err := builder.optimizeDistinctAgg(childID); err != nil {
+			return err
+		}
 	}
 
 	if node.NodeType == plan.Node_AGG {
 
 		for _, flag := range node.GroupingFlag {
 			if !flag {
-				return
+				return nil
 			}
 		}
 
 		if len(node.AggList) != 1 {
-			return
+			return nil
 		}
 
 		aggFunc := node.AggList[0].GetF()
 		if uint64(aggFunc.Func.Obj)&function.Distinct == 0 || (aggFunc.Func.ObjName != "count" && aggFunc.Func.ObjName != "sum") {
-			return
+			return nil
 		}
 
 		// Multi-arg COUNT(DISTINCT col1, col2, ...) cannot be optimized into a simple
 		// GROUP BY because the distinct combination spans multiple columns.
 		if len(aggFunc.Args) > 1 {
-			return
+			return nil
 		}
 
 		// COUNT(DISTINCT (col1, col2)) — tuple syntax; normalization to multi-arg
 		// form happens in HavingBinder.BindAggFunc. Just skip GROUP BY optimization.
 		if aggFunc.Args[0].Typ.Id == int32(types.T_tuple) {
-			return
+			return nil
 		}
 
 		oldGroupLen := len(node.GroupBy)
 		oldGroupBy := node.GroupBy
 		toCount := aggFunc.Args[0]
+		toCountNeedsPadSpaceKey := hasPadSpaceStringProvenance(toCount)
+		innerGroupBy := append(slices.Clone(oldGroupBy), toCount)
+		var innerGroupByHashKey []int32
+		hasPadSpaceGroupKey := hasPadSpacePhysicalGroupKey(node)
+		if hasPadSpaceGroupKey {
+			innerGroupByHashKey = slices.Clone(node.GroupByHashKey)
+			if !toCountNeedsPadSpaceKey {
+				innerGroupByHashKey = append(innerGroupByHashKey, int32(oldGroupLen))
+			}
+		} else {
+			// Re-run the functional-dependency proof with the DISTINCT argument
+			// included. It may be determined by a grouped primary key, but a
+			// value from another joined table still has to extend the hash key.
+			candidate := &plan.Node{NodeType: plan.Node_AGG, GroupBy: innerGroupBy}
+			builder.determineGroupByHashKey(candidate)
+			innerGroupByHashKey = candidate.GroupByHashKey
+		}
+		if toCountNeedsPadSpaceKey &&
+			(hasPadSpaceGroupKey || hashKeyContains(innerGroupByHashKey, int32(oldGroupLen)) || len(innerGroupByHashKey) == 0) {
+			physicalKeys, err := builder.buildPadSpacePhysicalKeyList(
+				[]*plan.Expr{toCount}, []bool{true},
+			)
+			if err != nil {
+				return err
+			}
+			physicalKeyPos := int32(len(innerGroupBy))
+			if hasPadSpaceGroupKey {
+				innerGroupByHashKey = append(innerGroupByHashKey, physicalKeyPos)
+			} else if len(innerGroupByHashKey) == 0 {
+				innerGroupByHashKey = make([]int32, oldGroupLen, oldGroupLen+1)
+				for i := range oldGroupLen {
+					innerGroupByHashKey[i] = int32(i)
+				}
+				innerGroupByHashKey = append(innerGroupByHashKey, physicalKeyPos)
+			} else {
+				for i, pos := range innerGroupByHashKey {
+					if pos == int32(oldGroupLen) {
+						innerGroupByHashKey[i] = physicalKeyPos
+					}
+				}
+			}
+			innerGroupBy = append(innerGroupBy, physicalKeys[0])
+		}
 
 		newGroupTag := builder.genNewBindTag()
 		newAggregateTag := builder.genNewBindTag()
 		aggNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_AGG,
-			Children:    []int32{node.Children[0]},
-			GroupBy:     append(oldGroupBy, toCount),
-			BindingTags: []int32{newGroupTag, newAggregateTag},
-			SpillMem:    builder.aggSpillMem,
+			NodeType:       plan.Node_AGG,
+			Children:       []int32{node.Children[0]},
+			GroupBy:        innerGroupBy,
+			GroupByHashKey: innerGroupByHashKey,
+			BindingTags:    []int32{newGroupTag, newAggregateTag},
+			SpillMem:       builder.aggSpillMem,
 		}, builder.ctxByNode[node.Children[0]])
 		builder.determineGroupByHashKey(builder.qry.Nodes[aggNodeID])
 
@@ -96,4 +144,20 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) {
 			},
 		}
 	}
+	return nil
+}
+
+// A PAD SPACE physical group key is a semantic equality key, not a functional
+// dependency proof. A rewritten DISTINCT argument must therefore extend it.
+func hasPadSpacePhysicalGroupKey(node *plan.Node) bool {
+	for _, pos := range node.GroupByHashKey {
+		if pos >= 0 && int(pos) < len(node.GroupBy) && isCastOverload(node.GroupBy[pos], 3) {
+			return true
+		}
+	}
+	return false
+}
+
+func hashKeyContains(hashKey []int32, target int32) bool {
+	return slices.Contains(hashKey, target)
 }
