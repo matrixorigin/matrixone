@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,7 @@ func newExactTestSpillEngine(
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
 	require.NoError(t, err)
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
 	}
@@ -44,7 +43,7 @@ func newExactTestSpillEngine(
 	engine, err := NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine

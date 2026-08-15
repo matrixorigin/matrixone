@@ -185,7 +185,11 @@ func (exec *avgTwResultFloatExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}()
 	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		var err error
+		vecs[i], err = exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}
@@ -393,7 +397,11 @@ func (exec *avgTwResultDecimalExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}()
 	for i, st := range exec.state {
-		vecs[i] = vector.NewOffHeapVecWithType(exec.retType)
+		var err error
+		vecs[i], err = exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
 		if err := vecs[i].PreExtend(int(st.length), exec.mp); err != nil {
 			return nil, err
 		}

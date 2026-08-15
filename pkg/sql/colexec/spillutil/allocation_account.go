@@ -23,7 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// Spill allocation sites occupy a dedicated range within the HashBuild owner.
+// Spill allocation sites occupy a dedicated range within each operator owner
+// supplied to NewSpillAllocationAccount.
 const (
 	SpillAllocationSiteDecodedData mpool.AllocationSite = iota + 32
 	SpillAllocationSiteDecodedArea
@@ -37,8 +38,10 @@ const (
 	SpillAllocationSiteDecodedGrouping
 	SpillAllocationSiteSelectedNulls
 	SpillAllocationSiteSelectedGrouping
-	SpillAllocationSiteReadBuffer
 )
+
+// Sites 44-59 belong to hashbuild runtime-filter and dedup allocations.
+const SpillAllocationSiteReadBuffer mpool.AllocationSite = 60
 
 // SpillAllocationAccount is the allocation provenance for one spill
 // engine.
@@ -87,7 +90,7 @@ func NewSpillAllocationAccount(
 func (a *SpillAllocationAccount) validate() error {
 	if a == nil || a.account == nil || a.account.Handle() == 0 ||
 		a.owner < mpool.AllocationOwnerMin ||
-		a.owner > mpool.AllocationOwnerMax ||
+		a.owner > mpool.AllocationOwnerCatalogMax ||
 		a.decoded == nil || a.selected == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -109,6 +112,18 @@ func newSpillBatch(
 	return bat, nil
 }
 
+// ConfigureDecodedBatch assigns the spill engine's decoded-data provenance to
+// an empty off-heap destination before its first physical allocation.
+func (a *SpillAllocationAccount) ConfigureDecodedBatch(bat *batch.Batch) error {
+	if err := a.validate(); err != nil {
+		return err
+	}
+	if bat == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return bat.SetAllocationAccount(a.decoded)
+}
+
 func newSpillVector(
 	typ types.Type,
 	selection *vector.AllocationAccountSelection,
@@ -119,14 +134,17 @@ func newSpillVector(
 	return vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
 }
 
-func growSpillSlice[T any](
+// GrowAccountedSlice grows an off-heap typed slice under the spill engine's
+// allocation owner. Growth admits the replacement while the old backing is
+// still live, then releases the old backing after the copy.
+func GrowAccountedSlice[T any](
 	values []T,
 	length int,
 	mp *mpool.MPool,
 	allocation *SpillAllocationAccount,
 	site mpool.AllocationSite,
 ) ([]T, error) {
-	if length < 0 {
+	if length < 0 || mp == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
 	if length <= cap(values) {
@@ -163,7 +181,8 @@ func growSpillSlice[T any](
 	return next[:length], nil
 }
 
-func freeSpillSlice[T any](
+// FreeAccountedSlice releases a slice returned by GrowAccountedSlice.
+func FreeAccountedSlice[T any](
 	values []T,
 	mp *mpool.MPool,
 ) {

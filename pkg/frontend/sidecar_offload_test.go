@@ -332,6 +332,30 @@ func TestBuildGPUResultSet(t *testing.T) {
 	assert.Equal(t, "name", col2.Name())
 }
 
+func TestBuildGPUResultSetUsesBinaryBlobMetadata(t *testing.T) {
+	result := &sidecarResponse{
+		Meta: []sidecarColumn{
+			{Name: "blob_data", Type: "BLOB"},
+			{Name: "bytea_data", Type: "BYTEA"},
+			{Name: "text_data", Type: "VARCHAR"},
+		},
+	}
+
+	mrs := &MysqlResultSet{}
+	require.NoError(t, buildGPUResultSet(context.Background(), mrs, result))
+	require.Len(t, mrs.Columns, 3)
+
+	for _, resultColumn := range mrs.Columns[:2] {
+		col := resultColumn.(*MysqlColumn)
+		require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+		require.Equal(t, uint16(charsetBinary), col.Charset())
+		require.Equal(t, uint32(sidecarMaxResponseSize), col.Length())
+		require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+	}
+	require.Equal(t, defines.MYSQL_TYPE_VARCHAR, mrs.Columns[2].ColumnType())
+	require.Zero(t, mrs.Columns[2].(*MysqlColumn).Flag()&uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
+}
+
 func TestGpuTypeToMysql(t *testing.T) {
 	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql("INTEGER"))
 	assert.Equal(t, defines.MYSQL_TYPE_LONGLONG, sidecarTypeToMysql("BIGINT"))
