@@ -31,7 +31,7 @@ func applyRemapDbToSQL(t *testing.T, sql string, remap map[string]string) string
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	require.Len(t, stmts, 1)
-	applyRemapDb(stmts, remap)
+	applyRemapDb(stmts, remap, 1)
 	return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
 }
 
@@ -119,7 +119,7 @@ func TestApplyRemapDb(t *testing.T) {
 			"insert into dbxxx.t(dbxxx.t.id, dbxxx.t.v) values (1, 2) on duplicate key update v = values(dbxxx.t.v)", 1)
 		require.NoError(t, err)
 		insert := stmts[0].(*tree.Insert)
-		applyRemapDb(stmts, remap)
+		applyRemapDb(stmts, remap, 1)
 
 		require.Equal(t, tree.Identifier("dbyyy"), insert.TargetDatabaseName)
 		require.Equal(t, "dbyyy", insert.ColumnNames[0].DbNameOrigin())
@@ -134,7 +134,7 @@ func TestApplyRemapDb(t *testing.T) {
 			"replace into dbxxx.t(dbxxx.t.id, dbxxx.t.v) values (1, 2)", 1)
 		require.NoError(t, err)
 		replace := stmts[0].(*tree.Replace)
-		applyRemapDb(stmts, remap)
+		applyRemapDb(stmts, remap, 1)
 
 		require.Equal(t, tree.Identifier("dbyyy"), replace.TargetDatabaseName)
 		require.Equal(t, "dbyyy", replace.ColumnNames[0].DbNameOrigin())
@@ -285,6 +285,37 @@ func TestApplyRemapDb(t *testing.T) {
 	})
 }
 
+func TestApplyRemapDbPreservesIdentifierComparisonMode(t *testing.T) {
+	tests := []struct {
+		name        string
+		lower       int64
+		remapSource string
+		wantCompare string
+	}{
+		{name: "case sensitive", lower: 0, remapSource: "SrcMix27190", wantCompare: "DstMix27190"},
+		{name: "case insensitive", lower: 1, remapSource: "srcmix27190", wantCompare: "dstmix27190"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+				"prepare s from insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) "+
+					"values (1, 10) on duplicate key update v = values(SrcMix27190.t.v)", test.lower)
+			require.NoError(t, err)
+			applyRemapDb(stmts, map[string]string{test.remapSource: "DstMix27190"}, test.lower)
+
+			insert := stmts[0].(*tree.PrepareStmt).Stmt.(*tree.Insert)
+			require.Equal(t, tree.Identifier("DstMix27190"), insert.TargetDatabaseName)
+			require.Equal(t, "DstMix27190", insert.ColumnNames[0].DbNameOrigin())
+			require.Equal(t, test.wantCompare, insert.ColumnNames[0].DbName())
+			valuesExpr := insert.OnDuplicateUpdate[0].Expr.(*tree.FuncExpr)
+			valuesColumn := valuesExpr.Exprs[0].(*tree.UnresolvedName)
+			require.Equal(t, "DstMix27190", valuesColumn.DbNameOrigin())
+			require.Equal(t, test.wantCompare, valuesColumn.DbName())
+		})
+	}
+}
+
 func TestApplyRemapDbExpressionContainers(t *testing.T) {
 	remap := map[string]string{"src": "dst"}
 	tests := []struct {
@@ -352,7 +383,7 @@ func TestRemapDbInFullTextMatchPattern(t *testing.T) {
 	)
 	match := &tree.FullTextMatchExpr{Pattern: pattern}
 
-	remapDbInExpr(match, map[string]string{"src": "dst"})
+	remapDbInExpr(match, remapDbContext{databases: map[string]string{"src": "dst"}, lowerCaseTableNames: 1})
 
 	require.Equal(t, "dst.docs.pattern", tree.String(pattern, dialect.MYSQL))
 }
@@ -400,11 +431,11 @@ func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {
 	require.NoError(t, applyRemapDbByStatement(ctx, stmts, []map[string]string{
 		{"src": "first_db"},
 		{"src": "second_db"},
-	}))
+	}, 1))
 	require.Equal(t, "select * from first_db.t", tree.String(stmts[0], dialect.MYSQL))
 	require.Equal(t, "analyze table second_db.t(id)", tree.String(stmts[1], dialect.MYSQL))
 
-	err = applyRemapDbByStatement(ctx, stmts, []map[string]string{{"src": "only_one"}})
+	err = applyRemapDbByStatement(ctx, stmts, []map[string]string{{"src": "only_one"}}, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "remapdb policies")
 }

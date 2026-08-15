@@ -268,6 +268,11 @@ func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
 		"merge into target t using source s on t.id = s.id when not matched then insert (id, v) values (s.id, s.v)", 1)
 	require.NoError(t, err)
 
+	merge, err := ParseOne(context.Background(),
+		"merge into target t using source s on t.id = s.id when not matched then insert (t.id, t.v) values (s.id, s.v)", 1)
+	require.NoError(t, err)
+	require.Contains(t, tree.String(merge, dialect.MYSQL), "insert (id, v)")
+
 	_, err = ParseOne(context.Background(),
 		"merge into target t using source s on t.id = s.id when not matched then insert (other.wrong.id, v) values (s.id, s.v)", 1)
 	require.Error(t, err)

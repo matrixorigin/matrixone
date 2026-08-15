@@ -21,6 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+type remapDbContext struct {
+	databases           map[string]string
+	lowerCaseTableNames int64
+}
+
 // applyRemapDb substitutes the database of qualified table and column
 // references in parsed statements (db.table -> remap[db].table and
 // db.table.column -> remap[db].table.column). It runs after parsing and before
@@ -37,26 +42,32 @@ import (
 // the active database remap. Sub-selects nested in expressions (e.g. WHERE id
 // IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
-func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
+func applyRemapDb(stmts []tree.Statement, remap map[string]string, lowerCaseTableNames int64) {
 	if len(remap) == 0 {
 		return
 	}
+	remapCtx := remapDbContext{databases: remap, lowerCaseTableNames: lowerCaseTableNames}
 	for _, stmt := range stmts {
-		remapDbInStmt(stmt, remap)
+		remapDbInStmt(stmt, remapCtx)
 	}
 }
 
-func applyRemapDbByStatement(ctx context.Context, stmts []tree.Statement, remaps []map[string]string) error {
+func applyRemapDbByStatement(
+	ctx context.Context,
+	stmts []tree.Statement,
+	remaps []map[string]string,
+	lowerCaseTableNames int64,
+) error {
 	if len(stmts) != len(remaps) {
 		return moerr.NewInternalError(ctx, "the count of remapdb policies is not equal to statements")
 	}
 	for i, stmt := range stmts {
-		remapDbInStmt(stmt, remaps[i])
+		remapDbInStmt(stmt, remapDbContext{databases: remaps[i], lowerCaseTableNames: lowerCaseTableNames})
 	}
 	return nil
 }
 
-func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
+func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 	switch s := stmt.(type) {
 	case *tree.Select:
 		remapDbInSelect(s, remap)
@@ -167,7 +178,7 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 	}
 }
 
-func remapDbInWith(w *tree.With, remap map[string]string) {
+func remapDbInWith(w *tree.With, remap remapDbContext) {
 	if w == nil {
 		return
 	}
@@ -178,7 +189,7 @@ func remapDbInWith(w *tree.With, remap map[string]string) {
 	}
 }
 
-func remapDbInSelect(sel *tree.Select, remap map[string]string) {
+func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 	if sel == nil {
 		return
 	}
@@ -189,7 +200,7 @@ func remapDbInSelect(sel *tree.Select, remap map[string]string) {
 	remapDbInLimit(sel.Limit, remap)
 }
 
-func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
+func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
 	switch c := s.(type) {
 	case *tree.SelectClause:
 		if c.From != nil {
@@ -220,19 +231,19 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap map[string]string) {
 	}
 }
 
-func remapDbInWhere(w *tree.Where, remap map[string]string) {
+func remapDbInWhere(w *tree.Where, remap remapDbContext) {
 	if w != nil {
 		remapDbInExpr(w.Expr, remap)
 	}
 }
 
-func remapDbInTableExprs(tes tree.TableExprs, remap map[string]string) {
+func remapDbInTableExprs(tes tree.TableExprs, remap remapDbContext) {
 	for _, te := range tes {
 		remapDbInTableExpr(te, remap)
 	}
 }
 
-func remapDbInTableExpr(te tree.TableExpr, remap map[string]string) {
+func remapDbInTableExpr(te tree.TableExpr, remap remapDbContext) {
 	switch t := te.(type) {
 	case *tree.TableName:
 		remapTableName(t, remap)
@@ -262,13 +273,13 @@ func remapDbInTableExpr(te tree.TableExpr, remap map[string]string) {
 	}
 }
 
-func remapDbInExprs(exprs tree.Exprs, remap map[string]string) {
+func remapDbInExprs(exprs tree.Exprs, remap remapDbContext) {
 	for _, e := range exprs {
 		remapDbInExpr(e, remap)
 	}
 }
 
-func remapDbInOrderBy(orderBy tree.OrderBy, remap map[string]string) {
+func remapDbInOrderBy(orderBy tree.OrderBy, remap remapDbContext) {
 	for _, order := range orderBy {
 		if order != nil {
 			remapDbInExpr(order.Expr, remap)
@@ -276,7 +287,7 @@ func remapDbInOrderBy(orderBy tree.OrderBy, remap map[string]string) {
 	}
 }
 
-func remapDbInLimit(limit *tree.Limit, remap map[string]string) {
+func remapDbInLimit(limit *tree.Limit, remap remapDbContext) {
 	if limit == nil {
 		return
 	}
@@ -284,7 +295,7 @@ func remapDbInLimit(limit *tree.Limit, remap map[string]string) {
 	remapDbInExpr(limit.Count, remap)
 }
 
-func remapDbInTimeWindow(timeWindow *tree.TimeWindow, remap map[string]string) {
+func remapDbInTimeWindow(timeWindow *tree.TimeWindow, remap remapDbContext) {
 	if timeWindow == nil {
 		return
 	}
@@ -300,7 +311,7 @@ func remapDbInTimeWindow(timeWindow *tree.TimeWindow, remap map[string]string) {
 	}
 }
 
-func remapDbInUpdateExprs(updateExprs tree.UpdateExprs, remap map[string]string) {
+func remapDbInUpdateExprs(updateExprs tree.UpdateExprs, remap remapDbContext) {
 	for _, updateExpr := range updateExprs {
 		if updateExpr == nil {
 			continue
@@ -315,7 +326,7 @@ func remapDbInUpdateExprs(updateExprs tree.UpdateExprs, remap map[string]string)
 // remapDbInExpr walks expressions and their nested sub-selects (for example,
 // WHERE id IN (SELECT ... FROM dbx.t)). Keep this aligned with
 // pkg/sql/parsers/tree/expr.go when adding an expression wrapper with children.
-func remapDbInExpr(expr tree.Expr, remap map[string]string) {
+func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
 	switch e := expr.(type) {
 	case nil:
 		return
@@ -414,7 +425,7 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 	}
 }
 
-func remapDbInWindowSpec(windowSpec *tree.WindowSpec, remap map[string]string) {
+func remapDbInWindowSpec(windowSpec *tree.WindowSpec, remap remapDbContext) {
 	if windowSpec == nil {
 		return
 	}
@@ -423,7 +434,7 @@ func remapDbInWindowSpec(windowSpec *tree.WindowSpec, remap map[string]string) {
 	remapDbInFrameClause(windowSpec.Frame, remap)
 }
 
-func remapDbInFrameClause(frame *tree.FrameClause, remap map[string]string) {
+func remapDbInFrameClause(frame *tree.FrameClause, remap remapDbContext) {
 	if frame == nil {
 		return
 	}
@@ -431,7 +442,7 @@ func remapDbInFrameClause(frame *tree.FrameClause, remap map[string]string) {
 	remapDbInFrameBound(frame.End, remap)
 }
 
-func remapDbInFrameBound(bound *tree.FrameBound, remap map[string]string) {
+func remapDbInFrameBound(bound *tree.FrameBound, remap remapDbContext) {
 	if bound != nil {
 		remapDbInExpr(bound.Expr, remap)
 	}
@@ -439,12 +450,12 @@ func remapDbInFrameBound(bound *tree.FrameBound, remap map[string]string) {
 
 // remapTableName substitutes the database of a qualified table reference. An
 // unqualified reference (no explicit schema) is left untouched.
-func remapTableName(tn *tree.TableName, remap map[string]string) {
+func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	if tn == nil {
 		return
 	}
 	if tn.ExplicitSchema {
-		if target, ok := remap[string(tn.SchemaName)]; ok {
+		if target, ok := remap.databases[string(tn.SchemaName)]; ok {
 			tn.SchemaName = tree.Identifier(target)
 		}
 	}
@@ -456,21 +467,21 @@ func remapTableName(tn *tree.TableName, remap map[string]string) {
 // remapColumnName substitutes only the database component of a fully-qualified
 // column name. Two-part names are table/alias.column and must remain unchanged:
 // the first part can be a derived-table or CTE alias rather than a database.
-func remapColumnName(name *tree.UnresolvedName, remap map[string]string) {
+func remapColumnName(name *tree.UnresolvedName, remap remapDbContext) {
 	if name == nil || name.NumParts < 3 {
 		return
 	}
-	if target, ok := remap[name.DbName()]; ok {
-		name.CStrParts[2] = tree.NewCStr(target, 1)
+	if target, ok := remap.databases[name.DbName()]; ok {
+		name.CStrParts[2] = tree.NewCStr(target, remap.lowerCaseTableNames)
 	}
 }
 
 // remapInsertTarget keeps the user-visible logical target identity in sync
 // with the execution table rewritten by remapDbInTableExpr. TargetTableName is
 // unchanged because remapdb substitutes databases only.
-func remapInsertTarget(columnNames []*tree.UnresolvedName, databaseName *tree.Identifier, remap map[string]string) {
+func remapInsertTarget(columnNames []*tree.UnresolvedName, databaseName *tree.Identifier, remap remapDbContext) {
 	if databaseName != nil {
-		if target, ok := remap[string(*databaseName)]; ok {
+		if target, ok := remap.databases[string(*databaseName)]; ok {
 			*databaseName = tree.Identifier(target)
 		}
 	}
@@ -482,11 +493,11 @@ func remapInsertTarget(columnNames []*tree.UnresolvedName, databaseName *tree.Id
 // remapObjectName substitutes the database of a qualified object name (used for
 // the destination of RENAME TABLE, carried as an UnresolvedObjectName). Parts[1]
 // holds the schema and is only present when NumParts >= 2 (i.e. it is qualified).
-func remapObjectName(on *tree.UnresolvedObjectName, remap map[string]string) {
+func remapObjectName(on *tree.UnresolvedObjectName, remap remapDbContext) {
 	if on == nil || on.NumParts < 2 {
 		return
 	}
-	if target, ok := remap[on.Parts[1]]; ok {
+	if target, ok := remap.databases[on.Parts[1]]; ok {
 		on.Parts[1] = target
 	}
 }

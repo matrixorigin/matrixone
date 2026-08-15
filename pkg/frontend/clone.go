@@ -1329,7 +1329,7 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 
 	opts := []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()}
 	original := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
-	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName})
+	applyRemapDb([]tree.Statement{createView}, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames)
 	rewritten := tree.StringWithOpts(createView, dialect.MYSQL, opts...)
 	if rewritten == original {
 		return sql, nil

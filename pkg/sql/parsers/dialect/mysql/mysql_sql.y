@@ -6154,9 +6154,17 @@ merge_insert_column_list:
     {
         $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
     }
+|   ident '.' ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($3.Compare())}
+    }
 |   merge_insert_column_list ',' ident
     {
         $$ = append($1, tree.Identifier($3.Compare()))
+    }
+|   merge_insert_column_list ',' ident '.' ident
+    {
+        $$ = append($1, tree.Identifier($5.Compare()))
     }
 
 values_list:

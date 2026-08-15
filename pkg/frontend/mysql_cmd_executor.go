@@ -2151,7 +2151,7 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
-		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -3570,7 +3570,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 					}
 				}
 			}
-			if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
+			if err = applyRemapDbByStatement(
+				execCtx.reqCtx, stmts, statementRemaps, parserLowerCaseTableNames(ses),
+			); err != nil {
 				return nil, err
 			}
 		}
@@ -4508,7 +4510,9 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 				remaps[i] = carrier.GetRemapDb()
 			}
 		}
-		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+		if err = applyRemapDbByStatement(
+			execCtx.reqCtx, stmts, remaps, parserLowerCaseTableNames(ses),
+		); err != nil {
 			return err
 		}
 	}

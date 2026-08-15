@@ -1,5 +1,41 @@
 drop database if exists rdb_src;
 drop database if exists rdb_dst;
+set global lower_case_table_names = 0;
+drop database if exists SrcMix27190;
+drop database if exists DstMix27190;
+create database SrcMix27190;
+create database DstMix27190;
+create table DstMix27190.t(id int primary key, v int);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb": {"SrcMix27190": "DstMix27190"}}';
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (1, 10);
+insert into SrcMix27190.t set SrcMix27190.t.id = 2, SrcMix27190.t.v = 20;
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) select 3, 30;
+replace into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (4, 40);
+insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (1, 15)
+on duplicate key update v = values(SrcMix27190.t.v);
+prepare mixed_case_remap_insert from
+'insert into SrcMix27190.t(SrcMix27190.t.id, SrcMix27190.t.v) values (?, ?)';
+set @mixed_id = 5;
+set @mixed_v = 50;
+execute mixed_case_remap_insert using @mixed_id, @mixed_v;
+deallocate prepare mixed_case_remap_insert;
+use SrcMix27190;
+insert into t(SrcMix27190.t.id, SrcMix27190.t.v) values (6, 60);
+select * from DstMix27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  15  𝄀
+2  ¦  20  𝄀
+3  ¦  30  𝄀
+4  ¦  40  𝄀
+5  ¦  50  𝄀
+6  ¦  60
+use mysql;
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+drop database SrcMix27190;
+drop database DstMix27190;
+set global lower_case_table_names = 1;
 create database rdb_dst;
 create table rdb_dst.t(id int, v int);
 insert into rdb_dst.t values (1,10),(2,20),(3,30);
