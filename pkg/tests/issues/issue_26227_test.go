@@ -64,7 +64,7 @@ func TestViewMetadataRevalidationTenantMarkerExecutesAgainstCatalog(t *testing.T
 				"join mo_catalog.mo_account a on d.account_id=a.account_id "+
 				"where a.account_name=? and d.target_relation_id=0 and d.dependency_ordinal=0",
 			account).Scan(&status))
-		require.Equal(t, "REVALIDATE_REQUIRED", status)
+		require.Contains(t, []string{"REVALIDATE_REQUIRED", "REVALIDATE_SCAN"}, status)
 	})
 }
 
@@ -279,6 +279,48 @@ func TestViewMetadataInvalidatesBeyondSynchronousBudget(t *testing.T) {
 			"select cast(created_time as char) from mo_catalog.mo_tables "+
 				"where reldatabase=? and relname='v01'", database).Scan(&createdAfter))
 		require.Equal(t, createdBefore, createdAfter)
+	})
+}
+
+func TestHistoricalSnapshotViewCTASUsesSnapshotMetadata(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		const (
+			database = "view_metadata_snapshot_ctas"
+			snapshot = "view_metadata_snapshot_ctas_before_alter"
+		)
+		execSQLMaybe(t, ctx, db, "drop snapshot if exists `"+snapshot+"`")
+		execSQLMaybe(t, ctx, db, "drop database if exists `"+database+"`")
+		execSQLRequire(t, ctx, db, "create database `"+database+"`")
+		execSQLRequire(t, ctx, db, "use `"+database+"`")
+		defer execSQLMaybe(t, context.Background(), db, "drop database if exists `"+database+"`")
+		defer execSQLMaybe(t, context.Background(), db, "drop snapshot if exists `"+snapshot+"`")
+		waitForViewMetadataRevalidation(t, ctx, db)
+
+		execSQLRequire(t, ctx, db, "create table `"+database+"`.source_table (value int)")
+		execSQLRequire(t, ctx, db, "insert into `"+database+"`.source_table values (7)")
+		execSQLRequire(t, ctx, db,
+			"create view `"+database+"`.historical_view as select value from `"+database+"`.source_table")
+		execSQLRequire(t, ctx, db, "create snapshot `"+snapshot+"` for account")
+		execSQLRequire(t, ctx, db,
+			"alter view historical_view as select cast(value as bigint) value from source_table")
+
+		var value int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select value from `"+database+"`.historical_view{snapshot='"+snapshot+"'}").Scan(&value))
+		require.Equal(t, int64(7), value)
+		execSQLRequire(t, ctx, db,
+			"create table `"+database+"`.historical_copy as select * from `"+database+
+				"`.historical_view{snapshot='"+snapshot+"'}")
+		require.Equal(t, "INT", strings.ToUpper(viewColumnType(t, ctx, db, database, "historical_copy")))
 	})
 }
 

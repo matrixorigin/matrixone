@@ -9595,7 +9595,10 @@ func (builder *QueryBuilder) bindView(
 	obj *ObjectRef,
 	schema, table string,
 ) (nodeID int32, err error) {
-	if builder.deriveViewMetadata {
+	// A historical snapshot already provides the View TableDef from that
+	// catalog version. Its relation ID is not expected to have a lifecycle row
+	// in the current catalog, so only current-catalog CTAS needs this gate.
+	if builder.deriveViewMetadata && !IsSnapshotValid(snapshot) {
 		ownerAccountID, accountErr := builder.compCtx.GetAccountId()
 		if accountErr != nil {
 			return 0, accountErr

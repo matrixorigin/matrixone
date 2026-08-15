@@ -107,7 +107,8 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
 	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
-	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
+	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop view if exists information_schema.key_column_usage")
+	require.NotContains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table")
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
@@ -996,6 +997,36 @@ func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
 	require.NoError(t, entry.Upgrade(txn, 42))
 	require.Len(t, executed, 1)
 	require.True(t, strings.HasPrefix(executed[0], "SELECT 1 FROM information_schema.CHARACTER_SETS"))
+}
+
+func TestUpgradeInformationSchemaKeyColumnUsageExecutesDropView(t *testing.T) {
+	entry := upgradeInformationSchemaKeyColumnUsage()
+	current := false
+	stub := gostub.Stub(&versions.CheckViewDefinition,
+		func(executor.TxnExecutor, uint32, string, string) (bool, string, error) {
+			if current {
+				return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+			}
+			return true, "legacy definition", nil
+		})
+	defer stub.Reset()
+
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.UpgSql {
+			current = true
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql}, executed)
+	require.Contains(t, strings.ToLower(executed[0]), "drop view if exists")
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Empty(t, executed, "a completed tenant migration must be idempotent")
 }
 
 func TestRetireKafkaSinkDaemonTasks(t *testing.T) {

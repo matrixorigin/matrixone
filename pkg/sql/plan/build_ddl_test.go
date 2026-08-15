@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -3254,6 +3255,15 @@ type viewMetadataCheckingCompilerContext struct {
 	calls int
 }
 
+type snapshotViewMetadataCheckingCompilerContext struct {
+	*viewMetadataCheckingCompilerContext
+	snapshot *Snapshot
+}
+
+func (c *snapshotViewMetadataCheckingCompilerContext) ResolveSnapshotWithSnapshotName(string) (*Snapshot, error) {
+	return c.snapshot, nil
+}
+
 func (c *viewMetadataCheckingCompilerContext) EnsureViewMetadataCurrent(
 	_, _ string,
 	_ uint32,
@@ -3301,6 +3311,20 @@ func TestCTASRejectsNonCurrentViewMetadata(t *testing.T) {
 	_, err = BuildPlan(ctx, selectStmt, false)
 	require.NoError(t, err)
 	require.Zero(t, ctx.calls, "ordinary SELECT must use the rebound View definition")
+
+	snapshotCtx := &snapshotViewMetadataCheckingCompilerContext{
+		viewMetadataCheckingCompilerContext: ctx,
+		snapshot: &Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: 1},
+		},
+	}
+	snapshotStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table historical_copy as select * from stale_view{snapshot='historical'}", 1)
+	require.NoError(t, err)
+	defer snapshotStmt.Free()
+	_, err = BuildPlan(snapshotCtx, snapshotStmt, false)
+	require.NoError(t, err)
+	require.Zero(t, ctx.calls, "historical CTAS must use the View definition from the snapshot catalog")
 }
 
 func TestCreateTableAsSelectPropagatesNullExtension(t *testing.T) {

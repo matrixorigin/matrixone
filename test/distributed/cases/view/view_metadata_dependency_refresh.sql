@@ -117,6 +117,11 @@ CREATE VIEW invalid_direct AS
 SELECT invalid_left.a, invalid_right.a AS b FROM invalid_left LEFT JOIN invalid_right USING(a);
 CREATE VIEW invalid_downstream AS SELECT a FROM invalid_direct;
 ALTER TABLE invalid_left CHANGE a renamed_a BIGINT;
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('invalid_direct','invalid_downstream')
+AND status = 'INVALID' AND failure_code = 1;
 SELECT target_relation_name, status, failure_code
 FROM mo_catalog.mo_view_refresh
 WHERE target_database_name = 'view_metadata_refresh'
@@ -132,9 +137,18 @@ CREATE VIEW restored_downstream AS SELECT a FROM restored_direct;
 DROP SNAPSHOT IF EXISTS view_metadata_before_widening;
 CREATE SNAPSHOT view_metadata_before_widening FOR ACCOUNT;
 ALTER TABLE restored_source MODIFY a BIGINT;
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('restored_direct','restored_downstream')
+AND status = 'CURRENT';
 DESC restored_downstream;
 RESTORE TABLE view_metadata_refresh.restored_source{SNAPSHOT='view_metadata_before_widening'};
-SELECT sleep(12);
+-- @wait_expect(2, 60)
+SELECT count(*) FROM mo_catalog.mo_view_refresh
+WHERE target_database_name = 'view_metadata_refresh'
+AND target_relation_name IN ('restored_direct','restored_downstream')
+AND status = 'CURRENT';
 DESC restored_direct;
 DESC restored_downstream;
 

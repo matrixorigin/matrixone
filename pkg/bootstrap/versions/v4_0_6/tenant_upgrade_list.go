@@ -117,7 +117,7 @@ func upgradeInformationSchemaKeyColumnUsage() versions.UpgradeEntry {
 		UpgType:   versions.CREATE_VIEW,
 		UpgSql:    sysview.InformationSchemaKeyColumnUsageDDL,
 		CheckFunc: checkViewDefinition("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
-		PreSql:    fmt.Sprintf("DROP TABLE IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
+		PreSql:    fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "KEY_COLUMN_USAGE"),
 	}
 }
 
