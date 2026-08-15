@@ -151,7 +151,83 @@ func TestRightDedupDuplicateTracking(t *testing.T) {
 	}
 }
 
-func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches bool) {
+func TestRightDedupInputKeysUniqueLookupOnly(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unique_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupInputUniqueCase(t, pessimistic, false)
+		})
+		t.Run(fmt.Sprintf("target_conflict_pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupInputUniqueCase(t, pessimistic, true)
+		})
+	}
+}
+
+func runRightDedupInputUniqueCase(t *testing.T, pessimistic, targetConflict bool) {
+	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
+	defer ctrl.Finish()
+	typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+
+	buildBat := batch.NewWithSize(1)
+	buildBat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	buildBat.SetRowCount(1)
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:   true,
+		Conditions:    conditions[1],
+		JoinMapTag:    curTag,
+		JoinMapRefCnt: 1,
+	}
+	buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+
+	probeValues := []int32{2, 3}
+	if targetConflict {
+		probeValues = []int32{1}
+	}
+	probeBat := batch.NewWithSize(1)
+	probeBat.Vecs[0] = testutil.MakeInt32Vector(probeValues, nil, proc.Mp())
+	probeBat.SetRowCount(len(probeValues))
+	arg := &RightDedupJoin{
+		LeftTypes:         []types.Type{typ},
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 0, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   true,
+		DedupColName:      "pk",
+		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
+		JoinMapTag:        curTag,
+	}
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+	installTestAllocation(t, arg, buildArg)
+
+	require.NoError(t, buildArg.Prepare(proc))
+	require.NoError(t, arg.Prepare(proc))
+	_, err := vm.Exec(buildArg, proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(arg, proc)
+	if targetConflict {
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Duplicate entry")
+	} else {
+		require.NoError(t, err)
+		require.NotNil(t, res.Batch)
+		require.Equal(t, uint64(1), arg.ctr.mp.GetGroupCount(), "lookup-only probes must not grow the target map")
+		extra := arg.OpAnalyzer.GetOpStats().ExtraStats
+		require.Equal(t, int64(len(probeValues)), extra["RightDedupInputUniqueRows"])
+		require.Zero(t, extra["RightDedupInputUniqueTargetMatches"])
+		res, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecStop, res.Status)
+	}
+
+	arg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
+	proc.Free()
+}
+
+func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBatches, inputKeysUnique bool) {
 	proc, ctrl := newRightDedupTestProcess(t, pessimistic)
 	defer ctrl.Finish()
 	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
@@ -173,6 +249,7 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 		IsShuffle:         true,
 		ShuffleIdx:        0,
 		OnDuplicateAction: plan.Node_FAIL,
+		InputKeysUnique:   inputKeysUnique,
 		DedupColName:      "pk",
 		DedupColTypes:     []plan.Type{{Id: int32(types.T_int32)}},
 		JoinMapTag:        curTag,
@@ -238,10 +315,18 @@ func runRightDedupSpilledEmptyBuild(t *testing.T, pessimistic, duplicateAcrossBa
 func TestRightDedupSpilledEmptyBuild(t *testing.T) {
 	for _, pessimistic := range []bool{false, true} {
 		t.Run(fmt.Sprintf("unique_pessimistic_%t", pessimistic), func(t *testing.T) {
-			runRightDedupSpilledEmptyBuild(t, pessimistic, false)
+			runRightDedupSpilledEmptyBuild(t, pessimistic, false, false)
 		})
 		t.Run(fmt.Sprintf("duplicate_pessimistic_%t", pessimistic), func(t *testing.T) {
-			runRightDedupSpilledEmptyBuild(t, pessimistic, true)
+			runRightDedupSpilledEmptyBuild(t, pessimistic, true, false)
+		})
+	}
+}
+
+func TestRightDedupSpilledInputKeysUnique(t *testing.T) {
+	for _, pessimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pessimistic_%t", pessimistic), func(t *testing.T) {
+			runRightDedupSpilledEmptyBuild(t, pessimistic, false, true)
 		})
 	}
 }

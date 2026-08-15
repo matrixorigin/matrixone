@@ -86,6 +86,16 @@ func TestDisableMemoryUnsafeRightDedupRejectsUnknownCardinality(t *testing.T) {
 	}
 }
 
+func TestDisableMemoryUnsafeRightDedupSeparatesInputUniqueCandidates(t *testing.T) {
+	builder, joins := makeChainedRightDedupBuilder(127 * 1024)
+	joins[0].DedupInputKeysUnique = true
+
+	builder.disableMemoryUnsafeRightDedup(4)
+
+	require.True(t, joins[0].IsRightJoin, "the flagged PK candidate only retains its 100-row target map")
+	require.False(t, joins[1].IsRightJoin, "the ordinary unique-index candidate still accounts for incoming rows")
+}
+
 func makeChainedRightDedupBuilder(joinSpillMem int64) (*QueryBuilder, []*planpb.Node) {
 	source := &planpb.Node{NodeType: planpb.Node_VALUE_SCAN, Stats: &planpb.Stats{Outcnt: 1000}}
 	targetPK := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}}

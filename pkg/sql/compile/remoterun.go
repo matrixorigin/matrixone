@@ -882,6 +882,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			ShuffleIdx:             t.ShuffleIdx,
 			OnDuplicateAction:      t.OnDuplicateAction,
+			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
 			DelColIdx:              t.DelColIdx,
@@ -1413,6 +1414,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.JoinMapTag = t.JoinMapTag
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
 		arg.DelColIdx = t.DelColIdx

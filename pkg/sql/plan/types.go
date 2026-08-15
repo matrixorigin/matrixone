@@ -414,6 +414,11 @@ type QueryBuilder struct {
 	returningTableName  string
 	returningAlias      string
 	returningColPos     map[string]int32
+	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
+	// the source primary key proves uniqueness of the target primary-key key.
+	// It is consumed only by the target-PK DEDUP node; secondary unique-index
+	// DEDUP nodes retain their existing duplicate-detection semantics.
+	insertInputKeysUnique bool
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after

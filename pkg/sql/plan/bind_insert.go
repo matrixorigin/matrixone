@@ -34,6 +34,10 @@ import (
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
+	// This flag is populated by initInsertReplaceStmt only for a plain
+	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
+	// the proof into a later DML path (for example LOAD or REPLACE).
+	builder.insertInputKeysUnique = false
 	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
 	// CHAR/VARCHAR writes to truncation instead of rejection.
 	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
@@ -2403,6 +2407,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				OnDuplicateAction: onDupAction,
 				DedupColName:      dedupColName,
 				DedupColTypes:     dedupColTypes,
+				DedupInputKeysUnique: onDupAction == plan.Node_FAIL &&
+					!isFakePK && builder.insertInputKeysUnique,
 			}
 
 			if onDupAction == plan.Node_UPDATE {
@@ -3233,6 +3239,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		lastNodeID int32
 		err        error
 	)
+	builder.insertInputKeysUnique = false
 
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
@@ -3295,6 +3302,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if err != nil {
 			return 0, nil, nil, err
 		}
+		if !isReplace {
+			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
+		}
 		//ifInsertFromUniqueColMap = make(map[string]bool)
 
 	case *tree.ParenSelect:
@@ -3305,6 +3315,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
+		}
+		if !isReplace {
+			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
 		}
 		// ifInsertFromUniqueColMap = make(map[string]bool)
 
@@ -3365,6 +3378,191 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
+}
+
+// insertSourceColumn identifies an output column that is still a direct
+// column of one source table.  Keeping this lineage separate from expression
+// rewriting makes the uniqueness proof fail closed for casts, functions, and
+// row-multiplying operators.
+type insertSourceColumn struct {
+	table     *plan.TableDef
+	colPos    int32
+	sourceTag int32
+}
+
+// proveInsertInputKeysUnique proves that every incoming target-PK key is
+// unique by tracing a row-preserving INSERT ... SELECT plan back to a source
+// table's explicit primary key.  The proof is deliberately conservative: only
+// direct column projections over a single table scan are accepted.
+func (builder *QueryBuilder) proveInsertInputKeysUnique(
+	sourceNodeID int32,
+	insertColumns []string,
+	targetTable *plan.TableDef,
+) bool {
+	targetPK, ok := insertPrimaryKeyColumnPositions(targetTable)
+	if !ok || len(insertColumns) == 0 {
+		return false
+	}
+
+	lineage, sourceTable, ok := builder.insertSourceLineage(sourceNodeID)
+	if !ok || sourceTable == nil || len(lineage) != len(insertColumns) {
+		return false
+	}
+	sourcePK, ok := insertPrimaryKeyColumnPositions(sourceTable)
+	if !ok {
+		return false
+	}
+
+	// The source PK must be present in the target key.  A target composite key
+	// such as (id, col1) is therefore safe when the source PK is (id), while a
+	// target key (id) is not safe for a source whose PK is (id, col1).
+	targetKeySourceCols := make(map[int32]struct{}, len(targetPK))
+	for _, targetPos := range targetPK {
+		if targetPos < 0 || int(targetPos) >= len(targetTable.Cols) || targetTable.Cols[targetPos] == nil {
+			return false
+		}
+		name := targetTable.Cols[targetPos].Name
+		inputPos := -1
+		for i, insertColumn := range insertColumns {
+			if strings.EqualFold(catalog.ResolveAlias(insertColumn), name) {
+				inputPos = i
+				break
+			}
+		}
+		if inputPos < 0 || inputPos >= len(lineage) {
+			return false
+		}
+		if lineage[inputPos].table != sourceTable {
+			return false
+		}
+		sourcePos := lineage[inputPos].colPos
+		if sourcePos < 0 || int(sourcePos) >= len(sourceTable.Cols) || sourceTable.Cols[sourcePos] == nil ||
+			!insertKeyTypesCompatible(sourceTable.Cols[sourcePos].Typ, targetTable.Cols[targetPos].Typ) {
+			// The assignment projection may cast the source key to the target
+			// type after this proof runs. Only identical key encodings are
+			// accepted here; narrowing casts could collapse distinct source PKs.
+			return false
+		}
+		targetKeySourceCols[sourcePos] = struct{}{}
+	}
+	for _, sourcePos := range sourcePK {
+		if _, ok := targetKeySourceCols[sourcePos]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// insertSourceLineage accepts only row-preserving FILTER and SORT operators;
+// PROJECT is accepted only when every output is a direct child column
+// reference.
+func (builder *QueryBuilder) insertSourceLineage(nodeID int32) ([]insertSourceColumn, *plan.TableDef, bool) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil, nil, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nil, nil, false
+	}
+
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
+		if len(node.Children) != 0 || node.TableDef == nil || len(node.TableDef.Cols) == 0 ||
+			len(node.BindingTags) != 1 {
+			return nil, nil, false
+		}
+		sourceTag := node.BindingTags[0]
+		if len(node.ProjectList) == 0 {
+			lineage := make([]insertSourceColumn, len(node.TableDef.Cols))
+			for i := range node.TableDef.Cols {
+				lineage[i] = insertSourceColumn{table: node.TableDef, colPos: int32(i), sourceTag: sourceTag}
+			}
+			return lineage, node.TableDef, true
+		}
+		lineage := make([]insertSourceColumn, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.TableDef.Cols) {
+				return nil, nil, false
+			}
+			if col.RelPos != sourceTag {
+				return nil, nil, false
+			}
+			lineage[i] = insertSourceColumn{table: node.TableDef, colPos: col.ColPos, sourceTag: col.RelPos}
+		}
+		return lineage, node.TableDef, true
+
+	case plan.Node_FILTER, plan.Node_SORT:
+		if len(node.Children) != 1 || len(node.ProjectList) != 0 {
+			return nil, nil, false
+		}
+		return builder.insertSourceLineage(node.Children[0])
+
+	case plan.Node_PROJECT:
+		if len(node.Children) != 1 || len(node.ProjectList) == 0 {
+			return nil, nil, false
+		}
+		childID := node.Children[0]
+		childLineage, sourceTable, ok := builder.insertSourceLineage(childID)
+		if !ok {
+			return nil, nil, false
+		}
+		lineage := make([]insertSourceColumn, len(node.ProjectList))
+		for i, expr := range node.ProjectList {
+			col := expr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childLineage) {
+				return nil, nil, false
+			}
+			if col.RelPos != childLineage[col.ColPos].sourceTag {
+				return nil, nil, false
+			}
+			lineage[i] = childLineage[col.ColPos]
+		}
+		return lineage, sourceTable, true
+	}
+
+	return nil, nil, false
+}
+
+func insertPrimaryKeyColumnPositions(table *plan.TableDef) ([]int32, bool) {
+	if table == nil || table.Pkey == nil || table.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return nil, false
+	}
+	names := table.Pkey.Names
+	if len(names) == 0 && table.Pkey.PkeyColName != "" && table.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		names = []string{table.Pkey.PkeyColName}
+	}
+	if len(names) == 0 {
+		return nil, false
+	}
+	positions := make([]int32, 0, len(names))
+	for _, name := range names {
+		name = catalog.ResolveAlias(name)
+		pos, ok := table.Name2ColIndex[name]
+		if !ok {
+			for i, col := range table.Cols {
+				if col != nil && strings.EqualFold(col.Name, name) {
+					pos = int32(i)
+					ok = true
+					break
+				}
+			}
+		}
+		if !ok || pos < 0 || int(pos) >= len(table.Cols) {
+			return nil, false
+		}
+		positions = append(positions, pos)
+	}
+	return positions, true
+}
+
+func insertKeyTypesCompatible(source, target plan.Type) bool {
+	return source.Id == target.Id &&
+		source.Width == target.Width &&
+		source.Scale == target.Scale &&
+		source.Table == target.Table &&
+		source.Enumvalues == target.Enumvalues &&
+		source.Charset == target.Charset
 }
 
 // isNumericAssignmentTarget reports whether a DML target column type may seed the

@@ -168,7 +168,8 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 							ctr.mp = jm
 							ctr.groupCount = jm.GetGroupCount()
 							ctr.buildGroupCount = ctr.groupCount
-							if !proc.GetTxnOperator().Txn().IsPessimistic() && ctr.buildGroupCount > 0 {
+							if !rightDedupJoin.InputKeysUnique &&
+								!proc.GetTxnOperator().Txn().IsPessimistic() && ctr.buildGroupCount > 0 {
 								ctr.matched, initErr = colexec.NewAccountedBitmap(
 									int64(ctr.buildGroupCount),
 									proc.Mp(),
@@ -238,7 +239,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: true,
-				MergeProbeBatches:       true,
+				MergeProbeBatches:       !rightDedupJoin.InputKeysUnique,
 				Budget:                  budget,
 			}, rightDedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
 			if engineErr != nil {
@@ -275,7 +276,8 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		}
 		ctr.groupCount = ctr.mp.GetGroupCount()
 		ctr.buildGroupCount = ctr.groupCount
-		if !proc.GetTxnOperator().Txn().IsPessimistic() &&
+		if !rightDedupJoin.InputKeysUnique &&
+			!proc.GetTxnOperator().Txn().IsPessimistic() &&
 			ctr.buildGroupCount > 0 {
 			ctr.matched, err = colexec.NewAccountedBitmap(
 				int64(ctr.buildGroupCount),
@@ -321,9 +323,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	}
 
 	count := bat.RowCount()
-	err = ctr.mp.PreAlloc(uint64(count))
-	if err != nil {
-		return err
+	if !ap.InputKeysUnique {
+		err = ctr.mp.PreAlloc(uint64(count))
+		if err != nil {
+			return err
+		}
 	}
 
 	if ctr.itr == nil {
@@ -331,15 +335,43 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	}
 
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
+	var targetMatches int64
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := min(count-i, hashmap.UnitLimit)
-		vals, zvals, err := ctr.itr.Insert(i, n, ctr.vecs)
+		var vals []uint64
+		var zvals []int64
+		if ap.InputKeysUnique {
+			vals, zvals, err = ctr.itr.Find(i, n, ctr.vecs)
+		} else {
+			vals, zvals, err = ctr.itr.Insert(i, n, ctr.vecs)
+		}
 		if err != nil {
 			return err
 		}
 
 		for k, v := range vals[:n] {
 			if zvals[k] == 0 || v == 0 {
+				continue
+			}
+
+			if ap.InputKeysUnique {
+				if v != 0 {
+					targetMatches++
+					var rowStr string
+					if len(ap.DedupColTypes) == 1 && ap.DedupColName == catalog.IndexTableIndexColName && ctr.vecs[0].GetType().Oid == types.T_varchar {
+						t, _, schema, decodeErr := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
+						if decodeErr == nil && len(schema) > 1 {
+							rowStr = t.ErrString(make([]int32, len(schema)))
+						}
+					}
+					if len(rowStr) == 0 {
+						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
+						if err != nil {
+							return err
+						}
+					}
+					return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
+				}
 				continue
 			}
 
@@ -400,6 +432,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 				return moerr.NewNotSupported(proc.Ctx, "RIGHT DEDUP join not support UPDATE")
 			}
 		}
+	}
+	if ap.InputKeysUnique {
+		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueRows", int64(count))
+		analyzer.GetOpStats().AddExtraStat("RightDedupInputUniqueTargetMatches", targetMatches)
 	}
 
 	if err := ap.resetResultBatch(); err != nil {

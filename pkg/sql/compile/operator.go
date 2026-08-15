@@ -681,6 +681,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.InputKeysUnique = t.InputKeysUnique
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
@@ -1557,6 +1558,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.OnDuplicateAction = node.OnDuplicateAction
+	arg.InputKeysUnique = node.DedupInputKeysUnique
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1

@@ -845,7 +845,9 @@ func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
 	rightDedupJoin := rightdedupjoin.NewArgument()
 	rightDedupJoin.IsShuffle = true
 	rightDedupJoin.ShuffleIdx = -1
+	rightDedupJoin.InputKeysUnique = true
 	require.Equal(t, int32(2), dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).ShuffleIdx)
+	require.True(t, dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).InputKeysUnique)
 }
 
 func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing.T) {

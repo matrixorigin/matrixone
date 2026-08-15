@@ -1206,8 +1206,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 					SpillThreshold: threshold,
 				},
 				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
-					Conditions:     [][]*planpb.Expr{{}, {}},
-					SpillThreshold: threshold,
+					Conditions:      [][]*planpb.Expr{{}, {}},
+					SpillThreshold:  threshold,
+					InputKeysUnique: true,
 				},
 			} {
 				t.Run(fmt.Sprintf("%s/%d", name, threshold), func(t *testing.T) {
@@ -1224,6 +1225,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 						require.Equal(t, threshold, join.SpillThreshold)
 					case *rightdedupjoin.RightDedupJoin:
 						require.Equal(t, threshold, join.SpillThreshold)
+						require.True(t, join.InputKeysUnique)
 					default:
 						t.Fatalf("unexpected restored operator %T", restored)
 					}

@@ -1065,6 +1065,11 @@ message Node {
   // partition equality keys and the remaining entries are per-partition
   // ordering keys for bounded Top-N execution.
   int32 partition_by_count = 80;
+
+  // DEDUP only: the incoming key columns are proven unique by the insert
+  // planner, so the right-side operator only needs to look up target keys and
+  // must not retain incoming keys in its hashmap.
+  bool dedup_input_keys_unique = 81;
 }
 
 message SnapshotExtraInfo {
