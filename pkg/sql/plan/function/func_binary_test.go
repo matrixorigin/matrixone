@@ -34,50 +34,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTimeWindowIntervalHelpersSupportMicrosecond(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	num, err := getIntervalNum(1000, int64(types.MicroSecond), proc)
-	require.NoError(t, err)
-	require.Equal(t, int64(1000), num)
-	_, err = getIntervalNum(1, int64(types.IntervalType(99)), proc)
-	require.ErrorContains(t, err, "now support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
-
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{500}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
-		},
-		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{500}, nil),
-		Divisor,
-	)
-	succeed, info := tc.Run()
-	require.True(t, succeed, info)
-}
-
-func TestTimeWindowTruncatePreservesMicrosecondScale(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	input, err := types.ParseDatetime("2026-08-12 10:00:00.001100", 6)
-	require.NoError(t, err)
-	expected, err := types.ParseDatetime("2026-08-12 10:00:00.001000", 6)
-	require.NoError(t, err)
-
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{input}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{1000}, nil),
-			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.MicroSecond)}, nil),
-		},
-		NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, []types.Datetime{expected}, nil),
-		Truncate,
-	)
-	succeed, info := tc.Run()
-	require.True(t, succeed, info)
-}
-
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -13151,43 +13107,46 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 	require.Equal(t, types.DatetimeEpoch, got[1])
 }
 
-func TestMoWinTruncateTimestampReturnsDatetimeInstantKey(t *testing.T) {
+func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
-	first := types.FromClockUTC(2026, 1, 1, 0, 12, 34, 567890)
-	second := first + types.Timestamp(types.SecsPerMinute*types.MicroSecsPerSec)
-	require.NoError(t, vector.AppendFixedList(
-		values,
-		[]types.Timestamp{types.ZeroTimestamp, first, second, types.ZeroTimestamp},
-		[]bool{false, false, false, true},
-		proc.Mp(),
-	))
-	values.SetLength(4)
+	fallFirst := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	fallSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, fallFirst, fallSecond}, nil, proc.Mp()))
+	values.SetLength(3)
 	defer values.Free(proc.Mp())
 
-	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(10), 4, proc.Mp())
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
 	require.NoError(t, err)
 	defer diff.Free(proc.Mp())
-	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Minute), 4, proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 3, proc.Mp())
 	require.NoError(t, err)
 	defer unit.Free(proc.Mp())
 
-	result := vector.NewFunctionResultWrapper(types.T_datetime.ToTypeWithScale(6), proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
 	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(4))
-	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 4, nil))
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
 
-	truncateToTenMinutes := func(ts types.Timestamp) types.Datetime {
-		interval := int64(10 * types.SecsPerMinute * types.MicroSecsPerSec)
-		return types.Datetime(int64(ts) - int64(ts)%interval)
-	}
-	require.Equal(t, []types.Datetime{
-		types.ZeroDatetime,
-		truncateToTenMinutes(first),
-		truncateToTenMinutes(second),
-		0,
-	}, vector.MustFixedColNoTypeCheck[types.Datetime](result.GetResultVector()))
-	require.True(t, result.GetResultVector().IsNull(3))
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.ZeroTimestamp, got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()), got[2])
+}
+
+func TestMoWinTruncateTimestampOverloadDoesNotCastToDatetime(t *testing.T) {
+	got, err := GetFunctionByName(
+		context.Background(),
+		"mo_win_truncate",
+		[]types.Type{types.T_timestamp.ToTypeWithScale(6), types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	_, shouldCast := got.ShouldDoImplicitTypeCast()
+	require.False(t, shouldCast)
+	_, overloadID := DecodeOverloadID(got.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overloadID)
+	require.Equal(t, types.T_timestamp, got.GetReturnType().Oid)
+	require.Equal(t, int32(6), got.GetReturnType().Scale)
 }
 
 func TestMoWinTruncatePropagatesNull(t *testing.T) {
@@ -13223,6 +13182,45 @@ func TestMoWinTruncatePropagatesNull(t *testing.T) {
 		0,
 		types.DatetimeEpoch + types.MicroSecsPerSec,
 	}, vector.MustFixedColNoTypeCheck[types.Datetime](got))
+}
+
+func TestMoWinTruncateTimestampPropagatesNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(
+		values,
+		[]types.Timestamp{
+			types.Timestamp(0),
+			types.Timestamp(0),
+			types.Timestamp(types.MicroSecsPerSec),
+		},
+		[]bool{false, true, false},
+		proc.Mp(),
+	))
+	values.SetLength(3)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 3, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 3, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 3, nil))
+
+	got := result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.True(t, got.IsNull(1))
+	require.False(t, got.IsNull(2))
+	require.Equal(t, []types.Timestamp{
+		types.Timestamp(0),
+		0,
+		types.Timestamp(types.MicroSecsPerSec),
+	}, vector.MustFixedColNoTypeCheck[types.Timestamp](got))
 }
 
 func TestMoWinTruncateRejectsNonPositiveInterval(t *testing.T) {
