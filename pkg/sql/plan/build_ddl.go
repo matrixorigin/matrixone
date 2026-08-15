@@ -282,11 +282,10 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
-	// SAMPLE(*) expands to a sampling operator during binding, but replacing
-	// the source list with the ordinary projected columns would silently drop
-	// that operator. Keep the original statement until the SAMPLE AST can be
-	// rewritten without changing its semantics.
-	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) || viewSelectHasSampleStar(stmt) {
+	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
+	// leaves that query block intact while still stabilizing ordinary stars in
+	// unrelated query blocks.
+	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
 		return viewSql, false
 	}
 
@@ -617,6 +616,18 @@ func selectClauseOutputHasStar(selectClause *tree.SelectClause) bool {
 	return false
 }
 
+func selectClauseHasSampleExpr(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func directExprHasStar(expr tree.Expr) bool {
 	switch expr := expr.(type) {
 	case tree.UnqualifiedStar:
@@ -837,7 +848,15 @@ func viewSelectStatementWithExpandedStars(
 		}
 		expandedSelectList, ok := expandedSelectLists[selectStmt]
 		if ok {
-			if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
+			if selectClauseHasSampleExpr(selectStmt) {
+				// The bound list for SAMPLE(*) contains the sampled columns, not
+				// the SAMPLE expression itself. Keep this query block's source AST
+				// intact; ordinary stars in other query blocks are rewritten by the
+				// surrounding traversal.
+				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
+				stableClause.Exprs = stableExprs
+				rewritten = rewritten || exprsRewritten
+			} else if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
 				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(expandedSelectList, expandedSelectLists)
 				stableClause.Exprs = stableExprs
 				rewritten = true

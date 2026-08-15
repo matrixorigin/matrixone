@@ -4917,7 +4917,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
-	if ctx.captureViewStarExpansion && expandedSelectClause != nil {
+	// SAMPLE(*) expands to the sampled columns while binding, but the source
+	// AST must retain the SAMPLE operator when the view definition is persisted.
+	// Do not record that query block as an ordinary star expansion; the view SQL
+	// rewriter will keep the SAMPLE expression intact while still processing
+	// unrelated query blocks that contain ordinary stars.
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil && !selectClauseHasSampleExpr(expandedSelectClause) {
 		if ctx.expandedSelectLists == nil {
 			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
 		}

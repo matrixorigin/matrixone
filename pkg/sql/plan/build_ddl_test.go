@@ -1086,6 +1086,44 @@ func TestGenViewTableDefPreservesSampleStar(t *testing.T) {
 	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
 }
 
+func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
+	const rootSQL = "create view v_outer_sample as select * from nation where exists (select sample(*, 100 percent) from region)"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "sample 100.0 percent")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.NotContains(t, viewData.Stmt, "`nation`.*")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_outer_sample"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_outer_sample"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_outer_sample"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_outer_sample", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+}
+
 func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
 	const rootSQL = "create view v_union as select * from nation union all select * from nation"
 	ctx := &rootSQLCompilerContext{
