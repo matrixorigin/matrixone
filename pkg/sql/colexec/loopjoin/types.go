@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -161,7 +160,7 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteResultData,
 		loopJoinAllocationSiteResultArea,
 		loopJoinAllocationSiteResultNulls,
@@ -172,7 +171,7 @@ func (loopJoin *LoopJoin) SetAllocationAccount(
 	}
 	conditionSelection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		loopJoinAllocationSiteConditionData,
 		loopJoinAllocationSiteConditionArea,
 		loopJoinAllocationSiteConditionNulls,

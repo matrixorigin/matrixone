@@ -12341,7 +12341,9 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	page.SetPath(path)
 
-	time.Sleep(2 * time.Second)
+	// Expire only the in-memory representation. Advancing the page timestamp
+	// keeps this TTL boundary test deterministic under slow CI scheduling.
+	page.SetBornTS(time.Now().Add(-2 * time.Second))
 	tae.Runtime.TransferTable.RunTTL()
 	assert.True(t, page.IsPersist())
 	for i := 0; i < 10; i++ {
@@ -12414,7 +12416,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			page.SetPath(path)
 
-			time.Sleep(2 * time.Second)
+			// Expire the persisted representation without a wall-clock sleep.
+			page.SetBornTS(time.Now().Add(-3 * time.Second))
 			tae.Runtime.TransferTable.RunTTL()
 			_, err = tae.Runtime.TransferTable.Pin(*page.ID())
 			assert.True(t, errors.Is(err, moerr.GetOkExpectedEOB()))

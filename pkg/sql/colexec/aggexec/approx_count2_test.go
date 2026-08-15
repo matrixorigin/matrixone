@@ -16,17 +16,95 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
+	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
 
+func TestAccountedHllLazilyActivatesNonNullGroups(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := makeApproxCount(mp, AggIdOfApproxCount,
+		types.T_int64.ToType()).(*approxCountExec)
+	owner := any(exec).(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(4))
+	baseline := account.Snapshot().Used
+
+	nulls := vector.NewConstNull(types.T_int64.ToType(), 4, mp)
+	groups := []uint64{1, 2, 3, 4}
+	require.NoError(t,
+		exec.PreflightBatchFill(0, groups, []*vector.Vector{nulls}))
+	require.Equal(t, baseline, account.Snapshot().Used)
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{nulls}))
+	for _, state := range exec.state {
+		for _, mob := range state.mobs {
+			require.Nil(t, mob)
+		}
+	}
+
+	values := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t,
+		vector.AppendFixedList(values, []int64{7}, nil, mp))
+	require.NoError(t,
+		exec.PreflightBatchFill(0, []uint64{2}, []*vector.Vector{values}))
+	require.Equal(t, baseline+uint64(hllRegisterCnt), account.Snapshot().Used)
+	require.NoError(t,
+		exec.BatchFill(0, []uint64{2}, []*vector.Vector{values}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0),
+		vector.GetFixedAtNoTypeCheck[uint64](results[0], 0))
+	require.Equal(t, uint64(1),
+		vector.GetFixedAtNoTypeCheck[uint64](results[0], 1))
+	for _, result := range results {
+		result.Free(mp)
+	}
+	values.Free(mp)
+	nulls.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedHllPreflightBroadcastsScalarConstPastPhysicalRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := makeApproxCount(mp, AggIdOfApproxCount,
+		types.T_int64.ToType()).(*approxCountExec)
+	owner := any(exec).(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+
+	input, err := vector.NewConstFixed(
+		types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	groups := []uint64{1, 1}
+	require.NoError(t, exec.PreflightBatchFill(
+		3, groups, []*vector.Vector{input}))
+	require.NoError(t, exec.BatchFill(
+		3, groups, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1),
+		vector.GetFixedAtNoTypeCheck[uint64](results[0], 0))
+	results[0].Free(mp)
+	input.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestHllSketchMarshalAndUnmarshalFromReader(t *testing.T) {
 	mp := mpool.MustNewZero()
-	sketch, err := makeHllSketch(mp)
+	sketch, err := makeHllSketch(mp, nil)
 	require.NoError(t, err)
 
 	hlls := sketch.(*hllSketch)
@@ -36,15 +114,111 @@ func TestHllSketchMarshalAndUnmarshalFromReader(t *testing.T) {
 	data, err := hlls.MarshalBinary()
 	require.NoError(t, err)
 
-	restoredMU, err := makeHllSketch(mp)
+	restoredMU, err := makeHllSketch(mp, nil)
 	require.NoError(t, err)
 	restored := restoredMU.(*hllSketch)
 	require.NoError(t, restored.UnmarshalBinary(data))
 	require.Equal(t, hlls.Estimate(), restored.Estimate())
 
-	readerRestored := &hllSketch{}
+	readerRestoredMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	readerRestored := readerRestoredMU.(*hllSketch)
 	require.NoError(t, readerRestored.UnmarshalFromReader(bytes.NewReader(data)))
 	require.Equal(t, hlls.Estimate(), readerRestored.Estimate())
+
+	hlls.Free()
+	restored.Free()
+	readerRestored.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllSketchLegacyWireAndEstimateCompatibility(t *testing.T) {
+	mp := mpool.MustNewZero()
+	legacy := hll.NewNoSparse()
+	currentMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	current := currentMU.(*hllSketch)
+	defer func() {
+		current.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for value := int64(0); value < 10_000; value++ {
+		encoded := types.EncodeInt64(&value)
+		legacy.Insert(encoded)
+		current.Insert(encoded)
+	}
+	legacyBytes, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	currentBytes, err := current.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, legacyBytes, currentBytes)
+	require.Equal(t, legacy.Estimate(), current.Estimate())
+
+	legacyDecoder := hll.NewNoSparse()
+	require.NoError(t, legacyDecoder.UnmarshalBinary(currentBytes))
+	require.Equal(t, current.Estimate(), legacyDecoder.Estimate())
+
+	currentDecoderMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	currentDecoder := currentDecoderMU.(*hllSketch)
+	defer currentDecoder.Free()
+	require.NoError(t, currentDecoder.UnmarshalBinary(legacyBytes))
+	require.Equal(t, legacy.Estimate(), currentDecoder.Estimate())
+}
+
+func TestHllSketchMergesLegacySparseWire(t *testing.T) {
+	mp := mpool.MustNewZero()
+	legacy := hll.New()
+	for value := int64(0); value < 100; value++ {
+		legacy.Insert(types.EncodeInt64(&value))
+	}
+	legacyBytes, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, byte(1), legacyBytes[3])
+
+	currentMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	current := currentMU.(*hllSketch)
+	require.NoError(t, current.mergeBytes(legacyBytes))
+	require.Equal(t, legacy.Estimate(), current.Estimate())
+	current.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllSketchMalformedSparseMergeIsAtomic(t *testing.T) {
+	mp := mpool.MustNewZero()
+	destinationMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	destination := destinationMU.(*hllSketch)
+	defer func() {
+		destination.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	for value := int64(0); value < 32; value++ {
+		destination.Insert(types.EncodeInt64(&value))
+	}
+	want := bytes.Clone(destination.regs)
+
+	legacy := hll.New()
+	for value := int64(100); value < 180; value++ {
+		legacy.Insert(types.EncodeInt64(&value))
+	}
+	encoded, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, byte(1), encoded[3])
+
+	// Keep a valid temporary-set prefix and a fully decodable list, but make
+	// the published list cardinality inconsistent with the payload.
+	temporaryCount := binary.BigEndian.Uint32(encoded[4:8])
+	metadata := 8 + int(temporaryCount)*4
+	require.LessOrEqual(t, metadata+12, len(encoded))
+	malformed := bytes.Clone(encoded)
+	count := binary.BigEndian.Uint32(malformed[metadata : metadata+4])
+	binary.BigEndian.PutUint32(malformed[metadata:metadata+4], count+1)
+
+	require.Error(t, destination.mergeBytes(malformed))
+	require.Equal(t, want, destination.regs)
 }
 
 func TestApproxCountExecFillMergeFlush(t *testing.T) {
@@ -115,13 +289,19 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 	require.False(t, vecs[0].IsNull(0))
 	require.False(t, vecs[0].IsNull(1))
 
-	group1 := &hllSketch{}
+	group1MU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	group1 := group1MU.(*hllSketch)
 	require.NoError(t, group1.UnmarshalBinary(vecs[0].GetBytesAt(0)))
 	require.Equal(t, uint64(3), group1.Estimate())
 
-	group2 := &hllSketch{}
+	group2MU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	group2 := group2MU.(*hllSketch)
 	require.NoError(t, group2.UnmarshalBinary(vecs[0].GetBytesAt(1)))
 	require.Equal(t, uint64(1), group2.Estimate())
+	group1.Free()
+	group2.Free()
 
 	values.Free(mp)
 	rightValues.Free(mp)
@@ -134,7 +314,7 @@ func TestHllMergeExecFillMergeFlush(t *testing.T) {
 	mp := mpool.MustNewZero()
 
 	buildSketch := func(values ...int64) []byte {
-		sketch, err := makeHllSketch(mp)
+		sketch, err := makeHllSketch(mp, nil)
 		require.NoError(t, err)
 		hlls := sketch.(*hllSketch)
 		for _, value := range values {
@@ -142,6 +322,7 @@ func TestHllMergeExecFillMergeFlush(t *testing.T) {
 		}
 		data, err := hlls.MarshalBinary()
 		require.NoError(t, err)
+		hlls.Free()
 		return data
 	}
 
@@ -168,13 +349,19 @@ func TestHllMergeExecFillMergeFlush(t *testing.T) {
 	vecs, err := left.Flush()
 	require.NoError(t, err)
 
-	group1 := &hllSketch{}
+	group1MU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	group1 := group1MU.(*hllSketch)
 	require.NoError(t, group1.UnmarshalBinary(vecs[0].GetBytesAt(0)))
 	require.Equal(t, uint64(4), group1.Estimate())
 
-	group2 := &hllSketch{}
+	group2MU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	group2 := group2MU.(*hllSketch)
 	require.NoError(t, group2.UnmarshalBinary(vecs[0].GetBytesAt(1)))
 	require.Equal(t, uint64(1), group2.Estimate())
+	group1.Free()
+	group2.Free()
 
 	invalid := vector.NewVec(types.T_varbinary.ToType())
 	require.NoError(t, vector.AppendBytes(invalid, []byte("bad"), false, mp))

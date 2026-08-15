@@ -247,6 +247,32 @@ func TestSortForSQLOrderFloat32NaNLast(t *testing.T) {
 	}
 }
 
+func TestSortByVectorsWithScratchMatchesConveniencePath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first := vector.NewVec(types.T_int64.ToType())
+	second := vector.NewVec(types.T_int64.ToType())
+	defer first.Free(mp)
+	defer second.Free(mp)
+	require.NoError(t, vector.AppendFixedList(
+		first, []int64{1, 1, 2, 2, 1, 0}, nil, mp))
+	require.NoError(t, vector.AppendFixedList(
+		second, []int64{2, 1, 2, 1, 3, 0}, nil, mp))
+
+	want := []int64{0, 1, 2, 3, 4, 5}
+	SortByVectors(want, []*vector.Vector{first, second},
+		[]bool{false, true}, []bool{false, false})
+	got := []int64{0, 1, 2, 3, 4, 5}
+	scratch := ByVectorsScratch{
+		Partitions: make([]int64, 0, len(got)),
+		Diffs:      make([]bool, len(got)),
+	}
+	SortByVectorsWithScratch(got, []*vector.Vector{first, second},
+		[]bool{false, true}, []bool{false, false}, &scratch)
+	require.Equal(t, want, got)
+	require.LessOrEqual(t, len(scratch.Partitions), len(got))
+	require.Len(t, scratch.Diffs, len(got))
+}
+
 func BenchmarkSortInt(b *testing.B) {
 	vs := make([]int, BenchmarkRows)
 	for i := range vs {

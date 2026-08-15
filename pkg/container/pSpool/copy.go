@@ -184,8 +184,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 		}
 	}
 
-	dst.ExtraBuf = src.ExtraBuf
-	src.ExtraBuf = nil
+	dst.MoveExtraBufferFrom(src)
 
 	// set row count.
 	dst.SetRowCount(src.RowCount())

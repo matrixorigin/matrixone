@@ -17,6 +17,7 @@ package timewin
 import (
 	"bytes"
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -117,9 +118,29 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			}
 		}
 	}
+	if (timeWin.GapFillStart == nil) != (timeWin.GapFillEnd == nil) {
+		return moerr.NewInternalErrorNoCtx("GAPFILL requires both start and finish bounds")
+	}
+	if timeWin.hasGapFillBounds() {
+		if ctr.gapFillStartExe == nil {
+			ctr.gapFillStartExe, err = colexec.NewExpressionExecutor(proc, timeWin.GapFillStart)
+			if err != nil {
+				return err
+			}
+		}
+		if ctr.gapFillEndExe == nil {
+			ctr.gapFillEndExe, err = colexec.NewExpressionExecutor(proc, timeWin.GapFillEnd)
+			if err != nil {
+				return err
+			}
+		}
+	}
 
 	ctr.tsOid = types.T(timeWin.TsType.Id)
 	ctr.resetParam(timeWin)
+	if err = ctr.evalGapFillBounds(timeWin, proc); err != nil {
+		return err
+	}
 
 	// Must match plan.BuildTimeWindowLayout: aggregates, then the boundaries,
 	// then the partition keys.
@@ -131,6 +152,82 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 		ctr.colCnt++
 	}
 	ctr.colCnt += len(timeWin.PartitionBy)
+	return nil
+}
+
+func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process) error {
+	if !timeWin.hasGapFillBounds() {
+		return nil
+	}
+	eval := func(exe colexec.ExpressionExecutor, name string) (types.Datetime, bool, error) {
+		vec, err := exe.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return 0, false, err
+		}
+		if vec.Length() == 0 || vec.IsNull(0) {
+			return 0, true, nil
+		}
+		switch vec.GetType().Oid {
+		case types.T_date:
+			return vector.MustFixedColWithTypeCheck[types.Date](vec)[0].ToDatetime(), false, nil
+		case types.T_datetime:
+			return vector.MustFixedColWithTypeCheck[types.Datetime](vec)[0], false, nil
+		case types.T_timestamp:
+			// TruncateTimestamp stores timestamp instants as raw DATETIME keys.
+			// Reinterpret the inferred bound identically; converting it through the
+			// session timezone would put bounds and observed rows in different grids.
+			return types.Datetime(vector.MustFixedColWithTypeCheck[types.Timestamp](vec)[0]), false, nil
+		default:
+			return 0, false, moerr.NewInternalErrorNoCtxf("GAPFILL %s bound has non-temporal type %s", name, vec.GetType().Oid.String())
+		}
+	}
+
+	start, startNull, err := eval(ctr.gapFillStartExe, "start")
+	if err != nil {
+		return err
+	}
+	finish, finishNull, err := eval(ctr.gapFillEndExe, "finish")
+	if err != nil {
+		return err
+	}
+	if timeWin.Interval <= 0 || timeWin.Sliding <= 0 {
+		return moerr.NewInternalErrorNoCtx("GAPFILL interval and sliding values must be positive")
+	}
+
+	// These bounds are inferred from ordinary WHERE predicates. NULL makes a
+	// comparison unknown and a reversed/equal half-open range is contradictory,
+	// so all three cases describe an empty input rather than an execution error.
+	// Check this before flooring start, otherwise an unaligned [t, t) would
+	// appear to contain the bucket that begins before t.
+	if startNull || finishNull || start >= finish {
+		ctr.boundedGapFill = true
+		ctr.gapFillStart = start
+		ctr.gapFillEnd = finish
+		ctr.status = end
+		return nil
+	}
+	if start == types.ZeroDatetime || finish == types.ZeroDatetime {
+		// Zero temporal values are valid SQL values, but their sentinel encoding
+		// cannot enter the regular DATETIME modulo/grid arithmetic. These bounds
+		// were inferred from WHERE rather than requested explicitly, so preserve
+		// the legacy observed-range GAPFILL behavior instead of rejecting a valid
+		// query. resetParam clears this choice before every Prepare, allowing a
+		// reused prepared statement with ordinary bounds to re-enable the grid.
+		return nil
+	}
+
+	ctr.boundedGapFill = true
+	ctr.gapFillStart = start - start%timeWin.Interval
+	ctr.gapFillEnd = finish
+	if ctr.gapFillStart < finish {
+		ctr.gapFillRows = int64((finish-ctr.gapFillStart-1)/timeWin.Sliding) + 1
+	}
+	if ctr.gapFillRows > maxGapFillRowsPerPartition {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
+	}
+	if ctr.gapFillRows == 0 {
+		ctr.status = end
+	}
 	return nil
 }
 
@@ -196,8 +293,18 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 			if result.Batch == nil {
+				if ctr.hasGapFillBounds(timeWin) && ctr.i == 0 && len(timeWin.PartitionBy) == 0 {
+					if err = ctr.startSyntheticGapFill(timeWin); err != nil {
+						return result, err
+					}
+					ctr.status = boundedEmpty
+					break
+				}
 				result.Status = vm.ExecStop
 				return result, nil
+			}
+			if result.Batch.IsEmpty() {
+				break
 			}
 
 			var ok bool
@@ -252,6 +359,19 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.end {
+				if ctr.hasGapFillBounds(timeWin) {
+					if ctr.boundedStreamReadyForTail(timeWin) {
+						complete, err := ctr.closeBoundedGapFillTail(timeWin)
+						if err != nil {
+							return result, err
+						}
+						ctr.last = complete
+						ctr.status = flush
+					} else {
+						ctr.status = nextWindow
+					}
+					break
+				}
 				if ctr.zeroWindow {
 					ctr.last = true
 					if !ctr.withoutFill {
@@ -283,6 +403,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.end = true
 				break
 			}
+			if result.Batch.IsEmpty() {
+				break
+			}
 
 			var ok bool
 			if ok, err = ctr.evalVector(result.Batch, proc); err != nil {
@@ -302,6 +425,14 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err = ctr.fillRows(timeWin); err != nil {
 				return result, err
 			}
+
+		case boundedEmpty:
+			complete, err := ctr.closeBoundedGapFillTail(timeWin)
+			if err != nil {
+				return result, err
+			}
+			ctr.last = complete
+			ctr.status = flush
 
 		case flush:
 
@@ -334,6 +465,23 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.partitionBreak = false
 				ctr.partitionWindows = 0
 				ctr.status = firstWindow
+			case ctr.syntheticBounds:
+				replacements, err := makeAggExecutors(timeWin, proc, true)
+				if err != nil {
+					return result, err
+				}
+				ctr.freeAgg()
+				ctr.aggs = replacements
+				ctr.left = ctr.nextLeft
+				ctr.right = ctr.left + timeWin.Interval
+				ctr.nextLeft = ctr.left + timeWin.Sliding
+				ctr.nextRight = ctr.nextLeft + timeWin.Interval
+				ctr.group = 0
+				ctr.withoutFill = true
+				if err = ctr.accountGapFillWindows(timeWin, 1); err != nil {
+					return result, err
+				}
+				ctr.status = boundedEmpty
 			default:
 				replacements, err := makeAggExecutors(timeWin, proc, true)
 				if err != nil {
@@ -499,8 +647,7 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 			}
 		}
 		ctr.group++
-		ctr.partitionWindows++
-		if err := ctr.accountGapFillWindow(t); err != nil {
+		if err := ctr.accountGapFillWindows(t, 1); err != nil {
 			return err
 		}
 	}
@@ -525,8 +672,7 @@ func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
 	ctr.curRowIdx = ctr.preRowIdx
 
 	if t.GapFill {
-		ctr.partitionWindows++
-		if err := ctr.accountGapFillWindow(t); err != nil {
+		if err := ctr.accountGapFillWindows(t, 1); err != nil {
 			return err
 		}
 	}
@@ -540,11 +686,12 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		if t.GapFill && ctr.partitionCount > maxGapFillPartitions {
 			return moerr.NewInvalidInputNoCtx("GAPFILL partition limit exceeded")
 		}
-		ctr.partitionWindows = 1
-	} else {
-		ctr.partitionWindows++
+		ctr.partitionWindows = 0
+		if ctr.hasGapFillBounds(t) && ctr.gapFillWindows+ctr.gapFillRows > maxGapFillRowsTotal {
+			return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
+		}
 	}
-	if err := ctr.accountGapFillWindow(t); err != nil {
+	if err := ctr.accountGapFillWindows(t, 1); err != nil {
 		return err
 	}
 	val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
@@ -558,6 +705,12 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		ctr.nextLeft = zeroValue
 		ctr.nextRight = zeroValue
 		ctr.zeroWindow = true
+	} else if ctr.hasGapFillBounds(t) {
+		ctr.left = ctr.gapFillStart
+		ctr.right = ctr.left + t.Interval
+		ctr.nextLeft = ctr.left + t.Sliding
+		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.zeroWindow = false
 	} else {
 		ctr.left = val - val%t.Interval
 		ctr.right = ctr.left + t.Interval
@@ -645,7 +798,14 @@ func (ctr *container) fillRows(t *TimeWin) error {
 		ctr.partLastVecIdx = ctr.curVecIdx
 		ctr.partLastRowIdx = ctr.curRowIdx
 
-		if val <= ctr.nextLeft {
+		// Keep the rewind cursor at the first row tied at nextLeft. The next
+		// overlapping window is left-inclusive, so every boundary peer must be
+		// replayed, including peers split across child batches. A row strictly
+		// before the boundary remains the best cursor until that first tie is
+		// observed.
+		atFirstBoundaryPeer := val == ctr.nextLeft &&
+			ctr.windowValue(ctr.preVecIdx, ctr.preRowIdx) != ctr.nextLeft
+		if val < ctr.nextLeft || atFirstBoundaryPeer {
 			ctr.preVecIdx = ctr.curVecIdx
 			ctr.preRowIdx = ctr.curRowIdx
 		}
@@ -665,6 +825,19 @@ func (ctr *container) fillRows(t *TimeWin) error {
 
 	switch {
 	case partBreak:
+		if ctr.hasGapFillBounds(t) {
+			if ctr.boundedPartitionReadyForTail(t) {
+				complete, err := ctr.closeBoundedGapFillTail(t)
+				if err != nil {
+					return err
+				}
+				ctr.partitionBreak = complete
+				ctr.status = flush
+			} else {
+				ctr.status = nextWindow
+			}
+			break
+		}
 		// Same shape as the end-of-stream check in nextBatch, scoped to the
 		// partition: once the rewind point has reached the partition's last
 		// row and the next window would start past it, the partition is done.
@@ -678,8 +851,8 @@ func (ctr *container) fillRows(t *TimeWin) error {
 			ctr.status = nextWindow
 		}
 	case outRange:
+		val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
 		if ctr.withoutFill && !t.GapFill && t.Sliding > 0 {
-			val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
 			if val >= ctr.right {
 				skip := (val-ctr.right)/t.Sliding + 1
 				ctr.left += skip * t.Sliding
@@ -692,7 +865,18 @@ func (ctr *container) fillRows(t *TimeWin) error {
 				return nil
 			}
 		}
-		if ctr.group > maxTimeWindowRows {
+		if ctr.hasGapFillBounds(t) && t.Sliding == t.Interval {
+			target := val - val%t.Interval
+			flushed, err := ctr.advanceBoundedTumblingGap(t, target)
+			if err != nil {
+				return err
+			}
+			if flushed {
+				ctr.status = flush
+			} else {
+				ctr.status = fill
+			}
+		} else if ctr.group > maxTimeWindowRows {
 			ctr.wStart = append(ctr.wStart, ctr.left)
 			ctr.wEnd = append(ctr.wEnd, ctr.right)
 			ctr.status = flush
@@ -706,6 +890,151 @@ func (ctr *container) fillRows(t *TimeWin) error {
 	return nil
 }
 
+func (ctr *container) boundedStreamReadyForTail(t *TimeWin) bool {
+	if ctr.nextLeft >= ctr.gapFillEnd {
+		return true
+	}
+	lastVec := ctr.i - 1
+	return lastVec >= 0 && ctr.preVecIdx == lastVec &&
+		ctr.preRowIdx == ctr.tsVec[lastVec].Length()-1 && ctr.lastVal < ctr.nextLeft
+}
+
+func (ctr *container) boundedPartitionReadyForTail(t *TimeWin) bool {
+	return ctr.nextLeft >= ctr.gapFillEnd ||
+		(ctr.preVecIdx == ctr.partLastVecIdx && ctr.preRowIdx == ctr.partLastRowIdx &&
+			ctr.partLastVal < ctr.nextLeft)
+}
+
+func (ctr *container) startSyntheticGapFill(t *TimeWin) error {
+	if ctr.gapFillRows <= 0 {
+		return moerr.NewInternalErrorNoCtx("cannot start an empty GAPFILL domain")
+	}
+	ctr.partitionCount = 1
+	if ctr.partitionCount > maxGapFillPartitions {
+		return moerr.NewInvalidInputNoCtx("GAPFILL partition limit exceeded")
+	}
+	if ctr.gapFillWindows+ctr.gapFillRows > maxGapFillRowsTotal {
+		return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
+	}
+
+	ctr.left = ctr.gapFillStart
+	ctr.right = ctr.left + t.Interval
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.group = 0
+	ctr.withoutFill = true
+	ctr.syntheticBounds = true
+	for _, agg := range ctr.aggs {
+		if err := agg.GroupGrow(1); err != nil {
+			return err
+		}
+	}
+	return ctr.accountGapFillWindows(t, 1)
+}
+
+// closeBoundedGapFillTail appends the current window and every following
+// window whose start is inside [start, finish). It grows aggregate groups once
+// per output batch instead of once per empty bucket, which is the dominant
+// cost for long quiet ranges. The bool reports whether finish was reached.
+func (ctr *container) closeBoundedGapFillTail(t *TimeWin) (bool, error) {
+	if ctr.left >= ctr.gapFillEnd {
+		return true, nil
+	}
+	remaining := int64((ctr.gapFillEnd-ctr.left-1)/t.Sliding) + 1
+	count := remaining
+	capacity := int64(maxTimeWindowRows - len(ctr.wStart))
+	if capacity < 1 {
+		capacity = 1
+	}
+	if count > capacity {
+		count = capacity
+	}
+
+	ctr.appendGapFillBounds(t, count)
+	additional := count - 1 // the current aggregate group already exists
+	if err := ctr.growGapFillGroups(t, additional); err != nil {
+		return false, err
+	}
+	ctr.group += int(additional)
+	ctr.left += types.Datetime(additional) * t.Sliding
+	ctr.right = ctr.left + t.Interval
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+	return count == remaining, nil
+}
+
+// advanceBoundedTumblingGap skips directly to the bucket containing target.
+// When the output batch fills, it closes the current prefix and lets the normal
+// post-flush transition create the next group.
+func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetime) (bool, error) {
+	steps := int64((target - ctr.left) / t.Sliding)
+	if steps <= 0 {
+		return false, nil
+	}
+	capacity := int64(maxTimeWindowRows - len(ctr.wStart))
+	if capacity < 1 {
+		capacity = 1
+	}
+
+	if steps >= capacity {
+		ctr.appendGapFillBounds(t, capacity)
+		additional := capacity - 1
+		if err := ctr.growGapFillGroups(t, additional); err != nil {
+			return false, err
+		}
+		ctr.group += int(additional)
+		ctr.left += types.Datetime(additional) * t.Sliding
+		ctr.right = ctr.left + t.Interval
+		ctr.nextLeft = ctr.left + t.Sliding
+		ctr.nextRight = ctr.nextLeft + t.Interval
+		return true, nil
+	}
+
+	// Close every bucket before target and create one aggregate group for the
+	// target bucket. The input row remains at the same cursor and is consumed by
+	// the next fill iteration.
+	ctr.appendGapFillBounds(t, steps)
+	if err := ctr.growGapFillGroups(t, steps); err != nil {
+		return false, err
+	}
+	ctr.group += int(steps)
+	ctr.left = target
+	ctr.right = ctr.left + t.Interval
+	ctr.nextLeft = ctr.left + t.Sliding
+	ctr.nextRight = ctr.nextLeft + t.Interval
+	ctr.withoutFill = true
+	return false, nil
+}
+
+func (ctr *container) growGapFillGroups(t *TimeWin, count int64) error {
+	if count <= 0 {
+		return nil
+	}
+	if err := ctr.accountGapFillWindows(t, count); err != nil {
+		return err
+	}
+	for _, agg := range ctr.aggs {
+		if err := agg.GroupGrow(int(count)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) appendGapFillBounds(t *TimeWin, count int64) {
+	if count <= 0 {
+		return
+	}
+	ctr.wStart = slices.Grow(ctr.wStart, int(count))
+	ctr.wEnd = slices.Grow(ctr.wEnd, int(count))
+	start := ctr.left
+	for i := int64(0); i < count; i++ {
+		left := start + types.Datetime(i)*t.Sliding
+		ctr.wStart = append(ctr.wStart, left)
+		ctr.wEnd = append(ctr.wEnd, left+t.Interval)
+	}
+}
+
 const maxTimeWindowRows = 8192
 
 const (
@@ -714,17 +1043,18 @@ const (
 	maxGapFillRowsTotal        = 10_000_000
 )
 
-func (ctr *container) accountGapFillWindow(timeWin *TimeWin) error {
-	if !timeWin.GapFill {
+func (ctr *container) accountGapFillWindows(timeWin *TimeWin, count int64) error {
+	if !timeWin.GapFill || count <= 0 {
 		return nil
 	}
-	if ctr.partitionWindows > maxGapFillRowsPerPartition {
+	if ctr.partitionWindows+count > maxGapFillRowsPerPartition {
 		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
 	}
-	ctr.gapFillWindows++
-	if ctr.gapFillWindows > maxGapFillRowsTotal {
+	if ctr.gapFillWindows+count > maxGapFillRowsTotal {
 		return moerr.NewInvalidInputNoCtx("GAPFILL generated total row limit exceeded")
 	}
+	ctr.partitionWindows += count
+	ctr.gapFillWindows += count
 	return nil
 }
 
@@ -824,7 +1154,10 @@ func timestampIntervalBoundaryInDomain(value types.Timestamp) bool {
 
 func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeFlushedAggVecs(proc.Mp())
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	// Aggregate results can carry a statement allocation account.  The result
+	// batch takes ownership of those vectors and therefore must preserve their
+	// off-heap/accounted storage class.
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, agg := range ctr.aggs {
 		vecs, err := agg.Flush()
@@ -856,7 +1189,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		ctr.wEnd = nil
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		if ap.timestampWindow() {
 			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc)
@@ -931,7 +1264,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 
 func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err error) {
 	ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
-	ctr.bat = batch.NewWithSize(ctr.colCnt)
+	// Input expressions can forward allocation-accounted vectors.  Both the
+	// result owner and the temporary expression batch must keep them off-heap.
+	ctr.bat = batch.NewOffHeapWithSize(ctr.colCnt)
 	i := 0
 	for aggIndex, vecs := range ctr.aggVec[ctr.i-1] {
 		if !vecs[0].HasPrepareParamKind() {
@@ -975,7 +1310,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		ctr.wEnd = nil
 		return nil
 	}
-	bat := batch.NewWithSize(1)
+	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		bat.SetVector(0, ctr.tsVec[ctr.i-1])
 		batch.SetLength(bat, ctr.tsVec[ctr.i-1].Length())

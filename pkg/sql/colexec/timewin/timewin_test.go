@@ -162,6 +162,91 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestIntervalResultPreservesAccountedInputVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	value := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+	require.NoError(t, value.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(value, int64(42), false, mp))
+	ctr := container{
+		colCnt: 1,
+		i:      1,
+		aggVec: [][][]*vector.Vector{{{value}}},
+	}
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, ctr.calResForInterval(&TimeWin{}, proc))
+	require.Same(t, value, ctr.bat.Vecs[0])
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](ctr.bat.Vecs[0]))
+
+	// The interval buffer, not the forwarding batch, owns the vector.
+	ctr.bat = nil
+	value.Free(mp)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestTimeWinResetReleasesInheritedAccountedInput(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	ts := vector.NewOffHeapVecWithType(types.T_datetime.ToType())
+	require.NoError(t, ts.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(ts, types.Datetime(1), false, mp))
+	value := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, value.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(value, int32(42), false, mp))
+	input := batch.NewOffHeapWithSize(2)
+	input.SetVector(0, ts)
+	input.SetVector(1, value)
+	input.SetRowCount(1)
+
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	arg := &TimeWin{
+		Types:    []types.Type{types.T_int32.ToType()},
+		Aggs:     []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil)},
+		TsType:   plan.Type{Id: int32(types.T_datetime)},
+		Ts:       newExpression(0),
+		EndExpr:  newExpression(0),
+		Interval: makeInterval(),
+	}
+	require.NoError(t, arg.Prepare(proc))
+	ok, err := arg.ctr.evalVector(input, proc)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// Pipeline cleanup resets children before parents. Once the input owner is
+	// gone, only TimeWin's inherited duplicate capacity remains in the attempt.
+	input.Clean(mp)
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestEvalVectorSkipsNullTimeRows(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := &TimeWin{
