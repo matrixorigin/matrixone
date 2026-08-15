@@ -98,6 +98,39 @@ func TestPromotedCharComparisonUsesDedicatedCastOverload(t *testing.T) {
 	require.Equal(t, int32(2), overload)
 }
 
+func TestValueSelectingPromotedCharComparisonUsesDedicatedCastOverload(t *testing.T) {
+	ctx := context.Background()
+	charType := types.New(types.T_char, 8, 0)
+	varcharType := types.New(types.T_varchar, 8, 0)
+
+	for _, tc := range []struct {
+		name string
+		fn   string
+	}{
+		{name: "case", fn: "case"},
+		{name: "if", fn: "if"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			charValue := makePlan2StringConstExprWithType("MO      ")
+			charValue.Typ = makePlan2Type(&charType)
+			varcharValue := makePlan2StringConstExprWithType("MO")
+			varcharValue.Typ = makePlan2Type(&varcharType)
+			promoted, err := BindFuncExprImplByPlanExpr(ctx, tc.fn, []*Expr{
+				makePlan2BoolConstExprWithType(true), charValue, varcharValue,
+			})
+			require.NoError(t, err)
+			require.True(t, hasPadSpaceStringProvenance(promoted), promoted.String())
+			comparison, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{promoted, makePlan2StringConstExprWithType("MO")})
+			require.NoError(t, err)
+
+			leftCast := comparison.GetF().GetArgs()[0].GetF()
+			require.NotNil(t, leftCast)
+			_, overload := function.DecodeOverloadID(leftCast.GetFunc().GetObj())
+			require.Equal(t, int32(2), overload)
+		})
+	}
+}
+
 func TestSetOperationCharCastUsesDedicatedOverload(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.New(types.T_char, 4, 0)

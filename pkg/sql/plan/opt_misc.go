@@ -33,6 +33,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
+	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
 	increaseRefCntForExprList(node.AggList, 1, colRefCnt)
 	increaseRefCntForExprList(node.WinSpecList, 1, colRefCnt)
 
@@ -304,6 +305,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.OnList, projMap)
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
+	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)

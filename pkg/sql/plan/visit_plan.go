@@ -181,6 +181,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.PhysicalEqualityKeyList {
+		node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
 		if err != nil {
@@ -354,6 +361,13 @@ func visitMissingNodeExprs(
 			for i := range node.GroupBy {
 				var err error
 				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.PhysicalEqualityKeyList {
+				var err error
+				node.PhysicalEqualityKeyList[i], err = rule.ApplyExpr(node.PhysicalEqualityKeyList[i])
 				if err != nil {
 					return err
 				}

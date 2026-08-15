@@ -4285,6 +4285,12 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			wantKey:  true,
 		},
 		{
+			name:     "promoted char union",
+			sql:      "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
 			name:     "varchar control",
 			sql:      "select cast('MO ' as varchar(8)) union select cast('MO' as varchar(8))",
 			nodeType: plan.Node_UNION,
@@ -4363,6 +4369,29 @@ func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 			require.Equal(t, int32(3), overloadID)
 		})
 	}
+}
+
+func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(true), t,
+		"select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+	)
+	require.NoError(t, err)
+
+	var aggregate *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+			aggregate = node
+			break
+		}
+	}
+	require.NotNil(t, aggregate)
+	require.Len(t, aggregate.GroupBy, 2)
+	require.Equal(t, []int32{1}, aggregate.GroupByHashKey)
+	keyFn := aggregate.GroupBy[1].GetF()
+	require.NotNil(t, keyFn)
+	_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+	require.Equal(t, int32(3), overloadID)
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {

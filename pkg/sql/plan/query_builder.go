@@ -3773,14 +3773,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setBranchPadSpaceProvenance := make([][]bool, len(subCtxList))
 	setOperationKeyRequired := make([]bool, projectLength)
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		setBranchPadSpaceProvenance[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			setBranchPadSpaceProvenance[branchIdx][colIdx] =
+				hasPadSpaceStringProvenance(builder.qry.Nodes[nodes[branchIdx]].ProjectList[colIdx])
 		}
 	}
 
@@ -3836,7 +3840,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = argsCastType[0]
 			}
 			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
-				hasChar, hasVariableString := false, false
+				hasChar, hasVariableString, hasPromotedChar := false, false, false
 				for _, typ := range tmpArgsType {
 					switch typ.Oid {
 					case types.T_char:
@@ -3845,7 +3849,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						hasVariableString = true
 					}
 				}
-				setOperationKeyRequired[columnIdx] = hasChar && hasVariableString
+				for branchIdx := range setBranchPadSpaceProvenance {
+					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
+				}
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar && hasVariableString
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
@@ -3917,28 +3924,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		return projectList
 	}
 	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
-		requiresKeyList := false
-		for _, required := range setOperationKeyRequired {
-			requiresKeyList = requiresKeyList || required
-		}
-		if !requiresKeyList {
-			return nil, nil
-		}
-
-		keyList := make([]*plan.Expr, len(projectList))
-		for i, expr := range projectList {
-			keyList[i] = DeepCopyExpr(expr)
-			if setOperationKeyRequired[i] {
-				var err error
-				keyList[i], err = appendSetOperationCastBeforeExpr(
-					builder.GetContext(), keyList[i], keyList[i].Typ,
-				)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		return keyList, nil
+		return builder.buildPadSpacePhysicalKeyList(projectList, setOperationKeyRequired)
 	}
 	appendSetOperationNode := func(
 		nodeType plan.Node_NodeType,
@@ -9392,14 +9378,41 @@ func (builder *QueryBuilder) appendAggNode(
 		return
 	}
 
+	groupBy := ctx.groups
+	groupingFlag := ctx.groupingFlag
+	var groupByHashKey []int32
+	if !hasInactiveGroupingColumn(groupingFlag) {
+		required := make([]bool, len(groupBy))
+		for i, expr := range groupBy {
+			required[i] = hasPadSpaceStringProvenance(expr)
+		}
+		var physicalKeys []*plan.Expr
+		physicalKeys, err = builder.buildPadSpacePhysicalKeyList(groupBy, required)
+		if err != nil {
+			return
+		}
+		if len(physicalKeys) > 0 {
+			visibleCount := len(groupBy)
+			groupBy = append(slices.Clone(groupBy), physicalKeys...)
+			groupByHashKey = make([]int32, visibleCount)
+			for i := range groupByHashKey {
+				groupByHashKey[i] = int32(visibleCount + i)
+			}
+			if len(groupingFlag) > 0 {
+				groupingFlag = append(slices.Clone(groupingFlag), groupingFlag...)
+			}
+		}
+	}
+
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:     plan.Node_AGG,
-		Children:     []int32{nodeID},
-		GroupBy:      ctx.groups,
-		GroupingFlag: ctx.groupingFlag,
-		AggList:      ctx.aggregates,
-		BindingTags:  []int32{ctx.groupTag, ctx.aggregateTag},
-		SpillMem:     builder.aggSpillMem,
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{nodeID},
+		GroupBy:        groupBy,
+		GroupingFlag:   groupingFlag,
+		GroupByHashKey: groupByHashKey,
+		AggList:        ctx.aggregates,
+		BindingTags:    []int32{ctx.groupTag, ctx.aggregateTag},
+		SpillMem:       builder.aggSpillMem,
 	}, ctx)
 
 	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
@@ -9687,30 +9700,47 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	return
 }
 
-func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) (int32, error) {
-	projects := builder.qry.Nodes[nodeID].ProjectList
-	requiresPhysicalKeys := false
-	for _, project := range projects {
-		if hasPadSpaceStringProvenance(project) {
-			requiresPhysicalKeys = true
-			break
-		}
+func (builder *QueryBuilder) buildPadSpacePhysicalKeyList(
+	exprs []*plan.Expr,
+	required []bool,
+) ([]*plan.Expr, error) {
+	requiresKeyList := false
+	for _, needKey := range required {
+		requiresKeyList = requiresKeyList || needKey
+	}
+	if !requiresKeyList {
+		return nil, nil
+	}
+	if len(exprs) != len(required) {
+		return nil, moerr.NewInternalErrorNoCtx("physical equality key shape does not match projected row")
 	}
 
-	var physicalKeys []*plan.Expr
-	if requiresPhysicalKeys {
-		physicalKeys = make([]*plan.Expr, len(projects))
-		for i, project := range projects {
-			key := DeepCopyExpr(project)
-			if hasPadSpaceStringProvenance(project) {
-				var err error
-				key, err = appendSetOperationCastBeforeExpr(builder.GetContext(), key, key.Typ)
-				if err != nil {
-					return 0, err
-				}
+	keyList := make([]*plan.Expr, len(exprs))
+	for i, expr := range exprs {
+		keyList[i] = DeepCopyExpr(expr)
+		if required[i] {
+			var err error
+			keyList[i], err = appendSetOperationCastBeforeExpr(
+				builder.GetContext(), keyList[i], keyList[i].Typ,
+			)
+			if err != nil {
+				return nil, err
 			}
-			physicalKeys[i] = key
 		}
+	}
+	return keyList, nil
+}
+
+func (builder *QueryBuilder) appendDistinctNode(ctx *BindContext, nodeID int32) (int32, error) {
+	projects := builder.qry.Nodes[nodeID].ProjectList
+	required := make([]bool, len(projects))
+	for i, project := range projects {
+		required[i] = hasPadSpaceStringProvenance(project)
+	}
+
+	physicalKeys, err := builder.buildPadSpacePhysicalKeyList(projects, required)
+	if err != nil {
+		return 0, err
 	}
 
 	return builder.appendNode(&plan.Node{

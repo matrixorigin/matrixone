@@ -5355,7 +5355,7 @@ func hasPadSpaceStringProvenance(expr *Expr) bool {
 			(toType.Oid == types.T_varchar || toType.Oid == types.T_text)
 	}
 	switch fn.Func.ObjName {
-	case "coalesce", "ifnull":
+	case "case", "coalesce", "if", "ifnull":
 		for _, arg := range fn.Args {
 			if hasPadSpaceStringProvenance(arg) {
 				return true
