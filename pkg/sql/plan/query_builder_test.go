@@ -812,7 +812,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where
 
-	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0)
+	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), newNodeID)
 	require.Equal(t, 1, len(boundFilterList))
@@ -4740,7 +4740,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	require.Equal(t, int32(0), nodeID)
 
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
-	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID)
+	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID, false)
 	require.NoError(t, err)
 
 	nodeID = builder.appendWhereNode(bindCtx, nodeID, boundFilterList, notCacheable)

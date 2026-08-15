@@ -331,6 +331,13 @@ func TestGapFillDoesNotInferFromPartialTimeRange(t *testing.T) {
 		"nested timestamp predicate": " where updated_at >= '2026-01-01 00:00:00'" +
 			" and date(updated_at) = '2026-01-02'" +
 			" and updated_at < '2026-01-01 00:06:00'",
+		"timestamp in subquery": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:06:00'" +
+			" and updated_at in (select updated_at from " + twTable + " where 1 = 0)",
+		"timestamp in correlated exists": " where updated_at >= '2026-01-01 00:00:00'" +
+			" and updated_at < '2026-01-01 00:06:00'" +
+			" and exists (select 1 from " + twTable + " inner_tw" +
+			" where inner_tw.updated_at = t_on_update.updated_at and 1 = 0)",
 	}
 	for name, predicates := range queries {
 		t.Run(name, func(t *testing.T) {

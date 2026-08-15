@@ -7259,7 +7259,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
 		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(
+			ctx, clause.Where, nodeID, astTimeWindow != nil && astTimeWindow.GapFill,
+		); err != nil {
 			return
 		}
 
@@ -7350,11 +7352,15 @@ func (builder *QueryBuilder) bindWhere(
 	ctx *BindContext,
 	clause *tree.Where,
 	nodeID int32,
+	preserveGapFillFilters bool,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
 	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
 	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
+	}
+	if preserveGapFillFilters {
+		ctx.gapFillWhereFilters = DeepCopyExprList(whereList)
 	}
 	// Scalar-subquery decorrelation may need a safe outer-key domain while it
 	// is flattening one conjunct. Publish the complete bound WHERE list before
@@ -7782,7 +7788,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 	updateTimeWindowBoundaryTypes(ctx, boundaryType)
 
 	if astTimeWindow.GapFill {
-		gapFillStart, gapFillEnd, err = inferGapFillBounds(builder.GetContext(), ctx.whereFilters, ts)
+		gapFillStart, gapFillEnd, err = inferGapFillBounds(builder.GetContext(), ctx.gapFillWhereFilters, ts)
 		if err != nil {
 			return
 		}
@@ -7895,6 +7901,13 @@ func inferGapFillBounds(
 	// predicates are direct, constant half-open edges.
 	var starts, finishes []*Expr
 	for _, filter := range filters {
+		// Correlated references inside a subquery live in that subquery's plan,
+		// outside this expression tree. Conservatively decline inference for any
+		// pre-flatten subquery predicate so none of those hidden timestamp
+		// constraints can be omitted from the fixed domain.
+		if hasSubquery(filter) {
+			return nil, nil, nil
+		}
 		if !gapFillBoundContainsColumn(filter, tsCol) {
 			continue
 		}
