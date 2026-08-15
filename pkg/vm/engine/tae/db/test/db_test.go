@@ -203,9 +203,12 @@ func TestCancelableJob(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, jobs.JobCount())
 
-	testutils.WaitExpect(5000, func() bool {
-		return v1.Load() > 5 && v2.Load() > 5
-	})
+	require.Eventually(t, func() bool {
+		return v2.Load() > 5
+	}, time.Second, time.Millisecond)
+	// The duplicate job1 registration above must not replace or start the
+	// rejected callback.
+	assert.Zero(t, v1.Load())
 
 	jobs.Reset()
 	assert.Equal(t, 0, jobs.JobCount())
@@ -1314,6 +1317,7 @@ func TestFlushTableErrorHandle(t *testing.T) {
 	schema.Extra.BlockMaxRows = 20
 	schema.Extra.ObjectMaxBlocks = 10
 	bat := catalog.MockBatch(schema, (int(schema.Extra.BlockMaxRows)*2 + int(schema.Extra.BlockMaxRows/2)))
+	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
 	txn.CreateDatabase("db", "", "")
@@ -1341,7 +1345,14 @@ func TestFlushTableErrorHandle(t *testing.T) {
 		assert.Error(t, err)
 		assert.NoError(t, txn.Rollback(context.Background()))
 	}
-	for i := 0; i < 20; i++ {
+	iterations := 20
+	if testing.Short() {
+		// CI runs the race suite in short mode. Keep representative create,
+		// flush-failure, and drop cycles while leaving the full stress count
+		// for explicit non-short runs.
+		iterations = 3
+	}
+	for i := 0; i < iterations; i++ {
 		createAndInsert()
 		flushTable()
 		droptable()
@@ -10562,7 +10573,13 @@ func TestDedup2(t *testing.T) {
 	tae.BindSchema(schema)
 
 	count := 50
+	if testing.Short() {
+		// Cross the first object boundary (2 rows/block * 10 blocks/object)
+		// while avoiding the quadratic 50-row stress volume in the short suite.
+		count = int(schema.Extra.BlockMaxRows*schema.Extra.ObjectMaxBlocks) + 1
+	}
 	data := catalog.MockBatch(schema, count)
+	defer data.Close()
 	datas := data.Split(count)
 
 	tae.CreateRelAndAppend(datas[0], true)

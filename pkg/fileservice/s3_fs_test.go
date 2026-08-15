@@ -947,19 +947,31 @@ func TestS3PrefetchFile(t *testing.T) {
 	assert.Nil(t, err)
 
 	// read
+	// Exercise representative cache reads without repeatedly rereading the
+	// whole object. The old 1000-point ramp performed about 4 GiB of reads for
+	// an 8 MiB fixture while checking the same disk-cache hit invariant.
+	readSizes := []int{
+		1,
+		4 << 10,
+		_ReadCoalesceSize,
+		1 << 20,
+		len(data) / 2,
+		len(data) - 1,
+		len(data),
+	}
 	lastHit := int64(0)
-	for i := 1; i < len(data); i += len(data) / 1000 {
+	for _, size := range readSizes {
 		vec := &IOVector{
 			FilePath: "foo/bar",
 			Entries: []IOEntry{
 				{
-					Size: int64(i),
+					Size: int64(size),
 				},
 			},
 		}
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
-		assert.Equal(t, data[:i], vec.Entries[0].Data)
+		assert.Equal(t, data[:size], vec.Entries[0].Data)
 		assert.Equal(t, lastHit+1, pcSet.FileService.Cache.Disk.Hit.Load())
 		vec.Release()
 		lastHit++
