@@ -4291,6 +4291,12 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			wantKey:  true,
 		},
 		{
+			name:     "derived promoted char union",
+			sql:      "select x from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d union select cast(r_name as varchar(8)) from region",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
 			name:     "varchar control",
 			sql:      "select cast('MO ' as varchar(8)) union select cast('MO' as varchar(8))",
 			nodeType: plan.Node_UNION,
@@ -4436,26 +4442,43 @@ func TestPromotedCharPadSpaceMetadataCrossesTransparentBoundaries(t *testing.T) 
 }
 
 func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
-	logicPlan, err := runOneStmt(
-		NewMockOptimizer(true), t,
-		"select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
-	)
-	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "direct",
+			sql:  "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))), count(*) from nation group by coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))",
+		},
+		{
+			name: "derived table",
+			sql:  "select x, count(*) from (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) d group by x",
+		},
+		{
+			name: "cte",
+			sql:  "with d as (select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) as x from nation) select x, count(*) from d group by x",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
 
-	var aggregate *plan.Node
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
-			aggregate = node
-			break
-		}
+			var aggregate *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 && len(node.GroupByHashKey) > 0 {
+					aggregate = node
+					break
+				}
+			}
+			require.NotNil(t, aggregate)
+			require.Len(t, aggregate.GroupBy, 2)
+			require.Equal(t, []int32{1}, aggregate.GroupByHashKey)
+			keyFn := aggregate.GroupBy[1].GetF()
+			require.NotNil(t, keyFn)
+			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
+			require.Equal(t, int32(3), overloadID)
+		})
 	}
-	require.NotNil(t, aggregate)
-	require.Len(t, aggregate.GroupBy, 2)
-	require.Equal(t, []int32{1}, aggregate.GroupByHashKey)
-	keyFn := aggregate.GroupBy[1].GetF()
-	require.NotNil(t, keyFn)
-	_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
-	require.Equal(t, int32(3), overloadID)
 }
 
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {

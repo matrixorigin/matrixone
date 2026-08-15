@@ -83,8 +83,25 @@ select count(*) from pad_char_promoted where case when c is null then v else c e
 select count(*) from (
     select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
 ) q;
+select count(*) from (
+    select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+select count(*) from (
+    select x from (select coalesce(c, v) as x from pad_char_promoted) d
+    union select c from pad_char_set_v8
+) q;
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+select count(*) from (
+    select distinct x from (
+        select coalesce(c, v) as x from pad_char_promoted
+        union all select c from pad_char_set_v8
+    ) d
+) q;
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -144,8 +161,25 @@ select count(*) from pad_char_promoted where case when c is null then v else c e
 select count(*) from (
     select distinct x from (select coalesce(c, v) as x from pad_char_promoted) d
 ) q;
+select count(*) from (
+    select x from (select coalesce(c, v) as x from pad_char_promoted) d group by x
+) q;
+select count(*) from (
+    select x from (select coalesce(c, v) as x from pad_char_promoted) d
+    union select c from pad_char_set_v8
+) q;
+with d as (select coalesce(c, v) as x from pad_char_promoted)
+select count(*) from (select distinct x from d) q;
+select count(*) from (
+    select distinct x from (
+        select coalesce(c, v) as x from pad_char_promoted
+        union all select c from pad_char_set_v8
+    ) d
+) q;
 select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
 where x in ('MO', 'XX');
+select count(*) from (select coalesce(c, v) as x from pad_char_promoted) d
+where x not in ('MO', 'XX');
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;
