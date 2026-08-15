@@ -680,20 +680,26 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 }
 
 func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	gapFillStart := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
+	gapFillEnd := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
 	node := &plan.Node{
-		NodeType:    plan.Node_TIME_WINDOW,
-		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
-		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
-		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
-		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		GapFillMode: plan.Node_GAP_FILL_PARTITION,
-		ProjectList: []*plan.Expr{},
-		BindingTags: []int32{},
-		AggList:     []*plan.Expr{},
+		NodeType:     plan.Node_TIME_WINDOW,
+		Interval:     makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:      []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:    &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:         &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode:  plan.Node_GAP_FILL_PARTITION,
+		GapFillStart: gapFillStart,
+		GapFillEnd:   gapFillEnd,
+		ProjectList:  []*plan.Expr{},
+		BindingTags:  []int32{},
+		AggList:      []*plan.Expr{},
 	}
 	arg := constructTimeWindow(context.Background(), node, nil)
 	require.True(t, arg.GapFill)
 	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Same(t, gapFillStart, arg.GapFillStart)
+	require.Same(t, gapFillEnd, arg.GapFillEnd)
 	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
 	arg.Release()
 }
