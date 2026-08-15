@@ -46,13 +46,15 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if len(dbName) == 0 {
 		dbName = ctx.DefaultDatabase()
 	}
-
 	_, t, err := ctx.Resolve(dbName, tblName, nil)
 	if err != nil {
 		return nil, err
 	}
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
+	}
+	if err = validateInsertColumnQualifiers(ctx.GetContext(), stmt.ColumnNames, dbName, tblName); err != nil {
+		return nil, err
 	}
 	if t.TableType == catalog.SystemSourceRel {
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
@@ -350,6 +352,37 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		}
 	}
 	return insertColsName, nil
+}
+
+func validateInsertColumnQualifiers(
+	ctx context.Context,
+	columnNames []*tree.UnresolvedName,
+	dbName string,
+	tableName string,
+) error {
+	for _, columnName := range columnNames {
+		if columnName == nil {
+			continue
+		}
+		if qualifier := columnName.TblName(); qualifier != "" && !strings.EqualFold(qualifier, tableName) {
+			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
+		}
+		if qualifier := columnName.DbName(); qualifier != "" && !strings.EqualFold(qualifier, dbName) {
+			return moerr.NewBadFieldError(ctx, qualifiedInsertColumnName(columnName), "field list")
+		}
+	}
+	return nil
+}
+
+func qualifiedInsertColumnName(columnName *tree.UnresolvedName) string {
+	switch columnName.NumParts {
+	case 3:
+		return columnName.DbNameOrigin() + "." + columnName.TblNameOrigin() + "." + columnName.ColNameOrigin()
+	case 2:
+		return columnName.TblNameOrigin() + "." + columnName.ColNameOrigin()
+	default:
+		return columnName.ColNameOrigin()
+	}
 }
 
 // canUsePkFilter checks if the primary key filter can be used for the given insert statement.
@@ -724,6 +757,7 @@ func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSel
 		Table:          stmt.Table,
 		PartitionNames: stmt.PartitionNames,
 		Columns:        stmt.Columns,
+		ColumnNames:    stmt.ColumnNames,
 		Rows:           stmt.Rows,
 	}
 	return replaceStmt

@@ -30,6 +30,7 @@ type Replace struct {
 	Table          TableExpr
 	PartitionNames IdentifierList
 	Columns        IdentifierList
+	ColumnNames    []*UnresolvedName
 	Rows           *Select
 	Returning      SelectExprs
 	// IsSetFormat marks the `REPLACE ... SET col = expr` form. The parser
@@ -49,7 +50,11 @@ func (node *Replace) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 
-	if node.Columns != nil {
+	if node.ColumnNames != nil {
+		ctx.WriteString(" (")
+		formatUnresolvedNames(ctx, node.ColumnNames)
+		ctx.WriteByte(')')
+	} else if node.Columns != nil {
 		ctx.WriteString(" (")
 		node.Columns.Format(ctx)
 		ctx.WriteByte(')')

@@ -143,6 +143,7 @@ func sqlTaskInt64(v any) int64 {
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
+    insertColumns tree.InsertColumns
     joinCond tree.JoinCond
     selectLockInfo *tree.SelectLockInfo
 
@@ -695,9 +696,11 @@ func sqlTaskInt64(v any) int64 {
 %type <orderBy> order_list order_by_clause order_by_opt within_group_opt
 %type <limit> limit_opt limit_clause query_limit_opt offset_clause
 %type <rankOption> rank_opt
-%type <str> insert_column optype_opt
+%type <unresolvedName> insert_column
+%type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
+%type <insertColumns> insert_column_list
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt
@@ -5775,7 +5778,8 @@ replace_data:
 |   '(' insert_column_list ')' replace_table_source
     {
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5789,7 +5793,8 @@ replace_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -5803,7 +5808,8 @@ replace_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5814,14 +5820,17 @@ replace_data:
 			goto ret1
 		}
 		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
 		var valueList tree.Exprs
 		for _, a := range $2 {
 			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
 			valueList = append(valueList, a.Expr)
 		}
 		vc := tree.NewValuesClause([]tree.Exprs{valueList})
 		$$ = &tree.Replace{
 			Columns: identList,
+			ColumnNames: columnNames,
 			Rows: tree.NewSelect(vc, nil, nil),
 			IsSetFormat: true,
 		}
@@ -5956,7 +5965,7 @@ merge_when_clause:
             Matched: false,
             Condition: $4,
             Action: tree.MergeActionInsert,
-            InsertColumns: $8,
+            InsertColumns: $8.Identifiers,
             InsertValues: $12,
         }
     }
@@ -6017,7 +6026,8 @@ insert_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -6031,7 +6041,8 @@ insert_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -6041,15 +6052,18 @@ insert_data:
             yylex.Error("the set list of insert can not be empty")
             goto ret1
         }
-        var identList tree.IdentifierList
+		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
         var valueList tree.Exprs
         for _, a := range $2 {
-            identList = append(identList, a.Column)
+			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
-            Columns: identList,
+			Columns: identList,
+			ColumnNames: columnNames,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -6085,7 +6099,8 @@ set_value:
     insert_column '=' expr_or_default
     {
         $$ = &tree.Assignment{
-            Column: tree.Identifier($1),
+            Column: tree.Identifier($1.ColName()),
+            ColumnName: $1,
             Expr: $3,
         }
     }
@@ -6093,25 +6108,33 @@ set_value:
 insert_column_list:
     insert_column
     {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
+        $$ = tree.InsertColumns{
+            Identifiers: tree.IdentifierList{tree.Identifier($1.ColName())},
+            Names: []*tree.UnresolvedName{$1},
+        }
     }
 |   insert_column_list ',' insert_column
     {
-        $$ = append($1, tree.Identifier($3))
+		$$ = $1
+        $$.Identifiers = append($1.Identifiers, tree.Identifier($3.ColName()))
+        $$.Names = append($1.Names, $3)
     }
 
 insert_column:
     ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
 |   ident '.' ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblName, $3)
     }
 |   ident '.' ident '.' ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($5.Origin())
+        dbName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbName, tblName, $5)
     }
 
 values_list:
@@ -13152,7 +13175,7 @@ function_call_generic:
     }
 |   VALUES '(' insert_column ')'
     {
-        column := tree.NewUnresolvedColName($3)
+		column := tree.NewUnresolvedColName($3.ColNameOrigin())
         name := tree.NewUnresolvedColName($1)
     	$$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),

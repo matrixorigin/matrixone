@@ -39,6 +39,11 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 	if err != nil {
 		return 0, err
 	}
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, dmlCtx.objRefs[0].SchemaName, dmlCtx.objRefs[0].ObjName,
+	); err != nil {
+		return 0, err
+	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForReplaceStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; REPLACE maintains them with

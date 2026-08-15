@@ -181,24 +181,29 @@ func TestGroupingAcceptsExpressions(t *testing.T) {
 
 func TestInsertColumnQualification(t *testing.T) {
 	tests := []struct {
-		name string
-		sql  string
+		name     string
+		sql      string
+		numParts int
 	}{
 		{
-			name: "unqualified",
-			sql:  "insert into db1.t1 (id, value) values (1, 10)",
+			name:     "unqualified",
+			sql:      "insert into db1.t1 (id, value) values (1, 10)",
+			numParts: 1,
 		},
 		{
-			name: "table qualified",
-			sql:  "insert into db1.t1 (t1.id, t1.value) values (1, 10)",
+			name:     "table qualified",
+			sql:      "insert into db1.t1 (t1.id, t1.value) values (1, 10)",
+			numParts: 2,
 		},
 		{
-			name: "database and table qualified",
-			sql:  "insert into db1.t1 (db1.t1.id, db1.t1.value) values (1, 10)",
+			name:     "database and table qualified",
+			sql:      "insert into db1.t1 (db1.t1.id, db1.t1.value) values (1, 10)",
+			numParts: 3,
 		},
 		{
-			name: "quoted database and table qualified",
-			sql:  "insert into `db1`.`t1` (`db1`.`t1`.`id`, `db1`.`t1`.`value`) values (1, 10)",
+			name:     "quoted database and table qualified",
+			sql:      "insert into `db1`.`t1` (`db1`.`t1`.`id`, `db1`.`t1`.`value`) values (1, 10)",
+			numParts: 3,
 		},
 	}
 
@@ -211,6 +216,10 @@ func TestInsertColumnQualification(t *testing.T) {
 			insert, ok := stmt.(*tree.Insert)
 			require.True(t, ok)
 			require.Equal(t, tree.IdentifierList{"id", "value"}, insert.Columns)
+			require.Len(t, insert.ColumnNames, 2)
+			for _, columnName := range insert.ColumnNames {
+				require.Equal(t, test.numParts, columnName.NumParts)
+			}
 
 			formatted := tree.String(stmt, dialect.MYSQL)
 			roundTripped, err := ParseOne(context.Background(), formatted, 1)
@@ -220,6 +229,7 @@ func TestInsertColumnQualification(t *testing.T) {
 			roundTripInsert, ok := roundTripped.(*tree.Insert)
 			require.True(t, ok)
 			require.Equal(t, insert.Columns, roundTripInsert.Columns)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
 		})
 	}
 

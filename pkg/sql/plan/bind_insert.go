@@ -48,6 +48,11 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	if err = validateInsertColumnQualifiers(
+		builder.GetContext(), stmt.ColumnNames, dmlCtx.objRefs[0].SchemaName, dmlCtx.objRefs[0].ObjName,
+	); err != nil {
+		return 0, err
+	}
 
 	if stmt.IsRestore {
 		builder.isRestore = true
