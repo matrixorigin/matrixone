@@ -81,6 +81,13 @@ func newBenchmarkPhyPlan(operatorCount int, withBackgroundQuery bool) *PhyPlan {
 }
 
 func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
+	resourceSummary := &resource.StatementResourceSummary{StatementWallNS: 17}
+	if quality := resourceSummary.Allocation.AddGeneration(7, 0, true); quality != 0 {
+		panic(quality)
+	}
+	if quality := resourceSummary.Allocation.AddOwnerGeneration(1, 7, 0); quality != 0 {
+		panic(quality)
+	}
 	stats := &process.OperatorStats{
 		OperatorName:    "shared",
 		CallNum:         7,
@@ -111,7 +118,7 @@ func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
 	return &PhyPlan{
 		Version:   "1.0",
 		RetryTime: 3,
-		Resource:  &resource.StatementResourceSummary{StatementWallNS: 17},
+		Resource:  resourceSummary,
 		LocalScope: []PhyScope{{
 			Magic:      "Normal",
 			Receiver:   []PhyReceiver{{Idx: 2, RemoteUuid: "local"}},
@@ -169,7 +176,7 @@ func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
 		{
 			name:                  "StatementResourceSummary",
 			value:                 source.Resource,
-			referenceBearingField: nil,
+			referenceBearingField: []string{"Allocation"},
 		},
 	}
 
@@ -207,6 +214,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	stats.OperatorMetrics[process.OpScanTime] = 22
 	stats.ExtraStats["SpillBytes"] = 23
 	stats.Reset()
+	require.Zero(t, source.Resource.Allocation.AddOwnerGeneration(1, 5, 0))
 
 	require.Equal(t, uint64(17), got.Resource.StatementWallNS)
 	require.Equal(t, 2, got.LocalScope[0].Receiver[0].Idx)
@@ -216,6 +224,9 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 	require.Equal(t, 7, got.LocalScope[0].RootOperator.OpStats.CallNum)
 	require.Equal(t, int64(11), got.LocalScope[0].RootOperator.OpStats.OperatorMetrics[process.OpScanTime])
 	require.Equal(t, int64(13), got.LocalScope[0].RootOperator.OpStats.ExtraStats["SpillBytes"])
+	owner, ok := got.Resource.Allocation.Owner(1)
+	require.True(t, ok)
+	require.Equal(t, uint64(7), owner.SumGenerationPeak)
 
 	var nilPlan *PhyPlan
 	require.Nil(t, nilPlan.CloneForExport())

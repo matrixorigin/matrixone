@@ -5649,6 +5649,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG))
 	}
 }
 

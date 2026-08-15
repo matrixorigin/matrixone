@@ -1065,6 +1065,12 @@ message Node {
   // partition equality keys and the remaining entries are per-partition
   // ordering keys for bounded Top-N execution.
   int32 partition_by_count = 80;
+
+  // TIME_WINDOW only: optional half-open GAPFILL domain inferred from simple
+  // timestamp >= start and timestamp < finish predicates. Both expressions
+  // must be present before the executor extends the observed data domain.
+  Expr gap_fill_start = 81;
+  Expr gap_fill_end = 82;
 }
 
 message SnapshotExtraInfo {

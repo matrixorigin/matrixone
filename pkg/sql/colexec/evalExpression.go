@@ -2706,11 +2706,26 @@ type ExprEvalVector struct {
 }
 
 func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEvalVector, err error) {
+	return MakeEvalVectorWithAllocation(proc, expressions, nil)
+}
+
+// MakeEvalVectorWithAllocation builds an evaluation vector whose expression-
+// owned result storage has explicit physical allocation provenance. Borrowed
+// column vectors retain their source ownership.
+func MakeEvalVectorWithAllocation(
+	proc *process.Process,
+	expressions []*plan.Expr,
+	selection *vector.AllocationAccountSelection,
+) (ev ExprEvalVector, err error) {
 	if len(expressions) == 0 {
 		return
 	}
 
-	ev.Executor, err = NewExpressionExecutorsFromPlanExpressions(proc, expressions)
+	ev.Executor, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		proc,
+		expressions,
+		selection,
+	)
 	if err != nil {
 		return
 	}

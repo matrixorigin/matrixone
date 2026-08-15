@@ -139,7 +139,10 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
 	ctr.isStrHash = keyWidth > 8
-	if err = ctr.hash.BuildHashTable(proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable, 1024); err != nil {
+	if err = ctr.hash.BuildHashTable(
+		proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable,
+		false, 1024, nil, nil,
+	); err != nil {
 		return err
 	}
 
@@ -258,7 +261,7 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 			return err
 		}
 		count := min(hashmap.UnitLimit, input.RowCount()-start)
-		groupIDs, _, err := ctr.hash.Itr.Insert(start, count, ctr.partitionEval.Vec)
+		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, ctr.partitionEval.Vec)
 		if err != nil {
 			return err
 		}
