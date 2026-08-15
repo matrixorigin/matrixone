@@ -1,6 +1,8 @@
 drop database if exists time_window;
 create database time_window;
 use time_window;
+set @time_window_saved_time_zone = @@time_zone;
+set time_zone = '+00:00';
 
 -- Time Window ignores rows whose time key is NULL and keeps valid buckets.
 drop table if exists time_window_null_ts;
@@ -403,4 +405,5 @@ select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) s
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
 drop table tw_interval_bad_unit;
 
+set time_zone = @time_window_saved_time_zone;
 drop database time_window;
