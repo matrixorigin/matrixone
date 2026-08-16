@@ -293,6 +293,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
+		DedupInputKeysUnique:   node.DedupInputKeysUnique,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
