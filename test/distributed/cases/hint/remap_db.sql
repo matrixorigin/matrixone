@@ -33,6 +33,8 @@ deallocate prepare mixed_case_remap_insert;
 use SrcMix27190;
 insert into t(SrcMix27190.t.id, SrcMix27190.t.v) values (6, 60);
 select * from DstMix27190.t order by id;
+/*+ {"rewrites":{"DstMix27190.t":"select * from DstMix27190.t where id=2"}} */
+select * from DstMix27190.t order by id;
 use mysql;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
@@ -62,6 +64,8 @@ set @mixed_two_v = 50;
 execute mixed_case_mode_two_insert using @mixed_two_id, @mixed_two_v;
 deallocate prepare mixed_case_mode_two_insert;
 select * from DstMix2_27190.T order by id;
+/*+ {"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=2"}} */
+select * from DstMix2_27190.T order by id;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 set global lower_case_table_names = 0;
@@ -80,6 +84,8 @@ drop database if exists srcuse27190;
 drop database if exists dstuse27190;
 drop database if exists dsta27190;
 drop database if exists dstb27190;
+drop database if exists srcrewriteinline27190;
+drop database if exists dstrewritemixed27190;
 create database SrcForm27190;
 create database DstForm27190;
 create table DstForm27190.t(id int primary key, v int);
@@ -87,6 +93,10 @@ create database SrcUse27190;
 create database DstUse27190;
 create table SrcUse27190.t(id int primary key, v int);
 create table DstUse27190.t(id int primary key, v int);
+create database SrcRewriteInline27190;
+create database DstRewriteMixed27190;
+create table DstRewriteMixed27190.t(id int primary key);
+insert into DstRewriteMixed27190.t values (1), (2), (3);
 set enable_remap_hint = 1;
 set remap_rewrites = '{"remapdb":{"SrcForm27190":"DstForm27190","SrcUse27190":"DstUse27190"}}';
 insert into SrcForm27190.t(SrcForm27190.t.id, SrcForm27190.t.v) values (1, 10);
@@ -116,10 +126,16 @@ set remap_rewrites = '{"remapdb":{"SourceCase27190":"DstA27190"}}';
 set remap_rewrites = '';
 select count(*) from dsta27190.t;
 select * from dstb27190.t;
+/*+ {
+  "remapdb":{"SrcRewriteInline27190":"DstRewriteMixed27190"},
+  "rewrites":{"DstRewriteMixed27190.t":"select * from DstRewriteMixed27190.t where id=2"}
+} */ select * from SrcRewriteInline27190.t order by id;
 -- @pattern
 set remap_rewrites = '{"remapdb":{"SourceCase27190":"dst_a","sourcecase27190":"dst_b"}}';
 -- @pattern
 set remap_rewrites = '{"remapdb":{"ChainSrc27190":"MID27190","mid27190":"dst_chain27190"}}';
+-- @pattern
+set remap_rewrites = '{"rewrites":{"DstRewriteMixed27190.t":"select 1","dstrewritemixed27190.T":"select 2"}}';
 set enable_remap_hint = 0;
 drop database srcform27190;
 drop database dstform27190;
@@ -127,6 +143,8 @@ drop database srcuse27190;
 drop database dstuse27190;
 drop database dsta27190;
 drop database dstb27190;
+drop database srcrewriteinline27190;
+drop database dstrewritemixed27190;
 -- @session
 
 create database rdb_dst;

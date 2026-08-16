@@ -10453,7 +10453,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					lower := builder.compCtx.GetLowerCaseTableNames()
+					builder.ctxByNode[nodeID].cteName =
+						tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 				}
 				ctx.remapOption = m
 				return

@@ -75,6 +75,36 @@ func cloneRewriteMap(src map[string]string) map[string]string {
 	return dst
 }
 
+func normalizeRewriteRules(
+	ctx context.Context,
+	rules map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	normalized := make(map[string]string, len(rules))
+	originalKeys := make(map[string]string, len(rules))
+	for key, rule := range rules {
+		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+		if err != nil {
+			return nil, err
+		}
+		comparisonKey, err := parsers.RewriteKeyComparison(ctx, key, lowerCaseTableNames)
+		if err != nil {
+			return nil, err
+		}
+		if previous, ok := originalKeys[comparisonKey]; ok {
+			return nil, moerr.NewParseErrorf(ctx,
+				"rewrite tables %q and %q are equivalent under lower_case_table_names=%d",
+				previous, key, lowerCaseTableNames)
+		}
+		originalKeys[comparisonKey] = key
+		normalized[canonicalKey] = rule
+	}
+	return normalized, nil
+}
+
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
 	policy := &rewritePolicySnapshot{
 		enabled: ses.rewriteEnabled.Load(), lowerCaseTableNames: parserLowerCaseTableNames(ses),
@@ -282,14 +312,27 @@ func rewriteSingleSQL(
 	// remapdb (database-name substitution) is applied before the table rewrites
 	// and does not stack: a database maps to one target, so the inline hint
 	// overrides the session variable for the same source database.
-	chains := make(map[string][]string, len(cache)+len(sessionRules)+len(inlineRules))
-	for k, v := range cache {
+	normalizedRoleRules, err := normalizeRewriteRules(ctx, cache, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	normalizedSessionRules, err := normalizeRewriteRules(ctx, sessionRules, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	normalizedInlineRules, err := normalizeRewriteRules(ctx, inlineRules, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	chains := make(map[string][]string,
+		len(normalizedRoleRules)+len(normalizedSessionRules)+len(normalizedInlineRules))
+	for k, v := range normalizedRoleRules {
 		chains[k] = append(chains[k], v)
 	}
-	for k, v := range sessionRules {
+	for k, v := range normalizedSessionRules {
 		chains[k] = append(chains[k], v)
 	}
-	for k, v := range inlineRules {
+	for k, v := range normalizedInlineRules {
 		chains[k] = append(chains[k], v)
 	}
 
@@ -357,7 +400,11 @@ func rewriteSQLFromMaterializedPolicy(
 	if err != nil {
 		return innerSQL, err
 	}
-	for key, rule := range inlineRules {
+	normalizedInlineRules, err := normalizeRewriteRules(ctx, inlineRules, lowerCaseTableNames)
+	if err != nil {
+		return innerSQL, err
+	}
+	for key, rule := range normalizedInlineRules {
 		chains[key] = append(chains[key], rule)
 	}
 	normalizedInlineRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, inlineRemapDb, lowerCaseTableNames)
@@ -542,9 +589,12 @@ func validateRemapRewrites(ctx context.Context, val interface{}, lowerCaseTableN
 		if err := validateRewriteTableKey(ctx, key); err != nil {
 			return err
 		}
-		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
+		if err := validateRewriteRuleSQL(ctx, rule, lowerCaseTableNames); err != nil {
 			return err
 		}
+	}
+	if _, err := normalizeRewriteRules(ctx, rules, lowerCaseTableNames); err != nil {
+		return moerr.NewInvalidInput(ctx, strings.TrimPrefix(err.Error(), "SQL parser error: "))
 	}
 	if err := validateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
 		return err
@@ -1114,12 +1164,16 @@ func rewriteFuncExprName(fn *tree.FuncExpr) string {
 	return ""
 }
 
-func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+func validateRewriteRuleSQL(ctx context.Context, rule string, lowerCaseTableNamesArg ...int64) error {
+	lowerCaseTableNames := int64(1)
+	if len(lowerCaseTableNamesArg) > 0 {
+		lowerCaseTableNames = lowerCaseTableNamesArg[0]
+	}
 	if strings.TrimSpace(rule) == "" {
 		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
 	}
 
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, lowerCaseTableNames)
 	if err != nil {
 		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
 	}
@@ -1169,7 +1223,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	}
 	roleID := vr.id
 
-	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL); err != nil {
+	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL, parserLowerCaseTableNames(ses)); err != nil {
 		return err
 	}
 

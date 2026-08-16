@@ -30,6 +30,10 @@ select * from DstMix27190.t order by id;
 4  ¦  40  𝄀
 5  ¦  50  𝄀
 6  ¦  60
+/*+ {"rewrites":{"DstMix27190.t":"select * from DstMix27190.t where id=2"}} */
+select * from DstMix27190.t order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
 use mysql;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
@@ -62,6 +66,10 @@ select * from DstMix2_27190.T order by id;
 3  ¦  30  𝄀
 4  ¦  40  𝄀
 5  ¦  50
+/*+ {"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=2"}} */
+select * from DstMix2_27190.T order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 set global lower_case_table_names = 0;
@@ -74,6 +82,8 @@ drop database if exists srcuse27190;
 drop database if exists dstuse27190;
 drop database if exists dsta27190;
 drop database if exists dstb27190;
+drop database if exists srcrewriteinline27190;
+drop database if exists dstrewritemixed27190;
 create database SrcForm27190;
 create database DstForm27190;
 create table DstForm27190.t(id int primary key, v int);
@@ -81,6 +91,10 @@ create database SrcUse27190;
 create database DstUse27190;
 create table SrcUse27190.t(id int primary key, v int);
 create table DstUse27190.t(id int primary key, v int);
+create database SrcRewriteInline27190;
+create database DstRewriteMixed27190;
+create table DstRewriteMixed27190.t(id int primary key);
+insert into DstRewriteMixed27190.t values (1), (2), (3);
 set enable_remap_hint = 1;
 set remap_rewrites = '{"remapdb":{"SrcForm27190":"DstForm27190","SrcUse27190":"DstUse27190"}}';
 insert into SrcForm27190.t(SrcForm27190.t.id, SrcForm27190.t.v) values (1, 10);
@@ -94,26 +108,26 @@ deallocate prepare mode_one_unqualified_insert;
 create table remapped_ddl(id int primary key);
 insert into remapped_ddl values (4);
 select * from t order by id;
-id    v
-2    20
-3    30
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
 select * from remapped_ddl;
-id
+➤ id[4,32,0]  𝄀
 4
 use mysql;
 set remap_rewrites = '';
 select count(*) from srcuse27190.t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select * from dstuse27190.t order by id;
-id    v
-2    20
-3    30
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  𝄀
+3  ¦  30
 select * from dstform27190.t;
-id    v
-1    10
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
 select * from dstuse27190.remapped_ddl;
-id
+➤ id[4,32,0]  𝄀
 4
 create database DstA27190;
 create database DstB27190;
@@ -123,15 +137,23 @@ set remap_rewrites = '{"remapdb":{"SourceCase27190":"DstA27190"}}';
 /*+ {"remapdb":{"sourcecase27190":"DstB27190"}} */ insert into SourceCase27190.t values (5);
 set remap_rewrites = '';
 select count(*) from dsta27190.t;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 select * from dstb27190.t;
-id
+➤ id[4,32,0]  𝄀
 5
+/*+ {
+"remapdb":{"SrcRewriteInline27190":"DstRewriteMixed27190"},
+"rewrites":{"DstRewriteMixed27190.t":"select * from DstRewriteMixed27190.t where id=2"}
+} */ select * from SrcRewriteInline27190.t order by id;
+➤ id[4,32,0]  𝄀
+2
 set remap_rewrites = '{"remapdb":{"SourceCase27190":"dst_a","sourcecase27190":"dst_b"}}';
 invalid input: remapdb source databases (.*) are equivalent under lower_case_table_names=1
 set remap_rewrites = '{"remapdb":{"ChainSrc27190":"MID27190","mid27190":"dst_chain27190"}}';
 invalid input: remapdb: database (.*) must not be both a source and a destination \(chaining is not allowed\)
+set remap_rewrites = '{"rewrites":{"DstRewriteMixed27190.t":"select 1","dstrewritemixed27190.T":"select 2"}}';
+invalid input: rewrite tables (.*) are equivalent under lower_case_table_names=1
 set enable_remap_hint = 0;
 drop database srcform27190;
 drop database dstform27190;
@@ -139,6 +161,8 @@ drop database srcuse27190;
 drop database dstuse27190;
 drop database dsta27190;
 drop database dstb27190;
+drop database srcrewriteinline27190;
+drop database dstrewritemixed27190;
 create database rdb_dst;
 create table rdb_dst.t(id int, v int);
 insert into rdb_dst.t values (1,10),(2,20),(3,30);

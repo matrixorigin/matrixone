@@ -780,6 +780,35 @@ func TestRewriteSQLRemapUsesCanonicalInlinePrecedence(t *testing.T) {
 	}
 }
 
+func TestRewriteSQLUsesCanonicalKeysAcrossLayers(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{
+		"DstMixed.T": "select * from DstMixed.T where role_keep = 1",
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"rewrites":{"dSTMixed.t":"select * from DstMixed.T where session_keep=1"},`+
+			`"remapdb":{"SrcMixed":"DstMixed"}}`))
+
+	rewritten, err := rewriteSQL(ctx, ses,
+		`/*+ {"rewrites":{"DSTMIXED.T":"select * from DstMixed.T where inline_keep=1"}} */ `+
+			`select * from SrcMixed.T`)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(ctx, content, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select * from DstMixed.T where role_keep = 1",
+		"select * from DstMixed.T where session_keep=1",
+		"select * from DstMixed.T where inline_keep=1",
+	}, chains["dstmixed.t"])
+	require.Equal(t, map[string]string{"srcmixed": "dstmixed"}, remapDb)
+}
+
 func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
 	ctx := context.Background()
 	require.ErrorContains(t, validateRemapRewrites(ctx,
@@ -788,6 +817,10 @@ func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
 		`{"remapdb":{"ChainSrc":"MID","mid":"dst"}}`, 1), "chaining is not allowed")
 	require.NoError(t, validateRemapRewrites(ctx,
 		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 0))
+	require.ErrorContains(t, validateRemapRewrites(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1), "equivalent")
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 0))
 }
 
 func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {

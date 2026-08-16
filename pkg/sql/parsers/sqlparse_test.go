@@ -17,6 +17,7 @@ package parsers
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -735,4 +736,52 @@ func TestNormalizeAndValidateRemapDb(t *testing.T) {
 	_, err = NormalizeAndValidateRemapDb(ctx,
 		map[string]string{"ChainSrc": "MID", "mid": "dst"}, 1)
 	require.ErrorContains(t, err, "chaining is not allowed")
+}
+
+func TestRewriteKeysUseIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name  string
+		lower int64
+		want  string
+	}{
+		{name: "mode zero", lower: 0, want: "MixedDB.MixedTable"},
+		{name: "mode one", lower: 1, want: "mixeddb.mixedtable"},
+		{name: "mode two", lower: 2, want: "MixedDB.MixedTable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			key, db, table, err := NormalizeRewriteKey(ctx, "MixedDB.MixedTable", test.lower)
+			require.NoError(t, err)
+			require.Equal(t, test.want, key)
+			require.Equal(t, strings.Split(test.want, ".")[0], db)
+			require.Equal(t, strings.Split(test.want, ".")[1], table)
+		})
+	}
+
+	_, _, err := DecodeRewriteHintWithLowerCaseTableNames(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1)
+	require.ErrorContains(t, err, "equivalent")
+}
+
+func TestRewriteBodyUsesIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	const sql = `/*+ {"rewrites":{"MixedDB.T":"select * from MixedDB.T"}} */ select * from MixedDB.T`
+	for _, test := range []struct {
+		lower  int64
+		key    string
+		origin string
+	}{
+		{lower: 0, key: "MixedDB.T", origin: "MixedDB.T"},
+		{lower: 1, key: "mixeddb.t", origin: "mixeddb.t"},
+		{lower: 2, key: "MixedDB.T", origin: "MixedDB.T"},
+	} {
+		stmts, err := Parse(ctx, dialect.MYSQL, sql, test.lower)
+		require.NoError(t, err)
+		require.NoError(t, AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			ctx, stmts, sql, "", test.lower))
+		sel := stmts[0].(*tree.Select)
+		chain := sel.RewriteOption.Rewrites[test.key]
+		require.Len(t, chain, 1)
+		require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), test.origin)
+	}
 }

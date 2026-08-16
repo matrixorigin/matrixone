@@ -391,6 +391,35 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 	return db, table, true
 }
 
+// NormalizeRewriteKey returns the database.table execution key used by the
+// planner under the active lower_case_table_names mode. Mode 1 lowercases
+// object names; modes 0 and 2 preserve their configured spelling.
+func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames int64) (string, string, string, error) {
+	db, table, ok := SplitRewriteKey(key)
+	if !ok {
+		return "", "", "", moerr.NewParseErrorf(ctx,
+			"rewrite table %q must be qualified as database.table", key)
+	}
+	if lowerCaseTableNames == 1 {
+		db = tree.NewCStr(db, lowerCaseTableNames).Compare()
+		table = tree.NewCStr(table, lowerCaseTableNames).Compare()
+	}
+	return db + "." + table, db, table, nil
+}
+
+// RewriteKeyComparison returns the identifier-equivalence key used only for
+// duplicate detection. In mode 2 this differs from the execution key because
+// spelling is preserved for lookup while comparisons remain case-insensitive.
+func RewriteKeyComparison(ctx context.Context, key string, lowerCaseTableNames int64) (string, error) {
+	db, table, ok := SplitRewriteKey(key)
+	if !ok {
+		return "", moerr.NewParseErrorf(ctx,
+			"rewrite table %q must be qualified as database.table", key)
+	}
+	return tree.NewCStr(db, lowerCaseTableNames).Compare() + "." +
+		tree.NewCStr(table, lowerCaseTableNames).Compare(), nil
+}
+
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
 // valid (unquoted) database identifier, and the source and destination sets must
 // be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
@@ -498,6 +527,7 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 	}
 	if len(rm.RawRewrites) > 0 {
 		rewrites = make(map[string][]string, len(rm.RawRewrites))
+		originalKeys := make(map[string]string, len(rm.RawRewrites))
 		for k, raw := range rm.RawRewrites {
 			if strings.TrimSpace(k) == "" {
 				return nil, nil, moerr.NewParseError(ctx, "empty table and database")
@@ -514,7 +544,21 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 			if derr != nil {
 				return nil, nil, derr
 			}
-			rewrites[db+"."+table] = sqls
+			canonicalKey, _, _, derr := NormalizeRewriteKey(ctx, db+"."+table, lowerCaseTableNames)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			comparisonKey, derr := RewriteKeyComparison(ctx, db+"."+table, lowerCaseTableNames)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			if previous, exists := originalKeys[comparisonKey]; exists {
+				return nil, nil, moerr.NewParseErrorf(ctx,
+					"rewrite tables %q and %q are equivalent under lower_case_table_names=%d",
+					previous, k, lowerCaseTableNames)
+			}
+			originalKeys[comparisonKey] = k
+			rewrites[canonicalKey] = sqls
 		}
 	}
 	return rewrites, remapDb, nil
@@ -525,7 +569,9 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
-	return AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, sqlMode, 0)
+	// Preserve the historical mode-1 behavior for callers that do not provide
+	// session semantics. Production frontend paths use the mode-aware entrypoint.
+	return AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, sqlMode, 1)
 }
 
 func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
@@ -578,7 +624,10 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 			rewriteOption.RemapDb = remapDb
 		}
 		for key, sqls := range rawChains {
-			db, table, _ := SplitRewriteKey(key)
+			_, db, table, err := NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+			if err != nil {
+				return err
+			}
 			if len(sqls) == 0 {
 				return moerr.NewParseError(ctx, "statement")
 			}
@@ -587,7 +636,7 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 				if v == "" {
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
 				if err != nil {
 					return moerr.NewParseError(ctx, err.Error())
 				}
