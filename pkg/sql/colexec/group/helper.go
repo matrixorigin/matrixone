@@ -91,18 +91,12 @@ func writeSpillBool(writer io.Writer, value bool) error {
 
 type spillRecordWriter struct {
 	target  io.Writer
-	disk    *process.ExecutionSpillDiskReservation
 	written int64
 }
 
 func (w *spillRecordWriter) Write(value []byte) (int, error) {
 	if w == nil || w.target == nil {
 		return 0, io.ErrClosedPipe
-	}
-	if w.disk != nil {
-		if err := w.disk.Grow(uint64(len(value))); err != nil {
-			return 0, err
-		}
 	}
 	n, err := w.target.Write(value)
 	w.written += int64(n)
@@ -511,7 +505,7 @@ func (ctr *container) openSpillBucket(
 		return err
 	}
 	bkt.file = file
-	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx)
+	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
 	if err != nil {
 		_ = file.Close()
 		bkt.file = nil
@@ -566,7 +560,7 @@ func (ctr *container) writeSpillRecord(
 			return 0, 0, err
 		}
 	}
-	record := spillRecordWriter{target: bkt.writer, disk: bkt.diskToken}
+	record := spillRecordWriter{target: bkt.writer}
 	cnt := int64(len(rows))
 	if err := types.WriteInt64(&record, cnt); err != nil {
 		return 0, 0, err

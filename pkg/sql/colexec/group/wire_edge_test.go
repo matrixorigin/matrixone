@@ -233,9 +233,9 @@ func TestGroupSpillReaderWriterBoundaryMatrix(t *testing.T) {
 	require.False(t, disabled)
 
 	var output bytes.Buffer
-	_, err = newGroupSpillWriter(nil, &output, ctx)
+	_, err = newGroupSpillWriter(nil, &output, ctx, nil)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	writer, err := newGroupSpillWriter(ctr, &output, ctx)
+	writer, err := newGroupSpillWriter(ctr, &output, ctx, nil)
 	require.NoError(t, err)
 	n, err = writer.Write(payload)
 	require.NoError(t, err)
@@ -249,7 +249,7 @@ func TestGroupSpillReaderWriterBoundaryMatrix(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelledWriter, err := newGroupSpillWriter(ctr, io.Discard, cancelled)
+	cancelledWriter, err := newGroupSpillWriter(ctr, io.Discard, cancelled, nil)
 	require.NoError(t, err)
 	_, err = cancelledWriter.Write([]byte{1})
 	require.ErrorIs(t, err, context.Canceled)
