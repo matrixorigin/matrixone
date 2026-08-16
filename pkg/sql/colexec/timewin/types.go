@@ -68,10 +68,12 @@ type container struct {
 	tsVec []*vector.Vector
 	tsOid types.T
 
-	startExe colexec.ExpressionExecutor
-	startVec *vector.Vector
-	endExe   colexec.ExpressionExecutor
-	endVec   *vector.Vector
+	startExe        colexec.ExpressionExecutor
+	startVec        *vector.Vector
+	startVecInBatch bool
+	endExe          colexec.ExpressionExecutor
+	endVec          *vector.Vector
+	endVecInBatch   bool
 	// Bounds are constant expressions inferred from the query predicates and
 	// evaluated once per Prepare, so prepared parameters remain supported.
 	gapFillStartExe colexec.ExpressionExecutor
@@ -191,6 +193,10 @@ func (timeWin TimeWin) TypeName() string {
 	return opName
 }
 
+func (timeWin *TimeWin) timestampWindow() bool {
+	return types.T(timeWin.TsType.Id) == types.T_timestamp
+}
+
 func NewArgument() *TimeWin {
 	return reuse.Alloc[TimeWin](nil)
 }
@@ -216,15 +222,19 @@ func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err er
 	// The last flushed batch and the aggregate executors belong to the finished
 	// generation. In the sliding path the batch owns its aggregate prefix (the
 	// boundaries belong to their expression executors and the partition keys to
-	// partOut); in the interval path every vector is a buffer that outlives the
-	// batch, so only the reference is dropped. Aggregates cannot be rewound
-	// once Flush has run (see makeAggExecutors), so they are discarded here and
-	// rebuilt by Prepare. Unaccounted tsVec/aggVec/partVec buffers stay
+	// partOut). In the interval path the aggregate/partition vectors are
+	// buffered inputs that outlive the batch, while TIMESTAMP boundaries are
+	// batch-owned decorations and must be released before the batch reference is
+	// dropped. Aggregates cannot be rewound once Flush has run (see
+	// makeAggExecutors), so they are discarded here and rebuilt by Prepare.
+	// Unaccounted tsVec/aggVec/partVec buffers stay
 	// allocated: with the cursors back at zero the next generation reuses them
 	// from index 0. Account-owned buffers are released below because their
 	// lifetime cannot cross a statement-attempt generation.
 	if timeWin.EndExpr == nil {
 		ctr.freeFlushedAggVecs(proc.Mp())
+	} else {
+		ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
 	}
 	ctr.bat = nil
 	if releaseInheritedAccount {
@@ -351,6 +361,8 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
+	ctr.startVecInBatch = false
+	ctr.endVecInBatch = false
 
 	ctr.curVecIdx = 0
 	ctr.curRowIdx = 0
@@ -414,6 +426,14 @@ func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
 	}
+	if ctr.startVecInBatch {
+		ctr.startVec = nil
+		ctr.startVecInBatch = false
+	}
+	if ctr.endVecInBatch {
+		ctr.endVec = nil
+		ctr.endVecInBatch = false
+	}
 }
 
 func (ctr *container) freeAgg() {
@@ -454,16 +474,18 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 
 	ctr.freePartOut(mp)
 
-	// calRes only ever hands the *cast results* of these two to the output
-	// batch; the datetime staging vectors themselves are owned here and were
-	// never released before.
+	// DATETIME windows use these as staging vectors and hand only cast results to
+	// the output batch. TIMESTAMP windows can attach them directly to the output
+	// batch; freeBatch/freeFlushedAggVecs clear the ownership flag in that case.
 	if ctr.startVec != nil {
 		ctr.startVec.Free(mp)
 		ctr.startVec = nil
+		ctr.startVecInBatch = false
 	}
 	if ctr.endVec != nil {
 		ctr.endVec.Free(mp)
 		ctr.endVec = nil
+		ctr.endVecInBatch = false
 	}
 }
 
