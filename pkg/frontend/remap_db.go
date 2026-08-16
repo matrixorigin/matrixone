@@ -26,6 +26,19 @@ type remapDbContext struct {
 	lowerCaseTableNames int64
 }
 
+func newRemapDbContext(databases map[string]string, lowerCaseTableNames int64) remapDbContext {
+	normalized := make(map[string]string, len(databases))
+	for source, target := range databases {
+		normalized[tree.NewCStr(source, lowerCaseTableNames).Compare()] = target
+	}
+	return remapDbContext{databases: normalized, lowerCaseTableNames: lowerCaseTableNames}
+}
+
+func (remap remapDbContext) lookup(database string) (string, bool) {
+	target, ok := remap.databases[tree.NewCStr(database, remap.lowerCaseTableNames).Compare()]
+	return target, ok
+}
+
 // applyRemapDb substitutes the database of qualified table and column
 // references in parsed statements (db.table -> remap[db].table and
 // db.table.column -> remap[db].table.column). It runs after parsing and before
@@ -46,7 +59,7 @@ func applyRemapDb(stmts []tree.Statement, remap map[string]string, lowerCaseTabl
 	if len(remap) == 0 {
 		return
 	}
-	remapCtx := remapDbContext{databases: remap, lowerCaseTableNames: lowerCaseTableNames}
+	remapCtx := newRemapDbContext(remap, lowerCaseTableNames)
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remapCtx)
 	}
@@ -62,7 +75,7 @@ func applyRemapDbByStatement(
 		return moerr.NewInternalError(ctx, "the count of remapdb policies is not equal to statements")
 	}
 	for i, stmt := range stmts {
-		remapDbInStmt(stmt, remapDbContext{databases: remaps[i], lowerCaseTableNames: lowerCaseTableNames})
+		remapDbInStmt(stmt, newRemapDbContext(remaps[i], lowerCaseTableNames))
 	}
 	return nil
 }
@@ -455,7 +468,7 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 		return
 	}
 	if tn.ExplicitSchema {
-		if target, ok := remap.databases[string(tn.SchemaName)]; ok {
+		if target, ok := remap.lookup(string(tn.SchemaName)); ok {
 			tn.SchemaName = tree.Identifier(target)
 		}
 	}
@@ -471,7 +484,7 @@ func remapColumnName(name *tree.UnresolvedName, remap remapDbContext) {
 	if name == nil || name.NumParts < 3 {
 		return
 	}
-	if target, ok := remap.databases[name.DbName()]; ok {
+	if target, ok := remap.lookup(name.DbName()); ok {
 		name.CStrParts[2] = tree.NewCStr(target, remap.lowerCaseTableNames)
 	}
 }
@@ -481,7 +494,7 @@ func remapColumnName(name *tree.UnresolvedName, remap remapDbContext) {
 // unchanged because remapdb substitutes databases only.
 func remapInsertTarget(columnNames []*tree.UnresolvedName, databaseName *tree.Identifier, remap remapDbContext) {
 	if databaseName != nil {
-		if target, ok := remap.databases[string(*databaseName)]; ok {
+		if target, ok := remap.lookup(string(*databaseName)); ok {
 			*databaseName = tree.Identifier(target)
 		}
 	}
@@ -497,7 +510,7 @@ func remapObjectName(on *tree.UnresolvedObjectName, remap remapDbContext) {
 	if on == nil || on.NumParts < 2 {
 		return
 	}
-	if target, ok := remap.databases[on.Parts[1]]; ok {
+	if target, ok := remap.lookup(on.Parts[1]); ok {
 		on.Parts[1] = target
 	}
 }

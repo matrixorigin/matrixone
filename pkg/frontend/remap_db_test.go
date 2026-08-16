@@ -293,7 +293,8 @@ func TestApplyRemapDbPreservesIdentifierComparisonMode(t *testing.T) {
 		wantCompare string
 	}{
 		{name: "case sensitive", lower: 0, remapSource: "SrcMix27190", wantCompare: "DstMix27190"},
-		{name: "case insensitive", lower: 1, remapSource: "srcmix27190", wantCompare: "dstmix27190"},
+		{name: "lowercase names", lower: 1, remapSource: "SrcMix27190", wantCompare: "dstmix27190"},
+		{name: "preserve names and compare lowercase", lower: 2, remapSource: "SrcMix27190", wantCompare: "dstmix27190"},
 	}
 
 	for _, test := range tests {
@@ -383,7 +384,7 @@ func TestRemapDbInFullTextMatchPattern(t *testing.T) {
 	)
 	match := &tree.FullTextMatchExpr{Pattern: pattern}
 
-	remapDbInExpr(match, remapDbContext{databases: map[string]string{"src": "dst"}, lowerCaseTableNames: 1})
+	remapDbInExpr(match, newRemapDbContext(map[string]string{"src": "dst"}, 1))
 
 	require.Equal(t, "dst.docs.pattern", tree.String(pattern, dialect.MYSQL))
 }

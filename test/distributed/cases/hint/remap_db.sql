@@ -38,6 +38,38 @@ set remap_rewrites = '';
 set enable_remap_hint = 0;
 drop database SrcMix27190;
 drop database DstMix27190;
+set global lower_case_table_names = 2;
+-- @session
+
+-- @session:id=3&user=sys:root&password=111
+drop database if exists SrcMix2_27190;
+drop database if exists DstMix2_27190;
+create database SrcMix2_27190;
+create database DstMix2_27190;
+create table DstMix2_27190.T(id int primary key, v int);
+set enable_remap_hint = 1;
+set remap_rewrites = '{"remapdb": {"SrcMix2_27190": "DstMix2_27190"}}';
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (1, 10);
+insert into SrcMix2_27190.T set SrcMix2_27190.T.id = 2, SrcMix2_27190.T.v = 20;
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) select 3, 30;
+replace into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (4, 40);
+insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (1, 15)
+    on duplicate key update v = values(SrcMix2_27190.T.v);
+prepare mixed_case_mode_two_insert from
+    'insert into SrcMix2_27190.T(SrcMix2_27190.T.id, SrcMix2_27190.T.v) values (?, ?)';
+set @mixed_two_id = 5;
+set @mixed_two_v = 50;
+execute mixed_case_mode_two_insert using @mixed_two_id, @mixed_two_v;
+deallocate prepare mixed_case_mode_two_insert;
+select * from DstMix2_27190.T order by id;
+set remap_rewrites = '';
+set enable_remap_hint = 0;
+set global lower_case_table_names = 0;
+-- @session
+
+-- @session:id=4&user=sys:root&password=111
+drop database SrcMix2_27190;
+drop database DstMix2_27190;
 set global lower_case_table_names = 1;
 -- @session
 create database rdb_dst;

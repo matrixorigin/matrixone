@@ -2472,6 +2472,28 @@ func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
 	}
 }
 
+func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+
+	const sql = "insert into SrcMix.T(SrcMix.T.id, SrcMix.T.v) values (1, 10)"
+	wrapper := &TxnComputationWrapper{}
+	wrapper.SetRemapDb(map[string]string{"SrcMix": "DstMix"})
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: sql}
+	execCtx.cws = []ComputationWrapper{wrapper}
+	execCtx.rewriteEnabled = true
+
+	require.NoError(t, rebuildStaleCachedStatements(ses, execCtx))
+	insert := wrapper.GetAst().(*tree.Insert)
+	require.Equal(t, tree.Identifier("DstMix"), insert.TargetDatabaseName)
+	require.Equal(t, "DstMix", insert.ColumnNames[0].DbNameOrigin())
+	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
