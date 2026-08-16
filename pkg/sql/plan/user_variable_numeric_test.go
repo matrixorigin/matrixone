@@ -135,6 +135,35 @@ func TestUserVariableNumericContextCoercesNumericString(t *testing.T) {
 		types.T(variableType.Id).ToType())
 }
 
+func TestUserVariableNumericContextCoercesNumericPrefixes(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		switch name {
+		case "integer_prefix_var":
+			return "12abc", nil
+		case "decimal_prefix_var":
+			return "  -1.5x", nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariable(name, isSystemVar, isGlobalVar)
+	}
+	optimizer.ctxt.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (Type, error) {
+		if name == "integer_prefix_var" || name == "decimal_prefix_var" {
+			return makeSimplePlan2Type(types.T_text), nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariableType(name, isSystemVar, isGlobalVar)
+	}
+
+	logicPlan, err := runOneStmt(optimizer, t, "select @integer_prefix_var + 0, @decimal_prefix_var + 0")
+	require.NoError(t, err)
+	varTypes := userVariableEffectiveTypes(logicPlan)
+	integerType, ok := varTypes["integer_prefix_var"]
+	require.True(t, ok)
+	require.True(t, types.T(integerType.Id).ToType().IsIntOrUint())
+	decimalType, ok := varTypes["decimal_prefix_var"]
+	require.True(t, ok)
+	require.True(t, types.T(decimalType.Id).ToType().IsDecimal() || types.T(decimalType.Id).ToType().IsFloat())
+}
+
 func TestPreparedParametersUseDefaultNumericContextInArithmetic(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, "prepare ps_count from 'select ? + ? as sum_val'")
 	require.NoError(t, err)

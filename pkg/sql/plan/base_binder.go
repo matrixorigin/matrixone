@@ -386,9 +386,26 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 		},
 	}
 	if !astExpr.System && b.numericParamType != nil {
+		// User variables are text-backed when their assignment came from a
+		// string.  Numeric expressions use MySQL's prefix conversion for such
+		// values (for example, '12abc' -> 12), rather than the strict implicit
+		// cast which rejects the trailing text.
+		if isStringBackedType(typ) {
+			return appendExplicitCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
+		}
 		return appendCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
 	}
 	return variable, nil
+}
+
+func isStringBackedType(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
@@ -432,22 +449,90 @@ func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, b
 	default:
 		return Type{}, false
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
+	trimmed := strings.TrimSpace(text)
+	prefix, decimal, ok := userVariableNumericPrefix(trimmed)
+	if !ok {
 		return Type{}, false
 	}
-	if _, err = strconv.ParseInt(text, 10, 64); err == nil {
+	if decimal {
+		if prefix == trimmed {
+			if _, err = types.ParseDecimal128(prefix, 38, 18); err == nil {
+				typ := types.T_decimal128.ToType()
+				typ.Width, typ.Scale = 38, 18
+				return makePlan2Type(&typ), true
+			}
+		}
+		// A decimal prefix followed by non-numeric text is evaluated through
+		// the floating-point MySQL coercion path.  The explicit cast overload
+		// consumes the same prefix at execution time.
+		if _, err = strconv.ParseFloat(prefix, 64); err == nil {
+			return makeSimplePlan2Type(types.T_float64), true
+		}
+		return Type{}, false
+	}
+	if _, err = strconv.ParseInt(prefix, 10, 64); err == nil {
 		return makeSimplePlan2Type(types.T_int64), true
 	}
-	if _, err = strconv.ParseUint(text, 10, 64); err == nil {
+	if _, err = strconv.ParseUint(prefix, 10, 64); err == nil {
 		return makeSimplePlan2Type(types.T_uint64), true
 	}
-	if _, err = types.ParseDecimal128(text, 38, 18); err == nil {
+	if _, err = types.ParseDecimal128(prefix, 38, 18); err == nil {
 		typ := types.T_decimal128.ToType()
 		typ.Width, typ.Scale = 38, 18
 		return makePlan2Type(&typ), true
 	}
 	return Type{}, false
+}
+
+// userVariableNumericPrefix extracts the decimal prefix consumed by MySQL's
+// numeric coercion.  It deliberately stops before trailing non-numeric text,
+// while accepting a decimal point and a complete exponent when present.
+func userVariableNumericPrefix(s string) (prefix string, decimal, ok bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false, false
+	}
+	i := 0
+	if s[i] == '+' || s[i] == '-' {
+		i++
+	}
+	digitsStart := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	hasDigits := i > digitsStart
+	if i < len(s) && s[i] == '.' {
+		decimal = true
+		i++
+		fractionStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == fractionStart && !hasDigits {
+			return "", false, false
+		}
+		hasDigits = hasDigits || i > fractionStart
+	}
+	if !hasDigits {
+		return "", false, false
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		exponentStart := i
+		i++
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		exponentDigitsStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i > exponentDigitsStart {
+			decimal = true
+		} else {
+			i = exponentStart
+		}
+	}
+	return s[:i], decimal, true
 }
 
 const (

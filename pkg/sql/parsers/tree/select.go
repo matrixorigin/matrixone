@@ -586,6 +586,81 @@ func ValidateSelectIntoPlacement(stmt *Select) string {
 	return ""
 }
 
+// ValidateSelectIntoNotAllowed rejects SELECT ... INTO actions when the
+// SELECT is embedded in a statement that has no owner for the assignment.
+// A top-level SELECT is allowed to own its INTO clause, so callers for
+// enclosing statements must use this check instead of
+// ValidateSelectIntoPlacement.
+func ValidateSelectIntoNotAllowed(stmt *Select) string {
+	if stmt == nil {
+		return ""
+	}
+	if selectStatementHasInto(stmt) || withHasInto(stmt.With) ||
+		selectStatementHasNestedInto(stmt.Select) || timeWindowHasInto(stmt.TimeWindow) ||
+		orderByHasInto(stmt.OrderBy) || limitHasInto(stmt.Limit) {
+		return MisplacedIntoClauseMessage
+	}
+	return ""
+}
+
+// ValidateSelectIntoEnclosingStatement applies the no-owner rule to the
+// statement forms which can contain a SELECT source.  EXPLAIN uses this
+// helper so it cannot accidentally accept an assignment that would only be
+// meaningful when the explained SELECT is executed directly.
+func ValidateSelectIntoEnclosingStatement(stmt Statement) string {
+	switch node := stmt.(type) {
+	case *Select:
+		return ValidateSelectIntoNotAllowed(node)
+	case *Insert:
+		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
+			return err
+		}
+		if withHasInto(node.With) {
+			return MisplacedIntoClauseMessage
+		}
+		if updateExprsHaveInto(node.OnDuplicateUpdate) || selectExprsHaveInto(node.Returning) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Replace:
+		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
+			return err
+		}
+		if selectExprsHaveInto(node.Returning) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Delete:
+		if withHasInto(node.With) || tableExprsHaveInto(node.Tables) ||
+			tableExprsHaveInto(node.TableRefs) || selectExprsHaveInto(node.Returning) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) ||
+			orderByHasInto(node.OrderBy) || limitHasInto(node.Limit) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	case *Update:
+		if withHasInto(node.With) || tableExprsHaveInto(node.Tables) ||
+			(node.From != nil && tableExprsHaveInto(node.From.Tables)) ||
+			updateExprsHaveInto(node.Exprs) || selectExprsHaveInto(node.Returning) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) ||
+			orderByHasInto(node.OrderBy) || limitHasInto(node.Limit) {
+			return MisplacedIntoClauseMessage
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+func updateExprsHaveInto(exprs UpdateExprs) bool {
+	for _, expr := range exprs {
+		if expr != nil && exprHasNestedInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
 func ValidateValuesIntoPlacement(stmt *ValuesStatement) string {
 	if stmt == nil {
 		return ""
@@ -754,6 +829,15 @@ func tableExprHasInto(expr TableExpr) bool {
 	case *TableFunction:
 		return exprHasNestedInto(node.Func) ||
 			(node.SelectStmt != nil && selectStatementHasInto(node.SelectStmt))
+	case *TableName:
+		if node.AtTsExpr != nil && exprHasNestedInto(node.AtTsExpr.Expr) {
+			return true
+		}
+		if node.IcebergRef != nil {
+			return exprHasNestedInto(node.IcebergRef.Snapshot) ||
+				exprHasNestedInto(node.IcebergRef.Timestamp)
+		}
+		return false
 	case *StatementSource:
 		return statementHasInto(node.Statement)
 	case SelectStatement:

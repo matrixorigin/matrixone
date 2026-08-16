@@ -104,6 +104,18 @@ func TestExplicitCastStringIntegerPrefix(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestExplicitCastStringFloatPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"  -1.5x  ", "12abc"}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{-1.5, 12}, nil)
+	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestExplicitCastFloatToUnsigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{

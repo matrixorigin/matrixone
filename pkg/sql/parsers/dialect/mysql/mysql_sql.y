@@ -3295,9 +3295,20 @@ use_stmt:
 
 update_stmt:
     update_no_with_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause update_no_with_stmt
     {
         $2.(*tree.Update).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -3510,10 +3521,18 @@ explain_stmt:
 explain_plan_stmt:
     explain_sym explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewExplainStmt($2, "text")
     }
 |   explain_sym VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
         }
@@ -3521,6 +3540,10 @@ explain_plan_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
         }
@@ -3528,6 +3551,10 @@ explain_plan_stmt:
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3536,6 +3563,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
         }
@@ -3543,6 +3574,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
          options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3551,6 +3586,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
@@ -3559,6 +3598,10 @@ explain_plan_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.MakeExplainStmt($5, $3)
     }
 |   explain_sym FORCE execute_stmt
@@ -5637,15 +5680,37 @@ drop_procedure_stmt:
 
 delete_stmt:
     delete_without_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    delete_with_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause delete_with_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 |    with_clause delete_without_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -5765,6 +5830,10 @@ replace_stmt:
     REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data returning_clause_opt
     {
         rep := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(rep.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         rep.Table = $3
         rep.PartitionNames = $4
         rep.Returning = $6
@@ -5853,6 +5922,10 @@ insert_stmt:
 |   with_clause insert_no_with_stmt
     {
         $2.(*tree.Insert).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -5860,6 +5933,10 @@ insert_no_with_stmt:
     INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
     {
         ins := $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $2
         if $3 != nil {
             ins.PartitionNames = $3.Names
@@ -5872,6 +5949,10 @@ insert_no_with_stmt:
 |   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $3
         if $4 != nil {
             ins.PartitionNames = $4.Names
@@ -5884,6 +5965,10 @@ insert_no_with_stmt:
 |   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $3
         if $4 != nil {
             ins.PartitionNames = $4.Names
@@ -8227,6 +8312,10 @@ create_view_stmt:
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -8242,6 +8331,10 @@ create_view_stmt:
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -10070,6 +10163,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -10080,6 +10177,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -10091,6 +10192,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -10101,6 +10206,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
