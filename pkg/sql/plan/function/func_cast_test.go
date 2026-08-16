@@ -3834,6 +3834,44 @@ func TestCastJsonToNumeric(t *testing.T) {
 	})
 }
 
+func TestCastJsonToBool(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_bool))
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_bool.ToType()})
+	require.NoError(t, err)
+
+	run := func(t *testing.T, name string, jsonTexts []string, nulls []bool,
+		expected []bool, expectedNulls []bool, wantErr bool) {
+		t.Helper()
+		if nulls == nil {
+			nulls = make([]bool, len(jsonTexts))
+		}
+		encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{}, []bool{}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), wantErr, expected, expectedNulls)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		if wantErr {
+			require.True(t, succeed, "case %s: expected cast to fail with error, but: %s", name, info)
+			return
+		}
+		require.True(t, succeed, "case %s: %s", name, info)
+	}
+
+	run(t, "literal_and_numeric", []string{"true", "false", "0", "2", "-1"}, nil,
+		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
+	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
+		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
+	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
+		[]bool{false, false}, []bool{true, true}, false)
+	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
+	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
+	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+}
+
 func TestCastJsonToJson(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	jsonTexts := []string{`{"a":1}`, `[1,true,{"b":"x"}]`, `null`}
@@ -4076,6 +4114,8 @@ func TestCastJsonToVarchar(t *testing.T) {
 // emptySliceForCastTarget returns an empty slice of the right type for the second (target type) cast parameter.
 func emptySliceForCastTarget(oid types.T) any {
 	switch oid {
+	case types.T_bool:
+		return []bool{}
 	case types.T_int8:
 		return []int8{}
 	case types.T_int16:

@@ -369,3 +369,15 @@ select json_extract('[null]', '$[1 to 1]') is null,
 select json_extract('[0,1,2]', '$[2 to 6]'),
        json_extract('[0,1,2]', '$[last-8 to last-2]');
 drop database test;
+
+create database test;
+use test;
+create table json_bool_compare_test(id int primary key, doc json);
+insert into json_bool_compare_test values
+    (1, '{"enabled":true}'),
+    (2, '{"enabled":false}'),
+    (3, '{}'),
+    (4, '{"enabled":null}');
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
+drop database test;
