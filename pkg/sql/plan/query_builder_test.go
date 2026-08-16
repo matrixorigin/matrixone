@@ -2610,7 +2610,11 @@ func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.
 			require.NotNil(t, truncateFunc)
 			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
 			require.Len(t, truncateFunc.Args, 3)
-			require.Equal(t, int32(types.T_datetime), truncateExpr.Typ.Id)
+			wantRetType := int32(types.T_datetime)
+			if !tt.wantCast {
+				wantRetType = int32(types.T_timestamp)
+			}
+			require.Equal(t, wantRetType, truncateExpr.Typ.Id)
 			require.Equal(t, tt.wantScale, truncateExpr.Typ.Scale)
 
 			castExpr := truncateFunc.Args[0]
@@ -2837,7 +2841,7 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Width)
 			require.Len(t, timeWindowNode.GroupBy, 1)
-			require.Equal(t, int32(types.T_datetime), timeWindowNode.GroupBy[0].Typ.Id)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.GroupBy[0].Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
 		})
@@ -2990,6 +2994,39 @@ func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.
 	}
 	assertBoundaryProjects(fillNode)
 	assertBoundaryProjects(timeWindowNode)
+}
+
+func TestQueryBuilderTimeWindowOuterFilterKeepsBoundaryCarrier(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(6))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from ("+
+			"select _wstart, _wend, count(*) as n from tw_scale "+
+			"interval(ts, 1, hour) sliding(1, hour)"+
+			") q where _wend is null")
+	require.NoError(t, err)
+
+	var timeWindowNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TIME_WINDOW {
+			timeWindowNode = node
+			break
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.NotEqual(t, TimeWindowSlotNone, layout.WEndSlot)
+	for _, expr := range timeWindowNode.ProjectList {
+		col := expr.GetCol()
+		require.NotNil(t, col)
+		require.Less(t, col.ColPos, layout.ColCnt)
+	}
+	require.NotEmpty(t, timeWindowNode.FilterList)
+	wendFilterCol := timeWindowNode.FilterList[0].GetF().Args[0].GetCol()
+	require.NotNil(t, wendFilterCol)
+	require.Equal(t, layout.WEndSlot, wendFilterCol.ColPos)
 }
 
 func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
