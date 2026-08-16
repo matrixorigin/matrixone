@@ -89,6 +89,10 @@ type RightDedupJoin struct {
 	JoinMapTag         int32
 
 	OnDuplicateAction plan.Node_OnDuplicateAction
+	// InputKeysUnique means the probe stream is proven unique on the dedup key.
+	// The operator then performs lookup-only conflict checks and never inserts
+	// probe keys into the target hashmap.
+	InputKeysUnique   bool
 	DedupColName      string
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type

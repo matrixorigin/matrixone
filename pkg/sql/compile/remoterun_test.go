@@ -546,6 +546,60 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
 }
 
+func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	unique := &rightdedupjoin.RightDedupJoin{
+		Conditions:      [][]*planpb.Expr{{}, {}},
+		InputKeysUnique: true,
+	}
+	ordinary := &rightdedupjoin.RightDedupJoin{Conditions: [][]*planpb.Expr{{}, {}}}
+	uniquePipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.RightDedupJoin),
+			RightDedupJoin: &pipeline.RightDedupJoin{
+				InputKeysUnique: true,
+			},
+		}},
+	}}}
+	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op:             int32(vm.RightDedupJoin),
+		RightDedupJoin: &pipeline.RightDedupJoin{},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	_, _, err := convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 21")
+	require.ErrorContains(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline),
+		"requires MORPC protocol version 21")
+	encodedPipeline, err := uniquePipeline.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(encodedPipeline, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 21")
+	_, _, err = convertToPipelineInstruction(ordinary, proc, ctx, 1)
+	require.NoError(t, err, "ordinary RIGHT DEDUP remains wire-compatible")
+	require.NoError(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, ordinaryPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, instruction, err := convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.RightDedupJoin.InputKeysUnique)
+	require.NoError(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline))
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -1221,8 +1275,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 					SpillThreshold: threshold,
 				},
 				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
-					Conditions:     [][]*planpb.Expr{{}, {}},
-					SpillThreshold: threshold,
+					Conditions:      [][]*planpb.Expr{{}, {}},
+					SpillThreshold:  threshold,
+					InputKeysUnique: true,
 				},
 			} {
 				t.Run(fmt.Sprintf("%s/%d", name, threshold), func(t *testing.T) {
@@ -1239,6 +1294,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 						require.Equal(t, threshold, join.SpillThreshold)
 					case *rightdedupjoin.RightDedupJoin:
 						require.Equal(t, threshold, join.SpillThreshold)
+						require.True(t, join.InputKeysUnique)
 					default:
 						t.Fatalf("unexpected restored operator %T", restored)
 					}

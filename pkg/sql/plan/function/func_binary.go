@@ -1745,29 +1745,26 @@ func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	if err != nil {
 		return err
 	}
-	t := int64(num)
+	t := num
 
 	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			if err = rs.Append(types.Datetime(0), true); err != nil {
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
 			continue
 		}
-		// ZeroTimestamp is a distinct sentinel, not a chronological instant.
-		// Keep it separate from the 0001-01-01 epoch used by regular modulo math.
 		if v == types.ZeroTimestamp {
-			if err = rs.Append(types.ZeroDatetime, false); err != nil {
+			if err = rs.Append(types.ZeroTimestamp, false); err != nil {
 				return err
 			}
 			continue
 		}
-		truncated := int64(v) - int64(v)%t
-		if err = rs.Append(types.Datetime(truncated), false); err != nil {
+		if err = rs.Append(types.Timestamp(int64(v)-int64(v)%t), false); err != nil {
 			return err
 		}
 	}
