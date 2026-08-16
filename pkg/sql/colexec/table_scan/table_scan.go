@@ -232,6 +232,39 @@ func (tableScan *TableScan) traceRead(proc *process.Process, bat *batch.Batch) {
 	)
 }
 
+// shrinkPopulatedVecs applies the surviving-row selection to every vector the reader
+// actually materialized, and skips any it left empty.
+//
+// batch.Shrink walks all of bat.Vecs and assumes each holds bat.RowCount() rows. The
+// vector-TopN pushdown breaks that: blockio.materializeVectorTopNRows loads only the rows
+// the in-block Top-K selected and then CleanOnlyData()s the ORDER BY vector column itself
+// (outputBat.Vecs[topColPos]) — its values were already consumed to compute the distances,
+// so it is deliberately left with 0 rows while its siblings hold len(selectRows). The
+// reader still hands that batch to the filter callback as fully loaded (readutil/reader.go
+// passes loadedColumns=nil whenever r.orderByLimit != nil, which also disables late
+// materialization), so shrinking by row index reached the empty column and panicked with
+// "index out of range [N] with length 0", killing the query. Reproduced on an IVF-FLAT
+// include-mode entries scan: ORDER BY vec_dist LIMIT 100 plus a predicate on an INCLUDE
+// column.
+//
+// Skipping is the only safe local action: a vector with no rows has nothing to realign,
+// and shrinking it is precisely the crash. It cannot mask a real misalignment either --
+// any vector the reader DID fill is shrunk, so every populated column stays consistent
+// with the row count set below.
+func shrinkPopulatedVecs(bat *batch.Batch, sels []int64) {
+	if len(sels) == bat.RowCount() {
+		return
+	}
+	rowCount := bat.RowCount()
+	for _, vec := range bat.Vecs {
+		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
+			continue
+		}
+		vec.Shrink(sels, false)
+	}
+	bat.SetRowCount(len(sels))
+}
+
 // evalFilter evaluates inline filter expressions in-place. loadedColumns is
 // nil for an eager batch; otherwise it identifies the vectors currently
 // present in a late-materialized full-schema batch.
@@ -333,7 +366,7 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
-					bat.Shrink(sels, false)
+					shrinkPopulatedVecs(bat, sels)
 				} else {
 					for _, pos := range loadedColumns {
 						bat.Vecs[pos].Shrink(sels, false)

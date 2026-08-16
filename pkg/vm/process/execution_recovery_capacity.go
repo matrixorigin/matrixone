@@ -21,38 +21,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
-// HashBuildRecoveryCapacity owns query/CN headroom which physical recovery
+// ExecutionRecoveryCapacity owns query/CN headroom which physical recovery
 // allocations borrow through an allocation-account capacity class. The
 // physical allocation remains the sole allocation-ledger owner; borrowing
 // prevents the same bytes from being charged to the shared budget twice.
-type HashBuildRecoveryCapacity struct {
+type ExecutionRecoveryCapacity struct {
 	mu sync.Mutex
 
-	generation *HashBuildBudgetGeneration
+	generation *ExecutionResourceGeneration
 	capacity   uint64
 	borrowed   uint64
 	closed     bool
 }
 
-func NewHashBuildRecoveryCapacity(
-	generation *HashBuildBudgetGeneration,
-) (*HashBuildRecoveryCapacity, error) {
+func NewExecutionRecoveryCapacity(
+	generation *ExecutionResourceGeneration,
+) (*ExecutionRecoveryCapacity, error) {
 	if generation == nil || generation.budget == nil || generation.Closed() {
-		return nil, ErrHashBuildBudgetInvalid
+		return nil, ErrExecutionResourceInvalid
 	}
-	return &HashBuildRecoveryCapacity{generation: generation}, nil
+	return &ExecutionRecoveryCapacity{generation: generation}, nil
 }
 
-// EnsureCapacity raises the reusable recovery floor before HashBuild retains
-// a source which may later need that floor to make spill progress.
-func (c *HashBuildRecoveryCapacity) EnsureCapacity(target uint64) error {
+// NewExecutionRecoveryCapacitySlot creates an inactive controller whose stable
+// address can be registered with an allocation account before an execution
+// attempt starts. Activate binds the slot to that attempt. Keeping registration
+// in the allocation-owner lifecycle avoids rebuilding controller metadata in
+// every operator Prepare while preserving the same per-attempt capacity floor.
+func NewExecutionRecoveryCapacitySlot() *ExecutionRecoveryCapacity {
+	return &ExecutionRecoveryCapacity{closed: true}
+}
+
+// Activate binds an inactive slot to one execution generation. A live slot may
+// only be activated again with the same generation; Close must first drain it
+// before it can be reused by another attempt.
+func (c *ExecutionRecoveryCapacity) Activate(
+	generation *ExecutionResourceGeneration,
+) error {
+	if c == nil || generation == nil || generation.budget == nil || generation.Closed() {
+		return ErrExecutionResourceInvalid
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != nil && !c.closed {
+		if c.generation == generation {
+			return nil
+		}
+		return ErrExecutionResourceInvalid
+	}
+	if c.capacity != 0 || c.borrowed != 0 {
+		return mpool.ErrAllocationAccountLive
+	}
+	c.generation = generation
+	c.closed = false
+	return nil
+}
+
+// EnsureCapacity raises the reusable recovery floor before an operator retains
+// state which may later need that floor to make spill progress.
+func (c *ExecutionRecoveryCapacity) EnsureCapacity(target uint64) error {
 	if c == nil {
-		return ErrHashBuildBudgetInvalid
+		return ErrExecutionResourceInvalid
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.generation == nil {
-		return ErrHashBuildSpillReservationInactive
+		return ErrExecutionSpillReservationInactive
 	}
 	if target <= c.capacity {
 		return nil
@@ -65,7 +99,7 @@ func (c *HashBuildRecoveryCapacity) EnsureCapacity(target uint64) error {
 	return nil
 }
 
-func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error {
+func (c *ExecutionRecoveryCapacity) AcquireAllocationCapacity(size uint64) error {
 	if size == 0 {
 		return nil
 	}
@@ -77,7 +111,7 @@ func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error
 	if c.closed || c.generation == nil {
 		return errors.Join(
 			mpool.ErrAllocationAccountSealed,
-			ErrHashBuildSpillReservationInactive,
+			ErrExecutionSpillReservationInactive,
 		)
 	}
 	if c.borrowed > c.capacity || size > c.capacity-c.borrowed {
@@ -94,22 +128,22 @@ func (c *HashBuildRecoveryCapacity) AcquireAllocationCapacity(size uint64) error
 	return nil
 }
 
-func (c *HashBuildRecoveryCapacity) ReleaseAllocationCapacity(size uint64) {
+func (c *ExecutionRecoveryCapacity) ReleaseAllocationCapacity(size uint64) {
 	if size == 0 {
 		return
 	}
 	if c == nil {
-		panic("nil hash build recovery capacity")
+		panic("nil execution recovery capacity")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if size > c.borrowed {
-		panic("hash build recovery capacity release underflow")
+		panic("execution recovery capacity release underflow")
 	}
 	c.borrowed -= size
 }
 
-func (c *HashBuildRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
+func (c *ExecutionRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
 	if c == nil {
 		return 0, 0
 	}
@@ -120,7 +154,7 @@ func (c *HashBuildRecoveryCapacity) Snapshot() (capacity, borrowed uint64) {
 
 // Close releases the recovery floor only after all physical borrowers have
 // returned it. A failed close keeps ownership intact for terminal diagnostics.
-func (c *HashBuildRecoveryCapacity) Close() error {
+func (c *ExecutionRecoveryCapacity) Close() error {
 	if c == nil {
 		return nil
 	}
@@ -141,4 +175,4 @@ func (c *HashBuildRecoveryCapacity) Close() error {
 	return nil
 }
 
-var _ mpool.AllocationCapacityController = (*HashBuildRecoveryCapacity)(nil)
+var _ mpool.AllocationCapacityController = (*ExecutionRecoveryCapacity)(nil)

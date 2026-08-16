@@ -325,11 +325,17 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode                   []*BindContext
-	nameByColRef                map[[2]int32]string
-	protectedScans              map[int32]int
-	updateTargetScans           map[int32]struct{}
-	projectSpecialGuards        map[int32]*specialIndexGuard
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
+	protectedScans       map[int32]int
+	updateTargetScans    map[int32]struct{}
+	projectSpecialGuards map[int32]*specialIndexGuard
+	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
+	// will anchor the vector rewrite on. applyIndices walks children first, so without
+	// this the SORT-anchored entry point would claim the classic
+	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
+	// column information and with it the index-only scan.
+	projectAnchoredSorts        map[int32]struct{}
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
 	indexHintOwnerByNode        map[int32]int32
@@ -414,6 +420,11 @@ type QueryBuilder struct {
 	returningTableName  string
 	returningAlias      string
 	returningColPos     map[string]int32
+	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
+	// the source primary key proves uniqueness of the target primary-key key.
+	// It is consumed only by the target-PK DEDUP node; secondary unique-index
+	// DEDUP nodes retain their existing duplicate-detection semantics.
+	insertInputKeysUnique bool
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -611,6 +622,10 @@ type BindContext struct {
 	projectByExpr       map[string]int32
 	timeByAst           map[string]int32
 	whereFilters        []*plan.Expr
+	// gapFillWhereFilters preserves the complete bound WHERE tree before
+	// subqueries are flattened into joins. Bounded GAPFILL inference must see
+	// every timestamp predicate, including IN/ANY/ALL subquery operands.
+	gapFillWhereFilters []*plan.Expr
 
 	projectColByAst map[string]int32
 

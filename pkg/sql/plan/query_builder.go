@@ -1881,6 +1881,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_TIME_WINDOW:
 		timeTag := node.BindingTags[0]
+		groupTag := node.BindingTags[1]
+
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		// Decide what survives before touching colRefCnt: a `_wstart`/`_wend`
 		// entry of AggList is a column reference to its own {timeTag, k}, so
@@ -2038,7 +2043,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		// selectable next to the window's aggregates. The operator always
 		// evaluates them to find its boundaries, so only their output is
 		// optional.
-		groupTag := node.BindingTags[1]
 		for p, slot := range layout.PartitionSlot {
 			if partitionSrc[p] < 0 {
 				continue
@@ -2064,6 +2068,31 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 					},
 				},
 			})
+		}
+
+		outputMap := make(map[[2]int32][2]int32, len(newToOld)+len(layout.PartitionSlot))
+		for k, oldIdx := range newToOld {
+			slot := layout.Slot[k]
+			if slot == TimeWindowSlotNone {
+				continue
+			}
+			outputMap[[2]int32{timeTag, oldIdx}] = [2]int32{0, slot}
+		}
+		for p, slot := range layout.PartitionSlot {
+			if partitionSrc[p] < 0 {
+				continue
+			}
+			outputMap[[2]int32{groupTag, partitionSrc[p]}] = [2]int32{0, slot}
+		}
+
+		remapInfo.tip = "FilterList"
+		for idx, expr := range node.FilterList {
+			increaseRefCnt(expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(expr, outputMap, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	case plan.Node_WINDOW:
@@ -4943,10 +4972,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// bind TIME WINDOW
 	var fillType plan.Node_FillType
 	var fillVals, fillCols []*Expr
-	var interval, sliding, ts, wEnd *Expr
+	var interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr
 	var boundTimeWindowOrderBy *plan.OrderBySpec
 	if astTimeWindow != nil {
-		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
+		if fillType, fillVals, fillCols, interval, sliding, ts, wEnd, gapFillStart, gapFillEnd, boundTimeWindowOrderBy, err = builder.bindTimeWindow(
 			ctx,
 			projectionBinder,
 			astTimeWindow,
@@ -5059,7 +5088,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			boundTimeWindowGroupBy,
 			fillType,
 			fillVals, fillCols,
-			interval, sliding, ts, wEnd,
+			interval, sliding, ts, wEnd, gapFillStart, gapFillEnd,
 			astTimeWindow,
 		); err != nil {
 			return
@@ -7259,7 +7288,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
 		var boundFilterList []*plan.Expr
-		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
+		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(
+			ctx, clause.Where, nodeID, astTimeWindow != nil && astTimeWindow.GapFill,
+		); err != nil {
 			return
 		}
 
@@ -7350,11 +7381,15 @@ func (builder *QueryBuilder) bindWhere(
 	ctx *BindContext,
 	clause *tree.Where,
 	nodeID int32,
+	preserveGapFillFilters bool,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
 	convertedExpr := builder.convertAccountToAccountIdIfNeeded(ctx, clause.Expr)
 	whereList, err := splitAndBindCondition(convertedExpr, NoAlias, ctx)
 	if err != nil {
 		return
+	}
+	if preserveGapFillFilters {
+		ctx.gapFillWhereFilters = DeepCopyExprList(whereList)
 	}
 	// Scalar-subquery decorrelation may need a safe outer-key domain while it
 	// is flattening one conjunct. Publish the complete bound WHERE list before
@@ -7741,7 +7776,7 @@ func (builder *QueryBuilder) bindTimeWindow(
 ) (
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	boundTimeWindowOrderBy *plan.OrderBySpec,
 	err error,
 ) {
@@ -7780,6 +7815,13 @@ func (builder *QueryBuilder) bindTimeWindow(
 	boundaryType := timeWindowBoundaryTypeForTimestamp(ts.Typ, astTimeWindow, ctx.timeBoundaryType)
 	ts.Typ = boundaryType
 	updateTimeWindowBoundaryTypes(ctx, boundaryType)
+
+	if astTimeWindow.GapFill {
+		gapFillStart, gapFillEnd, err = inferGapFillBounds(builder.GetContext(), ctx.gapFillWhereFilters, ts)
+		if err != nil {
+			return
+		}
+	}
 
 	// Copy rather than alias the group expression: remapping walks OrderBy and
 	// GroupBy separately, and rewriting one shared pointer twice would resolve
@@ -7865,6 +7907,171 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 	return
+}
+
+// inferGapFillBounds recognizes only the exact half-open predicate shape used
+// by the executor: timestamp >= start AND timestamp < finish. Keeping the
+// inference deliberately narrow means complex predicates retain the legacy
+// observed-range GAPFILL semantics instead of silently widening their domain.
+func inferGapFillBounds(
+	ctx context.Context,
+	filters []*Expr,
+	timestamp *Expr,
+) (start, finish *Expr, err error) {
+	tsCol := timestamp.GetCol()
+	if tsCol == nil {
+		return nil, nil, nil
+	}
+
+	// Every predicate that references the window column must participate in the
+	// inferred domain. Skipping an unsupported edge and using only the remaining
+	// half-open subset can widen a contradictory WHERE range into a non-empty
+	// synthetic grid. Retain legacy observed-range behavior unless all such
+	// predicates are direct, constant half-open edges.
+	var starts, finishes []*Expr
+	for _, filter := range filters {
+		// Correlated references inside a subquery live in that subquery's plan,
+		// outside this expression tree. Conservatively decline inference for any
+		// pre-flatten subquery predicate so none of those hidden timestamp
+		// constraints can be omitted from the fixed domain.
+		if hasSubquery(filter) {
+			return nil, nil, nil
+		}
+		if !gapFillBoundContainsColumn(filter, tsCol) {
+			continue
+		}
+		fn := filter.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return nil, nil, nil
+		}
+		left, right := fn.Args[0], fn.Args[1]
+		leftMatches := gapFillBoundColumnMatches(left, tsCol)
+		rightMatches := gapFillBoundColumnMatches(right, tsCol)
+		if leftMatches == rightMatches {
+			// Either the timestamp is nested in a more complex expression or it
+			// appears on both sides. Neither shape defines a safe fixed edge.
+			return nil, nil, nil
+		}
+		name := strings.ToLower(fn.Func.ObjName)
+		switch {
+		case leftMatches:
+			switch name {
+			case ">=":
+				if !gapFillBoundIsConstant(right) {
+					return nil, nil, nil
+				}
+				starts = append(starts, right)
+			case "<":
+				if !gapFillBoundIsConstant(right) {
+					return nil, nil, nil
+				}
+				finishes = append(finishes, right)
+			default:
+				return nil, nil, nil
+			}
+		case rightMatches:
+			// constant <= timestamp and constant > timestamp are the reversed
+			// spellings of the same canonical half-open predicates.
+			switch name {
+			case "<=":
+				if !gapFillBoundIsConstant(left) {
+					return nil, nil, nil
+				}
+				starts = append(starts, left)
+			case ">":
+				if !gapFillBoundIsConstant(left) {
+					return nil, nil, nil
+				}
+				finishes = append(finishes, left)
+			default:
+				return nil, nil, nil
+			}
+		}
+	}
+	if len(starts) == 0 || len(finishes) == 0 {
+		return nil, nil, nil
+	}
+
+	start, err = combineGapFillBounds(ctx, "greatest", starts, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = combineGapFillBounds(ctx, "least", finishes, timestamp.Typ)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// mo_win_truncate represents TIMESTAMP windows as DATETIME values whose raw
+	// microseconds are the source instants. Keep inferred TIMESTAMP bounds in
+	// their source type so the executor can reinterpret them in that same instant
+	// coordinate without applying the session timezone a second time.
+	if types.T(timestamp.Typ.Id) == types.T_timestamp {
+		return start, finish, nil
+	}
+
+	// The time-window key is evaluated as DATETIME by mo_win_truncate. Convert
+	// the already-combined bounds through the same cast path so every temporal
+	// input accepted by the binder (notably TIME and YEAR) reaches the executor
+	// in one representation.
+	datetimeType := plan.Type{Id: int32(types.T_datetime), Scale: timestamp.Typ.Scale}
+	start, err = appendCastBeforeExpr(ctx, start, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
+	finish, err = appendCastBeforeExpr(ctx, finish, datetimeType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return start, finish, nil
+}
+
+func gapFillBoundColumnMatches(expr *Expr, timestamp *plan.ColRef) bool {
+	col := expr.GetCol()
+	return col != nil && col.RelPos == timestamp.RelPos && col.ColPos == timestamp.ColPos
+}
+
+func gapFillBoundContainsColumn(expr *Expr, timestamp *plan.ColRef) bool {
+	if expr == nil {
+		return false
+	}
+	if gapFillBoundColumnMatches(expr, timestamp) {
+		return true
+	}
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, arg := range item.List.List {
+			if gapFillBoundContainsColumn(arg, timestamp) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gapFillBoundIsConstant(expr *Expr) bool {
+	return expr != nil && !exprHasColRef(expr) && !hasCorrCol(expr) &&
+		!hasSubquery(expr) && !containsVolatileFunction(expr)
+}
+
+func combineGapFillBounds(ctx context.Context, name string, candidates []*Expr, targetType plan.Type) (*Expr, error) {
+	casted := make([]*Expr, len(candidates))
+	for i, candidate := range candidates {
+		var err error
+		casted[i], err = appendCastBeforeExpr(ctx, DeepCopyExpr(candidate), targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(casted) == 1 {
+		return casted[0], nil
+	}
+	return BindFuncExprImplByPlanExpr(ctx, name, casted)
 }
 
 // groupingSetOrderResolution carries, per ORDER BY entry of a grouping-set
@@ -8700,7 +8907,7 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	boundTimeWindowGroupBy *plan.Expr,
 	fillType plan.Node_FillType,
 	fillVals, fillCols []*Expr,
-	interval, sliding, ts, wEnd *Expr,
+	interval, sliding, ts, wEnd, gapFillStart, gapFillEnd *Expr,
 	astTimeWindow *tree.TimeWindow,
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
@@ -8751,6 +8958,8 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		TimeWindowPartitionBy: partitionBy,
 		Timestamp:             ts,
 		WEnd:                  wEnd,
+		GapFillStart:          gapFillStart,
+		GapFillEnd:            gapFillEnd,
 		GapFillMode: func() plan.Node_GapFillMode {
 			if astTimeWindow.GapFill {
 				return plan.Node_GAP_FILL_PARTITION

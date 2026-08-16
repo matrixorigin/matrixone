@@ -2777,6 +2777,11 @@ func TestISCPExecutor5(t *testing.T) {
 
 	indexCount := 3
 	updateTimes := 10
+	if testing.Short() {
+		// Exercise one complete delete/append cycle and finish with populated
+		// source and index tables, so CheckTableData still compares real rows.
+		updateTimes = 2
+	}
 
 	for j := 0; j < tableCount; j++ {
 		for i := 0; i < indexCount; i++ {

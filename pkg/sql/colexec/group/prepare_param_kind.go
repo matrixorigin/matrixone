@@ -15,11 +15,12 @@
 package group
 
 import (
-	"bytes"
 	"context"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,8 +45,281 @@ const (
 )
 
 type prepareParamKindSummary struct {
-	kind vector.PrepareParamKind
-	seen bool
+	kind         vector.PrepareParamKind
+	seen         bool
+	rows         bool
+	binaryString bool
+}
+
+func (s *prepareParamKindSummary) observe(kind vector.PrepareParamKind) {
+	if !s.seen {
+		s.kind, s.seen = kind, true
+	} else if s.kind != kind {
+		s.kind = vector.PrepareParamNone
+	}
+}
+
+type prepareParamKindRowsSource struct {
+	vec      *vector.Vector
+	flags    []uint8
+	rowCount int
+	summary  prepareParamKindSummary
+}
+
+func newPrepareParamKindRowsSource(
+	vec *vector.Vector,
+	flags []uint8,
+) (prepareParamKindRowsSource, error) {
+	source := prepareParamKindRowsSource{vec: vec, flags: flags}
+	if vec == nil {
+		return source, nil
+	}
+	if flags != nil && len(flags) != vec.Length() {
+		return source, moerr.NewInvalidInputNoCtxf(
+			"prepared parameter selection length %d does not match vector rows %d",
+			len(flags), vec.Length())
+	}
+	hasExactRows := len(vec.GetPrepareParamKinds()) != 0 || vec.HasBinaryStringRows()
+	if flags == nil && !hasExactRows {
+		if vec.Length() != 0 && vec.HasPrepareParamKind() && !vec.AllNull() {
+			source.summary.observe(vec.GetPrepareParamKind())
+			source.summary.binaryString = vec.GetIsBinaryString()
+		}
+		return source, nil
+	}
+	selectedRows := 0
+	for row := 0; row < vec.Length(); row++ {
+		if flags != nil {
+			if flags[row] == 0 {
+				continue
+			}
+			if flags[row] != 1 {
+				return source, moerr.NewInvalidInputNoCtx(
+					"prepared parameter selection flag must be zero or one")
+			}
+		}
+		selectedRows++
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		kind := vec.GetPrepareParamKindAt(row)
+		source.summary.observe(kind)
+		binaryString := vec.GetBinaryStringMetadataAt(row)
+		source.summary.binaryString = source.summary.binaryString || binaryString
+		if hasExactRows && (kind != vector.PrepareParamNone || binaryString) {
+			source.summary.rows = true
+		}
+	}
+	if source.summary.rows {
+		source.rowCount = selectedRows
+	}
+	return source, nil
+}
+
+func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVersion bool) error {
+	if source == nil || source.rowCount == 0 {
+		return nil
+	}
+	if source.vec == nil || writer == nil {
+		return moerr.NewInvalidInputNoCtx("invalid prepared parameter row source")
+	}
+	var buffer [256]byte
+	buffered := 0
+	written := 0
+	flush := func() error {
+		if buffered == 0 {
+			return nil
+		}
+		_, err := writeGroupSpillBytes(writer, buffer[:buffered])
+		buffered = 0
+		return err
+	}
+	for row := 0; row < source.vec.Length(); row++ {
+		if source.flags != nil && source.flags[row] == 0 {
+			continue
+		}
+		kind := vector.PrepareParamNone
+		if !source.vec.IsNull(uint64(row)) {
+			kind = source.vec.GetPrepareParamKindAt(row)
+		}
+		if kind > vector.PrepareParamBoolean {
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid aggregate prepared parameter row kind %d", kind)
+		}
+		encoded := byte(kind)
+		if binaryVersion && !source.vec.IsNull(uint64(row)) &&
+			source.vec.GetBinaryStringMetadataAt(row) {
+			encoded |= prepareParamKindTrailerRowsMarker
+		}
+		buffer[buffered] = encoded
+		buffered++
+		written++
+		if buffered == len(buffer) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	if written != source.rowCount {
+		return moerr.NewInternalErrorNoCtx(
+			"prepared parameter row source changed during serialization")
+	}
+	return nil
+}
+
+type prepareParamKindRowsTarget struct {
+	accessor     aggexec.PrepareParamKindStateAccessor
+	chunk        int
+	flat         bool
+	expectedRows int
+}
+
+func prepareParamKindChunkTarget(
+	accessor aggexec.PrepareParamKindStateAccessor,
+	chunk int,
+) prepareParamKindRowsTarget {
+	target := prepareParamKindRowsTarget{
+		accessor:     accessor,
+		chunk:        chunk,
+		expectedRows: -1,
+	}
+	if accessor != nil {
+		if vec := accessor.PrepareParamKindVectorForChunk(chunk); vec != nil {
+			target.expectedRows = vec.Length()
+		}
+	}
+	return target
+}
+
+func prepareParamKindFlatTarget(
+	accessor aggexec.PrepareParamKindStateAccessor,
+) prepareParamKindRowsTarget {
+	target := prepareParamKindRowsTarget{
+		accessor:     accessor,
+		flat:         true,
+		expectedRows: -1,
+	}
+	if accessor == nil {
+		return target
+	}
+	rows := 0
+	for chunk := 0; chunk < accessor.PrepareParamKindChunkCount(); chunk++ {
+		vec := accessor.PrepareParamKindVectorForChunk(chunk)
+		if vec == nil || vec.Length() < 0 || rows > math.MaxInt-vec.Length() {
+			return target
+		}
+		rows += vec.Length()
+	}
+	target.expectedRows = rows
+	return target
+}
+
+type prepareParamKindObservingReader struct {
+	reader        io.Reader
+	summary       prepareParamKindSummary
+	binaryVersion bool
+}
+
+func (r *prepareParamKindObservingReader) Read(value []byte) (int, error) {
+	n, err := r.reader.Read(value)
+	for _, encoded := range value[:n] {
+		if r.binaryVersion {
+			r.summary.binaryString = r.summary.binaryString || encoded&prepareParamKindTrailerRowsMarker != 0
+			encoded &^= prepareParamKindTrailerRowsMarker
+		}
+		r.summary.observe(vector.PrepareParamKind(encoded))
+	}
+	return n, err
+}
+
+func (target *prepareParamKindRowsTarget) restore(
+	reader io.Reader,
+	rows int,
+	mp *mpool.MPool,
+	binaryVersion bool,
+) (prepareParamKindSummary, error) {
+	if target == nil || reader == nil || rows <= 0 || target.expectedRows != rows {
+		return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtx(
+			"invalid prepared parameter row target")
+	}
+	observed := &prepareParamKindObservingReader{reader: reader, binaryVersion: binaryVersion}
+	if target.accessor == nil {
+		var buffer [256]byte
+		remaining := rows
+		for remaining > 0 {
+			n := min(remaining, len(buffer))
+			if _, err := io.ReadFull(observed, buffer[:n]); err != nil {
+				return prepareParamKindSummary{}, err
+			}
+			for _, encoded := range buffer[:n] {
+				if binaryVersion {
+					encoded &^= prepareParamKindTrailerRowsMarker
+				}
+				if vector.PrepareParamKind(encoded) > vector.PrepareParamBoolean {
+					return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtxf(
+						"invalid aggregate prepared parameter row kind %d", encoded)
+				}
+			}
+			remaining -= n
+		}
+		return observed.summary, nil
+	}
+	restoreVector := func(vec *vector.Vector, count int) error {
+		if vec == nil || vec.Length() != count {
+			return moerr.NewInvalidInputNoCtx(
+				"prepared parameter target vector row count changed")
+		}
+		if binaryVersion {
+			return vec.SetPrepareParamKindsAndBinaryStringFromReader(
+				observed, count, mp, prepareParamKindTrailerRowsMarker)
+		}
+		return vec.SetPrepareParamKindsFromReader(observed, count, mp)
+	}
+	if !target.flat {
+		if err := restoreVector(
+			target.accessor.PrepareParamKindVectorForChunk(target.chunk), rows,
+		); err != nil {
+			return prepareParamKindSummary{}, err
+		}
+		return observed.summary, nil
+	}
+	remaining := rows
+	for chunk := 0; chunk < target.accessor.PrepareParamKindChunkCount(); chunk++ {
+		vec := target.accessor.PrepareParamKindVectorForChunk(chunk)
+		if vec == nil || vec.Length() > remaining {
+			return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtx(
+				"prepared parameter flat target does not match row count")
+		}
+		if err := restoreVector(vec, vec.Length()); err != nil {
+			return prepareParamKindSummary{}, err
+		}
+		remaining -= vec.Length()
+	}
+	if remaining != 0 {
+		return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtx(
+			"prepared parameter flat target is shorter than row count")
+	}
+	return observed.summary, nil
+}
+
+func (target *prepareParamKindRowsTarget) setBinarySummary(binaryString bool) {
+	if target == nil || target.accessor == nil || !binaryString {
+		return
+	}
+	if !target.flat {
+		if vec := target.accessor.PrepareParamKindVectorForChunk(target.chunk); vec != nil {
+			vec.SetIsBinaryString(true)
+		}
+		return
+	}
+	for chunk := 0; chunk < target.accessor.PrepareParamKindChunkCount(); chunk++ {
+		if vec := target.accessor.PrepareParamKindVectorForChunk(chunk); vec != nil {
+			vec.SetIsBinaryString(true)
+		}
+	}
 }
 
 func prepareParamKindWireV1Enabled(proc *process.Process) bool {
@@ -90,38 +364,39 @@ func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool
 // intact lets old readers consume aggregate state and ignore this trailer.
 func writePrepareParamKindTrailer(
 	ctx context.Context,
-	buf *bytes.Buffer,
+	writer io.Writer,
 	aggs []aggexec.AggFuncExecExpression,
 	states *aggexec.PrepareParamKindStates,
-	rows [][]vector.PrepareParamKind,
-	summaries []prepareParamKindSummary,
-	binaryRows [][]bool,
-	binarySummaries []bool,
+	sources []prepareParamKindRowsSource,
 ) error {
 	rowsVersion := false
-	for i := range rows {
-		if len(rows[i]) != 0 {
+	binaryVersion := false
+	for i := range sources {
+		if sources[i].rowCount != 0 {
 			rowsVersion = true
-			break
+		}
+		if sources[i].summary.binaryString {
+			binaryVersion = true
 		}
 	}
 	version := prepareParamKindTrailerVersion
-	if rowsVersion {
+	if binaryVersion {
+		version = prepareParamKindTrailerBinaryVersion
+	} else if rowsVersion {
 		version = prepareParamKindTrailerRowsVersion
 	}
-	for i := range binaryRows {
-		if len(binaryRows[i]) != 0 || i < len(binarySummaries) && binarySummaries[i] {
-			version = prepareParamKindTrailerBinaryVersion
-			rowsVersion = rowsVersion || len(binaryRows[i]) != 0
-			break
-		}
+	if _, err := writeGroupSpillBytes(writer, []byte{
+		prepareParamKindTrailerMagic0,
+		prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2,
+		version,
+	}); err != nil {
+		return err
 	}
-	buf.WriteByte(prepareParamKindTrailerMagic0)
-	buf.WriteByte(prepareParamKindTrailerMagic1)
-	buf.WriteByte(prepareParamKindTrailerMagic2)
-	buf.WriteByte(version)
 	nAggs := int32(len(aggs))
-	buf.Write(types.EncodeInt32(&nAggs))
+	if err := types.WriteInt32(writer, nAggs); err != nil {
+		return err
+	}
 	for i := range aggs {
 		kind, seen := states.GetState(i)
 		// Validate the execution-wide compatibility state even when a
@@ -132,42 +407,20 @@ func writePrepareParamKindTrailer(
 			return moerr.NewInternalErrorf(ctx,
 				"invalid aggregate prepared parameter kind %d", kind)
 		}
-		rowCount := 0
-		if i < len(rows) {
-			rowCount = len(rows[i])
-		}
-		if i < len(binaryRows) && len(binaryRows[i]) != 0 {
-			if rowCount != 0 && rowCount != len(binaryRows[i]) {
-				return moerr.NewInternalErrorNoCtx("aggregate provenance row counts do not match")
-			}
-			rowCount = len(binaryRows[i])
-		}
-		if rowsVersion && rowCount != 0 {
-			if int64(rowCount) > int64(prepareParamKindTrailerMaxRows) {
+		if rowsVersion && i < len(sources) && sources[i].rowCount != 0 {
+			if int64(sources[i].rowCount) > int64(prepareParamKindTrailerMaxRows) {
 				return moerr.NewInternalErrorf(ctx,
-					"aggregate prepared parameter row count %d exceeds limit", rowCount)
+					"aggregate prepared parameter row count %d exceeds limit", sources[i].rowCount)
 			}
-			buf.WriteByte(prepareParamKindTrailerRowsMarker)
-			encodedRows := int32(rowCount)
-			buf.Write(types.EncodeInt32(&encodedRows))
-			for row := 0; row < rowCount; row++ {
-				kind := vector.PrepareParamNone
-				if i < len(rows) && len(rows[i]) != 0 {
-					kind = rows[i][row]
-				}
-				if kind > vector.PrepareParamBoolean {
-					return moerr.NewInternalErrorf(ctx,
-						"invalid aggregate prepared parameter row kind %d", kind)
-				}
-				encoded := byte(kind)
-				binaryString := i < len(binarySummaries) && binarySummaries[i]
-				if i < len(binaryRows) && len(binaryRows[i]) != 0 {
-					binaryString = binaryRows[i][row]
-				}
-				if version == prepareParamKindTrailerBinaryVersion && binaryString {
-					encoded |= prepareParamKindTrailerRowsMarker
-				}
-				buf.WriteByte(encoded)
+			if _, err := writeGroupSpillBytes(writer, []byte{prepareParamKindTrailerRowsMarker}); err != nil {
+				return err
+			}
+			rowCount := int32(sources[i].rowCount)
+			if err := types.WriteInt32(writer, rowCount); err != nil {
+				return err
+			}
+			if err := sources[i].writeRows(writer, binaryVersion); err != nil {
+				return err
 			}
 			continue
 		}
@@ -175,21 +428,25 @@ func writePrepareParamKindTrailer(
 		// chunk/selection being serialized.  Use an unseen summary as well:
 		// falling back to the cumulative operator state here can leak a prior
 		// chunk's Float/Integer category onto an ordinary winner in this one.
-		if i < len(summaries) && aggs[i].PreservesFirstArgPrepareParamKind() {
-			kind, seen = summaries[i].kind, summaries[i].seen
+		if i < len(sources) && aggs[i].PreservesFirstArgPrepareParamKind() {
+			kind, seen = sources[i].summary.kind, sources[i].summary.seen
 		}
 		encoded, ok := encodePrepareParamKindState(kind, seen)
 		if !ok {
 			return moerr.NewInternalErrorf(ctx,
 				"invalid aggregate prepared parameter kind %d", kind)
 		}
-		buf.WriteByte(encoded)
-		if version == prepareParamKindTrailerBinaryVersion {
+		if _, err := writeGroupSpillBytes(writer, []byte{encoded}); err != nil {
+			return err
+		}
+		if binaryVersion {
 			binaryString := byte(0)
-			if i < len(binarySummaries) && binarySummaries[i] {
+			if i < len(sources) && sources[i].summary.binaryString {
 				binaryString = 1
 			}
-			buf.WriteByte(binaryString)
+			if _, err := writeGroupSpillBytes(writer, []byte{binaryString}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -202,53 +459,51 @@ func readPrepareParamKindTrailer(
 	reader io.Reader,
 	nAggs int32,
 	states *aggexec.PrepareParamKindStates,
-	expectedRows []int,
+	targets []prepareParamKindRowsTarget,
+	mp *mpool.MPool,
 	allowBinaryString bool,
-) ([][]vector.PrepareParamKind, []prepareParamKindSummary, [][]bool, []bool, error) {
+) ([]prepareParamKindSummary, error) {
+	if nAggs < 0 || states == nil {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"invalid aggregate prepared parameter destination")
+	}
 	magic0, err := types.ReadByte(reader)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	magic1, err := types.ReadByte(reader)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	magic2, err := types.ReadByte(reader)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	if magic0 != prepareParamKindTrailerMagic0 ||
 		magic1 != prepareParamKindTrailerMagic1 ||
 		magic2 != prepareParamKindTrailerMagic2 {
-		return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("invalid aggregate prepared parameter trailer")
+		return nil, moerr.NewInternalErrorNoCtx("invalid aggregate prepared parameter trailer")
 	}
 	version, err := types.ReadByte(reader)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	if version != prepareParamKindTrailerVersion && version != prepareParamKindTrailerRowsVersion &&
 		version != prepareParamKindTrailerBinaryVersion {
-		return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+		return nil, moerr.NewInternalErrorf(ctx,
 			"unsupported aggregate prepared parameter trailer version %d", version)
 	}
 	if version == prepareParamKindTrailerBinaryVersion && !allowBinaryString {
-		return nil, nil, nil, nil, moerr.NewInvalidStateNoCtx(
+		return nil, moerr.NewInvalidStateNoCtx(
 			"aggregate binary-string metadata requires MORPCVersion18")
 	}
 	encodedAggs, err := types.ReadInt32(reader)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	if encodedAggs != nAggs {
-		return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+		return nil, moerr.NewInternalErrorf(ctx,
 			"aggregate prepared parameter count %d does not match %d", encodedAggs, nAggs)
-	}
-	rows := make([][]vector.PrepareParamKind, nAggs)
-	var binaryRows [][]bool
-	var binarySummaries []bool
-	if version == prepareParamKindTrailerBinaryVersion {
-		binaryRows = make([][]bool, nAggs)
-		binarySummaries = make([]bool, nAggs)
 	}
 	// Keep the incoming record separate from the cumulative state.  The
 	// cumulative state is only an execution-wide compatibility summary; using
@@ -258,26 +513,27 @@ func readPrepareParamKindTrailer(
 	for i := int32(0); i < nAggs; i++ {
 		encoded, err := types.ReadByte(reader)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, err
 		}
-		if (version == prepareParamKindTrailerRowsVersion || version == prepareParamKindTrailerBinaryVersion) &&
+		if (version == prepareParamKindTrailerRowsVersion ||
+			version == prepareParamKindTrailerBinaryVersion) &&
 			encoded == prepareParamKindTrailerRowsMarker {
 			rowCount, err := types.ReadInt32(reader)
 			if err != nil {
-				return nil, nil, nil, nil, err
+				return nil, err
 			}
 			if rowCount <= 0 || rowCount > prepareParamKindTrailerMaxRows {
-				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+				return nil, moerr.NewInternalErrorf(ctx,
 					"invalid aggregate prepared parameter row count %d", rowCount)
 			}
-			if i >= int32(len(expectedRows)) || expectedRows[i] < 0 {
-				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+			if i >= int32(len(targets)) || targets[i].expectedRows < 0 {
+				return nil, moerr.NewInternalErrorf(ctx,
 					"aggregate %d does not expose a prepared parameter row count", i)
 			}
-			if rowCount != int32(expectedRows[i]) {
-				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+			if rowCount != int32(targets[i].expectedRows) {
+				return nil, moerr.NewInternalErrorf(ctx,
 					"aggregate prepared parameter row count %d does not match %d",
-					rowCount, expectedRows[i])
+					rowCount, targets[i].expectedRows)
 			}
 			// bytes.Reader exposes the complete remaining partial payload. Check
 			// the bound before make so a truncated/corrupt record cannot trigger
@@ -285,57 +541,44 @@ func readPrepareParamKindTrailer(
 			// is protected by expectedRows above; its read then remains streaming.
 			if remaining, ok := prepareParamKindReaderLen(reader); ok &&
 				int64(rowCount) > int64(remaining) {
-				return nil, nil, nil, nil, io.ErrUnexpectedEOF
+				return nil, io.ErrUnexpectedEOF
 			}
-			kinds := make([]vector.PrepareParamKind, int(rowCount))
-			var binary []bool
-			if version == prepareParamKindTrailerBinaryVersion {
-				binary = make([]bool, int(rowCount))
+			summary, err := targets[i].restore(
+				reader, int(rowCount), mp,
+				version == prepareParamKindTrailerBinaryVersion,
+			)
+			if err != nil {
+				return nil, err
 			}
-			for row := range kinds {
-				encodedRow, err := types.ReadByte(reader)
-				if err != nil {
-					return nil, nil, nil, nil, err
-				}
-				kind := encodedRow
-				if version == prepareParamKindTrailerBinaryVersion {
-					binary[row] = encodedRow&prepareParamKindTrailerRowsMarker != 0
-					kind &^= prepareParamKindTrailerRowsMarker
-				}
-				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
-					return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
-						"invalid aggregate prepared parameter row kind %d", kind)
-				}
-				kinds[row] = vector.PrepareParamKind(kind)
-			}
-			rows[i] = kinds
-			if version == prepareParamKindTrailerBinaryVersion {
-				binaryRows[i] = binary
-			}
-			kind, seen := summarizePrepareParamKinds(kinds)
-			summaries[i] = prepareParamKindSummary{kind: kind, seen: seen}
-			states.ObserveState(int(i), kind, seen)
+			summary.rows = true
+			summaries[i] = summary
 			continue
 		}
 		kind, seen, ok := decodePrepareParamKindState(encoded)
 		if !ok {
-			return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx,
+			return nil, moerr.NewInternalErrorf(ctx,
 				"invalid aggregate prepared parameter state %d", encoded)
 		}
 		summaries[i] = prepareParamKindSummary{kind: kind, seen: seen}
-		states.ObserveState(int(i), kind, seen)
 		if version == prepareParamKindTrailerBinaryVersion {
 			binaryString, err := types.ReadByte(reader)
 			if err != nil {
-				return nil, nil, nil, nil, err
+				return nil, err
 			}
 			if binaryString > 1 {
-				return nil, nil, nil, nil, moerr.NewInternalErrorNoCtx("invalid aggregate binary provenance summary")
+				return nil, moerr.NewInternalErrorNoCtx(
+					"invalid aggregate binary provenance summary")
 			}
-			binarySummaries[i] = binaryString == 1
+			summaries[i].binaryString = binaryString == 1
+			if i < int32(len(targets)) {
+				targets[i].setBinarySummary(summaries[i].binaryString)
+			}
 		}
 	}
-	return rows, summaries, binaryRows, binarySummaries, nil
+	for i := range summaries {
+		states.ObserveState(i, summaries[i].kind, summaries[i].seen)
+	}
+	return summaries, nil
 }
 
 func prepareParamKindReaderLen(reader io.Reader) (int, bool) {
@@ -344,19 +587,6 @@ func prepareParamKindReaderLen(reader io.Reader) (int, bool) {
 		return r.Len(), true
 	}
 	return 0, false
-}
-
-func summarizePrepareParamKinds(kinds []vector.PrepareParamKind) (vector.PrepareParamKind, bool) {
-	if len(kinds) == 0 {
-		return vector.PrepareParamNone, false
-	}
-	kind := kinds[0]
-	for _, current := range kinds[1:] {
-		if current != kind {
-			return vector.PrepareParamNone, true
-		}
-	}
-	return kind, true
 }
 
 // Zero is reserved for an unobserved aggregate input. Observed kinds are

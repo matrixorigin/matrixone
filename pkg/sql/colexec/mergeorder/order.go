@@ -17,8 +17,8 @@ package mergeorder
 import (
 	"bytes"
 	"container/heap"
-	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +31,42 @@ import (
 )
 
 const opName = "merge_order"
+
+func newBatchWithAllocation(
+	proc *process.Process,
+	source *batch.Batch,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, selection)
+	if err != nil {
+		return nil, err
+	}
+	if len(source.Attrs) > 0 {
+		destination.Attrs = append(
+			make([]string, 0, len(source.Attrs)),
+			source.Attrs...,
+		)
+	}
+	return destination, nil
+}
+
+func cloneBatchWithAllocation(
+	proc *process.Process,
+	source *batch.Batch,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	if selection == nil {
+		return source.Dup(proc.Mp())
+	}
+	destination, err := newBatchWithAllocation(proc, source, selection)
+	if err != nil {
+		return nil, err
+	}
+	if err = source.CloneTo(destination, proc.Mp()); err != nil {
+		return nil, err
+	}
+	return destination, nil
+}
 
 func (ctr *container) prepareInMemoryMerge(proc *process.Process, fs []*plan.OrderBySpec) error {
 	if len(ctr.batchList) <= 1 {
@@ -289,9 +325,13 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
 	mp := proc.Mp()
 	if ctr.buf == nil {
-		ctr.buf = batch.NewOffHeapWithSize(ctr.batchList[0].VectorCount())
-		for i := range ctr.buf.Vecs {
-			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*ctr.batchList[0].Vecs[i].GetType())
+		ctr.buf, err = newBatchWithAllocation(
+			proc,
+			ctr.batchList[0],
+			ctr.outputAllocation,
+		)
+		if err != nil {
+			return false, err
 		}
 	} else {
 		ctr.buf.CleanOnlyData()
@@ -455,13 +495,23 @@ func (mergeOrder *MergeOrder) Prepare(proc *process.Process) (err error) {
 
 	ctr := &mergeOrder.ctr
 	ctr.setSpillThreshold(mergeOrder.SpillThreshold)
+	if ctr.allocationAccount != nil {
+		ctr.budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+	}
 	if len(mergeOrder.ctr.executors) == 0 {
 		ctr.batchList = make([]*batch.Batch, 0, defaultCacheBatchSize)
 		ctr.orderCols = make([][]*vector.Vector, 0, defaultCacheBatchSize)
 
 		mergeOrder.ctr.executors = make([]colexec.ExpressionExecutor, len(mergeOrder.OrderBySpecs))
 		for i := range mergeOrder.ctr.executors {
-			mergeOrder.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, mergeOrder.OrderBySpecs[i].Expr)
+			mergeOrder.ctr.executors[i], err = colexec.NewExpressionExecutorWithAllocation(
+				proc,
+				mergeOrder.OrderBySpecs[i].Expr,
+				ctr.expressionAllocation,
+			)
 			if err != nil {
 				return err
 			}
@@ -532,68 +582,74 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 
-			if ctr.shouldSpill(int64(input.Batch.Size())) {
+			orderCols, evalErr := ctr.evaluateOrderColumns(proc, input.Batch)
+			if evalErr != nil && mpool.IsRetryableAllocationCapacity(evalErr) && len(ctr.batchList) > 0 {
+				ctr.generateCompares(mergeOrder.OrderBySpecs)
+				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
+					return vm.CancelResult, err
+				}
+				orderCols, evalErr = ctr.evaluateOrderColumns(proc, input.Batch)
+			}
+			if evalErr != nil {
+				return vm.CancelResult, evalErr
+			}
+
+			if ctr.shouldSpill(int64(input.Batch.Size())) || len(ctr.batchList) >= maxResidentBatches {
 				if !ctr.spilling {
 					ctr.generateCompares(mergeOrder.OrderBySpecs)
 					if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
+						freeOrderColumns(proc.Mp(), input.Batch, orderCols)
 						input.Batch.Clean(proc.Mp())
 						return vm.CancelResult, err
 					}
 				}
-				keyCols, err := ctr.buildSpillKeyColumns(proc, input.Batch)
-				if err != nil {
+				if err = ctr.spillEvaluatedBatch(
+					proc,
+					input.Batch,
+					orderCols,
+					analyzer,
+				); err != nil {
+					freeOrderColumns(proc.Mp(), input.Batch, orderCols)
 					input.Batch.Clean(proc.Mp())
 					return vm.CancelResult, err
 				}
-				if !ctr.spillAppendEnabled {
-					run, err := ctr.createSpillRun(proc)
-					if err != nil {
-						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-						input.Batch.Clean(proc.Mp())
-						return vm.CancelResult, err
-					}
-					if _, _, err = writeSpillBatch(proc, input.Batch, keyCols, run.file, &ctr.spillWriteBuf, analyzer); err != nil {
-						run.file.Close()
-						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-						input.Batch.Clean(proc.Mp())
-						return vm.CancelResult, err
-					}
-					run.batchCount = 1
-					run.rowCount = int64(input.Batch.RowCount())
-					if _, err = run.file.Seek(0, io.SeekStart); err != nil {
-						run.file.Close()
-						freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-						input.Batch.Clean(proc.Mp())
-						return vm.CancelResult, err
-					}
-					ctr.spillRuns = append(ctr.spillRuns, run)
-					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-					input.Batch.Clean(proc.Mp())
-					continue
-				}
-				incomingOrderCols, err := ctr.fillSpillIncomingOrderColumns(proc, input.Batch, keyCols)
-				if err != nil {
-					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-					input.Batch.Clean(proc.Mp())
-					return vm.CancelResult, err
-				}
-				if err = ctr.spillBatchWithAppend(proc, input.Batch, keyCols, incomingOrderCols, analyzer); err != nil {
-					freeOrderColumns(proc.Mp(), input.Batch, keyCols)
-					input.Batch.Clean(proc.Mp())
-					return vm.CancelResult, err
-				}
-				freeOrderColumns(proc.Mp(), input.Batch, keyCols)
+				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
 				input.Batch.Clean(proc.Mp())
 				continue
 			}
 
-			bat, err := input.Batch.Dup(proc.GetMPool())
+			bat, err := cloneBatchWithAllocation(
+				proc,
+				input.Batch,
+				ctr.retainedAllocation,
+			)
+			if err != nil && mpool.IsRetryableAllocationCapacity(err) {
+				ctr.generateCompares(mergeOrder.OrderBySpecs)
+				if spillErr := ctr.spillCachedRuns(proc, analyzer); spillErr != nil {
+					freeOrderColumns(proc.Mp(), input.Batch, orderCols)
+					return vm.CancelResult, spillErr
+				}
+				err = ctr.spillEvaluatedBatch(
+					proc,
+					input.Batch,
+					orderCols,
+					analyzer,
+				)
+				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
+				input.Batch.Clean(proc.Mp())
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				continue
+			}
 			if err != nil {
+				freeOrderColumns(proc.Mp(), input.Batch, orderCols)
 				return vm.CancelResult, err
 			}
+			ctr.remapRetainedOrderColumns(bat, orderCols)
 			analyzer.Alloc(int64(bat.Size()))
 			ctr.batchList = append(ctr.batchList, bat)
-			ctr.orderCols = append(ctr.orderCols, nil)
+			ctr.orderCols = append(ctr.orderCols, orderCols)
 			ctr.spillMemUsage += int64(bat.Size())
 			if ctr.shouldSpill(0) {
 				if err = ctr.spillCachedRuns(proc, analyzer); err != nil {
@@ -608,6 +664,12 @@ func (mergeOrder *MergeOrder) Call(proc *process.Process) (vm.CallResult, error)
 
 			// If only one batch, no need to sort. just send it.
 			if len(ctr.batchList) == 1 {
+				freeOrderColumns(
+					proc.Mp(),
+					ctr.batchList[0],
+					ctr.orderCols[0],
+				)
+				ctr.orderCols[0] = nil
 				if ctr.buf != nil {
 					ctr.buf.Clean(proc.Mp())
 					ctr.buf = nil

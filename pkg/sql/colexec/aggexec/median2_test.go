@@ -245,6 +245,245 @@ func TestMedianDistinctBatchMergeDeduplicates(t *testing.T) {
 	right.Free()
 }
 
+func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "distinct"}[distinct], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			exec, err := MakeAgg(
+				mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+			require.NoError(t, err)
+			owner := exec.(AllocationAccountOwner)
+			require.NoError(t, owner.SetAllocationAccount(allocation))
+			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+			require.NoError(t, exec.GroupGrow(3))
+
+			input := buildFixedVec(t, mp, types.T_int64.ToType(),
+				[]int64{9, 1, 5, 5, 2, 8, 4})
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, []uint64{1, 1, 1, 1, 2, 2, GroupNotMatched},
+				[]*vector.Vector{input}))
+			require.NoError(t, exec.BatchFill(
+				0, []uint64{1, 1, 1, 1, 2, 2, GroupNotMatched},
+				[]*vector.Vector{input}))
+
+			var encoded bytes.Buffer
+			codec := exec.(SpillStateCodec)
+			require.NoError(t, codec.SaveSpillIntermediateResult(
+				3, 0, []uint8{1, 1, 1}, &encoded))
+
+			restored, err := MakeAgg(
+				mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+			require.NoError(t, err)
+			restoredOwner := restored.(AllocationAccountOwner)
+			require.NoError(t, restoredOwner.SetAllocationAccount(allocation))
+			SyncAggregatorsToChunkSize([]AggFuncExec{restored}, AggBatchSize)
+			require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+				bytes.NewReader(encoded.Bytes()), mp))
+
+			resident, err := exec.Flush()
+			require.NoError(t, err)
+			spilled, err := restored.Flush()
+			require.NoError(t, err)
+			require.Len(t, resident, 1)
+			require.Len(t, spilled, 1)
+			require.True(t, vector.AllocationAccountSelectionsEqual(
+				allocation.vectorSelection(), resident[0].AllocationAccountSelection()))
+			require.True(t, vector.AllocationAccountSelectionsEqual(
+				allocation.vectorSelection(), spilled[0].AllocationAccountSelection()))
+			for row, want := range []float64{5, 5, 0} {
+				if row == 2 {
+					require.True(t, resident[0].IsNull(uint64(row)))
+					require.True(t, spilled[0].IsNull(uint64(row)))
+					continue
+				}
+				if distinct && row == 0 {
+					want = 5
+				}
+				require.Equal(t, want,
+					vector.GetFixedAtNoTypeCheck[float64](resident[0], row))
+				require.Equal(t, want,
+					vector.GetFixedAtNoTypeCheck[float64](spilled[0], row))
+			}
+
+			resident[0].Free(mp)
+			spilled[0].Free(mp)
+			input.Free(mp)
+			exec.Free()
+			restored.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			require.NoError(t, restoredOwner.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestAccountedMedianFinalizationExactCap(t *testing.T) {
+	run := func(limit uint64) (uint64, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(
+			account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+				VectorData: 1, VectorArea: 2, VectorNulls: 3,
+				VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+			})
+		require.NoError(t, err)
+
+		exec, err := MakeAgg(
+			mp, AggIdOfMedian, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+		input := buildFixedVec(t, mp, types.T_int64.ToType(),
+			[]int64{9, 1, 7, 3, 5})
+		groups := []uint64{1, 1, 1, 1, 1}
+		if err = exec.GroupGrow(1); err == nil {
+			err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{input})
+		}
+		if err == nil {
+			err = exec.BatchFill(0, groups, []*vector.Vector{input})
+		}
+		var results []*vector.Vector
+		if err == nil {
+			results, err = exec.Flush()
+			if err == nil {
+				require.Equal(t, 5.0,
+					vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+			}
+		}
+		peak := account.Snapshot().Peak
+		for _, result := range results {
+			result.Free(mp)
+		}
+		input.Free(mp)
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return peak, err
+	}
+
+	peak, err := run(128 << 20)
+	require.NoError(t, err)
+	require.Positive(t, peak)
+	exactPeak, err := run(peak)
+	require.NoError(t, err)
+	require.Equal(t, peak, exactPeak)
+	_, err = run(peak - 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+}
+
+func TestMedianStableIntermediateCompatibilityAcrossAllocationModes(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "distinct"}[distinct], func(t *testing.T) {
+			for _, direction := range []struct {
+				name            string
+				accountedSource bool
+			}{
+				{name: "accounted-to-legacy", accountedSource: true},
+				{name: "legacy-to-accounted", accountedSource: false},
+			} {
+				t.Run(direction.name, func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					registry, account, allocation := newTestAggregateAllocation(t)
+					source, err := MakeAgg(
+						mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+					require.NoError(t, err)
+					target, err := MakeAgg(
+						mp, AggIdOfMedian, distinct, types.T_int64.ToType())
+					require.NoError(t, err)
+					var accounted AggFuncExec
+					if direction.accountedSource {
+						accounted = source
+					} else {
+						accounted = target
+					}
+					owner := accounted.(AllocationAccountOwner)
+					require.NoError(t, owner.SetAllocationAccount(allocation))
+					SyncAggregatorsToChunkSize([]AggFuncExec{source, target}, AggBatchSize)
+
+					require.NoError(t, source.GroupGrow(2))
+					input := buildFixedVec(t, mp, types.T_int64.ToType(),
+						[]int64{9, 1, 5, 5, 2, 8})
+					groups := []uint64{1, 1, 1, 1, 2, 2}
+					if direction.accountedSource {
+						require.NoError(t, source.(BatchCapacityPreflight).PreflightBatchFill(
+							0, groups, []*vector.Vector{input}))
+					}
+					require.NoError(t, source.BatchFill(
+						0, groups, []*vector.Vector{input}))
+					var encoded bytes.Buffer
+					require.NoError(t, source.SaveIntermediateResult(
+						2, [][]uint8{{1, 1}}, &encoded))
+					require.NoError(t, target.UnmarshalFromReader(
+						bytes.NewReader(encoded.Bytes()), mp))
+					results, err := target.Flush()
+					require.NoError(t, err)
+					require.Equal(t, 5.0,
+						vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+					require.Equal(t, 5.0,
+						vector.GetFixedAtNoTypeCheck[float64](results[0], 1))
+
+					for _, result := range results {
+						result.Free(mp)
+					}
+					input.Free(mp)
+					source.Free()
+					target.Free()
+					require.NoError(t, owner.ClearAllocationAccount(allocation))
+					finishTestAggregateAllocation(t, registry, account)
+					require.Zero(t, mp.CurrNB())
+				})
+			}
+		})
+	}
+}
+
+func TestAccountedMedianChunkIntermediateCompatibility(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	source, err := MakeAgg(
+		mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	owner := source.(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	SyncAggregatorsToChunkSize([]AggFuncExec{source}, AggBatchSize)
+	require.NoError(t, source.GroupGrow(AggBatchSize+1))
+	input := buildFixedVec(t, mp, types.T_int64.ToType(),
+		[]int64{9, 1, 2, 8})
+	require.NoError(t, source.(BatchCapacityPreflight).PreflightBatchFill(
+		0, []uint64{1, 1, AggBatchSize + 1, AggBatchSize + 1}, []*vector.Vector{input}))
+	require.NoError(t, source.BatchFill(
+		0, []uint64{1, 1, AggBatchSize + 1, AggBatchSize + 1}, []*vector.Vector{input}))
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(1, &encoded))
+	target, err := MakeAgg(
+		mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	results, err := target.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, 5.0,
+		vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+
+	results[0].Free(mp)
+	input.Free(mp)
+	source.Free()
+	target.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMedianIntermediateRoundTripMultipleGroups(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {
@@ -332,13 +571,11 @@ func TestMedianIntermediateRoundTripRejectsInvalidGroupCount(t *testing.T) {
 
 	broken := append([]byte(nil), buf.Bytes()...)
 	reader := bytes.NewReader(broken)
-	_, err = types.ReadInt64(reader)
-	require.NoError(t, err)
-
 	probe, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
 	require.NoError(t, err)
 	probeExec := probe.(*medianColumnNumericExec[int64])
-	require.NoError(t, unmarshalFromReaderNoGroup(reader, &probeExec.ret.optSplitResult))
+	_, err = unmarshalFromReaderNoGroup(reader, &probeExec.ret.optSplitResult)
+	require.NoError(t, err)
 	offset := len(broken) - reader.Len()
 	copy(broken[offset:offset+8], types.EncodeInt64(ptr(int64(1<<30))))
 	probe.Free()
@@ -384,6 +621,110 @@ func TestMedianDistinctRoundTripRebuildsDistinctState(t *testing.T) {
 	ret[0].Free(mp)
 	restored.Free()
 	exec.Free()
+}
+
+func TestMedianRepeatedUnmarshalReplacesOwnedState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	encode := func(values []int64) []byte {
+		exec, err := makeMedian(mp, AggIdOfMedian, true, types.T_int64.ToType())
+		require.NoError(t, err)
+		require.NoError(t, exec.GroupGrow(1))
+		vec := buildFixedVec(t, mp, types.T_int64.ToType(), values)
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+		var buf bytes.Buffer
+		require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &buf))
+		vec.Free(mp)
+		exec.Free()
+		return append([]byte(nil), buf.Bytes()...)
+	}
+
+	first := encode([]int64{1, 3})
+	second := encode([]int64{10, 20})
+	restored, err := makeMedian(mp, AggIdOfMedian, true, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(first), mp))
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(second), mp))
+
+	// The first record's DISTINCT map must not affect the replacement record.
+	// Value 1 appears only in the first record and therefore remains admissible.
+	more := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1})
+	require.NoError(t, restored.BulkFill(0, []*vector.Vector{more}))
+	ret, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 10.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+
+	ret[0].Free(mp)
+	more.Free(mp)
+	restored.Free()
+}
+
+func TestMedianFailedUnmarshalPreservesOwnedState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	target, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, target.GroupGrow(1))
+	old := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{99})
+	require.NoError(t, target.BulkFill(0, []*vector.Vector{old}))
+
+	source, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, source.GroupGrow(1))
+	fresh := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1, 2})
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{fresh}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &encoded))
+	broken := encoded.Bytes()[:encoded.Len()-1]
+
+	require.Error(t, target.UnmarshalFromReader(bytes.NewReader(broken), mp))
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 99.0,
+		vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+
+	result[0].Free(mp)
+	fresh.Free(mp)
+	old.Free(mp)
+	source.Free()
+	target.Free()
+}
+
+func TestMedianEmptyIntermediateRoundTripReplacesState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	empty, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	var encoded bytes.Buffer
+	require.NoError(t, empty.SaveIntermediateResult(0, nil, &encoded))
+	empty.Free()
+
+	target, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	require.NoError(t, target.GroupGrow(1))
+	old := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{99})
+	require.NoError(t, target.BulkFill(0, []*vector.Vector{old}))
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+
+	// An empty replacement remains a reusable zero-group executor.
+	require.NoError(t, target.GroupGrow(1))
+	fresh := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{7})
+	require.NoError(t, target.BulkFill(0, []*vector.Vector{fresh}))
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 7.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+
+	result[0].Free(mp)
+	fresh.Free(mp)
+	old.Free(mp)
+	target.Free()
 }
 
 func TestSelectKthFuncHandlesDuplicateHeavyInput(t *testing.T) {
