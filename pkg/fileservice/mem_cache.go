@@ -462,7 +462,6 @@ func (m *MemCache) reserveCacheData(ctx context.Context, bytes int) *memoryCache
 
 		m.capacityMu.Lock()
 		capacity = m.cache.Capacity()
-		used = m.cache.Used()
 		target := capacity - m.reservedBytes - want
 		m.capacityMu.Unlock()
 
