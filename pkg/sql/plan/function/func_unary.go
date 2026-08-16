@@ -5348,29 +5348,26 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 }
 
 func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
-	year, month, day, yearDigits, separator, ok := mysqlSeparatedDatePartsForExtract(clock)
+	year, month, day, yearDigits, _, ok := mysqlSeparatedDatePartsForExtract(clock)
 	if !ok || !mysqlClockFieldsForExtractHasThreeFields(clock) || mysqlDatetimeDateForExtract(year, month, day) {
 		return false
 	}
-	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
-	if suffix == "" {
+	suffixToken := mysqlTimeSuffixTokenForExtract(suffix)
+	if !suffixToken.present {
 		return false
 	}
-	if mysqlShortNonNumericTimeSuffixForExtract(suffix) {
-		return false
+	// The date-shaped prefix and the TIME-shaped prefix share the same
+	// numeric fields. MySQL's scanner can keep the TIME interpretation when
+	// the token after the whitespace fits in the bytes left by the date year.
+	// A trailing whitespace byte is consumed by that scanner as well, so it
+	// reduces the available token width by one. Long all-digit tokens are the
+	// one numeric form that the scanner consumes after a trailing whitespace.
+	maxTokenBytes := 4 - yearDigits
+	if suffixToken.trailingWhitespace {
+		maxTokenBytes--
 	}
-	trailingWhitespace := mysqlEndsWithWhitespaceForExtract(suffix)
-	for trailingWhitespace && len(suffix) > 0 && mysqlWhitespaceForExtract(suffix[len(suffix)-1]) {
-		suffix = suffix[:len(suffix)-1]
-	}
-	allDigits := len(suffix) > 0
-	for i := 0; i < len(suffix); i++ {
-		if suffix[i] < '0' || suffix[i] > '9' {
-			allDigits = false
-			break
-		}
-	}
-	if allDigits && ((yearDigits == 2 && separator == ':') || (yearDigits >= 3 && trailingWhitespace)) {
+	if suffixToken.valid &&
+		((suffixToken.allDigits && suffixToken.trailingWhitespace) || suffixToken.byteLen <= maxTokenBytes) {
 		return false
 	}
 	return true
@@ -5380,37 +5377,94 @@ func mysqlRepeatedClockSeparatorBeforeTokenForExtract(clock, suffix string) bool
 	if len(clock) == 0 {
 		return false
 	}
-	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
-	if suffix == "" {
+	suffixToken := mysqlTimeSuffixTokenForExtract(suffix)
+	if !suffixToken.present {
 		return false
 	}
-	if mysqlShortNonNumericTimeSuffixForExtract(suffix) {
-		// A short non-numeric token terminates the consumed TIME candidate
-		// without discarding the prefix. MySQL preserves a single trailing
-		// separator ("12:34:56: x") and omitted fields ("12:34::56 x",
-		// "12::56 x"), but a double trailing separator remains invalid.
-		return strings.HasSuffix(clock, "::")
+	// A repeated separator immediately after the first field means that the
+	// first field is the compact TIME value ("12::56"). The remaining bytes
+	// are outside the consumed candidate and must not invalidate it.
+	if mysqlClockHasOmittedMinuteForExtract(clock) {
+		return false
 	}
-	return strings.HasSuffix(clock, ":") && strings.Count(clock, ":") >= 2 ||
-		strings.Contains(clock, "::")
+	// A repeated separator after the minute, or a separator after seconds,
+	// leaves a smaller token boundary. Keep that boundary in terms of the
+	// leading field width instead of special-casing individual spellings.
+	if strings.HasSuffix(clock, "::") {
+		return true
+	}
+	if !strings.Contains(clock, "::") &&
+		(!strings.HasSuffix(clock, ":") || strings.Count(clock, ":") < 2) {
+		return false
+	}
+	yearDigits := mysqlLeadingDigitCountForExtract(clock)
+	maxTokenBytes := 3 - yearDigits
+	return !suffixToken.valid || suffixToken.byteLen > maxTokenBytes
 }
 
-func mysqlShortNonNumericTimeSuffixForExtract(suffix string) bool {
-	for len(suffix) > 0 && mysqlWhitespaceForExtract(suffix[len(suffix)-1]) {
-		suffix = suffix[:len(suffix)-1]
+type mysqlTimeSuffixToken struct {
+	present            bool
+	valid              bool
+	allDigits          bool
+	trailingWhitespace bool
+	byteLen            int
+}
+
+// mysqlTimeSuffixTokenForExtract keeps the complete token after the first
+// whitespace boundary. The byte width is intentional: MySQL's temporal
+// scanner consumes a byte-oriented prefix, so two ASCII bytes and one
+// two-byte UTF-8 rune occupy the same boundary while two UTF-8 runes do not.
+func mysqlTimeSuffixTokenForExtract(suffix string) mysqlTimeSuffixToken {
+	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
+	if suffix == "" {
+		return mysqlTimeSuffixToken{}
 	}
-	if suffix == "" || utf8.RuneCountInString(suffix) > 2 {
-		return false
+
+	tokenEnd := 0
+	for tokenEnd < len(suffix) && !mysqlWhitespaceForExtract(suffix[tokenEnd]) {
+		tokenEnd++
 	}
-	for _, r := range suffix {
-		if r >= '0' && r <= '9' {
-			return false
+	token := suffix[:tokenEnd]
+	if token == "" {
+		return mysqlTimeSuffixToken{}
+	}
+
+	result := mysqlTimeSuffixToken{
+		present:   true,
+		valid:     true,
+		allDigits: true,
+		byteLen:   len(token),
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if c < '0' || c > '9' {
+			result.allDigits = false
 		}
-		if r < utf8.RuneSelf && (mysqlDatetimePunctuationForExtract(byte(r)) || mysqlWhitespaceForExtract(byte(r))) {
-			return false
+		if c < utf8.RuneSelf && mysqlDatetimePunctuationForExtract(c) {
+			result.valid = false
 		}
 	}
-	return true
+	for i := tokenEnd; i < len(suffix); i++ {
+		if !mysqlWhitespaceForExtract(suffix[i]) {
+			result.valid = false
+			break
+		}
+	}
+	result.trailingWhitespace = tokenEnd < len(suffix)
+	return result
+}
+
+func mysqlLeadingDigitCountForExtract(str string) int {
+	pos := 0
+	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		pos++
+	}
+	return pos
+}
+
+func mysqlClockHasOmittedMinuteForExtract(clock string) bool {
+	pos := mysqlLeadingDigitCountForExtract(clock)
+	return pos > 0 && pos+1 < len(clock) && clock[pos] == ':' && clock[pos+1] == ':'
 }
 
 func mysqlClockFieldsForExtractHasThreeFields(str string) bool {
