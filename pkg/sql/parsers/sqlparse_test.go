@@ -698,3 +698,41 @@ func TestAddRewriteHints_ParseHintsBug_MismatchedInputs(t *testing.T) {
 	err = AddRewriteHints(ctx, stmts, "/*+ {\\\"rewrites\\\": {\\\"db1.t1\\\": \\\"select 1\\\"}} */ select 1")
 	require.ErrorContains(t, err, "parse hints bug")
 }
+
+func TestNormalizeAndValidateRemapDb(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		lower int64
+		input map[string]string
+		want  map[string]string
+	}{
+		{
+			name: "mode zero preserves source and target", lower: 0,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"SrcDB": "DstDB"},
+		},
+		{
+			name: "mode one lowercases source and execution target", lower: 1,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"srcdb": "dstdb"},
+		},
+		{
+			name: "mode two lowercases source and preserves target", lower: 2,
+			input: map[string]string{"SrcDB": "DstDB"}, want: map[string]string{"srcdb": "DstDB"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := NormalizeAndValidateRemapDb(ctx, test.input, test.lower)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	_, err := NormalizeAndValidateRemapDb(ctx,
+		map[string]string{"SourceCase": "dst_a", "sourcecase": "dst_b"}, 1)
+	require.ErrorContains(t, err, "equivalent")
+
+	_, err = NormalizeAndValidateRemapDb(ctx,
+		map[string]string{"ChainSrc": "MID", "mid": "dst"}, 1)
+	require.ErrorContains(t, err, "chaining is not allowed")
+}

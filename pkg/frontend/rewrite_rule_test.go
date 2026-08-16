@@ -760,6 +760,49 @@ func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
 	require.Equal(t, "inline_db", remapDb["src"])
 }
 
+func TestRewriteSQLRemapUsesCanonicalInlinePrecedence(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"remapdb":{"SourceCase":"DstA"}}`))
+
+	for range 100 {
+		rewritten, err := rewriteSQL(ctx, ses,
+			`/*+ {"remapdb":{"sourcecase":"DstB"}} */ insert into sourcecase.t values (1)`)
+		require.NoError(t, err)
+		remaps, err := extractRemapDbByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Equal(t, []map[string]string{{"sourcecase": "dstb"}}, remaps)
+	}
+}
+
+func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 1), "equivalent")
+	require.ErrorContains(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"ChainSrc":"MID","mid":"dst"}}`, 1), "chaining is not allowed")
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 0))
+}
+
+func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	tcc := ses.GetTxnCompileCtx()
+	tcc.SetDatabase("SrcUse27190")
+	tcc.execCtx = &ExecCtx{
+		reqCtx: ctx, ses: ses, remapDb: map[string]string{"srcuse27190": "dstuse27190"},
+	}
+	require.Equal(t, "dstuse27190", tcc.DefaultDatabase())
+}
+
 func TestValidateRewriteRuleSQL(t *testing.T) {
 	ctx := context.Background()
 

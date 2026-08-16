@@ -18,20 +18,13 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type remapDbContext struct {
 	databases           map[string]string
 	lowerCaseTableNames int64
-}
-
-func newRemapDbContext(databases map[string]string, lowerCaseTableNames int64) remapDbContext {
-	normalized := make(map[string]string, len(databases))
-	for source, target := range databases {
-		normalized[tree.NewCStr(source, lowerCaseTableNames).Compare()] = target
-	}
-	return remapDbContext{databases: normalized, lowerCaseTableNames: lowerCaseTableNames}
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
@@ -55,14 +48,24 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 // the active database remap. Sub-selects nested in expressions (e.g. WHERE id
 // IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
-func applyRemapDb(stmts []tree.Statement, remap map[string]string, lowerCaseTableNames int64) {
+func applyRemapDb(
+	ctx context.Context,
+	stmts []tree.Statement,
+	remap map[string]string,
+	lowerCaseTableNames int64,
+) error {
 	if len(remap) == 0 {
-		return
+		return nil
 	}
-	remapCtx := newRemapDbContext(remap, lowerCaseTableNames)
+	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
+	if err != nil {
+		return err
+	}
+	remapCtx := remapDbContext{databases: normalized, lowerCaseTableNames: lowerCaseTableNames}
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remapCtx)
 	}
+	return nil
 }
 
 func applyRemapDbByStatement(
@@ -75,7 +78,13 @@ func applyRemapDbByStatement(
 		return moerr.NewInternalError(ctx, "the count of remapdb policies is not equal to statements")
 	}
 	for i, stmt := range stmts {
-		remapDbInStmt(stmt, newRemapDbContext(remaps[i], lowerCaseTableNames))
+		normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remaps[i], lowerCaseTableNames)
+		if err != nil {
+			return err
+		}
+		remapDbInStmt(stmt, remapDbContext{
+			databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+		})
 	}
 	return nil
 }

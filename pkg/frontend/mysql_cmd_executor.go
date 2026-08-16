@@ -2111,7 +2111,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		rewritten, err = rewriteSQLFromMaterializedPolicy(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -2142,7 +2143,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	var remapDb map[string]string
 	if execCtx.rewriteEnabled {
 		parserSQLMode := sessionSQLModeForParser(ses)
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, rewritten, parserSQLMode); err != nil {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, rewritten, parserSQLMode, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -3537,7 +3539,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		if execCtx.rewriteEnabled {
-			err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode)
+			err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+				execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode, parserLowerCaseTableNames(ses))
 			if err != nil {
 				return nil, err
 			}
@@ -4501,7 +4504,9 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
 	}
 	if execCtx.rewriteEnabled {
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses),
+			parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 		remaps := make([]map[string]string, len(execCtx.cws))

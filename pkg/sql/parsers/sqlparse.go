@@ -413,23 +413,54 @@ func IsSystemDatabase(name string) bool {
 }
 
 func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
+	_, err := NormalizeAndValidateRemapDb(ctx, remapDb, 0)
+	return err
+}
+
+// NormalizeAndValidateRemapDb validates a remapdb policy using the same
+// identifier comparison mode as the parser and returns its execution form.
+// Source keys always use their comparison form. Targets are lowercased only in
+// lower_case_table_names=1; modes 0 and 2 preserve the configured spelling.
+func NormalizeAndValidateRemapDb(
+	ctx context.Context,
+	remapDb map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, error) {
 	if len(remapDb) == 0 {
-		return nil
+		return nil, nil
 	}
+	normalized := make(map[string]string, len(remapDb))
+	sources := make(map[string]string, len(remapDb))
 	for src, dst := range remapDb {
-		if !isValidDbIdentifier(strings.TrimSpace(src)) || !isValidDbIdentifier(strings.TrimSpace(dst)) {
-			return moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+		src = strings.TrimSpace(src)
+		dst = strings.TrimSpace(dst)
+		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
+			return nil, moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
 		}
 		if IsSystemDatabase(src) || IsSystemDatabase(dst) {
-			return moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+			return nil, moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+		}
+		sourceKey := tree.NewCStr(src, lowerCaseTableNames).Compare()
+		if previous, ok := sources[sourceKey]; ok {
+			return nil, moerr.NewParseErrorf(ctx,
+				"remapdb source databases %q and %q are equivalent under lower_case_table_names=%d",
+				previous, src, lowerCaseTableNames)
+		}
+		sources[sourceKey] = src
+		target := dst
+		if lowerCaseTableNames == 1 {
+			target = tree.NewCStr(dst, lowerCaseTableNames).Compare()
+		}
+		normalized[sourceKey] = target
+	}
+	for _, dst := range normalized {
+		targetKey := tree.NewCStr(dst, lowerCaseTableNames).Compare()
+		if _, ok := sources[targetKey]; ok {
+			return nil, moerr.NewParseErrorf(ctx,
+				"remapdb: database %q must not be both a source and a destination (chaining is not allowed)", dst)
 		}
 	}
-	for _, dst := range remapDb {
-		if _, ok := remapDb[strings.TrimSpace(dst)]; ok {
-			return moerr.NewParseErrorf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", strings.TrimSpace(dst))
-		}
-	}
-	return nil
+	return normalized, nil
 }
 
 // DecodeRewriteHint decodes a leading-hint JSON object into per-table rewrite
@@ -440,6 +471,14 @@ func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
 // uses this to merge inline hints exactly the way the parser reads them, so the
 // inline array-form (chain) syntax stays usable when hints are merged.
 func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string][]string, remapDb map[string]string, err error) {
+	return DecodeRewriteHintWithLowerCaseTableNames(ctx, content, 0)
+}
+
+func DecodeRewriteHintWithLowerCaseTableNames(
+	ctx context.Context,
+	content string,
+	lowerCaseTableNames int64,
+) (rewrites map[string][]string, remapDb map[string]string, err error) {
 	content = strings.TrimSpace(content)
 	if content == "" || content[0] != '{' {
 		return nil, nil, nil
@@ -453,7 +492,7 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 		for src, dst := range rm.RemapDb {
 			remapDb[strings.TrimSpace(src)] = strings.TrimSpace(dst)
 		}
-		if err := ValidateRemapDb(ctx, remapDb); err != nil {
+		if remapDb, err = NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -486,6 +525,16 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	return AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, sqlMode, 0)
+}
+
+func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+	ctx context.Context,
+	stmts []tree.Statement,
+	sql string,
+	sqlMode string,
+	lowerCaseTableNames int64,
+) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -517,7 +566,7 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 			continue
 		}
 
-		rawChains, remapDb, err := DecodeRewriteHint(ctx, hint)
+		rawChains, remapDb, err := DecodeRewriteHintWithLowerCaseTableNames(ctx, hint, lowerCaseTableNames)
 		if err != nil {
 			return err
 		}
