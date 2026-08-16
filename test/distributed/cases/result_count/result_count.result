@@ -52,8 +52,8 @@ show create database db1;
 Database    Create Database
 db1    CREATE DATABASE `db1`
 show create view v1;
-View    Create View    character_set_client    collation_connection
-v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
+➤ View[12,1,0]  ¦  Create View[12,51,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+v1  ¦  create view `v1` as select `t1`.`a` as `a`, `t1`.`b` as `b` from `t1`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int DEFAULT NULL,\n  `b` varchar(65535) DEFAULT NULL\n)
