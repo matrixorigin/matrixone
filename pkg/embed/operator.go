@@ -177,6 +177,11 @@ func (op *operator) Start() error {
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
 	}
+	if op.serviceType == metadata.ServiceType_CN {
+		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+			return err
+		}
+	}
 
 	if err := op.init(); err != nil {
 		return err
@@ -285,11 +290,14 @@ func (op *operator) startTNServiceLocked(
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
+	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+		return err
+	}
+	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
 	op.cfg.initMetaCache()
-	c := op.cfg.getCNServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
 	s, err := cnservice.NewService(
 		&c,
@@ -308,6 +316,13 @@ func (op *operator) startCNServiceLocked(
 		return err
 	}
 	return nil
+}
+
+func (op *operator) verifySiriusBenchmarkNoGC() error {
+	return cnservice.VerifySiriusBenchmarkNoGC(
+		&op.cfg.CN,
+		op.cfg.getTNServiceConfig().GCCfg.DisableGC,
+	)
 }
 
 func (op *operator) startConstructedServiceLocked(s service) error {

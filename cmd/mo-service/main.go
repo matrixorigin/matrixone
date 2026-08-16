@@ -207,6 +207,11 @@ func startService(
 	if err != nil {
 		return err
 	}
+	if st == metadata.ServiceType_CN {
+		if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
+			return err
+		}
+	}
 
 	setupServiceRuntime(cfg, stopper)
 
@@ -284,6 +289,10 @@ func startCNService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 ) error {
+	if err := cfg.verifySiriusBenchmarkNoGC(); err != nil {
+		return err
+	}
+	c := cfg.getCNServiceConfig()
 	// start up system module to do some calculation.
 	system.Run(stopper)
 
@@ -294,7 +303,6 @@ func startCNService(
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		defer serviceWG.Done()
 		cfg.initMetaCache()
-		c := cfg.getCNServiceConfig()
 		commonConfigKVMap, _ := dumpCommonConfig(*cfg)
 		s, err := cnservice.NewService(
 			&c,
@@ -324,6 +332,11 @@ func startCNService(
 			logutil.GetGlobalLogger().Error("failed to close cn service", zap.Error(err))
 		}
 	})
+}
+
+func (cfg *Config) verifySiriusBenchmarkNoGC() error {
+	tnGCDisabled := cfg.benchmarkTNNoGC || cfg.getTNServiceConfig().GCCfg.DisableGC
+	return cnservice.VerifySiriusBenchmarkNoGC(&cfg.CN, tnGCDisabled)
 }
 
 func startTNService(

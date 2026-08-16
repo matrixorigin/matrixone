@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 type testProxy struct {
@@ -224,8 +225,8 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 		emptyOK bool
 	}{
 		{"log", func(files []string) error { return startLogServiceCluster(ctx, files, nil, nil) }, false},
-		{"tn", func(files []string) error { return startTNServiceCluster(ctx, files, nil, nil) }, false},
-		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil) }, false},
+		{"tn", func(files []string) error { _, err := startTNServiceCluster(ctx, files, nil, nil); return err }, false},
+		{"cn", func(files []string) error { return startCNServiceCluster(ctx, files, nil, nil, false) }, false},
 		{"proxy", func(files []string) error { return startProxyServiceCluster(ctx, files, nil, nil) }, false},
 		{"python", func(files []string) error { return startPythonUdfServiceCluster(ctx, files, nil, nil) }, true},
 	}
@@ -251,6 +252,52 @@ func TestServiceClusterValidationAndErrors(t *testing.T) {
 	}
 }
 
+func TestLaunchTNGCDisabledProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	tn := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-1\"\n[tn.GCCfg]\ndisable-gc=true\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	proof, err := startTNServiceCluster(context.Background(), []string{tn}, nil, nil)
+	require.NoError(t, err)
+	require.True(t, proof)
+
+	tnWithoutGC := writeLaunchTestFile(t, "tn-with-gc.toml", "service-type=\"TN\"\n[tn]\nuuid=\"tn-2\"\n")
+	proof, err = startTNServiceCluster(context.Background(), []string{tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	proof, err = startTNServiceCluster(context.Background(), []string{tn, tnWithoutGC}, nil, nil)
+	require.NoError(t, err)
+	require.False(t, proof)
+
+	cn := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
+		require.True(t, cfg.benchmarkTNNoGC)
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, true))
+}
+
+func TestOrdinaryCNClusterDoesNotReadLaunchTNProof(t *testing.T) {
+	setLaunchTestHooks(t)
+	*launchFile = filepath.Join(t.TempDir(), "missing-launch.toml")
+	cn := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
+	launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+		return nil
+	}
+	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, false))
+}
+
+func TestStartCNServiceRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
+	cfg := NewConfig()
+	cfg.ServiceType = metadata.ServiceType_CN.String()
+	cfg.CN.Sirius.Enabled = true
+	cfg.CN.Sirius.BenchmarkNoGC = true
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "disable-gc=true")
+	require.ErrorContains(t, startCNService(cfg, nil, nil, nil), "disable-gc=true")
+}
+
 func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	setLaunchTestHooks(t)
 	valid := writeLaunchTestFile(t, "cn.toml", "")
@@ -258,7 +305,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 		return nil
 	}
 	*withProxy = false
-	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil); err != nil {
+	if err := startCNServiceCluster(context.Background(), []string{valid}, nil, nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +313,7 @@ func TestCNProxyStartErrorAndSingleCN(t *testing.T) {
 	launchNewProxy = func(string, *zap.Logger) goetty.Proxy {
 		return &testProxy{startErr: startError}
 	}
-	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil); !errors.Is(err, startError) {
+	if err := startCNServiceCluster(context.Background(), []string{valid, valid}, nil, nil, false); !errors.Is(err, startError) {
 		t.Fatalf("startCNServiceCluster() = %v, want %v", err, startError)
 	}
 }

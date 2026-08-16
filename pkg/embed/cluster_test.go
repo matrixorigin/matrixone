@@ -75,6 +75,15 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.False(t, op.needsCleanup())
 }
 
+func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
+	op := new(operator)
+	op.serviceType = metadata.ServiceType_CN
+	op.cfg.CN.Sirius.Enabled = true
+	op.cfg.CN.Sirius.BenchmarkNoGC = true
+	require.ErrorContains(t, op.Start(), "disable-gc=true")
+	require.False(t, op.needsCleanup())
+}
+
 func TestBasicCluster(t *testing.T) {
 	c, err := StartTestCluster(
 		WithCNCount(3),
