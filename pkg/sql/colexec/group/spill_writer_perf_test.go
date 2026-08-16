@@ -31,6 +31,20 @@ type groupSpillCountingWriter struct {
 	bytes  int
 }
 
+type groupSpillPartialWriter struct {
+	limit  int
+	err    error
+	writes int
+	bytes  int
+}
+
+func (w *groupSpillPartialWriter) Write(value []byte) (int, error) {
+	w.writes++
+	n := min(w.limit, len(value))
+	w.bytes += n
+	return n, w.err
+}
+
 func (w *groupSpillCountingWriter) Write(value []byte) (int, error) {
 	w.writes++
 	w.bytes += len(value)
@@ -136,6 +150,51 @@ func TestGroupSpillWriterDirectFallbackAccountsOneWrite(t *testing.T) {
 	generation.Close()
 	budget.Close()
 	require.Zero(t, pool.CurrNB())
+}
+
+func TestGroupSpillWriterReconcilesPartialPhysicalWrites(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		direct    bool
+		targetErr error
+		wantErr   error
+	}{
+		{name: "buffered short write", wantErr: io.ErrShortWrite},
+		{name: "buffered partial error", targetErr: io.ErrUnexpectedEOF, wantErr: io.ErrUnexpectedEOF},
+		{name: "direct short write", direct: true, wantErr: io.ErrShortWrite},
+		{name: "direct partial error", direct: true, targetErr: io.ErrUnexpectedEOF, wantErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			budget, generation, disk := newGroupSpillPerfBudget(t)
+			target := &groupSpillPartialWriter{limit: 4, err: test.targetErr}
+			pool := mpool.MustNewZero()
+			writer, err := newGroupSpillWriter(
+				&container{mp: pool}, target, context.Background(), disk)
+			require.NoError(t, err)
+			writer.disabled = test.direct
+
+			payload := make([]byte, 8)
+			n, writeErr := writer.Write(payload)
+			if test.direct {
+				require.Equal(t, 4, n)
+				require.ErrorIs(t, writeErr, test.wantErr)
+			} else {
+				require.Equal(t, len(payload), n)
+				require.NoError(t, writeErr)
+				require.ErrorIs(t, writer.Flush(), test.wantErr)
+			}
+			require.Equal(t, 1, target.writes)
+			require.Equal(t, 4, target.bytes)
+			require.Equal(t, uint64(4), disk.Size())
+
+			writer.Free()
+			require.True(t, disk.Release())
+			require.Zero(t, generation.Snapshot().SpillDiskUsed)
+			generation.Close()
+			budget.Close()
+			require.Zero(t, pool.CurrNB())
+		})
+	}
 }
 
 func BenchmarkGroupSpillWriterDiskAccounting(b *testing.B) {
