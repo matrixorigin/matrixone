@@ -11259,6 +11259,7 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 		{input: "12:34::56 abc", want: "NULL"},
 		{input: "12::56 x", want: "0/0/12"},
 		{input: "12::56 abc", want: "0/0/12"},
+		{input: "12::56 78", want: "0/0/12"},
 		{input: " 12:34:56: x", want: "12/34/56"},
 		{input: " 12:34::56 x", want: "12/34/0"},
 		{input: " 12::56 x", want: "0/0/12"},
