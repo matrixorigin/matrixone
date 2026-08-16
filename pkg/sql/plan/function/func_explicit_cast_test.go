@@ -20,8 +20,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -114,6 +116,40 @@ func TestExplicitCastStringFloatPrefix(t *testing.T) {
 	testCase := NewFunctionTestCase(proc, inputs, expect, NewExplicitCast)
 	succeed, info := testCase.Run()
 	require.True(t, succeed, info)
+}
+
+type numericWarning struct {
+	code uint16
+	msg  string
+}
+
+type numericWarningSession struct {
+	warnings []numericWarning
+}
+
+func (*numericWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*numericWarningSession) AddTempTable(string, string, string)        {}
+func (*numericWarningSession) RemoveTempTable(string, string)             {}
+func (*numericWarningSession) RemoveTempTableByRealName(string)           {}
+func (*numericWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *numericWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.warnings = append(s.warnings, numericWarning{code: code, msg: msg})
+}
+
+func TestNumericStringPrefixWarning(t *testing.T) {
+	session := &numericWarningSession{}
+	proc := &process.Process{Session: session}
+
+	appendNumericCoercionWarning(proc, "12abc")
+	appendNumericCoercionWarning(proc, "abc")
+	appendNumericCoercionWarning(proc, "")
+	appendNumericCoercionWarning(proc, "12")
+
+	require.Len(t, session.warnings, 2)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.Contains(t, warning.msg, "Truncated incorrect DOUBLE value")
+	}
 }
 
 func TestExplicitCastFloatToUnsigned(t *testing.T) {

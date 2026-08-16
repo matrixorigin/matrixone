@@ -586,16 +586,16 @@ func ValidateSelectIntoPlacement(stmt *Select) string {
 	return ""
 }
 
-// ValidateSelectIntoNotAllowed rejects SELECT ... INTO actions when the
-// SELECT is embedded in a statement that has no owner for the assignment.
-// A top-level SELECT is allowed to own its INTO clause, so callers for
-// enclosing statements must use this check instead of
-// ValidateSelectIntoPlacement.
+// ValidateSelectIntoNotAllowed validates a SELECT used as a source of an
+// enclosing statement.  The source itself may own a direct user-variable
+// assignment (INSERT ... SELECT ... INTO and CTAS ... SELECT ... INTO are
+// accepted by MySQL), while nested assignments and SELECT ... INTO OUTFILE
+// still have no owner in that context.
 func ValidateSelectIntoNotAllowed(stmt *Select) string {
 	if stmt == nil {
 		return ""
 	}
-	if selectStatementHasInto(stmt) || withHasInto(stmt.With) ||
+	if stmt.Ep != nil || selectTreeHasExport(stmt.Select) || withHasInto(stmt.With) ||
 		selectStatementHasNestedInto(stmt.Select) || timeWindowHasInto(stmt.TimeWindow) ||
 		orderByHasInto(stmt.OrderBy) || limitHasInto(stmt.Limit) {
 		return MisplacedIntoClauseMessage
@@ -603,19 +603,23 @@ func ValidateSelectIntoNotAllowed(stmt *Select) string {
 	return ""
 }
 
-// ValidateSelectIntoEnclosingStatement applies the no-owner rule to the
-// statement forms which can contain a SELECT source.  EXPLAIN uses this
-// helper so it cannot accidentally accept an assignment that would only be
-// meaningful when the explained SELECT is executed directly.
+// ValidateSelectIntoEnclosingStatement applies the context-specific shape
+// checks to statement forms which can contain a SELECT source.  The final
+// statement-root validator invokes this after all trailing clauses have been
+// attached.
 func ValidateSelectIntoEnclosingStatement(stmt Statement) string {
 	switch node := stmt.(type) {
 	case *Select:
-		return ValidateSelectIntoNotAllowed(node)
+		if node.IsPerform {
+			return ValidatePerformSelectIntoPlacement(node)
+		}
+		return ValidateSelectIntoPlacement(node)
 	case *Insert:
 		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
 			return err
 		}
-		if withHasInto(node.With) {
+		if withHasInto(node.With) || tableExprHasInto(node.Table) ||
+			partitionValuesHaveInto(node.PartitionValues) {
 			return MisplacedIntoClauseMessage
 		}
 		if updateExprsHaveInto(node.OnDuplicateUpdate) || selectExprsHaveInto(node.Returning) {
@@ -626,7 +630,7 @@ func ValidateSelectIntoEnclosingStatement(stmt Statement) string {
 		if err := ValidateSelectIntoNotAllowed(node.Rows); err != "" {
 			return err
 		}
-		if selectExprsHaveInto(node.Returning) {
+		if tableExprHasInto(node.Table) || selectExprsHaveInto(node.Returning) {
 			return MisplacedIntoClauseMessage
 		}
 		return ""
@@ -652,9 +656,74 @@ func ValidateSelectIntoEnclosingStatement(stmt Statement) string {
 	}
 }
 
+// ValidateSelectIntoStatementRoot applies the ownership rule after the full
+// statement has been assembled.  Grammar productions historically validated
+// a SELECT source before INSERT/REPLACE RETURNING and ON DUPLICATE clauses
+// were attached, and a number of statement roots had no validation at all.
+// Keeping this final boundary exhaustive prevents nested assignments from
+// being silently discarded while retaining the MySQL-supported direct source
+// forms.
+func ValidateSelectIntoStatementRoot(stmt Statement) string {
+	switch node := stmt.(type) {
+	case *Select:
+		if node.IsPerform {
+			return ValidatePerformSelectIntoPlacement(node)
+		}
+		return ValidateSelectIntoPlacement(node)
+	case *ValuesStatement:
+		return ValidateValuesIntoPlacement(node)
+	case *Insert:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Replace:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Delete:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *Update:
+		return ValidateSelectIntoEnclosingStatement(node)
+	case *CreateView:
+		if node.AsSource != nil && selectStatementHasInto(node.AsSource) {
+			return MisplacedIntoClauseMessage
+		}
+	case *CreateTable:
+		if node.AsSource != nil {
+			return ValidateSelectIntoNotAllowed(node.AsSource)
+		}
+	case *ExplainStmt:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *ExplainAnalyze:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *ExplainPhyPlan:
+		return ValidateSelectIntoStatementRoot(node.explainImpl.Statement)
+	case *CompoundStmt:
+		for _, child := range node.Stmts {
+			if err := ValidateSelectIntoStatementRoot(child); err != "" {
+				return err
+			}
+		}
+	default:
+		// SET, DO, CALL, SHOW predicates, and other statement roots do not
+		// provide an owner for a SELECT assignment.  Reflection is deliberate
+		// here: it follows every AST field, including newly added statement
+		// forms, instead of another incomplete type switch.
+		if selectTreeHasUserVariableInto(reflect.ValueOf(stmt)) {
+			return MisplacedIntoClauseMessage
+		}
+	}
+	return ""
+}
+
 func updateExprsHaveInto(exprs UpdateExprs) bool {
 	for _, expr := range exprs {
 		if expr != nil && exprHasNestedInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func partitionValuesHaveInto(values PartitionValues) bool {
+	for _, value := range values {
+		if value.Expr != nil && exprHasNestedInto(value.Expr) {
 			return true
 		}
 	}

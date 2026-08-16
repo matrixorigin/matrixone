@@ -452,7 +452,11 @@ func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, b
 	trimmed := strings.TrimSpace(text)
 	prefix, decimal, ok := userVariableNumericPrefix(trimmed)
 	if !ok {
-		return Type{}, false
+		// MySQL coerces non-numeric and empty strings to zero in arithmetic
+		// contexts (with a truncation warning only for a non-empty value).
+		// Keep the expression on the permissive floating-point cast path so
+		// the value is not rejected by an integer sibling's strict cast.
+		return makeSimplePlan2Type(types.T_float64), true
 	}
 	if decimal {
 		if prefix == trimmed {

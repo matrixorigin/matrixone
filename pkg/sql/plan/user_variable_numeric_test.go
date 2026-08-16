@@ -164,6 +164,36 @@ func TestUserVariableNumericContextCoercesNumericPrefixes(t *testing.T) {
 	require.True(t, types.T(decimalType.Id).ToType().IsDecimal() || types.T(decimalType.Id).ToType().IsFloat())
 }
 
+func TestUserVariableNumericContextCoercesNonNumericStringsToFloat(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		switch name {
+		case "non_numeric_text_var":
+			return "abc", nil
+		case "empty_text_var":
+			return "", nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariable(name, isSystemVar, isGlobalVar)
+	}
+	optimizer.ctxt.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (Type, error) {
+		if name == "non_numeric_text_var" || name == "empty_text_var" {
+			return makeSimplePlan2Type(types.T_text), nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariableType(name, isSystemVar, isGlobalVar)
+	}
+
+	logicPlan, err := runOneStmt(optimizer, t, "select @non_numeric_text_var + 0, @empty_text_var + 0")
+	require.NoError(t, err)
+	varTypes := userVariableEffectiveTypes(logicPlan)
+	for _, name := range []string{"non_numeric_text_var", "empty_text_var"} {
+		variableType, ok := varTypes[name]
+		require.True(t, ok, "user variable %s is missing from the plan", name)
+		require.True(t, types.T(variableType.Id).ToType().IsFloat(),
+			"user variable %s was not bound to a permissive float context: %s",
+			name, types.T(variableType.Id).ToType())
+	}
+}
+
 func TestPreparedParametersUseDefaultNumericContextInArithmetic(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, "prepare ps_count from 'select ? + ? as sum_val'")
 	require.NoError(t, err)

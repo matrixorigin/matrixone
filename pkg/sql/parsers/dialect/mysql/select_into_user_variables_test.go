@@ -139,17 +139,16 @@ func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 func TestSelectIntoUserVariablesRejectsOwnerlessEnclosingStatements(t *testing.T) {
 	testCases := []string{
 		"create view uv_bad_view as select 1 into @bad_view",
-		"create table uv_bad_ctas as select 1 into @bad_ctas",
-		"create table uv_bad_ctas_cols (a int) select 1 into @bad_ctas_cols",
-		"insert into uv_target select 1 into @bad_insert",
 		"with d as (select 1 into @bad_insert_cte) insert into uv_target select * from d",
-		"insert overwrite uv_target select 1 into @bad_insert_overwrite",
-		"insert ignore into uv_target select 1 into @bad_insert_ignore",
-		"replace into uv_target select 1 into @bad_replace",
 		"update uv_target set a = (select 1 into @bad_update)",
 		"delete from uv_target where a = (select 1 into @bad_delete)",
-		"explain select 1 into @bad_explain",
-		"explain analyze select 1 into @bad_explain_analyze",
+		"insert into uv_target values (1) on duplicate key update a = (select 1 into @bad_duplicate)",
+		"insert into uv_target values (1) returning (select 1 into @bad_returning)",
+		"replace into uv_target values (1) returning (select 1 into @bad_replace_returning)",
+		"set @bad_outer = (select 1 into @bad_inner)",
+		"do (select 1 into @bad_do)",
+		"call uv_proc((select 1 into @bad_call))",
+		"show tables where exists (select 1 into @bad_show)",
 	}
 
 	for _, testCase := range testCases {
@@ -157,6 +156,23 @@ func TestSelectIntoUserVariablesRejectsOwnerlessEnclosingStatements(t *testing.T
 			_, err := ParseOne(context.Background(), testCase, 1)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tree.MisplacedIntoClauseMessage)
+		})
+	}
+}
+
+func TestSelectIntoUserVariablesAllowsOwnedSourceContexts(t *testing.T) {
+	testCases := []string{
+		"insert into uv_target select 1 into @insert_source",
+		"create table uv_ctas as select 1 into @ctas_source",
+		"create table uv_ctas_cols (a int) select 1 into @ctas_cols_source",
+		"explain select 1 into @explain_source",
+		"explain analyze select 1 into @explain_analyze_source",
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase, 1)
+			require.NoError(t, err)
 		})
 	}
 }

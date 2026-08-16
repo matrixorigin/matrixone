@@ -1546,6 +1546,13 @@ func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
 	}
 }
 
+// AppendWarningDiagnostic exposes the diagnostic sink to expression
+// evaluation without coupling the process.Session interface to frontend
+// warning storage.
+func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
+	ses.appendWarningDiagnostic(code, msg)
+}
+
 func (ses *Session) diagnosticsSnapshot() errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
