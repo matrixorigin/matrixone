@@ -198,6 +198,9 @@ select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 ➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
 1
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+1  ¦  3
 select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
 ➤ group_concat(distinct coalesce(c, v) order by id separator ,)[12,0,0]  𝄀
 MO
@@ -394,6 +397,9 @@ select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 ➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
 1
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
+➤ count(distinct coalesce(c, v))[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
+1  ¦  3
 select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
 ➤ group_concat(distinct coalesce(c, v) order by id separator ,)[12,0,0]  𝄀
 MO

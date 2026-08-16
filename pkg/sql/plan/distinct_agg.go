@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,39 +60,19 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 	}
 
 	if node.NodeType == plan.Node_AGG {
-
-		for _, flag := range node.GroupingFlag {
-			if !flag {
-				return nil
-			}
-		}
-
-		if len(node.AggList) != 1 {
-			return nil
+		if !canOptimizeDistinctAgg(node) {
+			// HavingBinder leaves a single-argument COUNT/SUM DISTINCT value
+			// unchanged because this rewrite normally gives it a separate physical
+			// key. The rewrite is optional, though: for example, it is skipped
+			// when this node has a sibling aggregate. In that case the generic
+			// DISTINCT executor hashes the arguments directly, so establish the
+			// comparison-only PAD SPACE key at this actual consumer boundary.
+			return normalizeUnrewrittenDistinctAggArguments(builder.GetContext(), node)
 		}
 
 		aggFunc := node.AggList[0].GetF()
-		if aggFunc == nil || aggFunc.Func == nil ||
-			uint64(aggFunc.Func.Obj)&function.Distinct == 0 {
-			return nil
-		}
 		baseID := int64(uint64(aggFunc.Func.Obj) & function.DistinctMask)
 		functionID, _ := function.DecodeOverloadID(baseID)
-		if functionID != function.COUNT && functionID != function.SUM {
-			return nil
-		}
-
-		// Multi-arg COUNT(DISTINCT col1, col2, ...) cannot be optimized into a simple
-		// GROUP BY because the distinct combination spans multiple columns.
-		if len(aggFunc.Args) != 1 {
-			return nil
-		}
-
-		// COUNT(DISTINCT (col1, col2)) — tuple syntax; normalization to multi-arg
-		// form happens in HavingBinder.BindAggFunc. Just skip GROUP BY optimization.
-		if aggFunc.Args[0].Typ.Id == int32(types.T_tuple) {
-			return nil
-		}
 
 		oldGroupLen := len(node.GroupBy)
 		oldGroupBy := node.GroupBy
@@ -195,6 +176,50 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 		aggFunc.Func.Obj &= function.DistinctMask
 		aggFunc.Args[0] = distinctPairGroupCol(
 			toCount, resultGroupTag, int32(oldGroupLen))
+	}
+	return nil
+}
+
+func canOptimizeDistinctAgg(node *plan.Node) bool {
+	for _, flag := range node.GroupingFlag {
+		if !flag {
+			return false
+		}
+	}
+	if len(node.AggList) != 1 {
+		return false
+	}
+	aggFunc := node.AggList[0].GetF()
+	if aggFunc == nil || aggFunc.Func == nil ||
+		uint64(aggFunc.Func.Obj)&function.Distinct == 0 || len(aggFunc.Args) != 1 {
+		return false
+	}
+	baseID := int64(uint64(aggFunc.Func.Obj) & function.DistinctMask)
+	functionID, _ := function.DecodeOverloadID(baseID)
+	if functionID != function.COUNT && functionID != function.SUM {
+		return false
+	}
+	return aggFunc.Args[0].Typ.Id != int32(types.T_tuple)
+}
+
+func normalizeUnrewrittenDistinctAggArguments(ctx context.Context, node *plan.Node) error {
+	for _, agg := range node.AggList {
+		f := agg.GetF()
+		if f == nil || f.Func == nil || uint64(f.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		baseID := int64(uint64(f.Func.Obj) & function.DistinctMask)
+		functionID, _ := function.DecodeOverloadID(baseID)
+		if functionID != function.COUNT && functionID != function.SUM {
+			continue
+		}
+		for i := range f.Args {
+			var err error
+			f.Args[i], err = appendPadSpaceComparisonCastIfNeeded(ctx, f.Args[i])
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

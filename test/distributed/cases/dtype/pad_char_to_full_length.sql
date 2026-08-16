@@ -114,6 +114,7 @@ select count(y) from (
     ) d
 ) q;
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
 select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
 select id,
        count(*) over (partition by coalesce(c, v)),
@@ -212,6 +213,7 @@ select count(y) from (
     ) d
 ) q;
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
 select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
 select id,
        count(*) over (partition by coalesce(c, v)),
