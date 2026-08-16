@@ -4607,6 +4607,53 @@ func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *
 	}
 }
 
+func TestDistinctAggregatePromotedCharCanonicalizesWhenRewriteIsSkipped(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(distinct "+value+"), sum(n_regionkey) from nation")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.AggList) != 2 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
+func TestDistinctAggregatePromotedCharCanonicalizesWhenGroupingSetsSkipRewrite(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select n_regionkey, count(distinct "+value+
+			") from nation group by rollup(n_regionkey)")
+	require.NoError(t, err)
+
+	var countDistinct *plan.Expr
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != plan.Node_AGG || len(node.GroupingFlag) == 0 {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == "count" {
+				countDistinct = agg
+				break
+			}
+		}
+	}
+	require.NotNil(t, countDistinct)
+	require.Len(t, countDistinct.GetF().Args, 1)
+	require.True(t, isCastOverload(countDistinct.GetF().Args[0], 2))
+}
+
 func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
