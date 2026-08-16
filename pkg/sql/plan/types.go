@@ -604,10 +604,11 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	// pendingAggregateQuery is set before HAVING is bound. At that point
-	// SELECT/HAVING/ORDER BY aggregates may not have been appended to aggregates
-	// yet, but the query block is already an implicit aggregate query for
-	// ONLY_FULL_GROUP_BY correlation checks.
+	// pendingAggregateQuery is set after the pre-aggregate FROM/JOIN/WHERE/GROUP
+	// BY clauses are bound and before HAVING, projection, and ORDER BY. At that
+	// point SELECT/HAVING/ORDER BY aggregates may not have been appended to
+	// aggregates yet, but the query block is already an implicit aggregate query
+	// for ONLY_FULL_GROUP_BY correlation checks.
 	pendingAggregateQuery bool
 
 	// timeBoundaryType is the public type for _wstart/_wend. It is filled once

@@ -4765,16 +4765,13 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		// Keep the query-block aggregate state active while HAVING, SELECT
-		// projection, and ORDER BY are bound.  Correlated columns in a
-		// projection may be bound before the first SELECT aggregate is appended
-		// to ctx.aggregates; deriving this state from the AST makes the
-		// ONLY_FULL_GROUP_BY decision independent of SELECT-item order.  The
-		// aggregate-input correlation flag remains use-site-specific and prevents
-		// this state from classifying per-row aggregate arguments as bare output
-		// columns.
+		// projection, and ORDER BY are bound. bindSelectClause initializes the
+		// state after the pre-aggregation WHERE has been bound, so correlated
+		// columns in WHERE remain tied to the raw input rather than being
+		// classified as aggregate outputs. The aggregate-input correlation flag
+		// remains use-site-specific and prevents this state from classifying
+		// per-row aggregate arguments as bare output columns.
 		previousPendingAggregateQuery := ctx.pendingAggregateQuery
-		ctx.pendingAggregateQuery = previousPendingAggregateQuery ||
-			queryBlockHasPendingAggregate(selectClause.Exprs, selectClause.Having, astOrderBy)
 		defer func() {
 			ctx.pendingAggregateQuery = previousPendingAggregateQuery
 		}()
@@ -7396,6 +7393,14 @@ func (builder *QueryBuilder) bindSelectClause(
 			return
 		}
 	}
+
+	// The WHERE clause is evaluated on the raw input before this query block's
+	// aggregate stage. Delay the pending-aggregate marker until WHERE and GROUP
+	// BY binding are complete, while keeping it active for HAVING, projection,
+	// and ORDER BY. This preserves legal per-row correlations in pre-aggregate
+	// filters without making aggregate-query validation order-dependent.
+	ctx.pendingAggregateQuery = ctx.pendingAggregateQuery ||
+		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)

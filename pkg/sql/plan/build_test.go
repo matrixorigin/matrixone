@@ -1980,6 +1980,24 @@ func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T
 			FROM nation
 			WHERE n_regionkey = 1`,
 		`
+			SELECT SUM(n_nationkey)
+			FROM nation
+			WHERE EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT SUM(n.n_nationkey)
+			FROM nation n
+			JOIN region r ON EXISTS (
+			    SELECT n2.n_name
+			    FROM nation2 n2
+			    GROUP BY n2.n_name
+			    HAVING COUNT(*) > n.n_regionkey
+			)`,
+		`
 			SELECT 1
 			FROM nation
 			WHERE n_regionkey = 1
