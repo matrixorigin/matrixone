@@ -1065,7 +1065,7 @@ func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
 	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
 }
 
-func TestGenViewTableDefPreservesSampleStar(t *testing.T) {
+func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
 	const rootSQL = "create view v_sample as select sample(*, 100 percent) from nation"
 	ctx := &rootSQLCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(false),
@@ -1082,8 +1082,24 @@ func TestGenViewTableDefPreservesSampleStar(t *testing.T) {
 
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
-	require.Equal(t, rootSQL, viewData.Stmt)
-	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
+	require.Contains(t, viewData.Stmt, "sample(`nation`.`n_nationkey`, `nation`.`n_name`, `nation`.`n_regionkey`, `nation`.`n_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_sample"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_sample"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_sample"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 }
 
 func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
@@ -1103,7 +1119,8 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
-	require.Contains(t, viewData.Stmt, "sample(*, 100.0 percent)")
+	require.Contains(t, viewData.Stmt, "sample(`region`.`r_regionkey`, `region`.`r_name`, `region`.`r_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
 	require.NotContains(t, viewData.Stmt, "`nation`.*")
 	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
@@ -1124,6 +1141,38 @@ func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
 }
 
+func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
+	const rootSQL = "create view v_sample_subquery as select sample((select * from one_col union all select 1), 1 rows) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	addOneColViewStarTestTable(ctx.MockCompilerContext)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "select * from `one_col`")
+	require.Contains(t, viewData.Stmt, "select `one_col`.`id` as `id` from `one_col`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_sample_subquery"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_sample_subquery"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_sample_subquery"}
+	appendOneColExtraColumn(ctx.MockCompilerContext)
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample_subquery", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	_, err = BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+}
+
 func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
 	const rootSQL = "create view v_mixed_sample as select *, sample(*, 100 percent) from nation"
 	ctx := &rootSQLCompilerContext{
@@ -1141,7 +1190,8 @@ func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
 
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
-	require.Contains(t, viewData.Stmt, "sample(*, 100.0 percent)")
+	require.Contains(t, viewData.Stmt, "sample(`nation`.`n_nationkey`, `nation`.`n_name`, `nation`.`n_regionkey`, `nation`.`n_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
 	require.NotContains(t, viewData.Stmt, "`nation`.*")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
 	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))

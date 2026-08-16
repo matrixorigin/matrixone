@@ -4947,14 +4947,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
 	}
-	// SAMPLE(*) expands to the sampled columns while binding, but the source
-	// AST must retain the SAMPLE operator when the view definition is persisted.
-	// Capture mixed projections as well; cloneViewSelectExprsForView replaces
-	// only the ordinary wildcard portion and puts the SAMPLE expression back.
-	if ctx.captureViewStarExpansion && expandedSelectClause != nil &&
-		(!selectClauseHasSampleExpr(expandedSelectClause) || selectClauseHasOrdinaryStar(expandedSelectClause)) {
+	// Capture the visible projection for view definitions. SAMPLE(*) expands to
+	// sampled columns while binding, so the persisted AST must keep SAMPLE but
+	// replace its wildcard with the columns visible at CREATE VIEW time.
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil {
 		if ctx.expandedSelectLists == nil {
 			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+		}
+		sampleStarColumns, captureErr := sampleStarColumnsForView(builder, ctx, expandedSelectClause)
+		if captureErr != nil {
+			err = captureErr
+			return
 		}
 		headings := ctx.headings
 		if len(headings) > len(selectList) {
@@ -4965,6 +4968,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			expandedSelectClause,
 			selectList,
 			headings,
+			sampleStarColumns,
 		)
 	}
 
@@ -8461,15 +8465,61 @@ func cloneTreeSelectExprsWithStableHeadings(exprs tree.SelectExprs, headings []s
 	return cloned
 }
 
+func cloneTreeExprs(exprs tree.Exprs) tree.Exprs {
+	if len(exprs) == 0 {
+		return nil
+	}
+	cloned := make(tree.Exprs, len(exprs))
+	for i, expr := range exprs {
+		cloned[i] = cloneTreeExpr(expr)
+	}
+	return cloned
+}
+
+func sampleStarColumnsForView(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+) (tree.Exprs, error) {
+	if builder == nil || ctx == nil || selectClause == nil {
+		return nil, nil
+	}
+	for _, selectExpr := range selectClause.Exprs {
+		sample, ok := selectExpr.Expr.(*tree.SampleExpr)
+		if !ok {
+			continue
+		}
+		_, isStar := sample.GetColumns()
+		if !isStar {
+			continue
+		}
+		accountID, err := builder.compCtx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		columns, _, err := ctx.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+		if err != nil {
+			return nil, err
+		}
+		result := make(tree.Exprs, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, cloneTreeExpr(column.Expr))
+		}
+		return result, nil
+	}
+	return nil, nil
+}
+
 func cloneViewSelectExprsForView(
 	ctx *BindContext,
 	selectClause *tree.SelectClause,
 	exprs tree.SelectExprs,
 	headings []string,
+	sampleStarColumns tree.Exprs,
 ) tree.SelectExprs {
 	cloned := cloneTreeSelectExprsWithStableHeadings(exprs, headings)
 	if ctx == nil || selectClause == nil ||
-		!selectClauseHasSampleExpr(selectClause) || !selectClauseHasOrdinaryStar(selectClause) {
+		!selectClauseHasSampleExpr(selectClause) {
 		return cloned
 	}
 
@@ -8491,10 +8541,16 @@ func cloneViewSelectExprsForView(
 	if !foundSample {
 		return cloned
 	}
+	stableSample := cloneTreeSelectExprs(tree.SelectExprs{sampleExpr})[0]
+	if len(sampleStarColumns) > 0 {
+		if sample, ok := stableSample.Expr.(*tree.SampleExpr); ok {
+			sample.SetColumns(cloneTreeExprs(sampleStarColumns), false)
+		}
+	}
 
 	stable := make(tree.SelectExprs, 0, len(cloned)-ctx.sampleFunc.offset+1)
 	stable = append(stable, cloned[:sampleStart]...)
-	stable = append(stable, cloneTreeSelectExprs(tree.SelectExprs{sampleExpr})[0])
+	stable = append(stable, stableSample)
 	stable = append(stable, cloned[sampleEnd:]...)
 	return stable
 }

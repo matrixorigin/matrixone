@@ -515,6 +515,17 @@ func exprValueHasStar(value reflect.Value, visited map[treeClonePointer]struct{}
 		if expr, ok := value.Interface().(tree.Expr); ok && directExprHasStar(expr) {
 			return true
 		}
+		if sample, ok := value.Interface().(*tree.SampleExpr); ok {
+			columns, isStar := sample.GetColumns()
+			if isStar {
+				return true
+			}
+			for _, column := range columns {
+				if exprValueHasStar(reflect.ValueOf(column), visited) {
+					return true
+				}
+			}
+		}
 		if subquery, ok := value.Interface().(*tree.Subquery); ok {
 			return selectStatementHasStar(subquery.Select)
 		}
@@ -594,6 +605,15 @@ func selectClauseHasSampleExpr(selectClause *tree.SelectClause) bool {
 	return false
 }
 
+func selectExprsHaveSampleExpr(exprs tree.SelectExprs) bool {
+	for _, expr := range exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func directExprHasStar(expr tree.Expr) bool {
 	switch expr := expr.(type) {
 	case tree.UnqualifiedStar:
@@ -649,19 +669,24 @@ func viewSelectStatementWithExpandedStars(
 		}
 		expandedSelectList, ok := expandedSelectLists[selectStmt]
 		if ok {
-			if selectClauseHasSampleExpr(selectStmt) && !selectClauseHasOrdinaryStar(selectStmt) {
-				// The bound list for SAMPLE(*) contains the sampled columns, not
-				// the SAMPLE expression itself. Keep this query block's source AST
-				// intact; ordinary stars in other query blocks are rewritten by the
-				// surrounding traversal.
-				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
-				stableClause.Exprs = stableExprs
-				rewritten = rewritten || exprsRewritten
-			} else if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
-				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(expandedSelectList, expandedSelectLists)
-				stableClause.Exprs = stableExprs
-				rewritten = true
-				rewritten = rewritten || exprsRewritten
+			if selectClauseOutputHasStar(selectStmt) || len(expandedSelectList) != len(selectStmt.Exprs) {
+				// A SAMPLE-only clause must be replaced by the captured SAMPLE
+				// expression, not by a bare projection list supplied by an
+				// incomplete/foreign capture map. The production capture always
+				// preserves SAMPLE, while this guard keeps malformed input from
+				// silently changing the query shape.
+				if selectClauseHasSampleExpr(selectStmt) &&
+					!selectClauseHasOrdinaryStar(selectStmt) &&
+					!selectExprsHaveSampleExpr(expandedSelectList) {
+					stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(selectStmt.Exprs, expandedSelectLists)
+					stableClause.Exprs = stableExprs
+					rewritten = rewritten || exprsRewritten
+				} else {
+					stableExprs, exprsRewritten := viewSelectExprsWithExpandedStars(expandedSelectList, expandedSelectLists)
+					stableClause.Exprs = stableExprs
+					rewritten = true
+					rewritten = rewritten || exprsRewritten
+				}
 			} else {
 				stableExprs, exprsRewritten := viewSelectExprsWithExpandedStableHeadings(selectStmt.Exprs, expandedSelectList, expandedSelectLists)
 				stableClause.Exprs = stableExprs
@@ -980,6 +1005,29 @@ func rewriteClonedExprSubqueriesWithExpandedStars(
 			return false
 		}
 		visited[key] = struct{}{}
+		if sample, ok := original.Interface().(*tree.SampleExpr); ok {
+			clonedSample, ok := cloned.Interface().(*tree.SampleExpr)
+			if !ok {
+				return false
+			}
+			originalColumns, isStar := sample.GetColumns()
+			clonedColumns, _ := clonedSample.GetColumns()
+			if len(clonedColumns) != len(originalColumns) {
+				clonedColumns = make(tree.Exprs, len(originalColumns))
+			} else {
+				clonedColumns = append(tree.Exprs(nil), clonedColumns...)
+			}
+			rewritten := false
+			for i, column := range originalColumns {
+				stableColumn, columnRewritten := viewExprWithExpandedStars(column, expandedSelectLists)
+				clonedColumns[i] = stableColumn
+				rewritten = rewritten || columnRewritten
+			}
+			if rewritten {
+				clonedSample.SetColumns(clonedColumns, isStar)
+			}
+			return rewritten
+		}
 		if subquery, ok := original.Interface().(*tree.Subquery); ok {
 			stableStatement, rewritten := viewSelectStatementWithExpandedStars(subquery.Select, expandedSelectLists)
 			if rewritten && stableStatement != nil && cloned.Kind() == reflect.Pointer && !cloned.IsNil() {
