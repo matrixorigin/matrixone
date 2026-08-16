@@ -242,7 +242,7 @@ func (w *countingShortWriter) Write(value []byte) (int, error) {
 func TestGroupSpillWriterDoesNotRetryFailedFlush(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	target := &countingShortWriter{}
-	w, err := newGroupSpillWriter(&container{mp: proc.Mp()}, target, context.Background())
+	w, err := newGroupSpillWriter(&container{mp: proc.Mp()}, target, context.Background(), nil)
 	require.NoError(t, err)
 	require.NoError(t, w.ensureBuffer())
 	require.NoError(t, w.buffer.Resize(1))
@@ -330,7 +330,7 @@ func TestGroupSpillSaveArgCodecObservesCancellationWithinOneGroup(t *testing.T) 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	target := &cancelAfterWriteWriter{cancel: cancel}
-	writer, err := newGroupSpillWriter(&g.ctr, target, ctx)
+	writer, err := newGroupSpillWriter(&g.ctr, target, ctx, nil)
 	require.NoError(t, err)
 	err = codec.SaveSpillIntermediateResult(1, 0, []uint8{1}, writer)
 	require.ErrorIs(t, err, context.Canceled)

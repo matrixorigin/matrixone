@@ -20,6 +20,8 @@ import (
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // groupSpillReader keeps read-ahead physical storage under the Group owner.
@@ -217,11 +219,16 @@ func newGroupSpillWriter(
 	ctr *container,
 	target io.Writer,
 	ctx context.Context,
+	disk *process.ExecutionSpillDiskReservation,
 ) (*groupSpillWriter, error) {
 	if ctr == nil || ctr.mp == nil || target == nil || ctx == nil {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
-	return &groupSpillWriter{ctr: ctr, target: target, ctx: ctx}, nil
+	return &groupSpillWriter{
+		ctr:    ctr,
+		target: spillutil.NewDiskReservationWriter(target, disk),
+		ctx:    ctx,
+	}, nil
 }
 
 func (w *groupSpillWriter) ensureBuffer() error {
@@ -264,7 +271,7 @@ func (w *groupSpillWriter) Write(value []byte) (int, error) {
 		return 0, err
 	}
 	if w.disabled {
-		return writeGroupSpillBytes(w.target, value)
+		return w.writePhysical(value)
 	}
 	written := 0
 	for len(value) != 0 {
@@ -305,7 +312,7 @@ func (w *groupSpillWriter) Flush() error {
 	if w.buffer == nil || w.buffer.Len() == 0 {
 		return nil
 	}
-	if _, err := writeGroupSpillBytes(w.target, w.buffer.Bytes()); err != nil {
+	if _, err := w.writePhysical(w.buffer.Bytes()); err != nil {
 		w.failed = err
 		return err
 	}
@@ -326,6 +333,13 @@ func (w *groupSpillWriter) Free() {
 	w.ctx = nil
 	w.disabled = true
 	w.failed = nil
+}
+
+// writePhysical admits disk capacity immediately before one physical write.
+// Codec writes are coalesced above this boundary so accounting does not
+// serialize every small logical fragment on the shared execution budget.
+func (w *groupSpillWriter) writePhysical(value []byte) (int, error) {
+	return writeGroupSpillBytes(w.target, value)
 }
 
 func writeGroupSpillBytes(target io.Writer, value []byte) (int, error) {
