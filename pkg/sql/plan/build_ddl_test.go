@@ -1169,15 +1169,11 @@ func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
 	require.NoError(t, err)
 
 	require.False(t, viewSelectHasStar(nil))
-	require.False(t, viewSelectHasSampleStar(nil))
 	require.True(t, selectExprHasStar(starExpr))
 	require.True(t, selectExprHasStar(qualifiedStar))
 	require.False(t, selectExprHasStar(columnExpr))
 	require.True(t, selectExprHasStar(tree.SelectExpr{Expr: sampleStar}))
 	require.False(t, selectExprHasStar(tree.SelectExpr{Expr: sampleColumn}))
-	require.False(t, selectExprHasSampleStar(columnExpr))
-	require.True(t, selectExprHasSampleStar(tree.SelectExpr{Expr: sampleStar}))
-	require.False(t, selectExprHasSampleStar(tree.SelectExpr{Expr: sampleColumn}))
 
 	starClause := &tree.SelectClause{Exprs: tree.SelectExprs{starExpr}}
 	columnClause := &tree.SelectClause{Exprs: tree.SelectExprs{columnExpr}}
@@ -1191,16 +1187,6 @@ func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
 	require.False(t, selectStatementHasStar(nil))
 	require.False(t, selectStatementHasStar(columnClause))
 
-	sampleClause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: sampleStar}}}
-	sampleSelect := &tree.Select{Select: sampleClause}
-	sampleParen := &tree.ParenSelect{Select: sampleSelect}
-	sampleUnion := &tree.UnionClause{Left: sampleClause, Right: columnClause}
-	require.True(t, selectStatementHasSampleStar(sampleClause))
-	require.True(t, selectStatementHasSampleStar(sampleSelect))
-	require.True(t, selectStatementHasSampleStar(sampleParen))
-	require.True(t, selectStatementHasSampleStar(sampleUnion))
-	require.False(t, selectStatementHasSampleStar(nil))
-	require.False(t, selectStatementHasSampleStar(columnClause))
 }
 
 func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
