@@ -5029,11 +5029,33 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit, astRankOption); err != nil {
 			return
 		}
+	}
 
-		if astLimit != nil && lockNode != nil {
-			lockNode.Children[0] = nodeID
-			nodeID = builder.appendNode(lockNode, ctx)
+	// Keep the lock target collection in bindSelectClause, but attach the
+	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
+	// correlated HAVING is flattened into a MARK JOIN and FILTER; placing the
+	// lock before that rewrite would make the lock consume rows that the final
+	// predicate excludes.  Aggregate/sample plans keep their existing source
+	// row locking placement below.
+	appendLockNode := func() {
+		if lockNode == nil {
+			return
 		}
+		lockNode.Children[0] = nodeID
+		nodeID = builder.appendNode(lockNode, ctx)
+		lockNode = nil
+	}
+
+	var preWindowHavingList []*plan.Expr
+	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	}
+	deferLockForHaving := lockNode != nil &&
+		!ctx.sampleFunc.hasSampleFunc &&
+		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 && len(ctx.times) == 0 &&
+		len(boundHavingList) > 0 && (len(ctx.windows) == 0 || len(preWindowHavingList) > 0)
+	if !deferLockForHaving {
+		appendLockNode()
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
@@ -5094,12 +5116,21 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, boundHavingList); err != nil {
 			return
 		}
+		if deferLockForHaving {
+			// Keep the cardinality-changing HAVING above the lock.  The filter
+			// optimizer must not push it through LOCK_OP and widen the lock scope.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
+		}
+		appendLockNode()
 	} else if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
-		preWindowHavingList, _ := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
 		if len(preWindowHavingList) > 0 {
 			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, preWindowHavingList); err != nil {
 				return
 			}
+			if deferLockForHaving {
+				builder.qry.Nodes[nodeID].FilterIsBarrier = true
+			}
+			appendLockNode()
 		}
 	}
 
@@ -7373,10 +7404,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				TableDef:    builder.qry.Nodes[nodeID].GetTableDef(),
 				LockTargets: lockTargets,
 				BindingTags: []int32{builder.genNewBindTag()},
-			}
-
-			if astLimit == nil {
-				nodeID = builder.appendNode(lockNode, ctx)
 			}
 		}
 	}

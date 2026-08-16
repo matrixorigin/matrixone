@@ -1341,5 +1341,43 @@ select * from su_fu_main where id = 5;
 id    company_id    status
 5    50    44
 drop view if exists su_fu_view;
+drop table if exists su_fu_having_outer;
+drop table if exists su_fu_having_inner;
+create table su_fu_having_outer(id int primary key, note varchar(32));
+create table su_fu_having_inner(k int);
+insert into su_fu_having_outer values (1, 'original-1'), (2, 'original-2');
+insert into su_fu_having_inner values (10);
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+begin;
+select o.id
+from su_fu_having_outer o
+having exists (
+select i.k
+from su_fu_having_inner i
+group by i.k
+having count(*) >= o.id
+)
+order by o.id
+for update;
+id
+1
+use select_for_update;
+set session lock_wait_timeout = 1;
+update su_fu_having_outer set note = 'updated-excluded' where id = 2;
+commit;
+use select_for_update;
+set session lock_wait_timeout = 1;
+begin;
+update su_fu_having_outer set note = 'updated-included' where id = 1;
+Lock wait timeout exceeded; try restarting transaction
+rollback;
+commit;
+set @@sql_mode = default;
+select * from su_fu_having_outer order by id;
+id    note
+1    original-1
+2    updated-excluded
+drop table if exists su_fu_having_outer;
+drop table if exists su_fu_having_inner;
 drop table if exists su_fu_main;
 drop table if exists su_fu_ref;
