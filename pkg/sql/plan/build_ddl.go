@@ -565,6 +565,23 @@ func selectClauseOutputHasStar(selectClause *tree.SelectClause) bool {
 	return false
 }
 
+func selectClauseHasOrdinaryStar(selectClause *tree.SelectClause) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		switch expr := expr.Expr.(type) {
+		case tree.UnqualifiedStar:
+			return true
+		case *tree.UnresolvedName:
+			if expr.Star {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func selectClauseHasSampleExpr(selectClause *tree.SelectClause) bool {
 	if selectClause == nil {
 		return false
@@ -632,7 +649,7 @@ func viewSelectStatementWithExpandedStars(
 		}
 		expandedSelectList, ok := expandedSelectLists[selectStmt]
 		if ok {
-			if selectClauseHasSampleExpr(selectStmt) {
+			if selectClauseHasSampleExpr(selectStmt) && !selectClauseHasOrdinaryStar(selectStmt) {
 				// The bound list for SAMPLE(*) contains the sampled columns, not
 				// the SAMPLE expression itself. Keep this query block's source AST
 				// intact; ordinary stars in other query blocks are rewritten by the

@@ -4914,6 +4914,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if isRoot {
 					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 				}
+				captureGroupingSetViewStarExpansion(ctx, expandedSelectClause, selectStmts, hiddenResultLen)
 				return
 			}
 		}
@@ -4948,10 +4949,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 	// SAMPLE(*) expands to the sampled columns while binding, but the source
 	// AST must retain the SAMPLE operator when the view definition is persisted.
-	// Do not record that query block as an ordinary star expansion; the view SQL
-	// rewriter will keep the SAMPLE expression intact while still processing
-	// unrelated query blocks that contain ordinary stars.
-	if ctx.captureViewStarExpansion && expandedSelectClause != nil && !selectClauseHasSampleExpr(expandedSelectClause) {
+	// Capture mixed projections as well; cloneViewSelectExprsForView replaces
+	// only the ordinary wildcard portion and puts the SAMPLE expression back.
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil &&
+		(!selectClauseHasSampleExpr(expandedSelectClause) || selectClauseHasOrdinaryStar(expandedSelectClause)) {
 		if ctx.expandedSelectLists == nil {
 			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
 		}
@@ -4959,7 +4960,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if len(headings) > len(selectList) {
 			headings = headings[len(headings)-len(selectList):]
 		}
-		ctx.expandedSelectLists[expandedSelectClause] = cloneTreeSelectExprsWithStableHeadings(selectList, headings)
+		ctx.expandedSelectLists[expandedSelectClause] = cloneViewSelectExprsForView(
+			ctx,
+			expandedSelectClause,
+			selectList,
+			headings,
+		)
 	}
 
 	if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
@@ -8453,6 +8459,69 @@ func cloneTreeSelectExprsWithStableHeadings(exprs tree.SelectExprs, headings []s
 		}
 	}
 	return cloned
+}
+
+func cloneViewSelectExprsForView(
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+	exprs tree.SelectExprs,
+	headings []string,
+) tree.SelectExprs {
+	cloned := cloneTreeSelectExprsWithStableHeadings(exprs, headings)
+	if ctx == nil || selectClause == nil ||
+		!selectClauseHasSampleExpr(selectClause) || !selectClauseHasOrdinaryStar(selectClause) {
+		return cloned
+	}
+
+	sampleStart := ctx.sampleFunc.start
+	sampleEnd := sampleStart + ctx.sampleFunc.offset
+	if sampleStart < 0 || sampleEnd > len(cloned) || sampleStart >= sampleEnd {
+		return cloned
+	}
+
+	var sampleExpr tree.SelectExpr
+	foundSample := false
+	for _, expr := range selectClause.Exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			sampleExpr = expr
+			foundSample = true
+			break
+		}
+	}
+	if !foundSample {
+		return cloned
+	}
+
+	stable := make(tree.SelectExprs, 0, len(cloned)-ctx.sampleFunc.offset+1)
+	stable = append(stable, cloned[:sampleStart]...)
+	stable = append(stable, cloneTreeSelectExprs(tree.SelectExprs{sampleExpr})[0])
+	stable = append(stable, cloned[sampleEnd:]...)
+	return stable
+}
+
+func captureGroupingSetViewStarExpansion(
+	ctx *BindContext,
+	original *tree.SelectClause,
+	branches []*tree.SelectClause,
+	hiddenResultLen int,
+) {
+	if ctx == nil || !ctx.captureViewStarExpansion || original == nil || len(branches) == 0 {
+		return
+	}
+	if ctx.expandedSelectLists == nil {
+		ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
+	for _, branch := range branches {
+		expanded, ok := ctx.expandedSelectLists[branch]
+		if !ok {
+			continue
+		}
+		if hiddenResultLen > 0 && hiddenResultLen < len(expanded) {
+			expanded = expanded[:len(expanded)-hiddenResultLen]
+		}
+		ctx.expandedSelectLists[original] = cloneTreeSelectExprs(expanded)
+		return
+	}
 }
 
 type treeClonePointer struct {
