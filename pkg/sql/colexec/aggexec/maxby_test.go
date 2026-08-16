@@ -80,6 +80,46 @@ func TestMaxByCompactsReplacedVarlenaState(t *testing.T) {
 	require.Less(t, state.Allocated(), 2<<20, "winner state must be bounded by live groups, not by replaced input rows")
 }
 
+func TestMaxByDefersCompactionUntilBatchPublicationCompletes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{
+		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType(),
+	}
+	exec := makeMaxByExec(mp, 7014, false, params).(*maxByExec)
+	require.NoError(t, exec.GroupGrow(1))
+	valueVec := vector.NewVec(types.T_varchar.ToType())
+	orderVec := vector.NewVec(types.T_int64.ToType())
+	tieVec := vector.NewVec(types.T_int64.ToType())
+	defer func() {
+		valueVec.Free(mp)
+		orderVec.Free(mp)
+		tieVec.Free(mp)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for i := range 400 {
+		value := []byte(fmt.Sprintf("%06d:%s", i, strings.Repeat("x", 4096)))
+		require.NoError(t, vector.AppendBytes(valueVec, value, false, mp))
+		require.NoError(t, vector.AppendFixed(orderVec, int64(i), false, mp))
+		require.NoError(t, vector.AppendFixed(tieVec, int64(i), false, mp))
+	}
+	source := []*vector.Vector{valueVec, orderVec, tieVec}
+	for row := range 400 {
+		require.NoError(t, exec.copyWinner(
+			0, exec.state[0].vecs, 0, source, [3]int{row, row, row}))
+	}
+
+	before := exec.state[0].vecs[0].Allocated()
+	require.Greater(t, before, maxByVarlenaCompactionSlack)
+	require.Greater(t, exec.varlenaUsage[0][0].staleBytes,
+		exec.varlenaUsage[0][0].liveBytes+maxByVarlenaCompactionSlack)
+
+	exec.compactChunk(0)
+	require.Less(t, exec.state[0].vecs[0].Allocated(), before)
+	require.Zero(t, exec.varlenaUsage[0][0].staleBytes)
+}
+
 func TestMaxByPreservesWinningPrepareParamKind(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_text.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
@@ -369,6 +409,43 @@ func TestMaxByPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 	}
 }
 
+func TestMaxBySpillPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{
+		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType(),
+	}
+	inputs := maxByInputs(t, mp,
+		[]string{"binary", "text"}, nil, []int64{1, 1}, []string{"a", "b"})
+	require.NoError(t,
+		inputs[0].SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+
+	source := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
+	require.NoError(t, source.GroupGrow(2))
+	require.NoError(t, source.Fill(0, 0, inputs))
+	require.NoError(t, source.Fill(1, 1, inputs))
+	require.True(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(0))
+	require.False(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(1))
+	var spill bytes.Buffer
+	require.NoError(t, source.SaveSpillIntermediateResult(
+		2, 0, []uint8{1, 1}, &spill))
+
+	restored := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
+	require.NoError(t, restored.UnmarshalSpillFromReader(
+		bytes.NewReader(spill.Bytes()), mp))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.True(t, result[0].GetBinaryStringMetadataAt(0))
+	require.False(t, result[0].GetBinaryStringMetadataAt(1))
+
+	result[0].Free(mp)
+	source.Free()
+	restored.Free()
+	for _, input := range inputs {
+		input.Free(mp)
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMaxByMergeIsCommutativeAndAssociative(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
@@ -559,6 +636,7 @@ func TestMaxByFillAndMergeSkipBranches(t *testing.T) {
 	require.NoError(t, exec.Fill(0, 0, inputs))
 	require.NoError(t, exec.BatchMerge(other, 0, []uint64{GroupNotMatched}))
 	require.NoError(t, exec.SetExtraInformation(nil, 0))
+	require.ErrorContains(t, exec.Fill(0, 0, nil), "three input vectors")
 	require.ErrorContains(t, exec.BatchFill(0, nil, nil), "three input vectors")
 	require.Panics(t, func() { makeMaxByExec(mp, 7011, false, nil) })
 	for _, input := range inputs {

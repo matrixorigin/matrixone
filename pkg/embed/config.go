@@ -149,6 +149,7 @@ func newServiceConfig() ServiceConfig {
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
 				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+				MongoDB:          *config.NewMongoDBParameters(),
 			},
 		},
 	}
@@ -641,6 +642,7 @@ func (c *ServiceConfig) setFileserviceDefaultValues() {
 		c.FileServices = append(c.FileServices, fileservice.Config{
 			Name:    defines.TmpFileServiceName,
 			Backend: "DISK-TMP",
+			DataDir: c.defaultFileServiceDataDir(defines.TmpFileServiceName),
 		})
 	}
 }

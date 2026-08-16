@@ -32,13 +32,16 @@ import (
 // TestFileWithChecksumReadAtCoalesce exercises the read-coalescing ReadAt on the
 // large / multi-chunk path (reads spanning many on-disk blocks and crossing the
 // _ReadCoalesceSize cap), at the production block size (_BlockContentSize=2044)
-// and a tiny custom size, over random (offset,length) windows incl. past-EOF.
+// and a tiny custom size. Explicit boundary cases protect the chunking contract,
+// while random windows cover offset/length combinations including past-EOF.
 func TestFileWithChecksumReadAtCoalesce(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
 
+	const longReadSize = 3 << 20
+
 	for _, bcs := range []int{_BlockContentSize, 64} {
-		dataSize := 5 << 20 // 5 MiB > 2 MiB coalesce cap -> multi-chunk for 2044 blocks
+		dataSize := 5 << 20
 		if bcs == 64 {
 			dataSize = 256 << 10
 		}
@@ -54,11 +57,11 @@ func TestFileWithChecksumReadAtCoalesce(t *testing.T) {
 		require.NoError(t, err)
 
 		rng := mrand.New(mrand.NewSource(42))
-		for it := 0; it < 3000; it++ {
-			off := rng.Intn(dataSize + 4096) // sometimes at/past EOF
-			length := rng.Intn(3<<20) + 1    // up to 3 MiB -> crosses the 2 MiB cap
-			got := make([]byte, length)
-			n, rerr := fw.ReadAt(got, int64(off))
+		got := make([]byte, longReadSize)
+		coalescedContentSize := (_ReadCoalesceSize / (bcs + _ChecksumSize)) * bcs
+		checkRead := func(off, length int) {
+			t.Helper()
+			n, rerr := fw.ReadAt(got[:length], int64(off))
 
 			avail := 0
 			if off < dataSize {
@@ -77,6 +80,29 @@ func TestFileWithChecksumReadAtCoalesce(t *testing.T) {
 			} else {
 				require.NoErrorf(t, rerr, "bcs=%d off=%d len=%d", bcs, off, length)
 			}
+		}
+
+		// Protect each side of the coalescing boundary plus repeated chunk-loop
+		// execution. The long reads retain the original multi-megabyte path once
+		// without repeating the same work in every random iteration.
+		for _, length := range []int{
+			coalescedContentSize - 1,
+			coalescedContentSize,
+			coalescedContentSize + 1,
+			3*coalescedContentSize + bcs,
+			longReadSize,
+		} {
+			checkRead(0, length)
+			checkRead(dataSize/2, length)
+		}
+		checkRead(dataSize, coalescedContentSize+1)
+		checkRead(dataSize+1, coalescedContentSize+1)
+
+		const randomReadChunks = 3
+		for it := 0; it < 3000; it++ {
+			off := rng.Intn(dataSize + 4096) // sometimes at/past EOF
+			length := rng.Intn(randomReadChunks*coalescedContentSize) + 1
+			checkRead(off, length)
 		}
 	}
 }
@@ -140,7 +166,7 @@ func testFileWithChecksum(
 		ctx := context.Background()
 		fileWithChecksum := NewFileWithChecksum(ctx, underlying, blockContentSize, nil)
 
-		check := func(data []byte) {
+		checkContent := func(data []byte) {
 			// check content
 			pos, err := fileWithChecksum.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
@@ -148,14 +174,17 @@ func testFileWithChecksum(
 			content, err := io.ReadAll(fileWithChecksum)
 			assert.Nil(t, err)
 			assert.Equal(t, data, content)
+		}
 
+		checkReaderContract := func(data []byte) {
+			checkContent(data)
 			// seek
 			n, err := fileWithChecksum.Seek(0, io.SeekEnd)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(len(data)), n)
 
 			// iotest
-			pos, err = fileWithChecksum.Seek(0, io.SeekStart)
+			pos, err := fileWithChecksum.Seek(0, io.SeekStart)
 			assert.Nil(t, err)
 			assert.Equal(t, int64(0), pos)
 			err = iotest.TestReader(fileWithChecksum, data)
@@ -185,7 +214,7 @@ func testFileWithChecksum(
 		}
 		assert.Equal(t, expectedSize, int(underlyingSize))
 
-		check(data)
+		checkReaderContract(data)
 
 		for j := 0; j < len(data); j++ {
 
@@ -207,7 +236,11 @@ func testFileWithChecksum(
 			assert.Nil(t, err)
 			assert.Equal(t, data[j:], content)
 
-			check(data)
+			// Verify that the suffix write changed exactly the requested range.
+			// Reader conformance and SeekEnd are orthogonal to the mutation
+			// offset, so they are checked once per length above rather than for
+			// every offset in this exhaustive matrix.
+			checkContent(data)
 
 		}
 

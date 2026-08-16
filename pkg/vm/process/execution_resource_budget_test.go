@@ -31,13 +31,37 @@ import (
 // acquire/free boundary used by MPool without exposing a second production
 // reservation API.
 type testPhysicalAllocation struct {
-	generation *HashBuildBudgetGeneration
+	generation *ExecutionResourceGeneration
 	size       uint64
 	released   atomic.Bool
 }
 
+func TestExecutionResourceBudgetObserverDimensionsAreFixed(t *testing.T) {
+	components := [...]string{"memory", "spill_disk", "spill_fd"}
+	events := [...]string{"reserve", "release", "reconcile", "reject"}
+	scopes := [...]string{"query", "cn"}
+	want := len(components) * len(events) * len(scopes)
+	if len(executionResourceBudgetObservers) != want {
+		t.Fatalf("observer count = %d, want %d", len(executionResourceBudgetObservers), want)
+	}
+	for _, component := range components {
+		for _, event := range events {
+			for _, scope := range scopes {
+				key := executionResourceBudgetMetricKey{component: component, event: event, scope: scope}
+				if executionResourceBudgetObservers[key] == nil {
+					t.Fatalf("missing fixed observer: %+v", key)
+				}
+			}
+		}
+	}
+	unknown := executionResourceBudgetMetricKey{component: "unknown", event: "reserve", scope: "query"}
+	if executionResourceBudgetObservers[unknown] != nil {
+		t.Fatal("unknown dimensions must not create a metric observer")
+	}
+}
+
 func acquireTestPhysicalAllocation(
-	generation *HashBuildBudgetGeneration,
+	generation *ExecutionResourceGeneration,
 	size uint64,
 ) (*testPhysicalAllocation, error) {
 	if err := generation.AcquireAllocationCapacity(size); err != nil {
@@ -54,8 +78,8 @@ func (a *testPhysicalAllocation) Release() bool {
 	return true
 }
 
-func TestHashBuildBudgetPhysicalAllocationLimit(t *testing.T) {
-	budget := MustNewHashBuildBudget(math.MaxUint64, math.MaxUint64)
+func TestExecutionResourceBudgetPhysicalAllocationLimit(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(math.MaxUint64, math.MaxUint64)
 	generation, err := budget.OpenGeneration(1)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +88,7 @@ func TestHashBuildBudgetPhysicalAllocationLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exact limit rejected: %v", err)
 	}
-	if _, err = acquireTestPhysicalAllocation(generation, 1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+	if _, err = acquireTestPhysicalAllocation(generation, 1); !errors.Is(err, ErrExecutionResourceAdmission) {
 		t.Fatalf("limit+1 error = %v", err)
 	}
 	if budget.AggregateUsed() != math.MaxUint64 || generation.Used() != math.MaxUint64 {
@@ -78,8 +102,8 @@ func TestHashBuildBudgetPhysicalAllocationLimit(t *testing.T) {
 	}
 }
 
-func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
-	b := MustNewHashBuildBudget(10, 10)
+func TestExecutionResourceBudgetAdmissionIdentifiesResource(t *testing.T) {
+	b := MustNewExecutionResourceBudget(10, 10)
 	g, err := b.OpenGenerationWithSpillCaps(1, 10, 5, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -88,19 +112,19 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 
 	tests := []struct {
 		name string
-		want HashBuildBudgetComponent
+		want ExecutionResourceComponent
 		call func() error
 	}{
 		{
 			name: "memory",
-			want: HashBuildBudgetComponentMemory,
+			want: ExecutionResourceComponentMemory,
 			call: func() error {
 				return g.AcquireAllocationCapacity(11)
 			},
 		},
 		{
 			name: "spill disk",
-			want: HashBuildBudgetComponentSpillDisk,
+			want: ExecutionResourceComponentSpillDisk,
 			call: func() error {
 				_, reserveErr := g.ReserveSpillDisk(6)
 				return reserveErr
@@ -108,7 +132,7 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 		},
 		{
 			name: "spill fd",
-			want: HashBuildBudgetComponentSpillFD,
+			want: ExecutionResourceComponentSpillFD,
 			call: func() error {
 				_, reserveErr := g.ReserveSpillFD(2)
 				return reserveErr
@@ -117,20 +141,20 @@ func TestHashBuildBudgetAdmissionIdentifiesResource(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var budgetErr *HashBuildBudgetError
+			var budgetErr *ExecutionResourceError
 			if err := test.call(); !errors.As(err, &budgetErr) {
 				t.Fatalf("error=%v, want typed admission", err)
 			}
-			if budgetErr.Kind != HashBuildBudgetErrorAdmission || budgetErr.Component != test.want {
+			if budgetErr.Kind != ExecutionResourceErrorAdmission || budgetErr.Component != test.want {
 				t.Fatalf("admission kind/resource=(%d,%d), want=(%d,%d)",
-					budgetErr.Kind, budgetErr.Component, HashBuildBudgetErrorAdmission, test.want)
+					budgetErr.Kind, budgetErr.Component, ExecutionResourceErrorAdmission, test.want)
 			}
 		})
 	}
 }
 
-func TestHashBuildBudgetAllocationAccountIsSoleOwner(t *testing.T) {
-	budget := MustNewHashBuildBudget(10, 10)
+func TestExecutionResourceBudgetAllocationAccountIsSoleOwner(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(10, 10)
 	generation, err := budget.OpenGeneration(1)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +176,7 @@ func TestHashBuildBudgetAllocationAccountIsSoleOwner(t *testing.T) {
 	if generation.Used() != 10 || account.Snapshot().Used != 10 {
 		t.Fatal("physical allocation was not charged exactly once")
 	}
-	if _, err = mp.AllocAccounted(1, account, 1, 1); !errors.Is(err, ErrHashBuildBudgetAdmission) ||
+	if _, err = mp.AllocAccounted(1, account, 1, 1); !errors.Is(err, ErrExecutionResourceAdmission) ||
 		!errors.Is(err, mpool.ErrAllocationAccountCapacity) {
 		t.Fatalf("capacity error = %v", err)
 	}
@@ -175,8 +199,8 @@ func TestHashBuildBudgetAllocationAccountIsSoleOwner(t *testing.T) {
 	}
 }
 
-func TestHashBuildAllocationAccountRegistryBounds(t *testing.T) {
-	budget := MustNewHashBuildBudget(16<<10, 16<<10)
+func TestExecutionResourceAllocationAccountRegistryBounds(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(16<<10, 16<<10)
 	first, err := budget.OpenGeneration(1)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +209,7 @@ func TestHashBuildAllocationAccountRegistryBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if registry.GenerationCapacity() != hashBuildAllocationGenerationSlots ||
+	if registry.GenerationCapacity() != executionResourceAllocationGenerationSlots ||
 		registry.MaxAllocationMetadata() != 16<<10 {
 		t.Fatal("allocation registry does not follow byte-conservation bounds")
 	}
@@ -198,7 +222,7 @@ func TestHashBuildAllocationAccountRegistryBounds(t *testing.T) {
 		t.Fatal("one CN budget created multiple allocation registries")
 	}
 
-	large := MustNewHashBuildBudget(hashBuildAllocationMetadataMaxSlots+1, hashBuildAllocationMetadataMaxSlots+1)
+	large := MustNewExecutionResourceBudget(executionResourceAllocationMetadataMaxSlots+1, executionResourceAllocationMetadataMaxSlots+1)
 	largeGeneration, err := large.OpenGeneration(1)
 	if err != nil {
 		t.Fatal(err)
@@ -207,20 +231,20 @@ func TestHashBuildAllocationAccountRegistryBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if largeRegistry.MaxAllocationMetadata() != hashBuildAllocationMetadataMaxSlots {
+	if largeRegistry.MaxAllocationMetadata() != executionResourceAllocationMetadataMaxSlots {
 		t.Fatal("allocation metadata exceeded its fixed headroom")
 	}
 }
 
-func TestHashBuildBudgetQueryRejectRollsBackCN(t *testing.T) {
-	budget := MustNewHashBuildBudget(10, 4)
+func TestExecutionResourceBudgetQueryRejectRollsBackCN(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(10, 4)
 	first, _ := budget.OpenGeneration(1)
 	second, _ := budget.OpenGeneration(2)
 	allocation, err := acquireTestPhysicalAllocation(first, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = acquireTestPhysicalAllocation(second, 7); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+	if _, err = acquireTestPhysicalAllocation(second, 7); !errors.Is(err, ErrExecutionResourceAdmission) {
 		t.Fatalf("query rejection error = %v", err)
 	}
 	if budget.AggregateUsed() != 4 || second.Used() != 0 {
@@ -229,9 +253,9 @@ func TestHashBuildBudgetQueryRejectRollsBackCN(t *testing.T) {
 	allocation.Release()
 }
 
-func TestHashBuildBudgetConcurrentPhysicalAllocations(t *testing.T) {
+func TestExecutionResourceBudgetConcurrentPhysicalAllocations(t *testing.T) {
 	const workers = 64
-	budget := MustNewHashBuildBudget(workers, workers)
+	budget := MustNewExecutionResourceBudget(workers, workers)
 	allocations := make(chan *testPhysicalAllocation, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
@@ -263,12 +287,12 @@ func TestHashBuildBudgetConcurrentPhysicalAllocations(t *testing.T) {
 	}
 }
 
-func TestHashBuildBudgetGenerationIsolationAndClose(t *testing.T) {
-	budget := MustNewHashBuildBudget(8, 8)
+func TestExecutionResourceGenerationIsolationAndClose(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(8, 8)
 	oldGeneration, _ := budget.OpenGeneration(1)
 	oldAllocation, _ := acquireTestPhysicalAllocation(oldGeneration, 6)
 	oldGeneration.Close()
-	if _, err := acquireTestPhysicalAllocation(oldGeneration, 1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+	if _, err := acquireTestPhysicalAllocation(oldGeneration, 1); !errors.Is(err, ErrExecutionResourceClosed) {
 		t.Fatalf("closed generation error = %v", err)
 	}
 	newGeneration, _ := budget.OpenGeneration(2)
@@ -282,13 +306,13 @@ func TestHashBuildBudgetGenerationIsolationAndClose(t *testing.T) {
 	}
 	newAllocation.Release()
 	budget.Close()
-	if _, err = budget.OpenGeneration(3); !errors.Is(err, ErrHashBuildBudgetClosed) {
+	if _, err = budget.OpenGeneration(3); !errors.Is(err, ErrExecutionResourceClosed) {
 		t.Fatalf("closed budget error = %v", err)
 	}
 }
 
-func TestHashBuildBudgetLiveCapRefresh(t *testing.T) {
-	budget := MustNewHashBuildBudget(10, 10)
+func TestExecutionResourceBudgetLiveCapRefresh(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(10, 10)
 	var capValue atomic.Uint64
 	capValue.Store(10)
 	var calls atomic.Uint64
@@ -319,7 +343,7 @@ func TestHashBuildBudgetLiveCapRefresh(t *testing.T) {
 	budget.mu.Lock()
 	budget.capCached = false
 	budget.mu.Unlock()
-	if _, err = acquireTestPhysicalAllocation(generation, 7); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+	if _, err = acquireTestPhysicalAllocation(generation, 7); !errors.Is(err, ErrExecutionResourceAdmission) {
 		t.Fatalf("shrunk live cap error = %v", err)
 	}
 	if budget.AggregateCap() != 6 {
@@ -327,8 +351,8 @@ func TestHashBuildBudgetLiveCapRefresh(t *testing.T) {
 	}
 }
 
-func TestHashBuildBudgetSpillLedgers(t *testing.T) {
-	budget := MustNewHashBuildBudget(64, 64)
+func TestExecutionResourceBudgetSpillLedgers(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(64, 64)
 	generation, _ := budget.OpenGeneration(1)
 	disk, err := generation.ReserveSpillDisk(100)
 	if err != nil {
@@ -345,7 +369,7 @@ func TestHashBuildBudgetSpillLedgers(t *testing.T) {
 		t.Fatalf("disk reconcile: ok=%v err=%v", ok, reconcileErr)
 	}
 	generation.Close()
-	if _, err = generation.ReserveSpillDisk(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+	if _, err = generation.ReserveSpillDisk(1); !errors.Is(err, ErrExecutionResourceClosed) {
 		t.Fatalf("closed spill error = %v", err)
 	}
 	disk.Release()
@@ -355,37 +379,37 @@ func TestHashBuildBudgetSpillLedgers(t *testing.T) {
 	}
 }
 
-func TestHashBuildBudgetSpillReleaseRejectsLedgerUnderflow(t *testing.T) {
+func TestExecutionResourceBudgetSpillReleaseRejectsLedgerUnderflow(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		reserve func(*HashBuildBudgetGeneration) (func() bool, error)
-		corrupt func(*HashBuildBudget, *HashBuildBudgetGeneration)
+		reserve func(*ExecutionResourceGeneration) (func() bool, error)
+		corrupt func(*ExecutionResourceBudget, *ExecutionResourceGeneration)
 	}{
 		{
 			name: "disk",
-			reserve: func(generation *HashBuildBudgetGeneration) (func() bool, error) {
+			reserve: func(generation *ExecutionResourceGeneration) (func() bool, error) {
 				reservation, err := generation.ReserveSpillDisk(2)
 				return reservation.Release, err
 			},
-			corrupt: func(budget *HashBuildBudget, generation *HashBuildBudgetGeneration) {
+			corrupt: func(budget *ExecutionResourceBudget, generation *ExecutionResourceGeneration) {
 				generation.spillDiskUsed = 1
 				budget.spillDiskUsed = 1
 			},
 		},
 		{
 			name: "fd",
-			reserve: func(generation *HashBuildBudgetGeneration) (func() bool, error) {
+			reserve: func(generation *ExecutionResourceGeneration) (func() bool, error) {
 				reservation, err := generation.ReserveSpillFD(2)
 				return reservation.Release, err
 			},
-			corrupt: func(budget *HashBuildBudget, generation *HashBuildBudgetGeneration) {
+			corrupt: func(budget *ExecutionResourceBudget, generation *ExecutionResourceGeneration) {
 				generation.spillFDUsed = 1
 				budget.spillFDUsed = 1
 			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			budget := MustNewHashBuildBudget(64, 64)
+			budget := MustNewExecutionResourceBudget(64, 64)
 			generation, err := budget.OpenGeneration(1)
 			if err != nil {
 				t.Fatal(err)
@@ -429,24 +453,24 @@ func TestClampSpillFDCapBoundaries(t *testing.T) {
 	}
 }
 
-func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
+func TestGetExecutionResourceBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	const localService = "__process_local_cn__"
-	hashBuildCNBudgets.Delete(localService)
-	t.Cleanup(func() { hashBuildCNBudgets.Delete(localService) })
+	executionResourceCNBudgets.Delete(localService)
+	t.Cleanup(func() { executionResourceCNBudgets.Delete(localService) })
 
 	first := &Process{Base: &BaseProcess{Lim: Limitation{Size: 2 << 20, SpillSize: 4 << 20}}}
-	firstGeneration, err := first.GetHashBuildBudget()
+	firstGeneration, err := first.GetExecutionResourceBudget()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if firstGeneration.Cap() != 2<<20 || firstGeneration.SpillDiskCap() != 4<<20 {
 		t.Fatalf("first generation limits: %+v", firstGeneration.Snapshot())
 	}
-	if cached, cachedErr := first.GetHashBuildBudget(); cachedErr != nil || cached != firstGeneration {
+	if cached, cachedErr := first.GetExecutionResourceBudget(); cachedErr != nil || cached != firstGeneration {
 		t.Fatal("process generation was not cached")
 	}
 	second := &Process{Base: &BaseProcess{Lim: Limitation{Size: 1 << 20}}}
-	secondGeneration, err := second.GetHashBuildBudget()
+	secondGeneration, err := second.GetExecutionResourceBudget()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,9 +483,9 @@ func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
 	firstGeneration.budget.Close()
 }
 
-func TestResolveHashBuildCeiling(t *testing.T) {
+func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	const gib = uint64(1 << 30)
-	ceiling, err := ResolveHashBuildCeiling(HashBuildCeilingInputs{
+	ceiling, err := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
 		CgroupMemoryMax:       20 * gib,
 		HostMemTotal:          10 * gib,
 		GlobalMpoolCap:        30 * gib,
@@ -472,39 +496,39 @@ func TestResolveHashBuildCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ceiling.EffectiveCN != 10*gib || ceiling.Reserve != 4*gib ||
-		ceiling.CNHashCap != 6*gib || ceiling.QueryCap != 2*gib {
+		ceiling.CNMemoryCap != 6*gib || ceiling.QueryCap != 2*gib {
 		t.Fatalf("ceiling = %+v", ceiling)
 	}
-	if _, err = ResolveHashBuildCeiling(HashBuildCeilingInputs{
+	if _, err = ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
 		CgroupMemoryMax: math.MaxUint64,
-	}); !errors.Is(err, ErrHashBuildCeilingMissing) {
+	}); !errors.Is(err, ErrExecutionMemoryCeilingMissing) {
 		t.Fatalf("missing finite source error = %v", err)
 	}
-	if small, smallErr := ResolveHashBuildCeiling(HashBuildCeilingInputs{
+	if small, smallErr := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
 		HostMemTotal:  3 * gib,
 		FileCacheHint: 3 * gib,
-	}); smallErr != nil || small.CNHashCap != 3*gib/20 {
+	}); smallErr != nil || small.CNMemoryCap != 3*gib/20 {
 		t.Fatalf("small-CN ceiling = %+v, err=%v", small, smallErr)
 	}
 }
 
-func TestHashBuildBudgetUsesCurrentMemoryInputs(t *testing.T) {
-	previous := hashBuildProcessMemoryInputs
-	hashBuildProcessMemoryInputs = HashBuildCeilingInputs{HostMemTotal: 8 << 30}
-	t.Cleanup(func() { hashBuildProcessMemoryInputs = previous })
+func TestExecutionResourceBudgetUsesCurrentMemoryInputs(t *testing.T) {
+	previous := executionResourceProcessMemoryInputs
+	executionResourceProcessMemoryInputs = ExecutionMemoryCeilingInputs{HostMemTotal: 8 << 30}
+	t.Cleanup(func() { executionResourceProcessMemoryInputs = previous })
 	previousHint := fileservice.GlobalMemoryCacheSizeHint.Load()
 	fileservice.GlobalMemoryCacheSizeHint.Store(1 << 30)
 	t.Cleanup(func() { fileservice.GlobalMemoryCacheSizeHint.Store(previousHint) })
 
-	inputs := hashBuildProcessMemoryInputs
+	inputs := executionResourceProcessMemoryInputs
 	inputs.FileCacheHint = uint64(fileservice.GlobalMemoryCacheSizeHint.Load())
-	ceiling, err := ResolveHashBuildCeiling(inputs)
-	if err != nil || ceiling.CNHashCap == 0 {
+	ceiling, err := ResolveExecutionMemoryCeiling(inputs)
+	if err != nil || ceiling.CNMemoryCap == 0 {
 		t.Fatalf("current memory inputs did not produce a finite cap: %+v %v", ceiling, err)
 	}
 }
 
-func BenchmarkHashBuildBudgetAllocationAccount(b *testing.B) {
+func BenchmarkExecutionResourceBudgetAllocationAccount(b *testing.B) {
 	for _, accounted := range []bool{false, true} {
 		mode := "unaccounted"
 		if accounted {
@@ -513,11 +537,11 @@ func BenchmarkHashBuildBudgetAllocationAccount(b *testing.B) {
 		for _, size := range []int{64, 4 << 10, 64 << 10} {
 			b.Run(mode+"/alloc-free/"+fmt.Sprint(size), func(b *testing.B) {
 				mp := mpool.MustNewZero()
-				var generation *HashBuildBudgetGeneration
+				var generation *ExecutionResourceGeneration
 				var registry *mpool.AllocationAccountRegistry
 				var account *mpool.AllocationAccount
 				if accounted {
-					budget := MustNewHashBuildBudget(math.MaxUint64, math.MaxUint64)
+					budget := MustNewExecutionResourceBudget(math.MaxUint64, math.MaxUint64)
 					var err error
 					generation, err = budget.OpenGeneration(1)
 					if err != nil {

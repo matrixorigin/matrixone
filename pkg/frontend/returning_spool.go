@@ -58,14 +58,14 @@ type returningSpool struct {
 	rows       uint64
 	file       *os.File
 	writer     *bufio.Writer
-	// bytes.Buffer is Go-heap storage. The exact HashBuild allocation account
+	// bytes.Buffer is Go-heap storage. The exact execution allocation account
 	// covers allocator-visible MPool capacity only, so this bounded buffer must
 	// not create an estimated charge in that ledger.
 	buf bytes.Buffer
 	mp  *mpool.MPool
 
-	diskReservation *process.HashBuildSpillDiskReservation
-	fdReservation   *process.HashBuildSpillFDReservation
+	diskReservation *process.ExecutionSpillDiskReservation
+	fdReservation   *process.ExecutionSpillFDReservation
 }
 
 func (s *returningSpool) BeginAttempt(ctx context.Context, generation uint64, proc *process.Process) error {
@@ -77,7 +77,7 @@ func (s *returningSpool) BeginAttempt(ctx context.Context, generation uint64, pr
 	if s.state != returningSpoolIdle {
 		return moerr.NewInternalError(ctx, "DML RETURNING spool already has an active generation")
 	}
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	if err != nil {
 		return err
 	}
