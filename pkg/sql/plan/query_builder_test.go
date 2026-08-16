@@ -4579,6 +4579,62 @@ func TestDistinctAggregatePromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	}
 }
 
+func TestDistinctAggregatePromotedCharUsesCanonicalArgumentsWhenNotRewritten(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, sql := range []string{
+		"select count(distinct " + value + ", 1) from nation",
+		"select group_concat(distinct " + value + ") from nation",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err)
+
+		var aggregate *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+				aggregate = node
+				break
+			}
+		}
+		require.NotNil(t, aggregate)
+		var hasCanonicalArgument bool
+		for _, arg := range aggregate.AggList[0].GetF().Args {
+			if isCastOverload(arg, 2) {
+				hasCanonicalArgument = true
+				break
+			}
+		}
+		require.True(t, hasCanonicalArgument, sql)
+	}
+}
+
+func TestWindowPadSpaceKeysUseCanonicalArguments(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"select count(*) over (partition by "+value+"), "+
+			"dense_rank() over (order by "+value+") from nation")
+	require.NoError(t, err)
+
+	var partition *plan.Node
+	var rankedWindow *plan.WindowSpec
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_PARTITION && len(node.OrderBy) == 1 {
+			partition = node
+		}
+		if node.NodeType == plan.Node_WINDOW {
+			for _, item := range node.WinSpecList {
+				if window := item.GetW(); window != nil && window.Name == "dense_rank" {
+					rankedWindow = window
+				}
+			}
+		}
+	}
+	require.NotNil(t, partition)
+	require.True(t, isCastOverload(partition.OrderBy[0].Expr, 2))
+	require.NotNil(t, rankedWindow)
+	require.Len(t, rankedWindow.OrderBy, 1)
+	require.True(t, isCastOverload(rankedWindow.OrderBy[0].Expr, 2))
+}
+
 func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 	logicPlan, err := runOneStmt(
 		NewMockOptimizer(true),

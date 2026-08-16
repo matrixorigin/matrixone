@@ -160,6 +160,51 @@ func TestPromotedPadSpaceStringInUsesCanonicalKey(t *testing.T) {
 	}
 }
 
+func TestPromotedPadSpaceComparisonBuiltinsUseCanonicalArguments(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, tc := range []struct {
+		name string
+		sql  string
+		fn   string
+	}{
+		{name: "strcmp", sql: "select strcmp(" + value + ", 'MO') from nation", fn: "strcmp"},
+		{name: "field", sql: "select field(" + value + ", 'MO', 'XX') from nation", fn: "field"},
+		{name: "least", sql: "select least(" + value + ", 'MO') from nation", fn: "least"},
+		{name: "greatest", sql: "select greatest(" + value + ", 'MO') from nation", fn: "greatest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var found bool
+			var visit func(*planpb.Expr)
+			visit = func(expr *planpb.Expr) {
+				if expr == nil {
+					return
+				}
+				fn := expr.GetF()
+				if fn == nil {
+					return
+				}
+				if fn.Func.ObjName == tc.fn {
+					for _, arg := range fn.Args {
+						found = found || isCastOverload(arg, 2)
+					}
+				}
+				for _, arg := range fn.Args {
+					visit(arg)
+				}
+			}
+			for _, node := range logicPlan.GetQuery().Nodes {
+				for _, projection := range node.ProjectList {
+					visit(projection)
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
+
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
