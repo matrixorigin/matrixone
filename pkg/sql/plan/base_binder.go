@@ -6452,7 +6452,8 @@ func isCastOverload(expr *Expr, overloadID int32) bool {
 
 func isPadSpaceComparisonFunction(name string) bool {
 	switch name {
-	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between":
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between",
+		"strcmp", "field", "least", "greatest":
 		return true
 	default:
 		return false

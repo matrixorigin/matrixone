@@ -25,13 +25,13 @@ create table pad_char_set8 (c char(8));
 create table pad_char_set4 (c char(4));
 create table pad_char_set_v8 (c varchar(8));
 create table pad_char_set_text (c text);
-create table pad_char_promoted (c char(8), v varchar(8));
+create table pad_char_promoted (id int, c char(8), v varchar(8));
 create table pad_char_window (id int, c char(8), v varchar(8));
 insert into pad_char_set8 values ('MO');
 insert into pad_char_set4 values ('MO');
 insert into pad_char_set_v8 values ('MO');
 insert into pad_char_set_text values ('MO');
-insert into pad_char_promoted values ('MO', null), (null, 'MO');
+insert into pad_char_promoted values (1, 'MO', null), (2, null, 'MO');
 insert into pad_char_window values (1, 'MO', null), (2, null, 'MO'), (3, null, 'X');
 
 select char_length(c), length(c), hex(c), concat('>', c, '<'),
@@ -113,6 +113,18 @@ select count(y) from (
         select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
     ) d
 ) q;
+select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
+select id,
+       count(*) over (partition by coalesce(c, v)),
+       dense_rank() over (order by coalesce(c, v))
+from pad_char_promoted order by id;
+select id,
+       strcmp(coalesce(c, v), 'MO'),
+       field(coalesce(c, v), 'MO', 'XX'),
+       least(coalesce(c, v), 'MO'),
+       greatest(coalesce(c, v), 'MO')
+from pad_char_promoted order by id;
 
 prepare pad_char_stmt from
     'select c, char_length(c), length(c), hex(c), concat(''>'', c, ''<''),
@@ -199,6 +211,18 @@ select count(y) from (
         select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
     ) d
 ) q;
+select count(distinct coalesce(c, v), 1) from pad_char_promoted;
+select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
+select id,
+       count(*) over (partition by coalesce(c, v)),
+       dense_rank() over (order by coalesce(c, v))
+from pad_char_promoted order by id;
+select id,
+       strcmp(coalesce(c, v), 'MO'),
+       field(coalesce(c, v), 'MO', 'XX'),
+       least(coalesce(c, v), 'MO'),
+       greatest(coalesce(c, v), 'MO')
+from pad_char_promoted order by id;
 select length(c), hex(c) from (select c from pad_char_set8 union select c from pad_char_set4) u;
 select length(c), hex(c) from (select c from pad_char_set4 union select c from pad_char_set8) u;
 execute pad_char_stmt;
