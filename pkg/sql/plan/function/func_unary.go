@@ -5267,15 +5267,19 @@ func mysqlFirstWhitespaceForExtract(str string) int {
 }
 
 func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
-	prefix := mysqlTimePrefixForExtract(str)
-	if len(prefix) == 0 {
+	rawPrefix := mysqlTimePrefixForExtract(str)
+	if len(rawPrefix) == 0 {
 		return 0, 0, 0, false
 	}
 
-	prefix = mysqlTrimLeftWhitespaceForExtract(prefix)
+	prefix := mysqlTrimLeftWhitespaceForExtract(rawPrefix)
 	if len(prefix) == 0 {
 		return 0, 0, 0, false
 	}
+	// prefix is trimmed before scanning, but suffix ownership must still use
+	// offsets into the original value. Keeping this offset avoids dropping or
+	// shifting the token after a leading whitespace prefix.
+	prefixOffset := len(rawPrefix) - len(prefix)
 
 	if dot := strings.IndexByte(prefix, '.'); dot >= 0 {
 		// MySQL consumes the complete TIME prefix before a fractional separator.
@@ -5287,11 +5291,13 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	day := uint64(0)
 	hasDay := false
 	if space := mysqlFirstWhitespaceForExtract(prefix); space >= 0 {
+		suffixStart := prefixOffset + space
+		suffix := str[suffixStart:]
 		// Keep the complete post-day candidate, including bytes that terminate
 		// mysqlTimePrefixForExtract. MySQL uses a nonempty suffix to establish
 		// day-TIME ownership for a one-digit hour (for example, "1 2x" and
 		// "1 2 "), while the suffix-free "1 2" remains compact TIME.
-		postDay := mysqlTrimLeftWhitespaceForExtract(str[space:])
+		postDay := mysqlTrimLeftWhitespaceForExtract(suffix)
 		if space > 0 && asciiDigits(prefix[:space]) && mysqlDayTimeClockCandidateForExtract(postDay) {
 			day = mysqlClampedDigitsForExtract(prefix[:space], 35)
 			hasDay = true
@@ -5307,10 +5313,10 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 			// decision until the suffix is visible. Numeric suffixes are the
 			// exceptional two-digit-colon TIME form; other invalid-date suffixes
 			// are rejected by MySQL instead of being silently truncated to TIME.
-			if mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix, str, space) {
+			if mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix[:space], suffix) {
 				return 0, 0, 0, false
 			}
-			if mysqlInvalidDateClockSuffixForExtract(prefix[:space], str[space:]) {
+			if mysqlInvalidDateClockSuffixForExtract(prefix[:space], suffix) {
 				return 0, 0, 0, false
 			}
 			// A clock prefix followed by whitespace keeps the fields consumed
@@ -5370,15 +5376,14 @@ func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
 	return true
 }
 
-func mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix, str string, space int) bool {
-	if space <= 0 || space >= len(prefix) {
+func mysqlRepeatedClockSeparatorBeforeTokenForExtract(clock, suffix string) bool {
+	if len(clock) == 0 {
 		return false
 	}
-	suffix := mysqlTrimLeftWhitespaceForExtract(str[space:])
+	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
 	if suffix == "" {
 		return false
 	}
-	clock := prefix[:space]
 	if mysqlShortNonNumericTimeSuffixForExtract(suffix) {
 		// A short non-numeric token terminates the consumed TIME candidate
 		// without discarding the prefix. MySQL preserves a single trailing
