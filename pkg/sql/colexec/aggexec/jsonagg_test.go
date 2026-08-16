@@ -92,8 +92,8 @@ func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
 				"mutation must reuse preflighted retained capacity")
 
 			var spill bytes.Buffer
-			require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateResult(
-				1, 0, []uint8{1}, &spill))
+			require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+				0, []int32{0}, &spill))
 			restored, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
 			require.NoError(t, err)
 			restoredOwner := restored.(AllocationAccountOwner)
