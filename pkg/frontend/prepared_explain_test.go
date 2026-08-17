@@ -19,7 +19,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -29,9 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
 func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
@@ -100,6 +104,213 @@ func TestUnwrapExecutableExplainStatement(t *testing.T) {
 	plain := &tree.Select{}
 	require.Same(t, plain, unwrapExecutableExplainStatement(plain))
 	plain.Free()
+}
+
+// preparedAuthorizationBackgroundExec returns an empty result for privilege
+// lookups that are not explicitly configured.  This keeps the test focused on
+// the execute-time authorization boundary instead of the catalog query list.
+type preparedAuthorizationBackgroundExec struct {
+	backgroundExecTest
+}
+
+func (bh *preparedAuthorizationBackgroundExec) GetExecResultSet() []interface{} {
+	if result, ok := bh.sql2result[bh.currentSql]; ok && result != nil {
+		return []interface{}{result}
+	}
+	return []interface{}{newMrsForWithGrantOptionPrivilege(nil)}
+}
+
+func preparedTableScanPlan(tableName string) *planPb.Plan {
+	return &planPb.Plan{
+		Plan: &planPb.Plan_Query{
+			Query: &planPb.Query{
+				StmtType: planPb.Query_SELECT,
+				Steps:    []int32{0},
+				Nodes: []*planPb.Node{
+					{
+						NodeType: planPb.Node_TABLE_SCAN,
+						ObjRef: &planPb.ObjectRef{
+							SchemaName: "db1",
+							ObjName:    tableName,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func installPreparedTableScanPlan(
+	t *testing.T,
+	ses *Session,
+	prepareStmt *PrepareStmt,
+	innerPlan *planPb.Plan,
+) {
+	t.Helper()
+	prepareStmt.PreparePlan = &planPb.Plan{
+		Plan: &planPb.Plan_Dcl{
+			Dcl: &planPb.DataControl{
+				DclType: planPb.DataControl_PREPARE,
+				Control: &planPb.DataControl_Prepare{
+					Prepare: &planPb.Prepare{
+						Name: prepareStmt.Name,
+						Plan: innerPlan,
+					},
+				},
+			},
+		},
+	}
+	prepareStmt.compile = compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		ses.GetProc(), prepareStmt.PrepareStmt, false, nil, time.Now())
+}
+
+func configurePreparedAuthorizationSession(
+	t *testing.T,
+	ses *Session,
+	execCtx *ExecCtx,
+) {
+	t.Helper()
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "tenant1",
+		User:          "alice",
+		DefaultRole:   "analyst",
+		TenantID:      1,
+		UserID:        2,
+		DefaultRoleID: 3,
+	})
+	ses.SetAccountId(1)
+	if ses.cache == nil {
+		ses.cache = &privilegeCache{}
+	}
+	execCtx.reqCtx = defines.AttachAccount(execCtx.reqCtx, 1, 2, 3)
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+}
+
+func newPreparedAuthorizationWrapper(
+	ses *Session,
+	prepareStmt *PrepareStmt,
+	innerPlan *planPb.Plan,
+	binary bool,
+) (*TxnComputationWrapper, *ExecCtx) {
+	proc := ses.GetProc()
+	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
+	ctx = defines.AttachAccount(ctx, 1, 2, 3)
+	var stmt tree.Statement
+	var wrapperPlan *planPb.Plan
+	if binary {
+		stmt = prepareStmt.PrepareStmt
+		wrapperPlan = innerPlan
+	} else {
+		stmt = tree.NewExecute(tree.Identifier(prepareStmt.Name))
+		wrapperPlan = &planPb.Plan{
+			Plan: &planPb.Plan_Dcl{
+				Dcl: &planPb.DataControl{
+					DclType: planPb.DataControl_EXECUTE,
+					Control: &planPb.DataControl_Execute{
+						Execute: &planPb.Execute{Name: prepareStmt.Name},
+					},
+				},
+			},
+		}
+	}
+	cw := InitTxnComputationWrapper(ses, stmt, proc)
+	cw.plan = wrapperPlan
+	cw.binaryPrepare = binary
+	cw.stmtBorrowed = binary
+	execCtx := &ExecCtx{
+		reqCtx: ctx,
+		ses:    ses,
+		proc:   proc,
+		resper: ses.GetResponser(),
+		input: &UserInput{
+			stmtName:            prepareStmt.Name,
+			isBinaryProtExecute: binary,
+		},
+	}
+	return cw, execCtx
+}
+
+func newPreparedAuthorizationFixture(
+	t *testing.T,
+	stmtSQL string,
+) (*Session, *PrepareStmt, *planPb.Plan, *preparedAuthorizationBackgroundExec) {
+	t.Helper()
+	// Build the fixture with a catalog-independent statement, then replace its
+	// prepared AST with the real table-scan SQL.  The plan is supplied below so
+	// this test does not need a live catalog while still exercising the parser's
+	// SELECT/EXPLAIN statement shape.
+	ses, prepareStmt, _, _ := newPreparedExecuteEnvForSQL(t, 120, "select 1")
+	parsed, err := mysql.Parse(context.Background(), stmtSQL, 1)
+	require.NoError(t, err)
+	prepareStmt.PrepareStmt.Free()
+	prepareStmt.PrepareStmt = parsed[0]
+	prepareStmt.Sql = stmtSQL
+	innerPlan := preparedTableScanPlan("t1")
+	installPreparedTableScanPlan(t, ses, prepareStmt, innerPlan)
+	bh := &preparedAuthorizationBackgroundExec{}
+	bh.init()
+	return ses, prepareStmt, innerPlan, bh
+}
+
+func runPreparedAuthorizationCompile(
+	t *testing.T,
+	ses *Session,
+	prepareStmt *PrepareStmt,
+	innerPlan *planPb.Plan,
+	binary bool,
+	allowed bool,
+) error {
+	t.Helper()
+	cw, execCtx := newPreparedAuthorizationWrapper(ses, prepareStmt, innerPlan, binary)
+	configurePreparedAuthorizationSession(t, ses, execCtx)
+	if allowed {
+		ses.cache.add(objectTypeTable, privilegeLevelTable, "db1", "t1", PrivilegeTypeSelect)
+	}
+	_, err := cw.Compile(execCtx, nil)
+	return err
+}
+
+func TestPreparedExplainAuthorizationRechecksExecutionPrivilege(t *testing.T) {
+	cacheEnabledStub := gostub.Stub(&privilegeCacheIsEnabled, func(context.Context, *Session) (bool, error) {
+		return true, nil
+	})
+	defer cacheEnabledStub.Reset()
+
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		binary bool
+	}{
+		{name: "text execute select", sql: "select * from db1.t1", binary: false},
+		{name: "text execute explain analyze", sql: "explain analyze select * from db1.t1", binary: false},
+		{name: "text execute explain phyplan", sql: "explain phyplan select * from db1.t1", binary: false},
+		{name: "binary execute select", sql: "select * from db1.t1", binary: true},
+		{name: "binary explain analyze", sql: "explain analyze select * from db1.t1", binary: true},
+		{name: "binary explain phyplan", sql: "explain phyplan select * from db1.t1", binary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, prepareStmt, innerPlan, bh := newPreparedAuthorizationFixture(t, tc.sql)
+			defer prepareStmt.Close()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+
+			err := runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			require.NoError(t, err, "a granted prepared statement must reach the compile path")
+
+			// Revoke the table privilege and clear the session cache.  A fresh
+			// wrapper models a second EXECUTE/COM_STMT_EXECUTE using the same
+			// prepared handle after the revoke.
+			ses.InvalidatePrivilegeCache()
+			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, false)
+			require.Error(t, err, "a revoked prepared statement must be rejected")
+
+			// Re-granting the table privilege makes the same prepared handle
+			// executable again after the cache is repopulated.
+			err = runPreparedAuthorizationCompile(t, ses, prepareStmt, innerPlan, tc.binary, true)
+			require.NoError(t, err, "a re-granted prepared statement must be executable again")
+		})
+	}
 }
 
 func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
