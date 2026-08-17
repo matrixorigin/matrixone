@@ -5387,7 +5387,7 @@ func isPadSpaceValueSelectingFunction(name string) bool {
 	switch name {
 	case "case", "coalesce", "if", "ifnull",
 		"lag", "lead", "first_value", "last_value", "nth_value",
-		"any_value", "min", "max":
+		"any_value", "min", "max", "max_by", "max_by_non_null":
 		return true
 	default:
 		return false

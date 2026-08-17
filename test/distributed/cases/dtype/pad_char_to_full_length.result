@@ -216,6 +216,20 @@ select max(coalesce(c, v)) as x from pad_char_promoted group by id
 ) q;
 ➤ count(*)[-5,64,0]  𝄀
 1
+select count(*) from (
+select distinct x from (
+select max_by(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by_non_null(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 ➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
 1
@@ -432,6 +446,20 @@ select min(coalesce(c, v)) as x from pad_char_promoted group by id
 select count(*) from (
 select distinct x from (
 select max(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by(coalesce(c, v), id, id) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max_by_non_null(coalesce(c, v), id, id) as x from pad_char_promoted group by id
 ) d
 ) q;
 ➤ count(*)[-5,64,0]  𝄀

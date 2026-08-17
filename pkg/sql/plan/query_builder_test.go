@@ -4486,13 +4486,22 @@ func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 
 func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
-	for _, aggregate := range []string{"any_value", "min", "max"} {
-		t.Run(aggregate, func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr string
+	}{
+		{name: "any value", expr: "any_value(" + value + ")"},
+		{name: "min", expr: "min(" + value + ")"},
+		{name: "max", expr: "max(" + value + ")"},
+		{name: "max by", expr: "max_by(" + value + ", n_nationkey, n_nationkey)"},
+		{name: "max by non null", expr: "max_by_non_null(" + value + ", n_nationkey, n_nationkey)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
 				NewMockOptimizer(true),
 				t,
-				"select distinct x from (select "+aggregate+"("+value+
-					") as x from nation group by n_regionkey) d",
+				"select distinct x from (select "+tc.expr+
+					" as x from nation group by n_regionkey) d",
 			)
 			require.NoError(t, err)
 
