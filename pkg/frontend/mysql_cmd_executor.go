@@ -1028,6 +1028,13 @@ func doSetVar(
 			return
 		}
 		if assign.Global {
+			if def, ok := gSysVarsDefs[canonicalSystemVariableName(assign.Name)]; ok && def.Scope == ScopeBoth {
+				// SET GLOBAL changes the value inherited by a future session but
+				// leaves this session's value unchanged. Replaying it on a legacy
+				// target after the handshake would therefore lose the source value.
+				ses.markMigrationSystemVarReplayable(assign.Name, false)
+				return
+			}
 			// Only global variables with a session-migration runtime side
 			// effect need replayability tracking. A prepared or multi-statement
 			// SET GLOBAL for these variables is not present in the proxy raw

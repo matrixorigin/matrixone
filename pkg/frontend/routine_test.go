@@ -691,6 +691,31 @@ func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
 	require.True(t, ses.hasUnreplayableMigrationSystemVars())
 }
 
+func TestCapturedUserAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	preparedSQL := "set @x = 1"
+	preparedStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, preparedSQL, 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), preparedStmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
+
+	rawSQL := "set @x = @x + 1"
+	rawStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rawSQL, 1)
+	require.NoError(t, err)
+	rawExecCtx := newTestExecCtx(ctx, ctrl)
+	rawExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, rawExecCtx, rawStmt.(*tree.SetVar), rawSQL, false))
+	// A later captured write cannot prove that an earlier prepared write was
+	// replayable; retain the conservative migration marker for the variable.
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
+}
+
 func TestPreparedGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -742,6 +767,35 @@ func TestMultiStatementGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T)
 	execCtx.singleStatementQuery = false
 	require.NoError(t, doSetVar(
 		ses, execCtx, stmt.(*tree.SetVar), "set global runtime_filter_limit_in = 42", false))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestRawGlobalScopeBothAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "autocommit")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "autocommit", "0")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+
+	sql := "set global autocommit = 0"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
 	require.True(t, ses.hasUnreplayableMigrationSystemVars())
 }
 

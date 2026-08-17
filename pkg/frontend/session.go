@@ -465,7 +465,11 @@ func (ses *Session) setUserDefinedVarWithKindAndReplayability(
 ) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+	key := strings.ToLower(name)
+	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+		replayable = false
+	}
+	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
