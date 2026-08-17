@@ -86,6 +86,47 @@ func TestFoldVarExprRemoteNumericCastAppendsWarning(t *testing.T) {
 	require.Contains(t, session.warnings[0].msg, "12abc")
 }
 
+func TestFoldVarExprRemoteNumericCastSkipsUnselectedBranchWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		if name == "s" && !system {
+			return "12abc", nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+	})
+
+	variable := makeTestVarExpr("s")
+	variable.GetV().System = false
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		variable,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	zeroType := types.T_int64.ToType()
+	zero := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&zeroType),
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: 0},
+		}},
+	}
+	condition := makeTestConstBoolExpr(false)
+	iff, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition, cast, zero,
+	})
+	require.NoError(t, err)
+
+	folded, err := foldVarExprsInExprInPlace(iff, proc)
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.Empty(t, session.warnings)
+}
+
 func TestScopeContainsVarExpr(t *testing.T) {
 	scope := newScope(Normal)
 	proj := projection.NewArgument()
