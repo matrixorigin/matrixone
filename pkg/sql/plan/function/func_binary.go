@@ -1813,11 +1813,36 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 	if value == types.ZeroTimestamp {
 		return types.ZeroTimestamp
 	}
-	civil := value.ToDatetime(loc) + types.Datetime(interval)
-	boundary := civil.ToTimestamp(loc)
-	roundTrip := boundary.ToDatetime(loc)
-	if roundTrip < civil {
-		boundary += types.Timestamp(civil - roundTrip)
+	civilValue := value.ToDatetime(loc)
+	baseCivil := civilValue
+	gapAdjusted := false
+	if interval > 0 {
+		if gap := timestampWindowGapAt(value, loc); gap > 0 &&
+			int64(civilValue)%interval != 0 {
+			// NormalizeTimestampWindowStart maps a nonexistent civil boundary
+			// to the first valid instant after the gap. Recover that nominal
+			// phase before advancing so a later boundary does not drift.
+			baseCivil -= types.Datetime(gap)
+			gapAdjusted = true
+		}
+	}
+	civil := baseCivil + types.Datetime(interval)
+	resolve := func(candidateCivil types.Datetime) types.Timestamp {
+		boundary := candidateCivil.ToTimestamp(loc)
+		roundTrip := boundary.ToDatetime(loc)
+		if roundTrip < candidateCivil {
+			boundary += types.Timestamp(candidateCivil - roundTrip)
+		}
+		return boundary
+	}
+	boundary := resolve(civil)
+	if gapAdjusted && boundary <= value {
+		// A one-hour interval can map both the nonexistent and the first
+		// valid civil labels to the same instant. Skip the duplicate label.
+		if nextCivil, ok := safeTimestampWindowSum(int64(civil), interval); ok {
+			civil = types.Datetime(nextCivil)
+			boundary = resolve(civil)
+		}
 	}
 
 	// A repeated civil hour contains two distinct aligned instants.  Resolving
@@ -1861,13 +1886,18 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 		return value
 	}
 	startCivil := int64(value.ToDatetime(loc))
+	gapAdjusted := false
+	if gap := timestampWindowGapAt(value, loc); gap > 0 && startCivil%interval != 0 {
+		startCivil -= gap
+		gapAdjusted = true
+	}
 	targetCivil, ok := safeTimestampWindowSum(startCivil, delta)
 	if !ok {
 		return value
 	}
 	target := types.Datetime(targetCivil)
 	candidateRaw, ok := safeTimestampWindowSum(int64(value), delta)
-	if ok {
+	if ok && !gapAdjusted {
 		candidate := types.Timestamp(candidateRaw)
 		candidateCivil := int64(candidate.ToDatetime(loc))
 		civilDelta := candidateCivil - startCivil
@@ -1888,6 +1918,26 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 		}
 	}
 	return resolveTimestampWindowBoundary(target, loc)
+}
+
+// timestampWindowGapAt reports a positive UTC-offset jump whose first valid
+// instant is exactly value. Such an instant may be the canonical image of a
+// nonexistent civil grid boundary after NormalizeTimestampWindowStart.
+func timestampWindowGapAt(value types.Timestamp, loc *time.Location) int64 {
+	if loc == nil || value == types.ZeroTimestamp {
+		return 0
+	}
+	instant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	start, _ := instant.ZoneBounds()
+	if start.IsZero() || !instant.Equal(start) {
+		return 0
+	}
+	_, currentOffset := instant.Zone()
+	_, previousOffset := start.Add(-time.Microsecond).Zone()
+	if currentOffset <= previousOffset {
+		return 0
+	}
+	return int64(currentOffset-previousOffset) * types.MicroSecsPerSec
 }
 
 // TimestampWindowBoundarySteps returns the number of boundary advances from

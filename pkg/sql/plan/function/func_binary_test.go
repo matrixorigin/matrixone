@@ -86,6 +86,17 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 		end = types.Timestamp(int64(start) + hour + hour/2)
 		require.Equal(t, int64(1), TimestampWindowBoundarySteps(start, end, hour, fixed))
 	})
+	t.Run("spring-forward-grid-phase", func(t *testing.T) {
+		interval := int64(2 * types.SecsPerHour * types.MicroSecsPerSec)
+		start := NormalizeTimestampWindowStart(parse("2026-03-08 00:30:00"), interval, zone)
+		first := AdvanceTimestampWindowBoundary(start, interval, zone)
+		second := AdvanceTimestampWindowBoundary(first, interval, zone)
+		bulk := AdvanceTimestampWindowBoundaryBy(start, 2, interval, zone)
+		want := NormalizeTimestampWindowStart(parse("2026-03-08 04:30:00"), interval, zone)
+		require.Equal(t, parse("2026-03-08 03:00:00"), first)
+		require.Equal(t, want, second)
+		require.Equal(t, second, bulk)
+	})
 }
 
 func initAddFaultPointTestCase() []tcTemp {
