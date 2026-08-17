@@ -389,9 +389,6 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 			remapDbInExpr(when.Val, remap)
 		}
 		remapDbInExpr(e.Else, remap)
-	case tree.SampleExpr:
-		columns, _ := e.GetColumns()
-		remapDbInExprs(columns, remap)
 	case *tree.SampleExpr:
 		columns, _ := e.GetColumns()
 		remapDbInExprs(columns, remap)
