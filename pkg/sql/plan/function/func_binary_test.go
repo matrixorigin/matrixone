@@ -78,6 +78,14 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 		require.Equal(t, count, TimestampWindowBoundarySteps(start, end, 1, fixed))
 		require.Equal(t, end, AdvanceTimestampWindowBoundaryBy(start, count, 1, fixed))
 	})
+	t.Run("non-boundary-target-keeps-floor", func(t *testing.T) {
+		fixed := time.FixedZone("UTC+8", 8*60*60)
+		start := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+		end := types.Timestamp(int64(start) + hour/2)
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, end, hour, fixed))
+		end = types.Timestamp(int64(start) + hour + hour/2)
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(start, end, hour, fixed))
+	})
 }
 
 func initAddFaultPointTestCase() []tcTemp {

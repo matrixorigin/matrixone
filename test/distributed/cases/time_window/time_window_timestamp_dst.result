@@ -35,7 +35,7 @@ order by _wstart;
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_gap
 where event_ts >= '2026-03-08 00:00:00'
-  and event_ts < '2026-03-08 04:00:00'
+and event_ts < '2026-03-08 04:00:00'
 group by k interval(event_ts, 1, hour) gapfill(partition)
 order by _wstart, _wend;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
@@ -105,7 +105,7 @@ order by _wstart, _wend;
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_fall_gap
 where event_ts >= '2026-11-01 00:00:00'
-  and event_ts < '2026-11-01 03:00:00'
+and event_ts < '2026-11-01 03:00:00'
 group by k interval(event_ts, 1, hour) gapfill(partition)
 order by _wstart, _wend;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[-5,64,0]  𝄀

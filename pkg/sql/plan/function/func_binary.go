@@ -1931,11 +1931,11 @@ func TimestampWindowBoundarySteps(start, end types.Timestamp, interval int64, lo
 		}
 	}
 
-	// Preserve progress for a target immediately after a fold/gap even when a
-	// caller supplied a boundary vector whose representation is not divisible
-	// by the requested interval.
-	if end > start {
-		return 1
+	// Preserve the legacy floor semantics for a non-boundary target.  The
+	// transition-adjacent exact cases were handled above; for ordinary spans,
+	// returning one here would skip an extra empty window.
+	if rawSpan > 0 {
+		return rawSpan / interval
 	}
 	return 0
 }
