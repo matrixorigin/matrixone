@@ -19,6 +19,7 @@ set -eu
 usage() {
     echo "usage: $0 [go test flags and package patterns...]" >&2
     echo "example: $0 -race -count=1 -timeout=120s ./pkg/target/..." >&2
+    echo "gpu:     MO_CL_CUDA=1 $0 -count=1 ./pkg/vectorindex/metric/" >&2
 }
 
 if [ "$#" -eq 0 ]; then
@@ -71,6 +72,85 @@ case "$goos" in
         ;;
 esac
 
+# MO_CL_CUDA=1 selects the GPU build, exactly as it does for `make`. It is required
+# whenever libmo was built with CUDA -- not only for `-tags gpu` packages -- because a
+# CUDA libmo carries undefined cu* symbols that every test binary linking it must
+# resolve, whatever tags the package itself uses.
+#
+# Flags mirror the Makefile's MO_CL_CUDA block; keep the two in step. The rpaths do not:
+# the Makefile ships $ORIGIN/lib for the distributable, while test binaries run from
+# temporary directories and need absolute paths, like the libmo rpath below.
+cuda_cflags=
+cuda_ldflags=
+cuda_rpaths=
+cuda_runtime_paths=
+gpu_tag_args=
+if [ "${MO_CL_CUDA:-}" = "1" ]; then
+    if [ "$goos" != linux ]; then
+        echo "MO_CL_CUDA=1 is only supported on linux, not $goos" >&2
+        exit 1
+    fi
+    if [ -z "${CONDA_PREFIX:-}" ]; then
+        echo "CONDA_PREFIX env variable not found." >&2
+        echo "MO_CL_CUDA=1 needs it to locate cuvs, as the Makefile does" >&2
+        exit 1
+    fi
+    cuda_cflags="'-I/usr/local/cuda/include' '-I$CONDA_PREFIX/include'"
+    cuda_ldflags="-L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$CONDA_PREFIX/lib -lcuvs -lcuvs_c -lstdc++"
+    cuda_rpaths="-Wl,-rpath,/usr/local/cuda/lib64 -Wl,-rpath,$CONDA_PREFIX/lib"
+    cuda_runtime_paths=":/usr/local/cuda/lib64:$CONDA_PREFIX/lib"
+
+    # The Makefile adds `-tags gpu` under the same switch, so MO_CL_CUDA=1 must always end up
+    # building the gpu-tagged files. It cannot be appended as a second -tags: go test keeps
+    # only the LAST one, which would discard the caller's. Nor can it be skipped when the
+    # caller passes -tags -- that was the old behaviour, and it silently excluded every
+    # //go:build gpu file while still reporting a pass, so
+    #     MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/
+    # validated no GPU code at all and went green. MERGE instead: gpu joins the caller's tag
+    # set, in whichever form they wrote it.
+    merge_gpu_tag() {
+        # Go accepts comma-separated tags, and historically space-separated ones. Treat both
+        # as separators so `gpu` is not added twice to `-tags "foo gpu"`.
+        case ",$(printf '%s' "$1" | tr ' ' ',')," in
+            *,gpu,*) printf '%s' "$1" ;;
+            ,,) printf 'gpu' ;;
+            *) printf '%s,gpu' "$1" ;;
+        esac
+    }
+
+    caller_set_tags=0
+    argc=$#
+    i=0
+    while [ "$i" -lt "$argc" ]; do
+        arg="$1"
+        shift
+        i=$((i + 1))
+        case "$arg" in
+            -tags | --tags)
+                caller_set_tags=1
+                if [ "$i" -lt "$argc" ] && [ $# -gt 0 ]; then
+                    val="$1"
+                    shift
+                    i=$((i + 1))
+                else
+                    val=
+                fi
+                set -- "$@" "$arg" "$(merge_gpu_tag "$val")"
+                ;;
+            -tags=* | --tags=*)
+                caller_set_tags=1
+                set -- "$@" "${arg%%=*}=$(merge_gpu_tag "${arg#*=}")"
+                ;;
+            *)
+                set -- "$@" "$arg"
+                ;;
+        esac
+    done
+    if [ "$caller_set_tags" -eq 0 ]; then
+        gpu_tag_args="-tags gpu"
+    fi
+fi
+
 for required in "$libmo" "$include_dir"; do
     if [ ! -e "$required" ]; then
         echo "missing MatrixOne CGo prerequisite: $required" >&2
@@ -79,10 +159,22 @@ for required in "$libmo" "$include_dir"; do
     fi
 done
 
+# A CUDA-built libmo cannot be linked without the CUDA flags, whatever the package under
+# test is. Left alone that surfaces as a page of "undefined reference to cuInit" from the
+# linker, which reads like a code fault; say what it actually is instead.
+if [ -z "$cuda_ldflags" ] && command -v readelf >/dev/null 2>&1; then
+    if readelf -d "$libmo" 2>/dev/null | grep -q 'NEEDED.*libcuda'; then
+        echo "$libmo was built with CUDA but MO_CL_CUDA is not set." >&2
+        echo "re-run as: MO_CL_CUDA=1 $0 $*" >&2
+        echo "or rebuild a CPU libmo with: make clean && make" >&2
+        exit 1
+    fi
+fi
+
 # Match the repository build contract and remove ambient module/CGo flag
 # drift. CC/CXX and other standard toolchain selectors remain caller-owned.
 export GOWORK=off
-export CGO_CFLAGS="'-I$cgo_dir' '-I$include_dir'"
+export CGO_CFLAGS="'-I$cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}"
 export CGO_LDFLAGS="'-L$lib_dir'"
 
 # cgo/lib.go owns libmo's native dependency declaration. Query that metadata
@@ -96,7 +188,7 @@ if [ -z "$cgo_link_flags" ]; then
     exit 1
 fi
 
-runtime_paths="$cgo_dir:$lib_dir"
+runtime_paths="$cgo_dir:$lib_dir$cuda_runtime_paths"
 if [ "$runtime_path_var" = DYLD_LIBRARY_PATH ]; then
     export DYLD_LIBRARY_PATH="$runtime_paths"
 else
@@ -109,8 +201,8 @@ fi
 # The wrapper injects libmo even when the requested package does not import
 # cgo/lib.go, so it must also close libmo's dependency graph. Keep the queried
 # flags after -lmo: archive resolution is order-sensitive on common linkers.
-external_flags="$platform_link_flags -L$cgo_dir -lmo $cgo_link_flags -Wl,-rpath,$cgo_dir -Wl,-rpath,$lib_dir"
+external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$cgo_dir -lmo $cgo_link_flags -Wl,-rpath,$cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}"
 ldflags="-extldflags '$external_flags'"
 
 cd "$repo_root"
-exec go test -mod=readonly -ldflags "$ldflags" "$@"
+exec go test -mod=readonly $gpu_tag_args -ldflags "$ldflags" "$@"

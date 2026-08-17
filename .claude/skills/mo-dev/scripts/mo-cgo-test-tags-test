@@ -1,0 +1,131 @@
+#!/bin/sh
+#
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Checks that MO_CL_CUDA=1 always reaches `go test` with the gpu build tag, in whichever
+# form the caller wrote their own -tags.
+#
+# This exists because the wrapper used to SKIP `-tags gpu` whenever the caller passed any
+# -tags of their own, on the reasoning that go test keeps only the last -tags. The effect
+# was a false green:
+#
+#     MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/
+#
+# ran with `-tags typecheck`, so every //go:build gpu file and test was excluded from a run
+# whose whole purpose was GPU validation, and it passed.
+#
+# Runs without a GPU, a CUDA toolkit or a built libmo: `go` is stubbed to answer the
+# wrapper's probes and echo the argv it would have executed.
+#
+# Usage: sh .agents/skills/mo-dev/scripts/mo-cgo-test-tags-test
+
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+wrapper="$script_dir/mo-cgo-test"
+repo_root=$(CDPATH= cd -- "$script_dir/../../../.." && pwd)
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/bin" "$work/include" "$work/lib"
+
+cat > "$work/bin/go" <<'STUB'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) shift 2 ;;
+    env)
+      case "$2" in
+        GOOS|GOHOSTOS) echo linux ;;
+        GOARCH|GOHOSTARCH) echo amd64 ;;
+        CGO_ENABLED) echo 1 ;;
+        *) echo "" ;;
+      esac
+      exit 0 ;;
+    list) echo "-lmo -lstdc++"; exit 0 ;;
+    test) shift; echo "GO_TEST_ARGS: $*"; exit 0 ;;
+    *) shift ;;
+  esac
+done
+STUB
+chmod +x "$work/bin/go"
+
+failures=0
+
+# tags_of prints the -tags/--tags flag (and its value) the wrapper would hand go test.
+tags_of() {
+    MO_CL_CUDA=1 CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        sh "$wrapper" "$@" 2>/dev/null |
+        grep -oE 'GO_TEST_ARGS:.*' |
+        grep -oE '\-{1,2}tags[= ][^ ]+' |
+        head -1
+}
+
+check() {
+    want=$1
+    shift
+    got=$(tags_of "$@" || true)
+    if [ "$got" = "$want" ]; then
+        printf 'ok   %-38s -> %s\n' "$*" "$got"
+    else
+        printf 'FAIL %-38s -> %s (want %s)\n' "$*" "${got:-<no -tags at all>}" "$want"
+        failures=$((failures + 1))
+    fi
+}
+
+check "-tags gpu"             ./pkg/x/
+check "-tags typecheck,gpu"   -tags typecheck ./pkg/x/
+check "-tags=typecheck,gpu"   -tags=typecheck ./pkg/x/
+check "--tags=a,b,gpu"        --tags=a,b ./pkg/x/
+check "-tags gpu"             -tags gpu ./pkg/x/
+check "-tags=foo,gpu"         -tags=foo,gpu ./pkg/x/
+check "-tags typecheck,gpu"   -count=1 -tags typecheck -race ./pkg/x/
+
+# The caller's other flags and the package list must survive the rewrite untouched.
+full=$(MO_CL_CUDA=1 CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    sh "$wrapper" -count=1 -tags typecheck -race ./pkg/x/ 2>/dev/null |
+    grep -oE 'GO_TEST_ARGS:.*')
+for expect in '-count=1' '-race' './pkg/x/' '-tags typecheck,gpu'; do
+    case "$full" in
+        *"$expect"*) printf 'ok   argv keeps %s\n' "$expect" ;;
+        *) printf 'FAIL argv lost %s\n' "$expect"; failures=$((failures + 1)) ;;
+    esac
+done
+
+# Without MO_CL_CUDA the wrapper must not inject gpu at all. Skipped when the checked-out
+# libmo is itself CUDA-built: the wrapper then refuses the non-CUDA run by design (linking a
+# CUDA libmo without the CUDA flags fails with a page of undefined cuInit references), and
+# that refusal is a different behaviour under test, not this one.
+out=$(CONDA_PREFIX="$work" PATH="$work/bin:$PATH" sh "$wrapper" -tags typecheck ./pkg/x/ 2>&1 || true)
+case "$out" in
+    *"built with CUDA but MO_CL_CUDA is not set"*)
+        printf 'skip MO_CL_CUDA unset: libmo in this tree is CUDA-built\n' ;;
+    *)
+        got=$(printf '%s' "$out" | grep -oE 'GO_TEST_ARGS:.*' |
+            grep -oE '\-{1,2}tags[= ][^ ]+' | head -1 || true)
+        if [ "$got" = "-tags typecheck" ]; then
+            printf 'ok   MO_CL_CUDA unset leaves tags alone -> %s\n' "$got"
+        else
+            printf 'FAIL MO_CL_CUDA unset -> %s (want -tags typecheck)\n' "${got:-<none>}"
+            failures=$((failures + 1))
+        fi ;;
+esac
+
+cd "$repo_root" || exit 1
+if [ "$failures" -ne 0 ]; then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nall checks passed\n'

@@ -120,13 +120,6 @@ Two preconditions, both learned by wasting a run without them:
 Re-run a suspicious failure on a clean instance before reporting it. A suite that fails only
 after other suites is an ordering artifact, not a regression.
 
-### Verifying planner rewrites
-
-`set global plan_verifier = 1` turns on `pkg/planverify`: structural invariant checks that
-run on the plan right after the rewrites build it (a predicate on a field the executor
-ignores, a keyless SORT, an unresolvable column reference, a broken node graph). A violation
-fails the query, so a whole BVT run under it is the cheapest way to shake out a rewrite that
-produces a malformed-but-silent plan. Default is 0; keep it off outside test runs.
 
 ## Operator / Pipeline Rules
 

@@ -364,10 +364,16 @@ default: nothing tells an author when one rots. A single local sweep in August 2
 
 Two consequences for anyone running GPU tests:
 
-1. **A GPU failure is not automatically yours.** Prove ownership before fixing: revert your
-   change (`git stash`, or `git checkout HEAD~1 -- <paths>` once committed) and re-run. Then
-   check whether another branch already fixes it — `git log -S '<symbol>' --all --oneline`
-   and `git branch --contains <commit>` — before patching it into your diff. Three of the
+1. **A GPU failure is not automatically yours.** Prove ownership at the clean baseline
+   using the isolated worktree in section 5 — do NOT revert in place. `git stash` is
+   forbidden there for reasons that apply verbatim here, and `git checkout HEAD~1 -- <paths>`
+   is worse: it rewrites the index AND the working tree, so an interrupted or mistyped
+   invocation silently discards uncommitted work. A GPU build in the worktree needs its own
+   `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
+   out with it.
+
+   Once the failure is shown to predate your change, find out who owns it before touching it:
+   `git log -S '<symbol>' --all --oneline` and `git branch --contains <commit>`. Three of the
    four above were already fixed on other in-flight branches; duplicating those fixes would
    have produced merge conflicts for no gain.
 2. **Run the whole GPU set, not just your package**, when touching shared vector code:
