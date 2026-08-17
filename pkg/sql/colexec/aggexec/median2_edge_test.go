@@ -275,7 +275,7 @@ func TestMedianAccountedPolicyAndLegacyBranches(t *testing.T) {
 	require.ErrorIs(t, accounted.BulkFill(0, nil), mpool.ErrAllocationAccountInvalid)
 	require.Error(t, accounted.(BatchCapacityPreflight).PreflightBatchMerge(legacy, 0, nil))
 	require.NoError(t, legacy.(BatchCapacityPreflight).PreflightBatchMerge(accounted, 0, nil))
-	require.Error(t, legacy.(SpillStateCodec).SaveSpillIntermediateResult(0, 0, nil, io.Discard))
+	require.Error(t, legacy.(SpillStateCodec).SaveSpillIntermediateRows(0, nil, io.Discard))
 	require.Error(t, legacy.(SpillStateCodec).UnmarshalSpillFromReader(bytes.NewReader(nil), mp))
 
 	require.NoError(t, accounted.GroupGrow(1))
