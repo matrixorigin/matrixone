@@ -314,40 +314,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.idxcfg.IndexCapacity <= 0 {
-			u.idxcfg.IndexCapacity = srcRowCount
-			logutil.Infof("CAGRA create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
-		}
-
-		// Compute the small-tail cutoff. The trailing partial chunk is
-		// total % IndexCapacity. When IndexCapacity is auto-detected
-		// (== srcRowCount) the modulo is zero and no fallback fires.
-		// When the user explicitly set IndexCapacity and the trailing
-		// partial is smaller than the cuvs minimum (or every chunk
-		// would be too small because IndexCapacity itself is below the
-		// threshold) the tail rows route to CDC instead of cuvs.
-		// Threshold = the cuvs CAGRA minimum graph size for a build to
-		// succeed. Mirrors cuvs.DefaultCagraBuildParams().IntermediateGraphDegree
-		// (128) when the user didn't set it explicitly — same fallback
-		// chain the build itself uses.
-		threshold := int64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
-		if threshold <= 0 {
-			threshold = 128
-		}
-		u.cdcCutoff = srcRowCount
-		if u.idxcfg.IndexCapacity < threshold {
-			u.cdcCutoff = 0
-			logutil.Infof("CAGRA create: IndexCapacity %d < threshold %d; all %d rows route to CDC tail",
-				u.idxcfg.IndexCapacity, threshold, srcRowCount)
-		} else {
-			lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
-			if lastChunkSize > 0 && lastChunkSize < threshold {
-				u.cdcCutoff = srcRowCount - lastChunkSize
-				logutil.Infof("CAGRA create: trailing %d rows < threshold %d; routing them to CDC tail (cutoff=%d, total=%d)",
-					lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
-			}
-		}
+		// Capacity is resolved further down, once the dimension, storage type and device
+		// are known — sizing it against VRAM needs all three.
+		requestedCapacity := u.idxcfg.IndexCapacity
 
 		// ---- validate argument types ----
 		idVec := tf.ctr.argVecs[1]
@@ -378,6 +347,46 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// test-only: present N logical GPUs (all on device 0) so SHARDED / REPLICATED
 		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
+
+		// ---- capacity, bounded by what the GPU can actually hold ----
+		// See the ivfpq twin: every build is bounded, not just the default, because an
+		// explicit cagra_max_index_capacity is a request rather than an override.
+		//
+		// CAGRA's per-row build cost adds the intermediate kNN graph (neighbour ids plus
+		// distances) on top of the dataset.
+		perRow := uint64(u.idxcfg.CuvsCagra.Dimensions) * quantizationBytes(qt)
+		graphDegree := uint64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
+		if graphDegree == 0 {
+			graphDegree = 128
+		}
+		perRow += graphDegree * 8
+
+		var rowsFit int64
+		if len(devices) > 0 {
+			var freeBytes uint64
+			rowsFit, freeBytes, err = cuvs.RowsFittingFreeMem(devices[0], perRow)
+			if err != nil {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"cagra: cannot size the index build against GPU memory (%v); "+
+						"set cagra_max_index_capacity explicitly", err)
+			}
+			logutil.Infof("CAGRA create: %d MB free on device %d, %d B/row -> %d rows fit",
+				freeBytes>>20, devices[0], perRow, rowsFit)
+		}
+
+		threshold := int64(graphDegree)
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, threshold,
+			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			"cagra", "max_index_capacity")
+		if err != nil {
+			return err
+		}
+		u.idxcfg.IndexCapacity = plan.Capacity
+		u.cdcCutoff = plan.CdcCutoff
+		if plan.NumSubIdx > 1 || plan.VRAMBound {
+			logutil.Infof("CAGRA create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
+				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		}
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)

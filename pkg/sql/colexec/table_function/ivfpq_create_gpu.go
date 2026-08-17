@@ -324,33 +324,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				u.tblcfg.DbName, u.tblcfg.SrcTable)
 			return nil
 		}
-		if u.idxcfg.IndexCapacity <= 0 {
-			u.idxcfg.IndexCapacity = srcRowCount
-			logutil.Infof("IVFPQ create: auto-detected index capacity = %d from `%s`.`%s`",
-				u.idxcfg.IndexCapacity, u.tblcfg.DbName, u.tblcfg.SrcTable)
-		}
-
-		// Small-tail cutoff. Threshold = the cuvs IVF-PQ k-means
-		// minimum (lists). When the trailing partial chunk is smaller
-		// than lists — or every chunk would be too small because
-		// IndexCapacity itself is below lists — the tail rows route to
-		// CDC instead of cuvs k-means.
-		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
-		u.cdcCutoff = srcRowCount
-		if threshold > 0 {
-			if u.idxcfg.IndexCapacity < threshold {
-				u.cdcCutoff = 0
-				logutil.Infof("IVFPQ create: IndexCapacity %d < lists %d; all %d rows route to CDC tail",
-					u.idxcfg.IndexCapacity, threshold, srcRowCount)
-			} else {
-				lastChunkSize := srcRowCount % u.idxcfg.IndexCapacity
-				if lastChunkSize > 0 && lastChunkSize < threshold {
-					u.cdcCutoff = srcRowCount - lastChunkSize
-					logutil.Infof("IVFPQ create: trailing %d rows < lists %d; routing them to CDC tail (cutoff=%d, total=%d)",
-						lastChunkSize, threshold, u.cdcCutoff, srcRowCount)
-				}
-			}
-		}
+		// Capacity is resolved further down, once the dimension, storage type and device
+		// are known — sizing it against VRAM needs all three.
+		requestedCapacity := u.idxcfg.IndexCapacity
 
 		// kmeans training fraction (0-100 percent → 0-1 fraction). Flat
 		// algo_params key (set in CREATE INDEX) wins; otherwise the session
@@ -404,6 +380,52 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// test-only: present N logical GPUs (all on device 0) so SHARDED / REPLICATED
 		// modes can be built on a single-GPU host. No-op when gpu_multi_simulation < 2.
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
+
+		// ---- capacity, bounded by what the GPU can actually hold ----
+		// Every build is bounded, not just the default one: an explicit
+		// max_index_capacity is a request, and honouring a request larger than the
+		// device can take would reintroduce the OOM this bound exists to prevent.
+		//
+		// Per-row cost is not just the dataset. cuVS subsamples the k-means trainset as
+		// FLOAT32 whatever the storage type, so a quantized build still pays dim*4 for
+		// that fraction; leaving it out under-counts an int8 build by ~40%.
+		perRow := uint64(u.idxcfg.CuvsIvfpq.Dimensions) * quantizationBytes(qt)
+		perRow += uint64(float64(u.idxcfg.CuvsIvfpq.Dimensions) * 4 *
+			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction)
+
+		var rowsFit int64
+		if len(devices) > 0 {
+			var freeBytes uint64
+			rowsFit, freeBytes, err = cuvs.RowsFittingFreeMem(devices[0], perRow)
+			if err != nil {
+				// Never guess. Assuming the whole table fits is precisely the failure
+				// being prevented, so say which lever the operator has instead.
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ivfpq: cannot size the index build against GPU memory (%v); "+
+						"set max_index_capacity explicitly", err)
+			}
+			logutil.Infof("IVFPQ create: %d MB free on device %d, %d B/row -> %d rows fit",
+				freeBytes>>20, devices[0], perRow, rowsFit)
+		}
+
+		// lists defaults to the cuVS default when unset; a 0 threshold would silently
+		// disable the k-means minimum check below.
+		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
+		if threshold <= 0 {
+			threshold = int64(cuvs.DefaultIvfPqBuildParams().NLists)
+		}
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, threshold,
+			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			"ivfpq", "max_index_capacity")
+		if err != nil {
+			return err
+		}
+		u.idxcfg.IndexCapacity = plan.Capacity
+		u.cdcCutoff = plan.CdcCutoff
+		if plan.NumSubIdx > 1 || plan.VRAMBound {
+			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
+				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		}
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
