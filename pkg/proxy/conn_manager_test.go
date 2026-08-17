@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -643,19 +644,61 @@ func TestSelectOneTieBreakerHandlesCandidateChanges(t *testing.T) {
 	cn2 := testMakeCNServer("cn2", "", 2, "hash1", label)
 	cn3 := testMakeCNServer("cn3", "", 3, "hash1", label)
 
-	selected := cm.selectOne("hash1", []*CNServer{cn1, cn2, cn3})
-	require.Same(t, cn1, selected)
-	cm.selectOneFailed("hash1", selected.uuid)
+	snapshots := [][]*CNServer{
+		{cn1, cn2, cn3},
+		{cn2, cn1, cn3},
+	}
+	counts := make(map[string]int, 3)
+	for i := range 12 {
+		selected := cm.selectOne("hash1", snapshots[i%len(snapshots)])
+		require.NotNil(t, selected)
+		counts[selected.uuid]++
+		cm.selectOneFailed("hash1", selected.uuid)
+	}
+	require.Equal(t, map[string]int{"cn1": 4, "cn2": 4, "cn3": 4}, counts)
+}
 
-	// The candidate order may change between cluster-service snapshots. Continue
-	// after the previous CN in the current order when it is still eligible.
-	selected = cm.selectOne("hash1", []*CNServer{cn3, cn1, cn2})
-	require.Same(t, cn2, selected)
-	cm.selectOneFailed("hash1", selected.uuid)
+func TestSelectOneTieBreakerCandidateRemovalAndRecovery(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 
-	// If the previous CN is no longer eligible, restart from the current list.
-	selected = cm.selectOne("hash1", []*CNServer{cn3, cn1})
-	require.Same(t, cn3, selected)
+	cm := newConnManager()
+	label := newLabelInfo("t1", map[string]string{"k1": "v1"})
+	cns := []*CNServer{
+		testMakeCNServer("cn1", "", 1, "hash1", label),
+		testMakeCNServer("cn2", "", 2, "hash1", label),
+		testMakeCNServer("cn3", "", 3, "hash1", label),
+		testMakeCNServer("cn4", "", 4, "hash1", label),
+	}
+
+	selectAndFail := func(candidates []*CNServer, count int) map[string]int {
+		counts := make(map[string]int, len(candidates))
+		for i := range count {
+			snapshot := append([]*CNServer(nil), candidates...)
+			if i%2 == 0 {
+				slices.Reverse(snapshot)
+			} else {
+				shift := i % len(snapshot)
+				rotated := append([]*CNServer(nil), snapshot[shift:]...)
+				snapshot = append(rotated, snapshot[:shift]...)
+			}
+			selected := cm.selectOne("hash1", snapshot)
+			require.NotNil(t, selected)
+			counts[selected.uuid]++
+			cm.selectOneFailed("hash1", selected.uuid)
+		}
+		return counts
+	}
+
+	require.Equal(t, map[string]int{"cn1": 1, "cn2": 1, "cn3": 1, "cn4": 1}, selectAndFail(cns, 4))
+	require.Equal(t, map[string]int{"cn1": 2, "cn3": 2, "cn4": 2}, selectAndFail([]*CNServer{cns[0], cns[2], cns[3]}, 6))
+	require.Equal(t, map[string]int{"cn1": 1, "cn2": 1, "cn3": 1, "cn4": 1}, selectAndFail(cns, 4))
+
+	cn5 := testMakeCNServer("cn5", "", 5, "hash1", label)
+	withNewCN := append(append([]*CNServer(nil), cns...), cn5)
+	require.Equal(t,
+		map[string]int{"cn1": 1, "cn2": 1, "cn3": 1, "cn4": 1, "cn5": 1},
+		selectAndFail(withNewCN, 5),
+	)
 }
 
 func TestSelectOneTieBreakerIsolatedByLabelHash(t *testing.T) {

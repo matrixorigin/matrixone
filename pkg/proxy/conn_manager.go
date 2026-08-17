@@ -207,29 +207,38 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 		m.conns[hash] = ci
 	}
 
-	start := 0
-	for i, cn := range cns {
-		if cn.uuid == ci.lastSelectedCN {
-			start = (i + 1) % len(cns)
-			break
-		}
-	}
-
-	var ret *CNServer
+	var first *CNServer
+	var next *CNServer
 	var minCount = math.MaxInt
-	for i := range cns {
-		cn := cns[(start+i)%len(cns)]
+	for _, cn := range cns {
 		tunnels, ok := ci.cnTunnels[cn.uuid]
 		cnt := 0
 		if ok {
 			cnt = tunnels.count()
 		}
 
-		// Choose the CNServer that has the least connections on it.
+		// Choose the CNServer that has the least connections on it. Resolve ties
+		// in UUID order so fairness does not depend on the snapshot's map-derived
+		// candidate order.
 		if cnt < minCount {
-			ret = cn
 			minCount = cnt
+			first = cn
+			next = nil
+			if cn.uuid > ci.lastSelectedCN {
+				next = cn
+			}
+		} else if cnt == minCount {
+			if first == nil || cn.uuid < first.uuid {
+				first = cn
+			}
+			if cn.uuid > ci.lastSelectedCN && (next == nil || cn.uuid < next.uuid) {
+				next = cn
+			}
 		}
+	}
+	ret := next
+	if ret == nil {
+		ret = first
 	}
 
 	// Atomically increment the connection count for the selected CN server
