@@ -211,6 +211,72 @@ func TestRuntimeScanPlannerRewritesNessieNamedRefToCatalogPrefix(t *testing.T) {
 	require.Equal(t, "tag:release", plan.Snapshot.RefName)
 }
 
+func TestRuntimeScanPlannerRewritesNessieHashAsDetachedRef(t *testing.T) {
+	const commitHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	fixture := newPlannerFixture(t, 1)
+	fixture.client.GetConfigFunc = func(ctx context.Context, req api.GetConfigRequest) (*api.ConfigResponse, error) {
+		return &api.ConfigResponse{
+			Prefix:    "main|s3://warehouse",
+			Overrides: map[string]string{"nessie.is-nessie-catalog": "true"},
+		}, nil
+	}
+	var credentialPrefix string
+	fixture.client.LoadCredentialsFunc = func(ctx context.Context, req api.LoadCredentialsRequest) (*api.LoadCredentialsResponse, error) {
+		credentialPrefix = req.Prefix
+		return &api.LoadCredentialsResponse{}, nil
+	}
+	var loadTablePrefix string
+	fixture.client.LoadTableFunc = func(ctx context.Context, req api.LoadTableRequest) (*api.LoadTableResponse, error) {
+		loadTablePrefix = req.Prefix
+		fixture.catalogLoads++
+		return &api.LoadTableResponse{
+			MetadataLocation: "s3://warehouse/sales/orders/metadata/v2.metadata.json",
+			MetadataJSON:     []byte(sampleMetadataJSON),
+			ETag:             "etag-1",
+		}, nil
+	}
+	planner := RuntimeScanPlanner{
+		CatalogFactory: &recordingCatalogFactory{client: fixture.client},
+		Metadata:       fixture.facade,
+		ObjectReader: func(ctx context.Context, catalogClient api.CatalogClient, req api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
+			_, err := catalogClient.LoadCredentials(ctx, api.LoadCredentialsRequest{
+				CatalogRequest: req.CatalogRequest,
+				Namespace:      req.Namespace,
+				Table:          req.Table,
+			})
+			if err != nil {
+				return nil, ObjectReaderContext{}, err
+			}
+			return fixture.reader, ObjectReaderContext{}, nil
+		},
+		Cache: fixture.cache,
+		Config: api.Config{Scan: api.ScanPlanningConfig{
+			ManifestReadParallelism: 1,
+			MaxManifestFiles:        100,
+			MaxDataFiles:            100,
+		}},
+	}
+
+	plan, err := planner.PlanScan(context.Background(), api.ScanPlanRequest{
+		CatalogRequest: api.CatalogRequest{Catalog: model.Catalog{
+			AccountID: 42,
+			CatalogID: 7,
+			URI:       "https://catalog.example.com/iceberg",
+			Warehouse: "s3://warehouse",
+		}},
+		Namespace: api.Namespace{"sales"},
+		Table:     "orders",
+		Ref:       "hash:" + commitHash,
+		Snapshot:  api.SnapshotSelector{RefName: "hash:" + commitHash},
+	})
+	require.NoError(t, err)
+	wantPrefix := "@" + commitHash + "|s3://warehouse"
+	require.Equal(t, wantPrefix, credentialPrefix)
+	require.Equal(t, wantPrefix, loadTablePrefix)
+	require.Equal(t, "hash:"+commitHash, plan.Snapshot.RefName)
+}
+
 func TestRuntimeScanPlannerCacheSeparatesNessieRefsByEffectivePrefix(t *testing.T) {
 	const (
 		manifestListPath = "s3://warehouse/sales/orders/metadata/snap-22.avro"
