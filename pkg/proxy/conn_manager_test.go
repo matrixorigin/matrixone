@@ -424,9 +424,10 @@ func TestSelectOneFailed(t *testing.T) {
 	cm.selectOneFailed("hash1", "cn1")
 	require.Equal(t, 0, cm.getCNTunnels("hash1").count())
 
-	// Select again, should select cn1 again (now it has 0 connections)
+	// Select again. Both CNs have zero connections, so the tie-breaker should
+	// move past the failed selection instead of retrying the first CN.
 	selected = cm.selectOne("hash1", cns)
-	require.Equal(t, "cn1", selected.uuid)
+	require.Equal(t, "cn2", selected.uuid)
 	require.Equal(t, 1, cm.getCNTunnels("hash1").count())
 }
 
@@ -500,7 +501,7 @@ func TestSelectOneMultiplePending(t *testing.T) {
 	require.Equal(t, 2, cm.getCNTunnels("hash1").count())
 
 	selected3 := cm.selectOne("hash1", cns)
-	// cn1 has 1 placeholder (count=1), cn2 has 1 placeholder (count=1), so should choose cn1 (first in list)
+	// Both CNs have one placeholder, so round-robin should continue after cn2 and choose cn1.
 	require.Equal(t, "cn1", selected3.uuid)
 	require.Equal(t, 3, cm.getCNTunnels("hash1").count())
 }
@@ -530,7 +531,7 @@ func TestSelectOneWithRealConnections(t *testing.T) {
 	require.Equal(t, 2, cm.getCNTunnels("hash1").count())
 
 	// Select again, cn1 has 1 real (count=1), cn2 has 1 placeholder (count=1)
-	// Both have same count, so should choose the first one (cn1)
+	// Both have the same count, so round-robin should continue after cn2 and choose cn1.
 	selected = cm.selectOne("hash1", cns)
 	require.Equal(t, "cn1", selected.uuid)
 	require.Equal(t, 3, cm.getCNTunnels("hash1").count()) // cn1 now has 1 real + 1 placeholder
@@ -588,4 +589,100 @@ func TestSelectOneEmptyCNServers(t *testing.T) {
 	selected := cm.selectOne("hash1", []*CNServer{})
 	require.Nil(t, selected)
 	require.Equal(t, 0, cm.getCNTunnels("hash1").count())
+}
+
+func TestSequentialShortConnectionsDistributeAcrossCNs(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	tests := []struct {
+		name       string
+		cnCount    int
+		selections int
+	}{
+		{name: "two CNs", cnCount: 2, selections: 12},
+		{name: "three CNs", cnCount: 3, selections: 12},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cm := newConnManager()
+			label := newLabelInfo("t1", map[string]string{"k1": "v1"})
+			hash := LabelHash(test.name)
+			cns := make([]*CNServer, 0, test.cnCount)
+			for i := range test.cnCount {
+				cns = append(cns, testMakeCNServer(
+					fmt.Sprintf("cn%d", i+1), "", uint32(i+1), hash, label,
+				))
+			}
+
+			counts := make(map[string]int, test.cnCount)
+			for range test.selections {
+				selected := cm.selectOne(hash, cns)
+				require.NotNil(t, selected)
+				counts[selected.uuid]++
+
+				tunnel := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), nil)
+				cm.connect(selected, tunnel)
+				cm.disconnect(selected, tunnel)
+				require.Equal(t, 0, cm.count())
+			}
+
+			for _, cn := range cns {
+				require.Equal(t, test.selections/test.cnCount, counts[cn.uuid])
+			}
+		})
+	}
+}
+
+func TestSelectOneTieBreakerHandlesCandidateChanges(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cm := newConnManager()
+	label := newLabelInfo("t1", map[string]string{"k1": "v1"})
+	cn1 := testMakeCNServer("cn1", "", 1, "hash1", label)
+	cn2 := testMakeCNServer("cn2", "", 2, "hash1", label)
+	cn3 := testMakeCNServer("cn3", "", 3, "hash1", label)
+
+	selected := cm.selectOne("hash1", []*CNServer{cn1, cn2, cn3})
+	require.Same(t, cn1, selected)
+	cm.selectOneFailed("hash1", selected.uuid)
+
+	// The candidate order may change between cluster-service snapshots. Continue
+	// after the previous CN in the current order when it is still eligible.
+	selected = cm.selectOne("hash1", []*CNServer{cn3, cn1, cn2})
+	require.Same(t, cn2, selected)
+	cm.selectOneFailed("hash1", selected.uuid)
+
+	// If the previous CN is no longer eligible, restart from the current list.
+	selected = cm.selectOne("hash1", []*CNServer{cn3, cn1})
+	require.Same(t, cn3, selected)
+}
+
+func TestSelectOneTieBreakerIsolatedByLabelHash(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+
+	cm := newConnManager()
+	label1 := newLabelInfo("t1", map[string]string{"k1": "v1"})
+	label2 := newLabelInfo("t2", map[string]string{"k1": "v1"})
+	cns1 := []*CNServer{
+		testMakeCNServer("cn1", "", 1, "hash1", label1),
+		testMakeCNServer("cn2", "", 2, "hash1", label1),
+	}
+	cns2 := []*CNServer{
+		testMakeCNServer("cn1", "", 3, "hash2", label2),
+		testMakeCNServer("cn2", "", 4, "hash2", label2),
+	}
+
+	selected1 := cm.selectOne("hash1", cns1)
+	require.Equal(t, "cn1", selected1.uuid)
+	cm.selectOneFailed("hash1", selected1.uuid)
+
+	selected2 := cm.selectOne("hash2", cns2)
+	require.Equal(t, "cn1", selected2.uuid)
+	cm.selectOneFailed("hash2", selected2.uuid)
+
+	selected1 = cm.selectOne("hash1", cns1)
+	require.Equal(t, "cn2", selected1.uuid)
+	selected2 = cm.selectOne("hash2", cns2)
+	require.Equal(t, "cn2", selected2.uuid)
 }

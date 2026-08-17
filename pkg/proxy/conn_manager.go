@@ -141,8 +141,9 @@ func (t cnTunnels) count() int {
 
 // connInfo contains label info and CN tunnels.
 type connInfo struct {
-	label     labelInfo
-	cnTunnels cnTunnels
+	label          labelInfo
+	cnTunnels      cnTunnels
+	lastSelectedCN string
 }
 
 // newConnInfo creates a new connection info.
@@ -187,7 +188,8 @@ func newConnManager() *connManager {
 }
 
 // selectOne select the most suitable CN server according the connection count
-// on each CN server. The least count CN server is returned.
+// on each CN server. The least count CN server is returned, with ties resolved
+// by round-robin selection for each label hash.
 // This method atomically increments the connection count for the selected CN server
 // by adding a placeholder tunnel, ensuring fair distribution during concurrent
 // connection establishment.
@@ -200,18 +202,23 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 	}
 
 	ci, ok := m.conns[hash]
-	// There are no connections yet on all CN servers of this tenant.
-	// Select the first CN server and add a placeholder tunnel atomically.
 	if !ok {
-		selected := cns[0]
-		m.conns[hash] = newConnInfo(cns[0].reqLabel)
-		m.conns[hash].cnTunnels.add(selected.uuid, newPlaceholderTunnel())
-		return selected
+		ci = newConnInfo(cns[0].reqLabel)
+		m.conns[hash] = ci
+	}
+
+	start := 0
+	for i, cn := range cns {
+		if cn.uuid == ci.lastSelectedCN {
+			start = (i + 1) % len(cns)
+			break
+		}
 	}
 
 	var ret *CNServer
 	var minCount = math.MaxInt
-	for _, cn := range cns {
+	for i := range cns {
+		cn := cns[(start+i)%len(cns)]
 		tunnels, ok := ci.cnTunnels[cn.uuid]
 		cnt := 0
 		if ok {
@@ -229,6 +236,7 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 	// by adding a placeholder tunnel. This will be replaced by the real
 	// tunnel in connect() if successful, or removed in selectOneFailed() if failed.
 	if ret != nil {
+		ci.lastSelectedCN = ret.uuid
 		ci.cnTunnels.add(ret.uuid, newPlaceholderTunnel())
 	}
 
