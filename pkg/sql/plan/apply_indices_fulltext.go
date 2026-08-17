@@ -307,8 +307,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// their intersection can drop documents belonging to the final top page.
 	var limitExpr *plan.Expr
 	exactPrefilter := docfilter.SupportsBitset(types.T(pkType.Id).ToType())
-	if shouldPushFulltextCandidateLimit(len(ft_filters), len(scanNode.FilterList), pushdownEnabled, exactPrefilter) {
-		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
+	eligiblePrefilter := exactPrefilter
+	if len(scanNode.FilterList) > 0 {
+		eligiblePrefilter = pushdownEnabled && exactPrefilter && len(indexDefs) == 1 &&
+			fulltext2ConjunctiveCandidateLimitEligible(ft_filters[0], indexDefs[0])
+	}
+	if shouldPushFulltextCandidateLimit(len(ft_filters), len(scanNode.FilterList), pushdownEnabled, eligiblePrefilter) {
+		// Preserve the existing dynamic-LIMIT behavior when there is no
+		// residual WHERE. The new prefilter-assisted path is intentionally
+		// narrower: its admission is a planning-time correctness decision, so
+		// prepared/non-literal LIMIT values remain unbounded.
+		if len(scanNode.FilterList) == 0 {
+			limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
+		} else if _, literal := getLiteralUint64(paginationLimit); literal {
+			limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
+		}
 	}
 
 	// buildFullTextIndexScan

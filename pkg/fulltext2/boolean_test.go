@@ -164,3 +164,31 @@ func TestScanBooleanGroups(t *testing.T) {
 	require.Equal(t, byte('~'), got[2].prefix)
 	require.Equal(t, "jumps", got[2].text)
 }
+
+func TestIsConjunctiveTermQuery(t *testing.T) {
+	tests := []struct {
+		query string
+		want  bool
+	}{
+		{query: "+alpha", want: true},
+		{query: "+alpha +beta", want: true},
+		{query: "+alpha +alpha +beta", want: true},
+		{query: "alpha"},
+		{query: "+\"alpha beta\""},
+		{query: "+alpha*"},
+		{query: "+(alpha beta)"},
+		{query: "+alpha -beta"},
+		{query: "+alpha beta"},
+		{query: "+alpha ~beta"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.query, func(t *testing.T) {
+			got, err := IsConjunctiveTermQuery([]byte(tc.query), ParserDefault)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	_, err := IsConjunctiveTermQuery([]byte("+alpha"), "unsupported")
+	require.Error(t, err)
+}
