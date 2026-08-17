@@ -622,11 +622,14 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		var systemVarsExported bool
 		systemVars, err = ses.snapshotSessionSystemVars(operationCtx)
 		if err != nil {
-			// A system-only raw replay can observe final user-variable values
-			// instead of the source evaluation order, especially for mixed SET
-			// assignments. Never fall back after an oversized typed system
-			// snapshot; fail closed rather than risk a semantic change.
-			return err
+			// A complete raw replay remains valid for a pre-v22 target, but a
+			// v22 target cannot safely consume the system-only projection. Keep
+			// the reason explicit so the proxy can negotiate that distinction.
+			if !isMigrationSnapshotSizeLimitError(err) ||
+				ses.hasUnreplayableMigrationSystemVars() {
+				return err
+			}
+			resp.SystemVariablesSnapshotTooLarge = true
 		} else {
 			systemVarsExported = true
 		}

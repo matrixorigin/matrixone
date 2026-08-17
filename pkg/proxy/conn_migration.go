@@ -82,7 +82,8 @@ func (c *clientConn) migrateConnToContext(
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
 
-	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported
+	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported ||
+		info.SystemVariablesSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
 	if typedMigration {
@@ -95,6 +96,10 @@ func (c *clientConn) migrateConnToContext(
 			return err
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed system variables because the snapshot exceeds the connection migration size limit")
+		}
 	}
 	if !typedMigrationSupported {
 		if info.UserDefinedVarsExported && !info.UserDefinedVarsReplayable {
@@ -148,14 +153,16 @@ func (c *clientConn) migrateConnToContext(
 	)
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnTo)
 	req.MigrateConnToRequest = &query.MigrateConnToRequest{
-		ConnID:                  c.connID,
-		DB:                      info.DB,
-		PrepareStmts:            info.PrepareStmts,
-		LastAffectedRows:        info.LastAffectedRows,
-		UserDefinedVars:         nil,
-		UserDefinedVarsExported: false,
-		SystemVariables:         nil,
-		SystemVariablesExported: false,
+		ConnID:                    c.connID,
+		DB:                        info.DB,
+		PrepareStmts:              info.PrepareStmts,
+		LastAffectedRows:          info.LastAffectedRows,
+		UserDefinedVars:           nil,
+		UserDefinedVarsExported:   false,
+		SystemVariables:           nil,
+		SystemVariablesExported:   false,
+		UserDefinedVarsReplayable: info.UserDefinedVarsReplayable,
+		SystemVariablesReplayable: info.SystemVariablesReplayable,
 	}
 	if typedMigrationSupported {
 		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars

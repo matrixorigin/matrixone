@@ -922,8 +922,9 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			DB:                      "d1",
-			SystemVariablesExported: true,
+			DB:                        "d1",
+			SystemVariablesExported:   true,
+			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
 				{Name: "optimizer_hints", Value: plan2.MakePlan2StringConstExprWithType("forceOneCN=1")},
 				{Name: "runtime_filter_limit_in", Value: plan2.MakePlan2Int64ConstExprWithType(77)},
@@ -934,6 +935,7 @@ func TestSession_Migrate(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
+		require.False(t, target.hasUnreplayableMigrationSystemVars())
 
 		for name, expected := range map[string]interface{}{
 			"optimizer_hints":                   "forceOneCN=1",

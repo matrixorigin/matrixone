@@ -173,6 +173,8 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 			return moerr.NewInternalError(ctx, "bad request")
 		}
 		assert.True(t, migration.UserDefinedVarsExported)
+		assert.True(t, migration.UserDefinedVarsReplayable)
+		assert.True(t, migration.SystemVariablesReplayable)
 		assert.Len(t, migration.UserDefinedVars, 1)
 		assert.Equal(t, "ts0", migration.UserDefinedVars[0].Name)
 		assert.Equal(t, []string{"set time_zone = @ts0"}, migration.SetVarStmts)
@@ -186,6 +188,8 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 		cc.migration.systemSetVarStmts = []string{"set time_zone = @ts0"}
 		info := &pb.MigrateConnFromResponse{
 			UserDefinedVarsExported:       true,
+			UserDefinedVarsReplayable:     true,
+			SystemVariablesReplayable:     true,
 			UserLevelLockReleaseSupported: true,
 			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -284,6 +288,58 @@ func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
 			"/* cloud_nonuser */ set transferred=1;",
 			"set @mode = 'PIPES_AS_CONCAT'",
 		}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToAllowsOversizedSystemSnapshotForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		cc.migration.setVarStmts = []string{"set optimizer_hints = 'legacy'"}
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			SystemVariablesSnapshotTooLarge: true,
+			SystemVariablesReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+		assert.Equal(t, []string{
+			"/* cloud_nonuser */ set transferred=1;",
+			"set optimizer_hints = 'legacy'",
+		}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsOversizedSystemSnapshotForV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			SystemVariablesSnapshotTooLarge: true,
+			SystemVariablesReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "snapshot exceeds the connection migration size limit")
+		assert.Empty(t, sc.statements)
 	})
 }
 

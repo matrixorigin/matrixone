@@ -66,7 +66,7 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 	}
 
 	values["vec_value"].([]float32)[0] = 99
-	restored, err := decodeUserDefinedVars(context.Background(), snapshot)
+	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 	require.NoError(t, err)
 	for name, value := range values {
 		if name == "vec_value" {
@@ -79,6 +79,16 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeUserDefinedVarsPreservesReplayability(t *testing.T) {
+	value, err := encodeUserDefinedVarValue(context.Background(), "value", false)
+	require.NoError(t, err)
+	restored, err := decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{
+		{Name: "v", Value: value},
+	}, true)
+	require.NoError(t, err)
+	require.True(t, restored["v"].Replayable)
+}
+
 func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {
 	_, err := encodeUserDefinedVarValue(context.Background(), struct{}{}, false)
 	require.ErrorContains(t, err, "unsupported user variable type")
@@ -88,7 +98,7 @@ func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {
 		Value: &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
 	invalid := &query.MigrateUserDefinedVar{Name: "broken", Value: &plan.Expr{}}
-	result, err := decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{valid, invalid})
+	result, err := decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{valid, invalid}, false)
 	require.Error(t, err)
 	require.Nil(t, result)
 
@@ -99,13 +109,13 @@ func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {
 			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "bad"}}},
 		},
 	}
-	result, err = decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{malformedVector})
+	result, err = decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{malformedVector}, false)
 	require.ErrorContains(t, err, "vector user variable length")
 	require.Nil(t, result)
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err = decodeUserDefinedVars(canceled, []*query.MigrateUserDefinedVar{valid})
+	result, err = decodeUserDefinedVars(canceled, []*query.MigrateUserDefinedVar{valid}, false)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Nil(t, result)
 }
@@ -116,12 +126,12 @@ func TestDecodeUserDefinedVarsRejectsDuplicateAndOversize(t *testing.T) {
 	_, err = decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{
 		{Name: "Var", Value: value},
 		{Name: "var", Value: value},
-	})
+	}, false)
 	require.ErrorContains(t, err, "duplicate user variable")
 
 	largeValue, err := encodeUserDefinedVarValue(context.Background(), string(make([]byte, maxMigrateUserDefinedVarsSize)), false)
 	require.NoError(t, err)
-	_, err = decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{{Name: "large", Value: largeValue}})
+	_, err = decodeUserDefinedVars(context.Background(), []*query.MigrateUserDefinedVar{{Name: "large", Value: largeValue}}, false)
 	require.ErrorContains(t, err, "size limit")
 
 	ctrl := gomock.NewController(t)
@@ -300,7 +310,7 @@ func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.
 	for i := 0; i < 100; i++ {
 		snapshot, err := source.snapshotUserDefinedVars(context.Background())
 		require.NoError(t, err)
-		restored, err := decodeUserDefinedVars(context.Background(), snapshot)
+		restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
 		require.NoError(t, err)
 		target := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
 		target.installUserDefinedVars(restored)

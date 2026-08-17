@@ -169,7 +169,11 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 	return result, nil
 }
 
-func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefinedVar) (map[string]*UserDefinedVar, error) {
+func decodeUserDefinedVars(
+	ctx context.Context,
+	vars []*query.MigrateUserDefinedVar,
+	replayable bool,
+) (map[string]*UserDefinedVar, error) {
 	if migrateUserDefinedVarsProtoSize(vars) > maxMigrateUserDefinedVarsSize {
 		return nil, moerr.NewInternalError(ctx, "user variables exceed the connection migration size limit")
 	}
@@ -197,10 +201,7 @@ func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefined
 			Sql:              item.Sql,
 			IsBin:            item.IsBin,
 			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
-			// Typed restore does not populate the proxy's raw SET history. Keep
-			// the SQL text for EXECUTE ... USING reconstruction, but do not treat
-			// it as evidence that a later legacy migration can replay this value.
-			Replayable: false,
+			Replayable:       replayable,
 		}
 	}
 	return result, nil

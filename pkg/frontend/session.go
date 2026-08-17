@@ -2662,7 +2662,8 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
 		}
 		var err error
-		userVars, err = decodeUserDefinedVars(migrationCtx, req.UserDefinedVars)
+		userVars, err = decodeUserDefinedVars(
+			migrationCtx, req.UserDefinedVars, req.UserDefinedVarsReplayable)
 		if err != nil {
 			return err
 		}
@@ -2701,7 +2702,8 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
 					return moerr.AttachCause(migrationCtx, err)
 				}
-				ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, req.SystemVariablesReplayable)
 				continue
 			}
 			var oldAutocommit interface{}
@@ -2714,6 +2716,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
+			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
 			if variable.name == "autocommit" {
 				oldValue, err := valueIsBoolTrue(oldAutocommit)
 				if err != nil {

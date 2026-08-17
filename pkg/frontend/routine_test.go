@@ -645,7 +645,7 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndUnrep
 	require.False(t, resp.SystemVariablesReplayable)
 }
 
-func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndReplayable(t *testing.T) {
+func TestMigrateConnectionFromMarksTypedSystemSnapshotTooLargeForLegacyReplay(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
@@ -661,18 +661,19 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndRepla
 	})
 	require.NoError(t, ses.SetSessionSysVar(
 		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
-	// Even a raw-replayable assignment must fail closed: the proxy's system-only
-	// projection cannot preserve mixed SET evaluation order after final user
-	// variables are installed on the target.
+	// A raw-replayable assignment can be handed to a pre-v22 target, but a v22
+	// target must still fail closed because the typed system snapshot is absent.
 	ses.markMigrationSystemVarReplayable("optimizer_hints", true)
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 	resp := &query.MigrateConnFromResponse{}
-	err := rt.migrateConnectionFrom(resp)
-	require.ErrorContains(t, err, "size limit")
-	require.False(t, resp.UserDefinedVarsExported)
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
 	require.False(t, resp.SystemVariablesExported)
+	require.True(t, resp.SystemVariablesSnapshotTooLarge)
+	require.True(t, resp.SystemVariablesReplayable)
 }
 
 func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
