@@ -392,7 +392,17 @@ It skipped it until August 2026, on the reasoning that `go test` keeps only the 
 and appending would discard the caller's. The effect was a false green:
 `MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/` compiled **0** of that
 package's 2 GPU test files while reporting a pass. `mo-cgo-test-tags-test` pins every form
-with a stubbed `go`, so it needs no GPU, CUDA toolkit or built libmo.
+and needs no GPU, CUDA toolkit or built libmo.
+
+Stubbing `go` is not enough to earn that, and the first version of the test wrongly
+claimed it: the wrapper resolves its repository from its own location and rejects the run
+unless `cgo/libmo.so` and `thirdparties/install/include` exist there, before it would ever
+reach the stub. Pointed at the real checkout the test passed only where libmo happened to
+be built, and in a clean worktree reported all seven cases as `<no -tags at all>` -- a
+wrapper that never ran, misread as a wrapper that dropped the tag. It now copies the real
+wrapper into a throwaway git repo with empty stand-ins for both prerequisites, and checks
+each invocation exited zero before parsing its stdout, so a setup fault reports as
+`harness broken` instead of as seven tag failures.
 
 The wrapper's CUDA support is itself branch-dependent: a checkout whose `mo-cgo-test`
 predates it ignores `MO_CL_CUDA` entirely and fails to link a GPU-built `libmo` with
