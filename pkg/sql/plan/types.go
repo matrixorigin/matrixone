@@ -45,6 +45,11 @@ const (
 	NoAlias ExpandAliasMode = iota
 	AliasBeforeColumn
 	AliasAfterColumn
+	// AliasOnly resolves an unqualified name to a SELECT alias when one
+	// exists, but leaves ordinary column names unresolved.  HAVING uses this
+	// while binding a non-aggregate ONLY_FULL_GROUP_BY query so that projected
+	// aliases remain visible without making arbitrary source columns legal.
+	AliasOnly
 )
 
 type TableDefType = plan.TableDef_DefType
@@ -839,9 +844,10 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg     bool
-	rollupHaving  bool
-	bindingHaving bool
+	insideAgg             bool
+	bindingProjectedAlias bool
+	rollupHaving          bool
+	bindingHaving         bool
 }
 
 type ProjectionBinder struct {

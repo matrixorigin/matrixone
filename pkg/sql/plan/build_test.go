@@ -2072,6 +2072,36 @@ func TestOnlyFullGroupByAllowsNonAggregateHavingOnInformationSchemaView(t *testi
 	}
 }
 
+func TestOnlyFullGroupByRejectsNonAggregateHavingUnprojectedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING n_nationkey > 0`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
+func TestOnlyFullGroupByAllowsNonAggregateHavingDirectAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS region_key
+		FROM nation
+		HAVING region_key > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsNonAggregateHavingProjectedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
 func TestMatrixOneNativeStillRejectsNonAggregateHavingColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE")

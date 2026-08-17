@@ -7729,7 +7729,11 @@ func (builder *QueryBuilder) bindHaving(
 		havingBinder.bindingHaving = false
 	}()
 	ctx.binder = havingBinder
-	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
+	expandAlias := AliasAfterColumn
+	if builder.mysqlFullGroupByCompat && !ctx.aggregateQueryForFullGroupBy() {
+		expandAlias = AliasOnly
+	}
+	return splitAndBindCondition(clause.Expr, expandAlias, ctx)
 }
 
 func (builder *QueryBuilder) bindProjection(

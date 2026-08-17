@@ -609,7 +609,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
-			if expandAlias == AliasBeforeColumn {
+			if expandAlias == AliasBeforeColumn || expandAlias == AliasOnly {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
 						return selectItem.astExpr, nil
@@ -618,6 +618,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 					// Return the original expression unchanged - let the binder handle it
 					return astExpr, nil
 				}
+			}
+			if expandAlias == AliasOnly {
+				if projected, ok := bc.projectedColumnExpr(col); ok {
+					return projected, nil
+				}
+				// Keep the name unqualified.  The HavingBinder can then reject
+				// an unprojected source column instead of treating it as a
+				// legal post-filter.
+				return astExpr, nil
 			}
 
 			if binding, ok := bc.bindingByCol[col]; ok {
@@ -692,6 +701,17 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	}
 
 	return astExpr, err
+}
+
+func (bc *BindContext) projectedColumnExpr(col string) (tree.Expr, bool) {
+	for _, field := range bc.projectByAst {
+		expr := unwrapParenExpr(field.ast)
+		name, ok := expr.(*tree.UnresolvedName)
+		if ok && !name.Star && name.NumParts > 0 && name.ColName() == col {
+			return field.ast, true
+		}
+	}
+	return nil, false
 }
 
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)

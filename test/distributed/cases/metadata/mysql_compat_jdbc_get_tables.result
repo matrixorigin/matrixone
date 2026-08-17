@@ -28,6 +28,12 @@ WHERE TABLE_SCHEMA = 'mysql_compat_jdbc_get_tables'
 HAVING TABLE_TYPE IN ('TABLE', NULL, NULL, NULL, NULL)
 ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
 TABLE_CAT    TABLE_SCHEM    TABLE_NAME    TABLE_TYPE    REMARKS    TYPE_CAT    TYPE_SCHEM    TYPE_NAME    SELF_REFERENCING_COL_NAME    REF_GENERATION
-mysql_compat_jdbc_get_tables    null    t    TABLE    null    null    null    null    null    null
-mysql_compat_jdbc_get_tables    null    t2    TABLE    null    null    null    null    null    null
+mysql_compat_jdbc_get_tables    null    t    TABLE        null    null    null    null    null    null
+mysql_compat_jdbc_get_tables    null    t2    TABLE        null    null    null    null    null    null
+select TABLE_SCHEMA
+from INFORMATION_SCHEMA.TABLES
+where TABLE_SCHEMA = 'mysql_compat_jdbc_get_tables'
+having TABLE_TYPE = 'BASE TABLE';
+-- @regex("must appear in the GROUP BY clause", true)
+must appear in the GROUP BY clause
 drop database mysql_compat_jdbc_get_tables;
