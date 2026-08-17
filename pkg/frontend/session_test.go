@@ -997,7 +997,7 @@ func TestSession_Migrate(t *testing.T) {
 
 		autocommit, err := target.GetSessionSysVar("autocommit")
 		require.NoError(t, err)
-		require.Equal(t, int64(0), autocommit)
+		require.Equal(t, int8(0), autocommit)
 		require.False(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT))
 		require.Equal(t, uint16(0), target.GetTxnHandler().GetServerStatus()&SERVER_STATUS_AUTOCOMMIT)
