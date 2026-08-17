@@ -10,7 +10,7 @@
 
 This RFC evaluates how MatrixOne should invalidate prepared plans and RC transaction table-cache entries after catalog changes. It compares precise dependency watermarks with extending the existing fixed-size account-bucket watermark. It does not change production behavior.
 
-The current `CatalogCache.HasNewerVersion` uses exact database and table history lookups for named dependencies. A 4096-bucket monotonic watermark is used only for account-level dependencies where `DatabaseId`, `DatabaseName`, and table name are absent. Broadening that bucket check to every named dependency is conservative for correctness, but unrelated DDL and account hash collisions can cause unnecessary plan rebuilds and RC table-cache reloads.
+The current `CatalogCache.HasNewerVersion` uses exact database and table history lookups for named dependencies. A 4096-bucket monotonic watermark is used only for account-level dependencies where `DatabaseId`, `DatabaseName`, and table name are absent. Broadening the table-change bucket check to named table dependencies can remain conservative only if the exact database identity check is retained. Unrelated DDL and account hash collisions can still cause unnecessary plan rebuilds and RC table-cache reloads.
 
 # Motivation
 
@@ -72,9 +72,11 @@ No map keyed only by mutable database or table name is acceptable. GC may remove
 
 # Candidate B: Broadened Account-Bucket Watermark
 
-This option applies the existing 4096-bucket watermark to named database/table dependencies. Its hot path is a bucket calculation, read lock, and timestamp comparison, with fixed memory.
+This option retains the exact database-name and database-ID history check, then replaces only the named table-history scan with the existing 4096-bucket table-change watermark. The table portion of the hot path is a bucket calculation, read lock, and timestamp comparison, with fixed memory.
 
-It is correct only conservatively: accounts `A` and `A+4096` collide, and every table DDL in an account invalidates all named dependencies in that account. It does not encode which database/table changed, why it changed, or whether the plan depends on that object.
+The exact database check is required because `InsertDatabase` and `DeleteDatabase` do not advance the current table-change buckets. A bucket-only replacement could therefore miss drop/recreate of an empty database. A future design may instead add a separately specified database watermark, but it must not treat the current table bucket as a database-change oracle.
+
+With the exact database check retained, the table check is conservative: accounts `A` and `A+4096` collide, and every table DDL in an account invalidates all named table dependencies in that account. It does not encode which database/table changed, why it changed, or whether the plan depends on that object.
 
 This option must not proceed based only on allocation removal. It is acceptable only if measured false-positive costs remain within an agreed budget under realistic tenant and DDL distributions.
 
@@ -102,6 +104,7 @@ Workloads must include:
 - same-session, cross-session, and multi-CN execution;
 - RC transactions that reuse table-cache entries across statements;
 - table/database drop and recreation with name and identity reuse;
+- empty-database drop and recreation, proving the exact database check remains authoritative;
 - replay, checkpoint restore, concurrent update/check, and GC.
 
 The instrumentation experiment must report hit ratio, rebuild/cache-reload latency, CPU, allocations, and retained memory. It must not report profile-mode TPS as production throughput.
@@ -116,6 +119,7 @@ Any future implementation PR must include:
 - concurrent update/check race tests with deterministic barriers;
 - replay in order and out of order, checkpoint restore, and GC monotonicity;
 - drop/recreate, truncate, alter, and rename identity transitions;
+- empty-database drop/recreate with no table event available to advance an account bucket;
 - RC table-cache reuse and invalidation through the production transaction entry point;
 - text and binary prepared statements across sessions and CNs;
 - BVT cases for public prepared-statement behavior and multi-statement RC reuse;
