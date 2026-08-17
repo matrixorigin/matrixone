@@ -5556,28 +5556,6 @@ func mysqlLeadingDigitCountForExtract(str string) int {
 	return pos
 }
 
-func mysqlClockFieldsForExtractHasThreeFields(str string) bool {
-	pos := 0
-	for pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
-		pos++
-	}
-	if pos == len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
-		return false
-	}
-	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
-		pos++
-	}
-	if _, _, ok := mysqlVariableDigitsForExtract(str, &pos); !ok ||
-		pos == len(str) || !mysqlDatetimePunctuationForExtract(str[pos]) {
-		return false
-	}
-	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
-		pos++
-	}
-	_, _, ok := mysqlVariableDigitsForExtract(str, &pos)
-	return ok && pos == len(str)
-}
-
 func mysqlSeparatedDatePartsForExtract(str string) (year, month, day uint64, yearDigits int, separator byte, ok bool) {
 	pos := 0
 	var yearValue uint64
