@@ -137,8 +137,14 @@ explain select a from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 -- @regex("Table Function on ivf_search", false)
 explain select a from tc order by l2_distance(v,'[1,0,0,0]') limit 3;
 
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
+-- round(d,4): row a=1 IS the query vector, so its cosine distance is the degenerate 0.
+-- The dot product accumulates to 1.0 exactly on some SIMD kernels and to 0.99999994 on
+-- others, making 1-cos come back as 0.0 or as 2^-24 (5.96e-8) depending on the host CPU.
+-- The comparator treats 0-vs-nonzero as a hard mismatch, so it fails on whichever machine
+-- did not generate the .result. round() wraps the projection only -- ORDER BY stays on the
+-- raw distance so the index is still used. Same reason as vector_ivf_mode.sql:296.
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
 
 alter table tc drop index ivf_cos;
 
@@ -195,8 +201,14 @@ create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 -- @regex("hnsw_search", true)
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 
-select a, cosine_distance(v,'[1,0,0,0]') as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
+-- round(d,4): row a=1 IS the query vector, so its cosine distance is the degenerate 0.
+-- The dot product accumulates to 1.0 exactly on some SIMD kernels and to 0.99999994 on
+-- others, making 1-cos come back as 0.0 or as 2^-24 (5.96e-8) depending on the host CPU.
+-- The comparator treats 0-vs-nonzero as a hard mismatch, so it fails on whichever machine
+-- did not generate the .result. round() wraps the projection only -- ORDER BY stays on the
+-- raw distance so the index is still used. Same reason as vector_ivf_mode.sql:296.
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
 
 alter table hc drop index h_cos;
 

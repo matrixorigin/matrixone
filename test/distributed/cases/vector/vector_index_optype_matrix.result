@@ -217,12 +217,12 @@ Project  𝄀
         Sort Key: l2_distance(tc.v, ) INTERNAL, tc.a INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Table Scan on vec_optype_matrix.tc
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
-➤ a[-5,64,0]  ¦  d[8,9,0]  𝄀
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc order by cosine_distance(v,'[1,0,0,0]') limit 3;
+➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
 2  ¦  1.0  𝄀
 3  ¦  2.0
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
 2  ¦  1.0  𝄀
@@ -353,12 +353,12 @@ Project  𝄀
                     Runtime Filter Probe: hc.a  𝄀
               ->  Table Function on hnsw_search  𝄀
                     Limit: 3
-select a, cosine_distance(v,'[1,0,0,0]') as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
-➤ a[-5,64,0]  ¦  d[8,9,0]  𝄀
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
+➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
 2  ¦  1.0  𝄀
 3  ¦  2.0
-select a, cosine_distance(v,'[1,0,0,0]') as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
+select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from tc_ref order by cosine_distance(v,'[1,0,0,0]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
 2  ¦  1.0  𝄀
