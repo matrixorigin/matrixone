@@ -878,6 +878,51 @@ func BenchmarkRewriteSingleSQLPersistentMultiRulePolicy(b *testing.B) {
 	}
 }
 
+func TestSelectedRewriteWinnerValidatedForNonConsumerStatements(t *testing.T) {
+	ctx := context.Background()
+	assertAttachRejects := func(t *testing.T, rewritten string, want string) {
+		t.Helper()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer func() {
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+		}()
+		err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, rewritten, "", 1)
+		require.ErrorContains(t, err, want)
+	}
+
+	for _, test := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "ddl non select winner",
+			input: `/*+ {"rewrites":{"review27190.t":"delete from review27190.t"}} */ create table x(a int)`,
+			want:  "only accept SELECT-like statements",
+		},
+		{
+			name:  "set empty winner",
+			input: `/*+ {"rewrites":{"review27190.t":""}} */ set @a = 1`,
+			want:  "statement",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, 1, "")
+			require.NoError(t, err)
+			assertAttachRejects(t, rewritten, test.want)
+		})
+	}
+
+	outer := `/*+ {"rewrites":{"review27190.t":"select * from review27190.t"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"other27190.t":"select from"}} */ create table prepared_x(a int)`
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner, 1)
+	require.NoError(t, err)
+	assertAttachRejects(t, rewritten, "syntax error")
+}
+
 func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

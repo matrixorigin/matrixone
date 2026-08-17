@@ -632,16 +632,6 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {
-		switch stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
-			// SELECT and INSERT...SELECT carry the rewrite option for the planner
-			// (INSERT propagates it to its inner SELECT read-source, see below).
-			// UPDATE/DELETE are decoded only to validate the inline hint; their
-			// remapdb is applied at the AST level and table rewrites on their
-			// read-sources are not yet implemented.
-		default:
-			continue
-		}
 		hint := strings.TrimSpace(hints[i])
 		if hint == "" || hint[0] != '{' {
 			continue
@@ -680,30 +670,51 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 			continue
 		}
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		freeRewriteChain := func(chain []*tree.Rewrite) {
+			for _, rewrite := range chain {
+				if rewrite != nil && rewrite.Stmt != nil {
+					rewrite.Stmt.Free()
+				}
+			}
+		}
+		freeRewriteOption := func() {
+			for _, chain := range rewriteOption.Rewrites {
+				freeRewriteChain(chain)
+			}
+		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb
 		}
 		for key, sqls := range rawChains {
 			_, db, table, err := NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
 			if err != nil {
+				freeRewriteOption()
 				return err
 			}
 			if len(sqls) == 0 {
+				freeRewriteOption()
 				return moerr.NewParseError(ctx, "statement")
 			}
 			chain := make([]*tree.Rewrite, 0, len(sqls))
 			for _, v := range sqls {
 				if v == "" {
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, "statement")
 				}
 				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
 				if err != nil {
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, err.Error())
 				}
 				switch st.(type) {
 				case *tree.Select, *tree.ParenSelect:
 					// ok
 				default:
+					st.Free()
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
 				}
 				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
@@ -729,6 +740,10 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 					ps.Select.RewriteOption = rewriteOption
 				}
 			}
+		default:
+			// Every policy value must be valid even when this statement kind does
+			// not consume table rewrites. Release validation-only ASTs immediately.
+			freeRewriteOption()
 		}
 	}
 	return nil
