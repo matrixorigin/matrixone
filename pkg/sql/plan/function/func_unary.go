@@ -5084,7 +5084,18 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 		pos++
 	}
 	day, dayDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
-	if !ok || pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
+	if !ok {
+		return timeExtractParseResult{}
+	}
+	// str_to_datetime accepts additional punctuation after the day field
+	// before the separating whitespace (for example, "1:01:01: abc").
+	// Keep consuming that punctuation as part of the same date candidate;
+	// otherwise the length-gated DATETIME attempt is lost and the TIME scanner
+	// rejects the already-consumed clock prefix.
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		pos++
+	}
+	if pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
 		// A complete date without a clock is still handled by the TIME path.
 		return timeExtractParseResult{}
 	}
@@ -5098,7 +5109,14 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	for pos < len(str) && mysqlWhitespaceForExtract(str[pos]) {
 		pos++
 	}
+	clockStart := pos
 	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
+	// A bare sign after the date is not a valid DATETIME clock. Let the TIME
+	// scanner own the original candidate instead (the boundary is observable
+	// for inputs such as "1:01:01: +").
+	if pos > clockStart && (pos == len(str) || str[pos] < '0' || str[pos] > '9') {
+		return timeExtractParseResult{}
+	}
 	hour, hourDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok {
 		// Once the complete DATETIME candidate has been selected, a valid date
