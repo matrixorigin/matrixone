@@ -19,7 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	stderrors "errors"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -1588,7 +1588,7 @@ func (t *fragmentedParquetRangeTransport) RoundTrip(req *http.Request) (*http.Re
 	rangeHeader := strings.TrimPrefix(t.lastRange, "bytes=")
 	parts := strings.Split(rangeHeader, "-")
 	if len(parts) != 2 || rangeHeader == t.lastRange {
-		return nil, stderrors.New("missing or invalid Range header")
+		return nil, api.NewError(api.ErrObjectIO, "missing or invalid Range header", nil)
 	}
 	start, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
@@ -1599,7 +1599,7 @@ func (t *fragmentedParquetRangeTransport) RoundTrip(req *http.Request) (*http.Re
 		return nil, err
 	}
 	if start < 0 || end < start || end >= int64(len(t.data)) {
-		return nil, stderrors.New("requested Parquet range is outside fixture")
+		return nil, api.NewError(api.ErrObjectIO, "requested Parquet range is outside fixture", nil)
 	}
 	payload := t.data[start : end+1]
 	if int64(len(payload)) > t.maxRange {
@@ -1773,7 +1773,7 @@ func assertIcebergCode(t *testing.T, err error, code api.ErrorCode) {
 		t.Fatalf("expected %s, got nil", code)
 	}
 	var icebergErr *api.IcebergError
-	if !stderrors.As(err, &icebergErr) {
+	if !errors.As(err, &icebergErr) {
 		t.Fatalf("expected IcebergError %s, got %T %v", code, err, err)
 	}
 	if icebergErr.Code != code {
