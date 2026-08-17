@@ -4317,6 +4317,9 @@ type UserDefinedVar struct {
 	Sql              string
 	IsBin            bool
 	PrepareParamKind vector.PrepareParamKind
+	// Replayable is true only when the proxy can replay the assignment as a
+	// captured raw COM_QUERY SET statement during legacy migration.
+	Replayable bool
 }
 
 func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {

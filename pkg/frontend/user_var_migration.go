@@ -30,10 +30,23 @@ import (
 
 const maxMigrateUserDefinedVarsSize = 16 << 20
 
+const migrationNextTxnIsolationKey = transactionIsolationSystemVariable + ":next"
+
 func isMigrationSnapshotSizeLimitError(err error) bool {
 	return err != nil &&
 		moerr.IsMoErrCode(err, moerr.ErrInternal) &&
 		strings.Contains(err.Error(), "connection migration size limit")
+}
+
+func (ses *Session) hasUnreplayableMigrationUserVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, variable := range ses.userDefinedVars {
+		if variable == nil || !variable.Replayable {
+			return true
+		}
+	}
+	return false
 }
 
 func hasMigrationRuntimeSideEffect(name string) bool {
@@ -184,6 +197,10 @@ func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefined
 			Sql:              item.Sql,
 			IsBin:            item.IsBin,
 			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
+			// Typed restore does not populate the proxy's raw SET history. Keep
+			// the SQL text for EXECUTE ... USING reconstruction, but do not treat
+			// it as evidence that a later legacy migration can replay this value.
+			Replayable: false,
 		}
 	}
 	return result, nil

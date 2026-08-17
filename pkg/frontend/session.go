@@ -152,6 +152,10 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// migrationSystemVarReplayable records whether the latest assignment for a
+	// session system variable is known to be captured by the proxy's raw SET
+	// replay stream. A prepared assignment is not visible to that stream.
+	migrationSystemVarReplayable map[string]bool
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
 	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
@@ -447,6 +451,18 @@ func (ses *Session) setUserDefinedVarWithKind(
 	isBin bool,
 	kind vector.PrepareParamKind,
 ) error {
+	return ses.setUserDefinedVarWithKindAndReplayability(
+		name, value, sql, isBin, kind, false)
+}
+
+func (ses *Session) setUserDefinedVarWithKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
@@ -454,8 +470,30 @@ func (ses *Session) setUserDefinedVarWithKind(
 		Sql:              sql,
 		IsBin:            isBin,
 		PrepareParamKind: kind,
+		Replayable:       replayable,
 	}
 	return nil
+}
+
+func (ses *Session) markMigrationSystemVarReplayable(name string, replayable bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, replayable := range ses.migrationSystemVarReplayable {
+		if !replayable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserDefinedVar gets value of the user defined variable
@@ -1003,6 +1041,7 @@ func NewSession(
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -2662,6 +2701,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
 					return moerr.AttachCause(migrationCtx, err)
 				}
+				ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
 				continue
 			}
 			var oldAutocommit interface{}

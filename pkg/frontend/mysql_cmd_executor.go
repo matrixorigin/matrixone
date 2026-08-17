@@ -1000,13 +1000,29 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithKind(
-				name, value, sql, userVarIsBin, userVarPrepareParamKind)
+			err = ses.setUserDefinedVarWithKindAndReplayability(
+				name, value, sql, userVarIsBin, userVarPrepareParamKind,
+				!preparedExpression && sql != "")
 			if err != nil {
 				return err
 			}
 		}
 		return nil
+	}
+	markSystemReplayability := func(assign *tree.VarAssignmentExpr) {
+		if (!assign.System && !assign.SetNames) || assign.Global {
+			return
+		}
+		replayable := !preparedExpression && sql != ""
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				ses.markMigrationSystemVarReplayable(name, replayable)
+			}
+			return
+		}
+		ses.markMigrationSystemVarReplayable(assign.Name, replayable)
 	}
 
 	applyAssignment := func(item evaluatedAssignment) error {
@@ -1047,8 +1063,13 @@ func doSetVar(
 				}
 				allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
 					!execCtx.txnOpt.activeTxnAtStart
-				return txnHandler.setNextTxnIsolation(
-					execCtx.reqCtx, isolation, allowCurrentStatementTxn)
+				if err := txnHandler.setNextTxnIsolation(
+					execCtx.reqCtx, isolation, allowCurrentStatementTxn); err != nil {
+					return err
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, !preparedExpression && sql != "")
+				return nil
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1172,6 +1193,7 @@ func doSetVar(
 			if err = applyAssignment(item); err != nil {
 				return err
 			}
+			markSystemReplayability(assign)
 		}
 		completed = true
 		return nil
@@ -1185,6 +1207,7 @@ func doSetVar(
 		if err = applyAssignment(item); err != nil {
 			return err
 		}
+		markSystemReplayability(assign)
 	}
 	return nil
 }
@@ -1278,6 +1301,7 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		); err != nil {
 			return err
 		}
+		ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
 	case tree.TransactionScopeSession:
 		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
 			return err

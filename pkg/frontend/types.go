@@ -1618,6 +1618,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
 	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
+	}
 	return
 }
 

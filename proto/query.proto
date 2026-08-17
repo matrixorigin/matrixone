@@ -561,6 +561,10 @@ message MigrateConnFromResponse {
   bool UserDefinedVarsExported = 7;
   repeated MigrateSystemVariable SystemVariables = 8;
   bool SystemVariablesExported = 9;
+  // Whether the proxy's raw COM_QUERY SET history is complete for the
+  // corresponding typed state. A false value requires a v22 target.
+  bool UserDefinedVarsReplayable = 10;
+  bool SystemVariablesReplayable = 11;
 }
 
 message MigrateConnToRequest {

@@ -598,20 +598,29 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
+		// Typed snapshots can only be replayed by a v22 target when the proxy's
+		// raw COM_QUERY history did not observe every assignment (for example,
+		// prepared SET values). Keep that fact explicit for target negotiation.
+		resp.UserDefinedVarsReplayable = !ses.hasUnreplayableMigrationUserVars()
+		resp.SystemVariablesReplayable = !ses.hasUnreplayableMigrationSystemVars()
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
-			// Legacy replay only observes raw COM_QUERY SET statements and
-			// cannot prove that prepared or otherwise unobserved assignments
-			// cover the current user-variable state. Fail closed instead of
-			// reporting a successful migration that silently drops variables.
-			return err
+			// A bounded typed snapshot can fall back to the proxy's raw replay
+			// stream only when every current user-variable assignment is known to
+			// have been captured there. Prepared assignments are not observable
+			// by that stream and must fail closed.
+			if !isMigrationSnapshotSizeLimitError(err) || ses.hasUnreplayableMigrationUserVars() {
+				return err
+			}
 		} else {
 			resp.UserDefinedVars = vars
 			resp.UserDefinedVarsExported = true
 		}
 		systemVars, err := ses.snapshotSessionSystemVars(operationCtx)
 		if err != nil {
-			if !isMigrationSnapshotSizeLimitError(err) {
+			// As above, a legacy system-variable replay is safe only when every
+			// changed session variable is represented by a captured raw SET.
+			if !isMigrationSnapshotSizeLimitError(err) || ses.hasUnreplayableMigrationSystemVars() {
 				return err
 			}
 		} else {

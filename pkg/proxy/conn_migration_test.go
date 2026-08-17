@@ -274,14 +274,76 @@ func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
 		defer sc.Close()
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
 		info := &pb.MigrateConnFromResponse{
-			UserDefinedVarsExported: true,
-			SystemVariablesExported: true,
+			UserDefinedVarsExported:   true,
+			SystemVariablesExported:   true,
+			UserDefinedVarsReplayable: true,
+			SystemVariablesReplayable: true,
 		}
 		assert.NoError(t, cc.migrateConnTo(sc, info))
 		assert.Equal(t, []string{
 			"/* cloud_nonuser */ set transferred=1;",
 			"set @mode = 'PIPES_AS_CONCAT'",
 		}, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsUnreplayableTypedStateForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			UserDefinedVarsReplayable:     false,
+			UserDefinedVars:               []*pb.MigrateUserDefinedVar{{Name: "v"}},
+			UserLevelLockReleaseSupported: true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "complete raw replay")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsUnreplayableTypedSystemStateForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			SystemVariablesExported:       true,
+			SystemVariablesReplayable:     false,
+			SystemVariables:               []*pb.MigrateSystemVariable{{Name: "optimizer_hints"}},
+			UserLevelLockReleaseSupported: true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "complete raw replay")
+		assert.Empty(t, sc.statements)
 	})
 }
 

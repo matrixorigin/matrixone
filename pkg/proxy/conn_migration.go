@@ -96,6 +96,16 @@ func (c *clientConn) migrateConnToContext(
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
 	}
+	if !typedMigrationSupported {
+		if info.UserDefinedVarsExported && !info.UserDefinedVarsReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed user variables to a pre-v22 target without complete raw replay")
+		}
+		if info.SystemVariablesExported && !info.SystemVariablesReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed system variables to a pre-v22 target without complete raw replay")
+		}
+	}
 
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.

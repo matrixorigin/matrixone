@@ -498,12 +498,13 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 		}
 	})
 
-	require.NoError(t, ses.setUserDefinedVarWithKind(
+	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
 		"TS0",
 		"2026-08-07 04:20:01.123456",
 		"set @ts0 = (select updated_at from src limit 1)",
 		false,
 		vector.PrepareParamNone,
+		true,
 	))
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -514,6 +515,35 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	require.Len(t, resp.UserDefinedVars, 1)
 	require.Equal(t, "ts0", resp.UserDefinedVars[0].Name)
 	require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", resp.UserDefinedVars[0].Sql)
+	require.True(t, resp.UserDefinedVarsReplayable)
+}
+
+func TestMigrateConnectionFromMarksPreparedUserStateUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// An empty SQL field models a value produced by a prepared SET. The typed
+	// snapshot is valid for v22, but the legacy raw replay stream cannot carry it.
+	require.NoError(t, ses.setUserDefinedVarWithKind(
+		"prepared", "value", "", false, vector.PrepareParamNone))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.False(t, resp.UserDefinedVarsReplayable)
+	require.Len(t, resp.UserDefinedVars, 1)
 }
 
 func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T) {
@@ -538,7 +568,7 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T)
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
 		"",
 		false,
-		vector.PrepareParamString,
+		vector.PrepareParamNone,
 	))
 
 	rt := &Routine{mc: newMigrateController()}
@@ -549,6 +579,124 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T)
 	require.False(t, resp.UserDefinedVarsExported)
 	require.Empty(t, resp.UserDefinedVars)
 	require.False(t, resp.SystemVariablesExported)
+}
+
+func TestMigrateConnectionFromFallsBackWhenTypedUserSnapshotTooLargeAndReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// A normal COM_QUERY SET is retained by the proxy, so the oversized typed
+	// snapshot can safely fall back to the legacy replay stream.
+	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
+		"large",
+		string(make([]byte, maxMigrateUserDefinedVarsSize)),
+		"set @large = repeat('a', 16777216)",
+		false,
+		vector.PrepareParamNone,
+		true,
+	))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+	require.True(t, resp.UserDefinedVarsReplayable)
+	require.True(t, resp.SystemVariablesExported)
+}
+
+func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Prepared system assignments do not produce a proxy raw SET event. Mark
+	// the large value as unobserved and require migration to fail closed.
+	require.NoError(t, ses.SetSessionSysVar(
+		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFrom(resp)
+	require.ErrorContains(t, err, "size limit")
+	require.False(t, resp.UserDefinedVarsExported)
+	require.False(t, resp.SystemVariablesExported)
+	require.False(t, resp.SystemVariablesReplayable)
+}
+
+func TestMigrateConnectionFromFallsBackWhenTypedSystemSnapshotTooLargeAndReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	require.NoError(t, ses.SetSessionSysVar(
+		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
+	// Model the successful COM_QUERY proxy event after the session setter.
+	ses.markMigrationSystemVarReplayable("optimizer_hints", true)
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.UserDefinedVarsExported)
+	require.False(t, resp.SystemVariablesExported)
+	require.Empty(t, resp.SystemVariables)
+	require.True(t, resp.SystemVariablesReplayable)
+}
+
+func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set optimizer_hints = prepared_hint", 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestRawNextTransactionAssignmentIsReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	sql := "set @@transaction_isolation = 'READ-COMMITTED'"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), sql, false))
+	require.False(t, ses.hasUnreplayableMigrationSystemVars())
 }
 
 func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {

@@ -789,12 +789,14 @@ func TestSession_Migrate(t *testing.T) {
 		}
 		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
 			context.Background(), txn.TxnIsolation_RC, false))
+		source.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
 		routine := &Routine{mc: newMigrateController()}
 		routine.setSession(source)
 		exported := &query.MigrateConnFromResponse{}
 		require.NoError(t, routine.migrateConnectionFrom(exported))
 		require.True(t, exported.UserDefinedVarsExported)
 		require.True(t, exported.SystemVariablesExported)
+		require.False(t, exported.SystemVariablesReplayable)
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
@@ -811,6 +813,7 @@ func TestSession_Migrate(t *testing.T) {
 		restored, err := target.GetUserDefinedVar("ts0")
 		require.NoError(t, err)
 		require.Equal(t, "2026-08-07 04:20:01.123456", restored.Value)
+		require.False(t, restored.Replayable)
 		restoredMode, err := target.GetUserDefinedVar("mode")
 		require.NoError(t, err)
 		require.Equal(t, "PIPES_AS_CONCAT", restoredMode.Value)
