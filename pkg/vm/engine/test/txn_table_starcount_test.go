@@ -38,6 +38,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestStarCountBasic covers both the zero-row boundary and a fresh transaction
+// reading committed rows. A separate "readonly" test used the same ordinary
+// transaction path and duplicated this second assertion.
 func TestStarCountBasic(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -128,140 +131,33 @@ func TestStarCountBasic(t *testing.T) {
 
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
-}
 
-func TestStarCountWithUncommittedInserts(t *testing.T) {
-	catalog.SetupDefines("")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-
-	// Setup: Create database and table with 100 rows
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	schema := catalog2.MockSchemaAll(3, -1) // -1 means no primary key
-	schema.Name = "test_table"
-	defs, err := testutil.EngineTableDefBySchema(schema)
-	require.NoError(t, err)
-
-	err = db.Create(ctx, "test_table", defs)
-	require.NoError(t, err)
-
-	rel, err := db.Relation(ctx, "test_table", nil)
-	require.NoError(t, err)
-
-	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-
-	// Test: Add uncommitted inserts
+	// Reuse the engine and database fixture for the other zero boundary:
+	// uncommitted inserts on a table with no committed rows.
+	const emptyTable = "empty_with_uncommitted"
+	emptySchema := catalog2.MockSchemaAll(3, -1)
+	emptySchema.Name = emptyTable
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.NoError(t, err)
-
 	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
 	require.NoError(t, err)
-
-	rel, err = db.Relation(ctx, "test_table", nil)
+	defs, err = testutil.EngineTableDefBySchema(emptySchema)
 	require.NoError(t, err)
+	require.NoError(t, db.Create(ctx, emptyTable, defs))
+	require.NoError(t, txn.Commit(ctx))
 
-	// Insert 50 more rows (uncommitted) - no PK so no conflict
-	bat = catalog2.MockBatch(schema, 50)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
-
-	// Count should include uncommitted inserts
-	count, err := rel.StarCount(ctx)
-	require.NoError(t, err)
-	t.Logf("StarCount returned: %d, expected: 150 (100 committed + 50 uncommitted)", count)
-	require.Equal(t, uint64(150), count, "Should count 100 committed + 50 uncommitted")
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-}
-
-func TestStarCountReadonly(t *testing.T) {
-	catalog.SetupDefines("")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-
-	// Setup: Create database and table with 100 rows
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	schema := catalog2.MockSchemaAll(3, 0)
-	schema.Name = "test_table"
-	defs, err := testutil.EngineTableDefBySchema(schema)
-	require.NoError(t, err)
-
-	err = db.Create(ctx, "test_table", defs)
-	require.NoError(t, err)
-
-	rel, err := db.Relation(ctx, "test_table", nil)
-	require.NoError(t, err)
-
-	bat := catalog2.MockBatch(schema, 100)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-
-	// Test: Readonly transaction (use snapshot)
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
 	require.NoError(t, err)
-
 	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
 	require.NoError(t, err)
-
-	rel, err = db.Relation(ctx, "test_table", nil)
+	rel, err = db.Relation(ctx, emptyTable, nil)
 	require.NoError(t, err)
-
-	// Readonly transaction should only see committed rows
-	count, err := rel.StarCount(ctx)
+	bat = catalog2.MockBatch(emptySchema, 50)
+	require.NoError(t, rel.Write(ctx, containers.ToCNBatch(bat)))
+	count, err = rel.StarCount(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(100), count, "Readonly should only count committed rows")
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
+	require.Equal(t, uint64(50), count, "empty table should count uncommitted inserts")
+	require.NoError(t, txn.Commit(ctx))
 }
 
 // TestStarCountWithPersistedInserts tests StarCount with persisted uncommitted inserts
@@ -455,137 +351,9 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestStarCountReadonlyLarge tests readonly transaction with large dataset
-func TestStarCountReadonlyLarge(t *testing.T) {
-	catalog.SetupDefines("")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute*2)
-	defer cancel()
-
-	// Create database and table
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	schema := catalog2.MockSchemaAll(3, -1)
-	schema.Name = "test_table"
-	defs, err := testutil.EngineTableDefBySchema(schema)
-	require.NoError(t, err)
-
-	err = db.Create(ctx, "test_table", defs)
-	require.NoError(t, err)
-
-	rel, err := db.Relation(ctx, "test_table", nil)
-	require.NoError(t, err)
-
-	// Insert 10k rows (reduced from 1M to keep test fast)
-	totalRows := 10000
-	batchSize := 1000
-	for i := 0; i < totalRows/batchSize; i++ {
-		bat := catalog2.MockBatch(schema, batchSize)
-		err = rel.Write(ctx, containers.ToCNBatch(bat))
-		require.NoError(t, err)
-	}
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-
-	// Readonly transaction
-	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	rel, err = db.Relation(ctx, "test_table", nil)
-	require.NoError(t, err)
-
-	count, err := rel.StarCount(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(totalRows), count)
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-}
-
-// TestStarCountInMemoryEmpty tests in-memory inserts on empty table
-func TestStarCountInMemoryEmpty(t *testing.T) {
-	catalog.SetupDefines("")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-
-	// Create empty table
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	err = disttaeEngine.Engine.Create(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	db, err := disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	schema := catalog2.MockSchemaAll(3, -1)
-	schema.Name = "test_table"
-	defs, err := testutil.EngineTableDefBySchema(schema)
-	require.NoError(t, err)
-
-	err = db.Create(ctx, "test_table", defs)
-	require.NoError(t, err)
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-
-	// Insert 50 rows on empty table
-	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.NoError(t, err)
-
-	db, err = disttaeEngine.Engine.Database(ctx, "testdb", txn)
-	require.NoError(t, err)
-
-	rel, err := db.Relation(ctx, "test_table", nil)
-	require.NoError(t, err)
-
-	bat := catalog2.MockBatch(schema, 50)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.NoError(t, err)
-
-	count, err := rel.StarCount(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(50), count, "Empty table + 50 uncommitted = 50")
-
-	err = txn.Commit(ctx)
-	require.NoError(t, err)
-}
-
-// TestStarCountInMemoryLarge tests in-memory inserts with large dataset
+// TestStarCountInMemoryLarge checks the committed snapshot before adding
+// uncommitted rows, then checks the combined count. This retains both the
+// committed-only and committed-plus-workspace axes on one engine fixture.
 func TestStarCountInMemoryLarge(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -645,13 +413,16 @@ func TestStarCountInMemoryLarge(t *testing.T) {
 
 	rel, err = db.Relation(ctx, "test_table", nil)
 	require.NoError(t, err)
+	count, err := rel.StarCount(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(totalRows), count, "new transaction should see all committed rows")
 
 	uncommittedRows := 1000
 	bat := catalog2.MockBatch(schema, uncommittedRows)
 	err = rel.Write(ctx, containers.ToCNBatch(bat))
 	require.NoError(t, err)
 
-	count, err := rel.StarCount(ctx)
+	count, err = rel.StarCount(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(totalRows+uncommittedRows), count, "10k committed + 1k uncommitted = 11k")
 

@@ -147,6 +147,28 @@ func TestAdd(t *testing.T) {
 	})
 }
 
+func TestAddRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var n Nulls
+	n.GetBitmap().InstallExternalStorage(make([]uint64, 2))
+	n.InitWithSize(128)
+	require.NotPanics(t, func() {
+		n.AddRange(0, 128)
+	})
+	require.Equal(t, 128, n.Count())
+}
+
+func TestRangeUsesExclusiveEndForExternalStorage(t *testing.T) {
+	var source, destination Nulls
+	source.Add(7, 63)
+	destination.GetBitmap().InstallExternalStorage(make([]uint64, 1))
+	destination.InitWithSize(64)
+	require.NotPanics(t, func() {
+		Range(&source, 0, 64, 0, &destination)
+	})
+	require.True(t, destination.Contains(7))
+	require.True(t, destination.Contains(63))
+}
+
 func TestDel(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
 		n := &Nulls{}

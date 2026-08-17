@@ -18,7 +18,10 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
+	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -47,6 +50,9 @@ func (mergeTop *MergeTop) OpType() vm.OpType {
 }
 
 func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
+	defer func() {
+		err = mergeTopTerminalCapacityError(proc.Ctx, err)
+	}()
 	if mergeTop.OpAnalyzer == nil {
 		mergeTop.OpAnalyzer = process.NewAnalyzer(mergeTop.GetIdx(), mergeTop.IsFirst, mergeTop.IsLast, "mergetop")
 	} else {
@@ -55,7 +61,11 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 
 	// limit executor
 	if mergeTop.ctr.limitExecutor == nil {
-		mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, mergeTop.Limit)
+		mergeTop.ctr.limitExecutor, err = colexec.NewExpressionExecutorWithAllocation(
+			proc,
+			mergeTop.Limit,
+			mergeTop.ctr.expressionAllocation,
+		)
 		if err != nil {
 			return err
 		}
@@ -65,10 +75,18 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	mergeTop.ctr.limit = vector.MustFixedColWithTypeCheck[uint64](vec)[0]
-	if mergeTop.ctr.limit > 1024 {
-		mergeTop.ctr.sels = make([]int64, 0, 1024)
-	} else {
-		mergeTop.ctr.sels = make([]int64, 0, mergeTop.ctr.limit)
+	initialSelections := int(min(mergeTop.ctr.limit, uint64(1024)))
+	if initialSelections > 0 {
+		selections, growErr := growMergeTopSelections(
+			mergeTop.ctr.sels,
+			initialSelections,
+			proc,
+			mergeTop.ctr.allocationAccount,
+		)
+		if growErr != nil {
+			return growErr
+		}
+		mergeTop.ctr.sels = selections[:0]
 	}
 	mergeTop.ctr.poses = make([]int32, 0, len(mergeTop.Fs))
 
@@ -76,7 +94,11 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	if len(mergeTop.ctr.executorsForOrderList) != len(mergeTop.Fs) {
 		mergeTop.ctr.executorsForOrderList = make([]colexec.ExpressionExecutor, len(mergeTop.Fs))
 		for i := range mergeTop.ctr.executorsForOrderList {
-			mergeTop.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutor(proc, mergeTop.Fs[i].Expr)
+			mergeTop.ctr.executorsForOrderList[i], err = colexec.NewExpressionExecutorWithAllocation(
+				proc,
+				mergeTop.Fs[i].Expr,
+				mergeTop.ctr.expressionAllocation,
+			)
 			if err != nil {
 				return err
 			}
@@ -86,10 +108,16 @@ func (mergeTop *MergeTop) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
+func (mergeTop *MergeTop) Call(proc *process.Process) (
+	result vm.CallResult,
+	err error,
+) {
+	defer func() {
+		err = mergeTopTerminalCapacityError(proc.Ctx, err)
+	}()
 	analyzer := mergeTop.OpAnalyzer
 
-	result := vm.NewCallResult()
+	result = vm.NewCallResult()
 	if mergeTop.ctr.limit == 0 {
 		result.Batch = nil
 		result.Status = vm.ExecStop
@@ -108,7 +136,7 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	err := mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
+	err = mergeTop.ctr.eval(mergeTop.ctr.limit, proc, analyzer, &result)
 	if err == nil {
 		result.Status = vm.ExecStop
 		return result, nil
@@ -117,19 +145,32 @@ func (mergeTop *MergeTop) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer process.Analyzer) (bool, error) {
-	if ctr.bat != nil {
-		ctr.bat.CleanOnlyData()
-	}
 	for {
 		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 		if err != nil {
 			return true, err
 		}
 		if result.Batch == nil {
+			// The child can cancel after this invocation passed vm.Exec's entry
+			// check and still return EOF. Do not sort and publish partial input.
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return true, err
+			}
 			return false, nil
 		}
+		if result.Batch.IsEmpty() {
+			continue
+		}
+		if len(result.Batch.ExtraBuf) != 0 {
+			return true, moerr.NewInternalError(proc.Ctx,
+				"merge top build should not have extra buffers")
+		}
 
-		bat, err := result.Batch.Dup(proc.GetMPool())
+		bat, err := cloneMergeTopBatch(
+			proc,
+			result.Batch,
+			ctr.retainedAllocation,
+		)
 		if err != nil {
 			return true, err
 		}
@@ -164,6 +205,14 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
 				}
+				if ctr.retainedAllocation != nil {
+					if err := ctr.bat.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+						bat.Clean(proc.Mp())
+						ctr.bat.Clean(proc.Mp())
+						ctr.bat = nil
+						return false, err
+					}
+				}
 			}
 
 			for i := 0; i < len(bat.Vecs); i++ {
@@ -180,7 +229,7 @@ func (ctr *container) build(ap *MergeTop, proc *process.Process, analyzer proces
 				}
 				ctr.cmps = append(
 					ctr.cmps,
-					compare.New(*bat.Vecs[i].GetType(), desc, nullsLast),
+					compare.NewOrder(*bat.Vecs[i].GetType(), desc, nullsLast),
 				)
 			}
 
@@ -199,6 +248,30 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	processCount := rowsToFill(limit, len(ctr.sels), rowCount)
 
 	if processCount > 0 {
+		if processCount > math.MaxInt-len(ctr.sels) {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		oldSelectionCount := len(ctr.sels)
+		selections, err := growMergeTopSelections(
+			ctr.sels,
+			oldSelectionCount+processCount,
+			proc,
+			ctr.allocationAccount,
+		)
+		if err != nil {
+			return err
+		}
+		ctr.sels = selections[:oldSelectionCount]
+		var checkpoints []vector.AppendCheckpoint
+		if ctr.allocationAccount != nil {
+			checkpoints, err = ctr.appendCheckpoints(len(ctr.bat.Vecs), proc)
+			if err != nil {
+				return err
+			}
+			for i := range ctr.bat.Vecs {
+				checkpoints[i] = ctr.bat.Vecs[i].MakeAppendCheckpoint()
+			}
+		}
 		for j, vec := range ctr.bat.Vecs {
 			if err := vec.UnionBatch(
 				bat.Vecs[j],
@@ -207,12 +280,16 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 				nil,
 				proc.Mp(),
 			); err != nil {
+				for i := range checkpoints {
+					ctr.bat.Vecs[i].RollbackAppend(checkpoints[i], processCount)
+				}
 				return err
 			}
 		}
 		baseSel := int64(len(ctr.sels))
 		for i := range processCount {
-			ctr.sels = append(ctr.sels, baseSel+int64(i))
+			ctr.sels = ctr.sels[:oldSelectionCount+i+1]
+			ctr.sels[oldSelectionCount+i] = baseSel + int64(i)
 		}
 		ctr.bat.AddRowCount(processCount)
 
@@ -261,11 +338,12 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 	for i, cmp := range ctr.cmps {
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
-	sels := make([]int64, len(ctr.sels))
-	for i, j := 0, len(ctr.sels); i < j; i++ {
-		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
+	ordered := ctr.sels[:len(ctr.sels)]
+	for range len(ordered) {
+		heap.Pop(ctr)
 	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+	ctr.sels = ordered
+	if err := ctr.bat.Shuffle(ctr.sels, proc.Mp()); err != nil {
 		return err
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
@@ -274,6 +352,25 @@ func (ctr *container) eval(limit uint64, proc *process.Process, analyzer process
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	result.Batch = ctr.bat
 	return nil
+}
+
+func cloneMergeTopBatch(
+	proc *process.Process,
+	source *batch.Batch,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	if selection == nil {
+		return source.Dup(proc.Mp())
+	}
+	destination, err := proc.NewBatchFromSrcWithAllocation(source, 0, selection)
+	if err != nil {
+		return nil, err
+	}
+	if err = source.CloneTo(destination, proc.Mp()); err != nil {
+		destination.Clean(proc.Mp())
+		return nil, err
+	}
+	return destination, nil
 }
 
 // do sort work for heap, and result order will be set in container.sels

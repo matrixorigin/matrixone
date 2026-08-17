@@ -188,18 +188,25 @@ func (s *sqlExecutor) ExecTxn(
 	if err = exec.commit(); err != nil {
 		return err
 	}
-	s.maybeWaitCommittedLogApplied(exec.opts)
-	return nil
+	return s.maybeWaitCommittedLogApplied(exec.ctx, exec.opts)
 }
 
-func (s *sqlExecutor) maybeWaitCommittedLogApplied(opts executor.Options) {
+func (s *sqlExecutor) maybeWaitCommittedLogApplied(
+	ctx context.Context,
+	opts executor.Options,
+) error {
 	if !opts.WaitCommittedLogApplied() {
-		return
+		return nil
 	}
 	ts := opts.Txn().Txn().CommitTS
 	if !ts.IsEmpty() {
-		s.txnClient.SyncLatestCommitTS(ts)
+		// The commit callback has already advanced the transaction client's
+		// latest commit timestamp. Keep the visibility barrier on the same
+		// caller-owned context as the transaction that requested it.
+		_, err := s.txnClient.WaitLogTailAppliedAt(ctx, ts)
+		return err
 	}
+	return nil
 }
 
 func (s *sqlExecutor) getCompileContext(

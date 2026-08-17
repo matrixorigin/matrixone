@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -2139,65 +2138,6 @@ func TestNotifyMessageClean(t *testing.T) {
 
 	n2.clean(proc)
 	require.Equal(t, 1, ff.number)
-}
-
-func TestSuppressRemoteRunCancelError(t *testing.T) {
-	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
-	})
-
-	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
-	})
-
-	t.Run("suppress joined cancellation fallout after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := errors.Join(context.Canceled, moerr.NewQueryInterrupted(ctx))
-		require.NoError(t, suppressRemoteRunCancelError(ctx, err))
-	})
-
-	t.Run("keep independent deadline joined with cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := suppressRemoteRunCancelError(
-			ctx, errors.Join(context.DeadlineExceeded, context.Canceled))
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	})
-
-	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		primaryErr := moerr.NewInternalErrorNoCtx("remote execution failed")
-		err := suppressRemoteRunCancelError(
-			ctx, errors.Join(primaryErr, context.Canceled))
-		require.ErrorIs(t, err, primaryErr)
-	})
-
-	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
-	})
-
-	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
-	})
-
-	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
-		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, context.Canceled)
-		require.ErrorIs(t, err, context.Canceled)
-	})
 }
 
 func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {

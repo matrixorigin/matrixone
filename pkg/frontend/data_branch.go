@@ -562,7 +562,7 @@ func dataBranchCreateDatabase(
 		return
 	}
 
-	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
+	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase, nil); err != nil {
 		return
 	}
 
@@ -1907,6 +1907,11 @@ func getRelations(
 		)
 		return
 	}
+	if err = validateDataBranchNamedSnapshotScope(
+		ctx, tarName.AtTsExpr, tarSnap, tarDBName, tarTblName, tarRel,
+	); err != nil {
+		return
+	}
 
 	if baseDB, err = eng.Database(ctx, baseDBName, txnOpB); err != nil {
 		logutil.Error(
@@ -1930,6 +1935,11 @@ func getRelations(
 		)
 		return
 	}
+	if err = validateDataBranchNamedSnapshotScope(
+		ctx, baseName.AtTsExpr, baseSnap, baseDBName, baseTblName, baseRel,
+	); err != nil {
+		return
+	}
 
 	logutil.Info(
 		"DataBranch-GetRelations-Done",
@@ -1940,6 +1950,23 @@ func getRelations(
 	)
 
 	return
+}
+
+func validateDataBranchNamedSnapshotScope(
+	ctx context.Context,
+	atTsExpr *tree.AtTimeStamp,
+	snapshot *plan2.Snapshot,
+	databaseName string,
+	tableName string,
+	relation engine.Relation,
+) error {
+	if atTsExpr == nil || atTsExpr.Type != tree.ATTIMESTAMPSNAPSHOT {
+		return nil
+	}
+	tableDef := relation.GetTableDef(ctx)
+	return plan2.ValidateSnapshotScope(
+		snapshot, databaseName, tableName, tableDef.DbId, plan2.SnapshotTableID(tableDef),
+	)
 }
 
 func constructChangeHandle(

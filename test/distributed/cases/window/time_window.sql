@@ -1,6 +1,8 @@
 drop database if exists time_window;
 create database time_window;
 use time_window;
+set @time_window_saved_time_zone = @@time_zone;
+set time_zone = '+00:00';
 
 -- Time Window ignores rows whose time key is NULL and keeps valid buckets.
 drop table if exists time_window_null_ts;
@@ -359,6 +361,24 @@ select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (
 select count(*) as bucket_count, max(c) as row_count, max(s) as value_sum from (select device_id, _wstart, count(*) as c, sum(value) as s from tw_interval_fraction_telemetry where metric = 'cpu_usage' and event_ts >= '2024-03-01 08:00:00.000000' and event_ts < '2024-03-01 09:00:00.000000' group by device_id interval(event_ts, 1, hour)) q;
 drop table tw_interval_fraction_telemetry;
 
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
+drop table if exists tw_interval_timestamp_domain;
+create table tw_interval_timestamp_domain (
+  id int primary key,
+  event_ts timestamp(6) not null
+);
+insert into tw_interval_timestamp_domain values
+  (1, '9999-12-31 23:59:59.999999'),
+  (2, '1970-01-01 00:00:01.000000');
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour);
+select _wstart, _wend, count(*) from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day);
+select count(*) as null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day)) q where _wstart is null;
+select count(*) as null_end_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 1 interval(event_ts, 1, hour) sliding(1, hour)) q where _wend is null;
+select count(*) as gapfill_null_start_rows from (select _wstart, _wend, count(*) as n from tw_interval_timestamp_domain where id = 2 interval(event_ts, 1, day) sliding(1, day) fill(linear)) q where _wstart is null;
+drop table tw_interval_timestamp_domain;
+set time_zone = @old_time_zone;
+
 -- unsupported calendar units should return a normal SQL error, not enter the compile panic path
 drop table if exists tw_interval_bad_unit;
 create table tw_interval_bad_unit(ts timestamp(6), v int);
@@ -385,4 +405,5 @@ select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) s
 select _wstart, _wend, count(*) from tw_interval_bad_unit interval(ts, 1, day) sliding(1, quarter);
 drop table tw_interval_bad_unit;
 
+set time_zone = @time_window_saved_time_zone;
 drop database time_window;

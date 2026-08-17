@@ -31,6 +31,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1077,6 +1078,85 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamBypassesCachedTopologyForPreparedSiriusExecution(t *testing.T) {
+	for _, protocol := range []struct {
+		name     string
+		execPlan func(string) *plan.Execute
+		stmtName func(string) string
+	}{
+		{
+			name:     "binary",
+			execPlan: func(string) *plan.Execute { return nil },
+			stmtName: func(name string) string { return name },
+		},
+		{
+			name:     "text",
+			execPlan: func(name string) *plan.Execute { return &plan.Execute{Name: name} },
+			stmtName: func(string) string { return "" },
+		},
+	} {
+		t.Run(protocol.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, 110, "/*+ SIDECAR */ select 1")
+			defer prepareStmt.Close()
+
+			sentinel := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = sentinel
+
+			for range 2 {
+				retComp, retPlan, retStmt, originSQL, _, err := initExecuteStmtParam(
+					execCtx,
+					ses,
+					cw,
+					protocol.execPlan(prepareStmt.Name),
+					protocol.stmtName(prepareStmt.Name),
+				)
+				require.NoError(t, err)
+				require.Nil(t, retComp)
+				require.Same(t, sentinel, prepareStmt.compile)
+				require.NotNil(t, retPlan)
+				require.NotNil(t, retStmt)
+				require.True(t, siriusStatementSelected(originSQL, retStmt))
+			}
+		})
+	}
+}
+
+func TestCompileStatementContextsPreserveCounterWithoutLeakingSelection(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sql           string
+		separateChild bool
+	}{
+		{name: "selected", sql: "/*+ SIDECAR */ select 1", separateChild: true},
+		{name: "unselected", sql: "select 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			counter := new(perfcounter.CounterSet)
+			requestCtx, compileCtx := compileStatementContexts(
+				context.Background(), test.sql, &tree.Select{}, counter)
+
+			attached, ok := compileCtx.Value(perfcounter.CompilePlanMarkKey{}).(*perfcounter.CounterSet)
+			require.True(t, ok)
+			require.Same(t, counter, attached)
+			require.Equal(t, test.separateChild, requestCtx != compileCtx)
+			perfcounter.Update(compileCtx, func(set *perfcounter.CounterSet) {
+				set.FileService.S3.Get.Add(1)
+			})
+			require.Equal(t, int64(1), counter.FileService.S3.Get.Load())
+		})
+	}
+
+	requestCtx, _ := compileStatementContexts(
+		context.Background(), "/*+ SIDECAR */ select 1", &tree.Select{}, new(perfcounter.CounterSet))
+	requestCtx, unselectedCompileCtx := compileStatementContexts(
+		requestCtx, "select 2", &tree.Select{}, new(perfcounter.CounterSet))
+	require.True(t, requestCtx == unselectedCompileCtx,
+		"the selected statement's Sirius marker must not enter its sibling's request context")
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {

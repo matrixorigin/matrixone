@@ -80,6 +80,7 @@ func TestExecutionResourceRecorder(t *testing.T) {
 }
 
 func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
+	require.Equal(t, uint8(mpool.AllocationOwnerMax), resource.AllocationOwnerMaxID)
 	root := resource.NewRoot(resource.ConnExternal)
 	recorder := newExecutionResourceRecorder(
 		resource.ContextWithRoot(context.Background(), root),
@@ -92,6 +93,10 @@ func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
 				Peak: 64,
 			},
 			State: mpool.AllocationAccountTerminalValid,
+			Owners: []mpool.AllocationAccountOwnerSnapshot{{
+				Owner: mpool.AllocationOwnerHashBuild,
+				Peak:  64,
+			}},
 		},
 	)
 	recorder.finishAttempt(
@@ -111,8 +116,67 @@ func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
 	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
 	require.Equal(t, uint64(1), summary.Allocation.ValidGenerationCount)
 	require.Equal(t, uint64(64), summary.Allocation.MaxGenerationPeak)
+	owner, ok := summary.Allocation.Owner(uint8(mpool.AllocationOwnerHashBuild))
+	require.True(t, ok)
+	require.Equal(t, resource.AllocationOwnerTotals{
+		MaxGenerationPeak: 64,
+		SumGenerationPeak: 64,
+	}, owner)
 	require.Zero(t, summary.Allocation.LiveBytesAtTerminal)
 	require.Zero(t, summary.Quality&resource.QualityInvariantFailure)
+}
+
+func TestAddAllocationAccountTerminalRejectsMalformedOwnerEvidence(t *testing.T) {
+	var duplicate resource.AllocationAccountTotals
+	quality := addAllocationAccountTerminal(
+		&duplicate,
+		mpool.AllocationAccountTerminalSnapshot{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{Peak: 10},
+			State:                     mpool.AllocationAccountTerminalValid,
+			Owners: []mpool.AllocationAccountOwnerSnapshot{
+				{Owner: mpool.AllocationOwnerHashBuild, Peak: 5},
+				{Owner: mpool.AllocationOwnerHashBuild, Peak: 7},
+			},
+		},
+	)
+	require.NotZero(t, quality&resource.QualityInvariantFailure)
+	owner, ok := duplicate.Owner(uint8(mpool.AllocationOwnerHashBuild))
+	require.True(t, ok)
+	require.Equal(t, uint64(5), owner.SumGenerationPeak)
+
+	for _, snapshot := range []mpool.AllocationAccountTerminalSnapshot{
+		{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{Peak: 1},
+			State:                     mpool.AllocationAccountTerminalValid,
+		},
+		{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{Peak: 1},
+			State:                     mpool.AllocationAccountTerminalValid,
+			Owners: []mpool.AllocationAccountOwnerSnapshot{{
+				Owner: mpool.AllocationOwner(resource.AllocationOwnerMaxID + 1),
+				Peak:  1,
+			}},
+		},
+		{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{Peak: 1},
+			State:                     mpool.AllocationAccountTerminalValid,
+			Owners: []mpool.AllocationAccountOwnerSnapshot{{
+				Owner: mpool.AllocationOwnerHashBuild,
+			}},
+		},
+		{
+			AllocationAccountSnapshot: mpool.AllocationAccountSnapshot{Peak: 10},
+			State:                     mpool.AllocationAccountTerminalValid,
+			Owners: []mpool.AllocationAccountOwnerSnapshot{{
+				Owner: mpool.AllocationOwnerHashBuild,
+				Peak:  1,
+			}},
+		},
+	} {
+		var totals resource.AllocationAccountTotals
+		quality = addAllocationAccountTerminal(&totals, snapshot)
+		require.NotZero(t, quality&resource.QualityInvariantFailure)
+	}
 }
 
 func TestExplainPhyBufferUsesPublishedCurrentAttempt(t *testing.T) {
@@ -282,6 +346,9 @@ func TestOnlyOneEligibleExecutionOwnsStatementAttempts(t *testing.T) {
 func TestRemoteTerminalEnvelope(t *testing.T) {
 	anal := &AnalyzeModule{}
 	sender := &messageSenderOnClient{anal: anal}
+	var allocation resource.AllocationAccountTotals
+	require.Zero(t, allocation.AddGeneration(17, 0, true))
+	require.Zero(t, allocation.AddOwnerGeneration(63, 17, 0))
 	envelope := remoteTerminalEnvelope{
 		PhyPlan: models.PhyPlan{
 			Version:    "1.0",
@@ -298,12 +365,7 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 			MaxDomainPeakLiveBytes:      15,
 			SumDomainPeakLiveBytesBound: 15,
 		},
-		Allocation: resource.AllocationAccountTotals{
-			GenerationCount:      1,
-			ValidGenerationCount: 1,
-			MaxGenerationPeak:    17,
-			SumGenerationPeak:    17,
-		},
+		Allocation: allocation,
 		PendingAllocationGroups: []remoteAllocationGroupPending{{
 			Key:   "pending@cn",
 			Count: 2,
@@ -327,6 +389,12 @@ func TestRemoteTerminalEnvelope(t *testing.T) {
 	require.Equal(t, uint64(15), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Equal(t, uint64(1), summary.Allocation.GenerationCount)
 	require.Equal(t, uint64(17), summary.Allocation.MaxGenerationPeak)
+	owner, ok := summary.Allocation.Owner(63)
+	require.True(t, ok)
+	require.Equal(t, resource.AllocationOwnerTotals{
+		MaxGenerationPeak: 17,
+		SumGenerationPeak: 17,
+	}, owner)
 	require.NotZero(t, summary.Quality&resource.QualityPartial)
 	require.Len(t, anal.remotePhyPlans, 1)
 	require.Equal(t, "Merge", anal.remotePhyPlans[0].LocalScope[0].Magic)
@@ -359,6 +427,93 @@ func TestRemoteTerminalEnvelopeDecodesLegacyPlan(t *testing.T) {
 	emptySender := &messageSenderOnClient{anal: &AnalyzeModule{}}
 	require.NoError(t, emptySender.dealRemoteTerminal(empty))
 	require.Empty(t, emptySender.anal.remotePhyPlans)
+}
+
+func TestRemoteTerminalV3OwnerGapRemainsPartialAcrossV4Hop(t *testing.T) {
+	var legacyAllocation resource.AllocationAccountTotals
+	require.Zero(t, legacyAllocation.AddGeneration(17, 0, true))
+	legacyData, err := json.Marshal(remoteTerminalEnvelope{
+		TerminalResourceVersion: remoteAllocationOwnerResourceVersion - 1,
+		Allocation:              legacyAllocation,
+	})
+	require.NoError(t, err)
+
+	intermediate := &AnalyzeModule{}
+	require.NoError(t, (&messageSenderOnClient{anal: intermediate}).dealRemoteTerminal(
+		legacyData,
+	))
+	intermediateSummary := intermediate.remoteResourceSummary()
+	require.NotZero(t, intermediateSummary.Quality&resource.QualityPartial)
+	require.NotZero(
+		t,
+		intermediateSummary.Quality&resource.QualityMissingAllocationOwner,
+	)
+	require.Zero(t, intermediateSummary.Quality&resource.QualityInvariantFailure)
+	require.False(t, intermediateSummary.Allocation.HasOwnerAttribution())
+
+	intermediateData, err := json.Marshal(remoteTerminalEnvelope{
+		TerminalResourceVersion: remoteTerminalResourceVersion,
+		Delta: resource.Delta{
+			Quality: intermediateSummary.Quality,
+		},
+		Allocation: intermediateSummary.Allocation,
+	})
+	require.NoError(t, err)
+	root := &AnalyzeModule{}
+	require.NoError(t, (&messageSenderOnClient{anal: root}).dealRemoteTerminal(
+		intermediateData,
+	))
+	rootSummary := root.remoteResourceSummary()
+	require.NotZero(t, rootSummary.Quality&resource.QualityPartial)
+	require.NotZero(
+		t,
+		rootSummary.Quality&resource.QualityMissingAllocationOwner,
+	)
+	require.Zero(t, rootSummary.Quality&resource.QualityInvariantFailure)
+	require.Equal(t, uint64(1), rootSummary.Allocation.GenerationCount)
+	require.False(t, rootSummary.Allocation.HasOwnerAttribution())
+}
+
+func TestRemoteTerminalV4RejectsEmptyOwnerEvidence(t *testing.T) {
+	var allocation resource.AllocationAccountTotals
+	require.Zero(t, allocation.AddGeneration(17, 0, true))
+	require.Zero(t, allocation.AddOwnerGeneration(
+		uint8(mpool.AllocationOwnerHashBuild),
+		0,
+		0,
+	))
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		TerminalResourceVersion: remoteTerminalResourceVersion,
+		Allocation:              allocation,
+	})
+	require.NoError(t, err)
+
+	anal := &AnalyzeModule{}
+	require.NoError(t, (&messageSenderOnClient{anal: anal}).dealRemoteTerminal(data))
+	quality := anal.remoteResourceSummary().Quality
+	require.NotZero(t, quality&resource.QualityInvariantFailure)
+}
+
+func TestRemoteTerminalV4RejectsPartialOwnerEvidence(t *testing.T) {
+	var allocation resource.AllocationAccountTotals
+	require.Zero(t, allocation.AddGeneration(100, 0, true))
+	require.Zero(t, allocation.AddOwnerGeneration(
+		uint8(mpool.AllocationOwnerHashBuild),
+		1,
+		0,
+	))
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		TerminalResourceVersion: remoteTerminalResourceVersion,
+		Allocation:              allocation,
+	})
+	require.NoError(t, err)
+
+	anal := &AnalyzeModule{}
+	require.NoError(t, (&messageSenderOnClient{anal: anal}).dealRemoteTerminal(data))
+	quality := anal.remoteResourceSummary().Quality
+	require.NotZero(t, quality&resource.QualityInvariantFailure)
+	require.NotZero(t, quality&resource.QualityPartial)
+	require.NotZero(t, quality&resource.QualityMissingAllocationOwner)
 }
 
 func TestCountExpectedRemoteScopes(t *testing.T) {

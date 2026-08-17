@@ -108,6 +108,8 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 			InsertPkColIdx:        ctx.InsertPkColIdx,
 			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 			IgnoreAffectedRows:    ctx.IgnoreAffectedRows,
+			DedupByTargetRowId:    ctx.DedupByTargetRowId,
+			TargetUpdateCtxIdx:    ctx.TargetUpdateCtxIdx,
 		}
 	}
 
@@ -150,14 +152,18 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:           DeepCopyObjectRef(ctx.Ref),
-		TableDef:      DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:    ctx.HasAutoCol,
-		ColOffset:     ctx.ColOffset,
-		CompPkeyExpr:  DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr: DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:   ctx.IsOldUpdate,
-		IsNewUpdate:   ctx.IsNewUpdate,
+		Ref:                DeepCopyObjectRef(ctx.Ref),
+		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:         ctx.HasAutoCol,
+		ColOffset:          ctx.ColOffset,
+		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:        ctx.IsOldUpdate,
+		IsNewUpdate:        ctx.IsNewUpdate,
+		HasTargetSelector:  ctx.HasTargetSelector,
+		TargetRowNumberCol: ctx.TargetRowNumberCol,
+		TargetActiveCol:    ctx.TargetActiveCol,
+		TargetRowIdCol:     ctx.TargetRowIdCol,
 	}
 
 	return newCtx
@@ -255,6 +261,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FillType:        node.FillType,
 		FillVal:         DeepCopyExprList(node.FillVal),
 		GapFillMode:     node.GapFillMode,
+		GapFillStart:    DeepCopyExpr(node.GapFillStart),
+		GapFillEnd:      DeepCopyExpr(node.GapFillEnd),
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
@@ -284,6 +292,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RankOption:             DeepCopyRankOption(node.RankOption),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
+		PartitionByCount:       node.PartitionByCount,
+		DedupInputKeysUnique:   node.DedupInputKeysUnique,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),
@@ -482,6 +492,7 @@ func DeepCopyIndexOption(indexOption *plan.IndexOption) *plan.IndexOption {
 	}
 	newIndexOption := &plan.IndexOption{
 		CreateExtraTable: indexOption.CreateExtraTable,
+		Visibility:       indexOption.Visibility,
 	}
 
 	return newIndexOption
@@ -690,6 +701,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		HasForeignKeyAction: qry.HasForeignKeyAction,
 		HasReturning:        qry.HasReturning,
 		ReturningStep:       qry.ReturningStep,
+		ApplySqlSelectLimit: qry.ApplySqlSelectLimit,
 		DetectSqls:          slices.Clone(qry.DetectSqls),
 		CatalogDependencies: make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 	}

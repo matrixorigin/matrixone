@@ -1095,6 +1095,134 @@ func TestCommitPanicRollbackAdvancesSessionGeneration(t *testing.T) {
 	}
 }
 
+func TestTempTableAliasesFollowTransactionLifecycle(t *testing.T) {
+	type testState struct {
+		ses   *Session
+		op    *testTxnOp
+		exec  *ExecCtx
+		close func()
+	}
+	newState := func(t *testing.T, txnID byte) testState {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		ses.txnHandler.storage = eng
+
+		op := newTestTxnOp()
+		op.meta = txn.TxnMeta{
+			ID:     []byte{txnID},
+			Status: txn.TxnStatus_Active,
+		}
+		ses.txnHandler.txnOp = op
+		ses.txnHandler.txnCtx = ctx
+		ses.txnHandler.shareTxn = false
+		ses.txnHandler.optionBits = OPTION_BEGIN | OPTION_AUTOCOMMIT
+
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.stmt = &tree.Select{}
+		execCtx.txnOpt = FeTxnOption{autoCommit: true}
+		return testState{
+			ses:  ses,
+			op:   op,
+			exec: execCtx,
+			close: func() {
+				execCtx.Close()
+				ctrl.Finish()
+			},
+		}
+	}
+
+	t.Run("commit preserves aliases", func(t *testing.T) {
+		state := newState(t, 1)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.exec.txnOpt.byCommit = true
+
+		require.NoError(t, state.ses.GetTxnHandler().Commit(state.exec))
+
+		realName, ok := state.ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("rollback restores aliases", func(t *testing.T) {
+		state := newState(t, 2)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.exec.txnOpt.byRollback = true
+
+		require.NoError(t, state.ses.GetTxnHandler().Rollback(state.exec))
+
+		_, ok := state.ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("statement rollback preserves prior transaction changes", func(t *testing.T) {
+		state := newState(t, 3)
+		defer state.close()
+		state.ses.AddTempTable("db", "committed-statement", "real-committed")
+		state.ses.commitTempTableStatement(
+			tempTableTxnKey(state.op),
+			tempTableStatementKey(state.ses, false),
+		)
+		state.op.wp.StartStatement()
+		require.NoError(t, state.op.wp.IncrStatementID(context.Background(), false))
+		state.ses.AddTempTable("db", "failed-statement", "real-failed")
+
+		require.NoError(t, state.ses.GetTxnHandler().Rollback(state.exec))
+
+		_, ok := state.ses.GetTempTable("db", "failed-statement")
+		require.False(t, ok)
+		realName, ok := state.ses.GetTempTable("db", "committed-statement")
+		require.True(t, ok)
+		require.Equal(t, "real-committed", realName)
+		require.True(t, state.ses.GetTxnHandler().InActiveTxn())
+		state.op.wp.EndStatement()
+	})
+
+	t.Run("known commit failure restores aliases", func(t *testing.T) {
+		state := newState(t, 4)
+		defer state.close()
+		state.ses.addTempTable("db", "existing", "real-existing", "", "")
+		state.ses.RemoveTempTable("db", "existing")
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.op.commitErr = moerr.NewInternalErrorNoCtx("commit failed")
+		state.exec.txnOpt.byCommit = true
+
+		require.ErrorContains(t, state.ses.GetTxnHandler().Commit(state.exec), "commit failed")
+
+		realName, ok := state.ses.GetTempTable("db", "existing")
+		require.True(t, ok)
+		require.Equal(t, "real-existing", realName)
+		_, ok = state.ses.GetTempTable("db", "created")
+		require.False(t, ok)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+
+	t.Run("unknown commit result preserves aliases for cleanup", func(t *testing.T) {
+		state := newState(t, 5)
+		defer state.close()
+		state.ses.AddTempTable("db", "created", "real-created")
+		state.op.commitErr = moerr.NewTxnUnknown(state.exec.reqCtx, "test")
+		state.exec.txnOpt.byCommit = true
+
+		err := state.ses.GetTxnHandler().Commit(state.exec)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnUnknown))
+
+		realName, ok := state.ses.GetTempTable("db", "created")
+		require.True(t, ok)
+		require.Equal(t, "real-created", realName)
+		require.Empty(t, state.ses.tempTableTxnJournals)
+	})
+}
+
 var _ TxnOperator = new(testTxnOp)
 
 const (

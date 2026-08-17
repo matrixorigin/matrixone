@@ -66,6 +66,7 @@ const (
 	ErrNotSupported                uint16 = 20105
 	ErrRemoteDispatchNotRegistered uint16 = 20106
 	ErrMPoolCapacity               uint16 = 20107
+	ErrQueryTimeout                uint16 = 20108
 
 	// Group 2: numeric and functions
 	ErrDivByZero                   uint16 = 20200
@@ -183,6 +184,7 @@ const (
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
+	ErrFieldSpecifiedTwice                      uint16 = 20477
 
 	// Group 5: rpc errors
 	//
@@ -397,6 +399,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrNotSupported:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "not supported: %s"},
 	ErrRemoteDispatchNotRegistered: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote dispatch receiver %s is not registered yet"},
 	ErrMPoolCapacity:               {ER_ENGINE_OUT_OF_MEMORY, []string{MySQLDefaultSqlState}, "mpool physical capacity exceeded: %s"},
+	ErrQueryTimeout:                {ER_QUERY_TIMEOUT, []string{MySQLDefaultSqlState}, "Query execution was interrupted, maximum statement execution time exceeded"},
 
 	// Group 2: numeric
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
@@ -513,6 +516,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
+	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -979,6 +983,10 @@ func NewResourceExhaustedf(ctx context.Context, format string, args ...any) *Err
 
 func NewQueryInterrupted(ctx context.Context) *Error {
 	return newError(ctx, ErrQueryInterrupted)
+}
+
+func NewQueryTimeout(ctx context.Context) *Error {
+	return newError(ctx, ErrQueryTimeout)
 }
 
 func NewDivByZero(ctx context.Context) *Error {
@@ -1733,6 +1741,10 @@ func NewErrTooManyFields(ctx context.Context) *Error {
 
 func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
+}
+
+func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
+	return newError(ctx, ErrFieldSpecifiedTwice, column)
 }
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {

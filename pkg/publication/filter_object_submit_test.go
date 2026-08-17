@@ -184,6 +184,56 @@ func TestResolveCCPRObjectCleanupOwnersScopesCostToUniqueTombstones(t *testing.T
 		"stable-name data copies must not pay durable-owner lookup cost")
 }
 
+func TestResolveCCPRObjectCleanupOwnersRejectsIncompleteOwner(t *testing.T) {
+	tombstoneID := objectio.NewObjectid()
+	objectMap := map[objectio.ObjectId]*ObjectWithTableInfo{
+		tombstoneID: {
+			Stats: *objectio.NewObjectStatsWithObjectID(
+				&tombstoneID, false, true, false),
+			DBName:      "db",
+			TableName:   "table",
+			IsTombstone: true,
+		},
+	}
+
+	validProtection := CCPRSyncProtection{
+		JobID:     "job",
+		TNShardID: 44,
+		ValidTS:   func() int64 { return 33 },
+	}
+	tests := []struct {
+		name       string
+		engine     engine.Engine
+		protection CCPRSyncProtection
+	}{
+		{name: "nil engine", protection: validProtection},
+		{name: "empty job id", engine: mock_frontend.NewMockEngine(gomock.NewController(t)), protection: CCPRSyncProtection{
+			TNShardID: 44,
+			ValidTS:   validProtection.ValidTS,
+		}},
+		{name: "zero tn shard id", engine: mock_frontend.NewMockEngine(gomock.NewController(t)), protection: CCPRSyncProtection{
+			JobID:   "job",
+			ValidTS: validProtection.ValidTS,
+		}},
+		{name: "nil valid ts", engine: mock_frontend.NewMockEngine(gomock.NewController(t)), protection: CCPRSyncProtection{
+			JobID:     "job",
+			TNShardID: 44,
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			owners, err := resolveCCPRObjectCleanupOwners(
+				context.Background(), 7, objectMap, nil,
+				test.engine, test.protection,
+			)
+			require.Nil(t, owners)
+			require.ErrorContains(t, err,
+				"CCPR durable cleanup owner is not configured")
+		})
+	}
+}
+
 func TestApplyObjects_TTLExpired(t *testing.T) {
 	objectMap := map[objectio.ObjectId]*ObjectWithTableInfo{
 		{}: {DBName: "db1", TableName: "t1"},

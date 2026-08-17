@@ -143,6 +143,94 @@ func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
 	return string(databaseName), string(viewName), snapshot, nil
 }
 
+// ValidateSnapshotScope verifies that a relation belongs to the object covered
+// by a named snapshot. Timestamp-only snapshots have no object restriction.
+func ValidateSnapshotScope(
+	snapshot *Snapshot,
+	databaseName string,
+	tableName string,
+	databaseID uint64,
+	tableID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		if snapshot.ExtraInfo.ObjId != tableID {
+			return moerr.NewInternalErrorNoCtxf(
+				"table-level snapshot(%s) does not belong to the table(%s-%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+				tableName,
+			)
+		}
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
+// SnapshotTableID returns the stable identity used by table snapshots. A
+// copy-table ALTER replaces the physical table while preserving LogicalId.
+func SnapshotTableID(tableDef *TableDef) uint64 {
+	if tableDef == nil {
+		return 0
+	}
+	if tableDef.LogicalId != 0 {
+		return tableDef.LogicalId
+	}
+	return tableDef.TblId
+}
+
+// ValidateSnapshotDatabaseScope verifies that an operation scoped to a
+// database is compatible with a named snapshot. A table snapshot cannot read
+// database-wide metadata because it represents a single relation.
+func ValidateSnapshotDatabaseScope(
+	snapshot *Snapshot,
+	databaseName string,
+	databaseID uint64,
+) error {
+	if snapshot == nil || snapshot.ExtraInfo == nil {
+		return nil
+	}
+
+	switch snapshot.ExtraInfo.Level {
+	case tree.SNAPSHOTLEVELCLUSTER.String(), tree.SNAPSHOTLEVELACCOUNT.String():
+		return nil
+	case tree.SNAPSHOTLEVELDATABASE.String():
+		if snapshot.ExtraInfo.ObjId != databaseID {
+			return moerr.NewInternalErrorNoCtxf(
+				"database-level snapshot(%s) does not belong to the database(%s)",
+				snapshot.ExtraInfo.Name,
+				databaseName,
+			)
+		}
+	case tree.SNAPSHOTLEVELTABLE.String():
+		return moerr.NewInternalErrorNoCtxf(
+			"table-level snapshot(%s) cannot read database-wide metadata for database(%s)",
+			snapshot.ExtraInfo.Name,
+			databaseName,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported snapshot level %q", snapshot.ExtraInfo.Level)
+	}
+
+	return nil
+}
+
 type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
@@ -237,10 +325,17 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode                   []*BindContext
-	nameByColRef                map[[2]int32]string
-	protectedScans              map[int32]int
-	projectSpecialGuards        map[int32]*specialIndexGuard
+	ctxByNode            []*BindContext
+	nameByColRef         map[[2]int32]string
+	protectedScans       map[int32]int
+	updateTargetScans    map[int32]struct{}
+	projectSpecialGuards map[int32]*specialIndexGuard
+	// projectAnchoredSorts holds Top-K SORT node ids that a PROJECT directly above them
+	// will anchor the vector rewrite on. applyIndices walks children first, so without
+	// this the SORT-anchored entry point would claim the classic
+	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
+	// column information and with it the index-only scan.
+	projectAnchoredSorts        map[int32]struct{}
 	setBitmapByDisplayNode      map[[2]int32]int32
 	indexHintsByScan            map[int32]*indexHintSet
 	indexHintOwnerByNode        map[int32]int32
@@ -250,6 +345,11 @@ type QueryBuilder struct {
 	preserveInsertProjection    map[int32]struct{}
 	preserveScanProjection      map[int32]struct{}
 	positionalSinkScans         map[int32]struct{}
+	// userWindowNodes contains only WINDOW nodes produced from user
+	// SELECT window expressions. Internal ROW_NUMBER windows used by correlated
+	// LIMIT and DML deduplication must stay on their dedicated paths.
+	userWindowNodes          map[int32]struct{}
+	partitionTopNWindowNodes map[int32]struct{}
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -266,9 +366,8 @@ type QueryBuilder struct {
 	isRestoreByTs          bool
 	isSkipResolveTableDef  bool
 	skipStats              bool
-	isInsertIgnore         bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
-
-	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	isInsertIgnore         bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	deleteNode             map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// spill memory for aggregate function
 	aggSpillMem int64
@@ -309,6 +408,7 @@ type QueryBuilder struct {
 	irregularMaintTableDef    *plan.TableDef
 	irregularMaintObjRef      *plan.ObjectRef
 	irregularMaintSkipInsert  bool
+	irregularUpdateMaints     []irregularUpdateMaintenance
 
 	// DML RETURNING consumes an attempt-local row image from a dedicated sink.
 	// The mutation plan and the returning projection use independent SINK_SCAN
@@ -320,6 +420,11 @@ type QueryBuilder struct {
 	returningTableName  string
 	returningAlias      string
 	returningColPos     map[string]int32
+	// insertInputKeysUnique is set while binding a plain INSERT ... SELECT when
+	// the source primary key proves uniqueness of the target primary-key key.
+	// It is consumed only by the target-PK DEDUP node; secondary unique-index
+	// DEDUP nodes retain their existing duplicate-detection semantics.
+	insertInputKeysUnique bool
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
@@ -332,6 +437,16 @@ type QueryBuilder struct {
 	// populated lazily so unused CTE bodies retain their existing lazy-binding
 	// semantics.
 	cteRefs []*CTERef
+}
+
+type irregularUpdateMaintenance struct {
+	sourceStep  int32
+	deleteStep  int32
+	deletePkPos int32
+	deletePkTyp plan.Type
+	indexes     []*plan.IndexDef
+	tableDef    *plan.TableDef
+	objRef      *plan.ObjectRef
 }
 
 type OptimizerHints struct {
@@ -478,6 +593,14 @@ type BindContext struct {
 	boundCtes map[string]*CTERef
 	headings  []string
 
+	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
+	// VIEW definition. Ordinary SELECT planning must not clone its select list
+	// just to support view metadata persistence.
+	captureViewStarExpansion bool
+	// expandedSelectLists records the expanded output for each SELECT clause
+	// participating in a view definition, including UNION branches.
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
+
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
@@ -494,6 +617,18 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
+	// pendingAggregateQuery is set after the pre-aggregate FROM/JOIN/WHERE/GROUP
+	// BY clauses are bound and before HAVING, projection, and ORDER BY. At that
+	// point SELECT/HAVING/ORDER BY aggregates may not have been appended to
+	// aggregates yet, but the query block is already an implicit aggregate query
+	// for ONLY_FULL_GROUP_BY correlation checks.
+	pendingAggregateQuery bool
+
+	// timeBoundaryType is the public type for _wstart/_wend. It is filled once
+	// the time-window grouping key is bound, before the SELECT projection binds
+	// boundary column references.
+	timeBoundaryType *plan.Type
+
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
 	groupByParamAst     map[string]int32
@@ -503,6 +638,10 @@ type BindContext struct {
 	projectByExpr       map[string]int32
 	timeByAst           map[string]int32
 	whereFilters        []*plan.Expr
+	// gapFillWhereFilters preserves the complete bound WHERE tree before
+	// subqueries are flattened into joins. Bounded GAPFILL inference must see
+	// every timestamp predicate, including IN/ANY/ALL subquery operands.
+	gapFillWhereFilters []*plan.Expr
 
 	projectColByAst map[string]int32
 
@@ -543,6 +682,11 @@ type BindContext struct {
 	bindingTree *BindingTreeNode
 
 	parent *BindContext
+	// aggregateInputParent is set on a subquery context when that subquery is
+	// bound as an aggregate argument of its parent query. Correlations back to
+	// this parent are per-row aggregate inputs, not bare aggregate-query output
+	// columns for ONLY_FULL_GROUP_BY validation.
+	aggregateInputParent *BindContext
 
 	defaultDatabase string
 
@@ -635,6 +779,8 @@ type baseBinder struct {
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
+	subqueryInAggregateInput         bool
+	aggregateInputCorrelation        bool
 }
 
 type boundColumn struct {
@@ -693,8 +839,9 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg    bool
-	rollupHaving bool
+	insideAgg     bool
+	rollupHaving  bool
+	bindingHaving bool
 }
 
 type ProjectionBinder struct {

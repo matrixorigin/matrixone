@@ -1778,15 +1778,20 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 			}
 
 			var deletedRowIds []objectio.Rowid
-			var commit []types.TS
+			var commit ioutil.TombstoneCommitTSColumn
 			var abortColumn ioutil.TombstoneAbortColumn
 
 			deletedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](&cacheVectors[0])
 			if !obj.GetCNCreated() {
-				commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[1])
-				var abortErr error
+				var commitErr, abortErr error
+				commit, commitErr = ioutil.ValidateTombstoneCommitTSColumn(len(deletedRowIds), &cacheVectors[1])
+				if commitErr != nil {
+					release()
+					return commitErr
+				}
 				abortColumn, abortErr = ioutil.ValidateTombstoneAbortColumn(len(deletedRowIds), &cacheVectors[2])
 				if abortErr != nil {
+					release()
 					return abortErr
 				}
 			}
@@ -1796,9 +1801,14 @@ func (ls *LocalDisttaeDataSource) batchApplyTombstoneObjects(
 					deletedRowIds, rowIds[i].BorrowBlockID())
 
 				for j := s; j < e; j++ {
+					commitVisible := true
+					if commit.IsPresent() {
+						commitTS := commit.At(j)
+						commitVisible = commitTS.LE(&ls.snapshotTS)
+					}
 					if rowIds[i].EQ(&deletedRowIds[j]) &&
 						(!abortColumn.IsPresent() || !abortColumn.IsAborted(j)) &&
-						(commit == nil || commit[j].LE(&ls.snapshotTS)) {
+						commitVisible {
 						deletedMask.Add(uint64(i))
 						break
 					}

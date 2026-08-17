@@ -704,8 +704,11 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
 
-	runErr := err
-	runErr = suppressRemoteRunCancelError(s.Proc.Ctx, runErr)
+	runErr, _ := normalizeScopeRunError(
+		err,
+		s.Proc.Ctx,
+		scopeRunQueryContext(s.Proc),
+	)
 	if err != nil && s.Proc.Cancel != nil {
 		cancelErr := runErr
 		if cancelErr == nil {
@@ -713,8 +716,8 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		}
 		s.Proc.Cancel(cancelErr)
 	}
-	// this clean-up action shouldn't be called before context check.
-	// because the clean-up action will cancel the context, and error will be suppressed.
+	// Normalize before cleanup mutates the pipeline context so a substantive
+	// cancellation cause remains available to the caller.
 	p.CleanRootOperator(s.Proc, err != nil, c.isPrepare, runErr)
 
 	// sender should be closed after cleanup (tell the children-pipeline that query was done).
@@ -1259,7 +1262,18 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
+		originalErr := err
+		normalizedErr, _ := normalizeScopeRunError(
+			err,
+			s.Proc.Ctx,
+			scopeRunQueryContext(s.Proc),
+		)
+		// QueryInterrupted is normal pipeline fallout and may be suppressed.
+		// Preserve a raw context cancellation when it has no stronger cause so
+		// registration-retry cancellation retains its historical classification.
+		if normalizedErr != nil || moerr.IsMoErrCode(originalErr, moerr.ErrQueryInterrupted) {
+			err = normalizedErr
+		}
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1386,27 +1400,6 @@ func logRemoteNotifyCleanupSendFailure(
 		chLen,
 		chCap,
 		err)
-}
-
-func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
-	if err == nil {
-		return nil
-	}
-	if procCtx != nil && procCtx.Err() != nil &&
-		isScopeCancellationFrom(err, context.Canceled) {
-		return nil
-	}
-	return err
-}
-
-func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
-	if err == nil {
-		return nil
-	}
-	if procCtx != nil && procCtx.Err() != nil && moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
-		return nil
-	}
-	return err
 }
 
 func receiveMsgAndForward(sender *messageSenderOnClient, forwardReg *process.WaitRegister) error {

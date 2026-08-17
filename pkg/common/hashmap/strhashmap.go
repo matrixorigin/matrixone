@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -79,6 +80,12 @@ func (m *StrHashMap) NewIterator() Iterator {
 		zValues:       make([]int64, UnitLimit),
 		keys:          make([][]byte, UnitLimit),
 		strHashStates: make([][3]uint64, UnitLimit),
+	}
+}
+
+func (m *StrHashMap) NewTransactionalIterator() TransactionalIterator {
+	return &transactionalStrIterator{
+		strHashmapIterator: m.NewIterator().(*strHashmapIterator),
 	}
 }
 
@@ -291,7 +298,11 @@ func (m *StrHashMap) SetGroupingAware() error {
 }
 
 func (m *StrHashMap) Free() {
+	if m == nil || m.hashMap == nil {
+		return
+	}
 	m.hashMap.Free()
+	m.hashMap = nil
 }
 
 func (m *StrHashMap) PreAlloc(n uint64) error {
@@ -994,6 +1005,23 @@ func (m *StrHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// MarshalBinarySize returns the exact number of bytes written by WriteTo.
+// The wire format contains a one-byte option field, the eight-byte logical
+// row count, the eight-byte hash-table element count, and one 32-byte cell per
+// group.
+func (m *StrHashMap) MarshalBinarySize() (int64, error) {
+	const (
+		fixedSize = uint64(1 + 8 + 8)
+		cellSize  = uint64(32)
+		maxInt64  = uint64(^uint64(0) >> 1)
+	)
+	if m == nil || m.hashMap == nil || m.rows != m.hashMap.Cardinality() ||
+		m.rows > (maxInt64-fixedSize)/cellSize {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	return int64(fixedSize + m.rows*cellSize), nil
+}
+
 func (m *StrHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 	r := bytes.NewReader(data)
 	_, err := m.UnmarshalFrom(r, mp)
@@ -1071,6 +1099,16 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 		return 0, err
 	}
 	n += subn
+	if m.rows != m.hashMap.Cardinality() {
+		declaredRows := m.rows
+		cardinality := m.hashMap.Cardinality()
+		m.hashMap.Free()
+		m.hashMap = nil
+		m.rows = 0
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"string hash map row count %d does not match cardinality %d",
+			declaredRows, cardinality)
+	}
 
 	return n, nil
 }

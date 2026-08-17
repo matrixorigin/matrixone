@@ -28,14 +28,14 @@ const recoveryCapacityQuantum = uint64(64 << 10)
 
 func recoveryCheckedAdd(left, right uint64) (uint64, error) {
 	if left > math.MaxUint64-right {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return left + right, nil
 }
 
 func recoveryCheckedMul(left, right uint64) (uint64, error) {
 	if left != 0 && right > math.MaxUint64/left {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return left * right, nil
 }
@@ -45,7 +45,7 @@ func roundRecoveryCapacity(size uint64) (uint64, error) {
 		return 0, nil
 	}
 	if size > math.MaxUint64-(recoveryCapacityQuantum-1) {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	return (size + recoveryCapacityQuantum - 1) &^ (recoveryCapacityQuantum - 1), nil
 }
@@ -67,7 +67,7 @@ func (ctr *container) ensureRecoveryCapacity(
 	analyzer process.Analyzer,
 ) error {
 	if ctr.recoveryCapacity == nil || projection.maxRows <= 0 {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	expression := ctr.expressionRecoveryPeak
 	if projection.maxRows > ctr.expressionRecoveryRows {
@@ -118,7 +118,7 @@ func (hb *HashmapBuilder) projectRetainedRecovery(
 	src *batch.Batch,
 ) (recoveryBatchProjection, error) {
 	if src == nil || src.RowCount() <= 0 {
-		return recoveryBatchProjection{}, process.ErrHashBuildBudgetInvalid
+		return recoveryBatchProjection{}, process.ErrExecutionResourceInvalid
 	}
 	projection := recoveryBatchProjection{columns: len(src.Vecs)}
 	last := len(hb.Batches.Buf) - 1
@@ -185,16 +185,16 @@ func (hb *HashmapBuilder) projectRetainedRecovery(
 func projectedSelectedRange(src *batch.Batch, start, rows int) (uint64, error) {
 	if src == nil || start < 0 || rows < 0 || start > src.RowCount() ||
 		rows > src.RowCount()-start {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	var total uint64
 	for _, vec := range src.Vecs {
 		if vec == nil {
-			return 0, process.ErrHashBuildBudgetInvalid
+			return 0, process.ErrExecutionResourceInvalid
 		}
 		typeSize := vec.GetType().TypeSize()
 		if typeSize < 0 {
-			return 0, process.ErrHashBuildBudgetInvalid
+			return 0, process.ErrExecutionResourceInvalid
 		}
 		descriptors, err := recoveryCheckedMul(uint64(rows), uint64(typeSize))
 		if err != nil {
@@ -227,11 +227,11 @@ func unionBatchAreaProjection(
 		return 0, 0, nil
 	}
 	if start < 0 || rows < 0 {
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrExecutionResourceInvalid
 	}
 	if src.IsConst() {
 		if rows > 0 && src.Length() == 0 {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, process.ErrExecutionResourceInvalid
 		}
 		// SetConstNull intentionally retains reusable area capacity while
 		// clearing the only physical descriptor. NULL contributes no payload,
@@ -241,13 +241,13 @@ func unionBatchAreaProjection(
 		}
 		payload, err := selectedVarlenaPayload(src, 0, 1)
 		if err != nil || payload > math.MaxInt {
-			return 0, 0, process.ErrHashBuildBudgetInvalid
+			return 0, 0, process.ErrExecutionResourceInvalid
 		}
 		selected, err = recoveryCheckedMul(payload, uint64(rows))
 		return int(payload), selected, err
 	}
 	if start > src.Length() || rows > src.Length()-start {
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrExecutionResourceInvalid
 	}
 	if rows == 0 || len(src.GetArea()) == 0 {
 		return 0, 0, nil
@@ -257,7 +257,7 @@ func unionBatchAreaProjection(
 	}
 	payload, err := selectedVarlenaPayload(src, start, rows)
 	if err != nil || payload > math.MaxInt {
-		return 0, 0, process.ErrHashBuildBudgetInvalid
+		return 0, 0, process.ErrExecutionResourceInvalid
 	}
 	if start == 0 && rows == src.Length() {
 		return len(src.GetArea()), payload, nil
@@ -269,7 +269,7 @@ func selectedVarlenaPayload(src *vector.Vector, start, rows int) (uint64, error)
 	values, _ := vector.MustVarlenaRawData(src)
 	end := start + rows
 	if start < 0 || rows < 0 || end > len(values) {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	var payload uint64
 	for row := start; row < end; row++ {
@@ -292,7 +292,7 @@ func selectedVarlenaPayload(src *vector.Vector, start, rows int) (uint64, error)
 
 func spillRecoveryPeak(projection recoveryBatchProjection) (uint64, error) {
 	if projection.maxRows <= 0 || projection.columns < 0 {
-		return 0, process.ErrHashBuildBudgetInvalid
+		return 0, process.ErrExecutionResourceInvalid
 	}
 	rowScratch, err := recoveryCheckedMul(uint64(projection.maxRows), 12)
 	if err != nil {

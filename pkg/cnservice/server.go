@@ -409,7 +409,13 @@ func (s *service) Start() (err error) {
 		s.lifecycle = serviceStarted
 	}()
 
+	if err = s.waitForClusterSelfReady(); err != nil {
+		return err
+	}
 	if err = s.bootstrap(); err != nil {
+		return err
+	}
+	if err = s.startSiriusRuntime(context.Background()); err != nil {
 		return err
 	}
 
@@ -456,6 +462,7 @@ func (s *service) closeService() error {
 			// ingress before clearing any of those dependencies.
 			s.closeQueryService,
 			s.stopFrontend,
+			s.closeSiriusRuntime,
 			s.closeBootstrapService,
 			// Frontend shutdown stops accepting interactive work, while stopTask
 			// drains scheduled ingestion statements. Only after both producers have
