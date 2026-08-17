@@ -1764,18 +1764,45 @@ func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			}
 			continue
 		}
-		civil := v.ToDatetime(proc.GetSessionInfo().TimeZone)
-		truncatedCivil := types.Datetime(int64(civil) - int64(civil)%t)
-		truncated := types.Timestamp(int64(v) - int64(civil)%t)
-		if truncated.ToDatetime(proc.GetSessionInfo().TimeZone) != truncatedCivil {
-			truncated = truncatedCivil.ToTimestamp(proc.GetSessionInfo().TimeZone)
-		}
+		truncated := NormalizeTimestampWindowStart(v, t, proc.GetSessionInfo().TimeZone)
 		if err = rs.Append(truncated, false); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// NormalizeTimestampWindowStart aligns a timestamp to a session civil-time
+// window grid. Ambiguous fold boundaries retain the source instant's offset;
+// nonexistent gap boundaries advance to the first valid civil boundary. The
+// latter policy makes normalization idempotent across DST spring-forward gaps.
+func NormalizeTimestampWindowStart(value types.Timestamp, interval int64, loc *time.Location) types.Timestamp {
+	if value == types.ZeroTimestamp {
+		return types.ZeroTimestamp
+	}
+	civil := value.ToDatetime(loc)
+	remainder := int64(civil) % interval
+	truncatedCivil := types.Datetime(int64(civil) - remainder)
+
+	// Prefer subtracting on the instant timeline. Besides avoiding a second
+	// timezone lookup in the ordinary case, this preserves which occurrence of
+	// an ambiguous civil boundary the source timestamp belongs to.
+	truncated := types.Timestamp(int64(value) - remainder)
+	if truncated.ToDatetime(loc) == truncatedCivil {
+		return truncated
+	}
+
+	// A changed offset between value and its boundary requires resolving the
+	// boundary with its own offset. Go resolves a nonexistent civil time to one
+	// side of the gap; when it resolves backward, advance by the round-trip
+	// difference so the canonical boundary is the first valid time after it.
+	truncated = truncatedCivil.ToTimestamp(loc)
+	roundTrip := truncated.ToDatetime(loc)
+	if roundTrip < truncatedCivil {
+		truncated += types.Timestamp(truncatedCivil - roundTrip)
+	}
+	return truncated
 }
 
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {

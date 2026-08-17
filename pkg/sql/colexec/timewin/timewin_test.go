@@ -569,6 +569,13 @@ func TestTimestampWindowStartAlignsSlidingKeyInSessionTimezone(t *testing.T) {
 		proc,
 	)
 	require.Equal(t, mustDatetime(t, "2025-12-16 00:00:00"), types.Timestamp(start).ToDatetime(zone))
+
+	key, err = types.ParseTimestamp(zone, "2026-03-08 03:30:00", 6)
+	require.NoError(t, err)
+	interval := types.Datetime(2 * types.SecsPerHour * types.MicroSecsPerSec)
+	start = ctr.windowStart(types.Datetime(key), interval, proc)
+	require.Equal(t, mustDatetime(t, "2026-03-08 03:00:00"), types.Timestamp(start).ToDatetime(zone))
+	require.Equal(t, start, ctr.windowStart(start, interval, proc))
 }
 
 func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {

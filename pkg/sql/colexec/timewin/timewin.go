@@ -640,16 +640,8 @@ func (ctr *container) zeroWindowValue() types.Datetime {
 
 func (ctr *container) windowStart(value, interval types.Datetime, proc *process.Process) types.Datetime {
 	if ctr.tsOid == types.T_timestamp {
-		// mo_win_truncate aligns TIMESTAMP keys to the interval/sliding divisor.
-		// Re-align the key to the full interval on the same session civil-time
-		// grid while subtracting from the original instant, preserving DST folds.
-		civil := types.Timestamp(value).ToDatetime(proc.GetSessionInfo().TimeZone)
-		truncatedCivil := civil - civil%interval
-		truncated := types.Timestamp(value - types.Datetime(int64(civil)%int64(interval)))
-		if truncated.ToDatetime(proc.GetSessionInfo().TimeZone) != truncatedCivil {
-			truncated = truncatedCivil.ToTimestamp(proc.GetSessionInfo().TimeZone)
-		}
-		return types.Datetime(truncated)
+		return types.Datetime(function.NormalizeTimestampWindowStart(
+			types.Timestamp(value), int64(interval), proc.GetSessionInfo().TimeZone))
 	}
 	return value - value%interval
 }

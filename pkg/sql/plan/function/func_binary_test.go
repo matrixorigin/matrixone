@@ -13191,6 +13191,38 @@ func TestMoWinTruncateTimestampUsesBoundaryOffsetAcrossDST(t *testing.T) {
 	require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0])
 }
 
+func TestMoWinTruncateTimestampCanonicalizesDSTGapIdempotently(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
+
+	truncate := func(value types.Timestamp) types.Timestamp {
+		values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+		require.NoError(t, vector.AppendFixed(values, value, false, proc.Mp()))
+		defer values.Free(proc.Mp())
+		diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(2), 1, proc.Mp())
+		require.NoError(t, err)
+		defer diff.Free(proc.Mp())
+		unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Hour), 1, proc.Mp())
+		require.NoError(t, err)
+		defer unit.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+		return vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0]
+	}
+
+	value, err := types.ParseTimestamp(location, "2026-03-08 03:30:00", 6)
+	require.NoError(t, err)
+	want, err := types.ParseTimestamp(location, "2026-03-08 03:00:00", 6)
+	require.NoError(t, err)
+	got := truncate(value)
+	require.Equal(t, want, got)
+	require.Equal(t, got, truncate(got))
+}
+
 func TestMoWinTruncateTimestampOverloadDoesNotCastToDatetime(t *testing.T) {
 	got, err := GetFunctionByName(
 		context.Background(),

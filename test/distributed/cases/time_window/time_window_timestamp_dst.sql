@@ -15,6 +15,31 @@ from tw_dst_spring
 interval(event_ts, 1, hour)
 order by ws, we;
 
+create table tw_dst_gap(k int, event_ts timestamp(6), value int);
+insert into tw_dst_gap values
+  (1, '2026-03-08 01:30:00', 1),
+  (1, '2026-03-08 03:30:00', 2);
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_gap
+group by k interval(event_ts, 2, hour)
+order by _wstart;
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_gap
+group by k interval(event_ts, 2, hour) gapfill(partition)
+order by _wstart;
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_gap
+group by k interval(event_ts, 2, hour) sliding(1, hour)
+order by _wstart;
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_gap
+group by k interval(event_ts, 2, hour) sliding(1, hour) gapfill(partition)
+order by _wstart;
+
 set time_zone = '+00:00';
 create table tw_dst_fall(event_ts timestamp(6), value int);
 insert into tw_dst_fall values
