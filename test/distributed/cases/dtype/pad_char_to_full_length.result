@@ -195,6 +195,27 @@ select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
 ) q;
 ➤ count(y)[-5,64,0]  𝄀
 1
+select count(*) from (
+select distinct x from (
+select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select min(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 ➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀
 1
@@ -393,6 +414,27 @@ select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
 ) d
 ) q;
 ➤ count(y)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select min(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct x from (
+select max(coalesce(c, v)) as x from pad_char_promoted group by id
+) d
+) q;
+➤ count(*)[-5,64,0]  𝄀
 1
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 ➤ count(distinct coalesce(c, v), 1)[-5,64,0]  𝄀

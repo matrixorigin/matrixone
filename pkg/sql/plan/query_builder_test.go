@@ -4484,6 +4484,32 @@ func TestWindowValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
 	}
 }
 
+func TestAggregateValueFunctionsPreservePromotedCharPadSpaceKey(t *testing.T) {
+	value := "coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8)))"
+	for _, aggregate := range []string{"any_value", "min", "max"} {
+		t.Run(aggregate, func(t *testing.T) {
+			logicPlan, err := runOneStmt(
+				NewMockOptimizer(true),
+				t,
+				"select distinct x from (select "+aggregate+"("+value+
+					") as x from nation group by n_regionkey) d",
+			)
+			require.NoError(t, err)
+
+			var distinctAgg *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_AGG && len(node.AggList) == 0 {
+					distinctAgg = node
+					break
+				}
+			}
+			require.NotNil(t, distinctAgg)
+			require.Len(t, distinctAgg.GroupBy, 2)
+			require.Equal(t, []int32{1}, distinctAgg.GroupByHashKey)
+		})
+	}
+}
+
 func TestGroupByPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
 	for _, tc := range []struct {
 		name string
