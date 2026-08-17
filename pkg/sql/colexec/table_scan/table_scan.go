@@ -239,6 +239,12 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 		if vec == nil || vec.GetType().Oid != types.T_char || vec.IsConstNull() {
 			continue
 		}
+		// A late-materialized filter sees the full schema but only its early
+		// columns have values. Leave unloaded CHAR vectors for the post-read
+		// padding pass, after the reader has materialized them.
+		if bat.RowCount() != 0 && vec.Length() == 0 {
+			continue
+		}
 
 		width := int(vec.GetType().Width)
 		if width <= 0 {
