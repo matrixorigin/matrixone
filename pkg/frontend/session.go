@@ -2643,6 +2643,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		ses.installUserDefinedVars(userVars)
 	}
 	if req.SystemVariablesExported {
+		migrationExecCtx := &ExecCtx{
+			reqCtx:      migrationCtx,
+			inMigration: true,
+			ses:         ses,
+		}
+		defer migrationExecCtx.Close()
 		for _, variable := range systemVars {
 			if variable.nextTransaction {
 				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
@@ -2658,10 +2664,38 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 				}
 				continue
 			}
+			var oldAutocommit interface{}
+			if variable.name == "autocommit" {
+				oldAutocommit, err = ses.GetSessionSysVar(variable.name)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
 			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
-			ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			if variable.name == "autocommit" {
+				oldValue, err := valueIsBoolTrue(oldAutocommit)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				newValue, err := valueIsBoolTrue(variable.value)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.SetAutocommit(migrationExecCtx, oldValue, newValue); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if variable.runtimeValuePresent {
+				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			} else {
+				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			}
 		}
 	} else {
 		for _, stmt := range req.SetVarStmts {

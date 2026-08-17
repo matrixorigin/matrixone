@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +29,15 @@ import (
 )
 
 const maxMigrateUserDefinedVarsSize = 16 << 20
+
+func hasMigrationRuntimeSideEffect(name string) bool {
+	switch canonicalSystemVariableName(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		return true
+	default:
+		return false
+	}
+}
 
 func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.MigrateUserDefinedVar, error) {
 	ses.mu.Lock()
@@ -111,6 +121,16 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 			Name:  name,
 			Value: encoded,
 		})
+		if hasMigrationRuntimeSideEffect(name) {
+			if runtimeValue, ok := moruntime.ServiceRuntime(ses.service).GetGlobalVariables(name); ok {
+				runtimeEncoded, err := encodeUserDefinedVarValue(ctx, runtimeValue, false)
+				if err != nil {
+					return nil, moerr.NewInternalErrorf(ctx,
+						"cannot encode runtime side effect %q for connection migration: %v", name, err)
+				}
+				result[len(result)-1].RuntimeValue = runtimeEncoded
+			}
+		}
 		if name == transactionIsolationSystemVariable && hasNextTxnIsolation {
 			nextEncoded, err := encodeUserDefinedVarValue(ctx, nextTxnIsolationValue, false)
 			if err != nil {
@@ -164,9 +184,11 @@ func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefined
 }
 
 type migratedSystemVariable struct {
-	name            string
-	value           any
-	nextTransaction bool
+	name                string
+	value               any
+	runtimeValue        any
+	runtimeValuePresent bool
+	nextTransaction     bool
 }
 
 func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVariable) ([]migratedSystemVariable, error) {
@@ -202,15 +224,29 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		if err != nil {
 			return nil, err
 		}
+		var runtimeValue any
+		runtimeValuePresent := item.RuntimeValue != nil
+		if runtimeValuePresent {
+			if !hasMigrationRuntimeSideEffect(name) {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"runtime side effect is invalid for session system variable %q", name)
+			}
+			runtimeValue, err = decodeUserDefinedVarValue(ctx, item.RuntimeValue)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if item.NextTransaction {
 			if _, err := txnIsolationFromSystemValue(ctx, value); err != nil {
 				return nil, err
 			}
 		}
 		result = append(result, migratedSystemVariable{
-			name:            name,
-			value:           value,
-			nextTransaction: item.NextTransaction,
+			name:                name,
+			value:               value,
+			runtimeValue:        runtimeValue,
+			runtimeValuePresent: runtimeValuePresent,
+			nextTransaction:     item.NextTransaction,
 		})
 	}
 	return result, nil

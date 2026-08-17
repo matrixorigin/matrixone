@@ -239,6 +239,14 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "transaction_isolation", vars[0].name)
 	require.Equal(t, "ANSI_QUOTES", vars[0].value)
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{
+		Name:         "optimizer_hints",
+		Value:        value,
+		RuntimeValue: plan2.MakePlan2StringConstExprWithType("forceOneCN=1"),
+	}})
+	require.NoError(t, err)
+	require.True(t, vars[0].runtimeValuePresent)
+	require.Equal(t, "forceOneCN=1", vars[0].runtimeValue)
 	nextValue := plan2.MakePlan2StringConstExprWithType("READ-COMMITTED")
 	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
 		{Name: "transaction_isolation", Value: value},
@@ -270,6 +278,12 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.ErrorContains(t, err, "invalid session system variable")
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Name: "sql_mode", Value: &plan.Expr{}}})
 	require.ErrorContains(t, err, "invalid user variable value")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{
+		Name:         "sql_mode",
+		Value:        value,
+		RuntimeValue: value,
+	}})
+	require.ErrorContains(t, err, "runtime side effect is invalid")
 }
 
 func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.T) {

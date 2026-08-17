@@ -938,6 +938,71 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.disableAgg)
 	})
 
+	t.Run("typed system variables preserve transaction flags and runtime scope", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		source := genSession(ctrl, "d1", nil)
+		source.gSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "global-hint",
+			"autocommit":      int64(1),
+		}}
+		source.sesSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "inherited-before-global-set",
+			"autocommit":      int64(0),
+		}}
+		runtime.ServiceRuntime(sid).SetGlobalVariables("optimizer_hints", "global-hint")
+		exported, err := source.snapshotSessionSystemVars(context.Background())
+		require.NoError(t, err)
+		var optimizerSnapshot *query.MigrateSystemVariable
+		for _, variable := range exported {
+			if variable.Name == "optimizer_hints" {
+				optimizerSnapshot = variable
+				break
+			}
+		}
+		require.NotNil(t, optimizerSnapshot)
+		require.NotNil(t, optimizerSnapshot.RuntimeValue)
+
+		runtime.ServiceRuntime(sid).SetGlobalVariables("optimizer_hints", "target-sentinel")
+		target := genSession(ctrl, "d1", nil)
+		target.gSysVars = &SystemVariables{mp: map[string]interface{}{
+			"optimizer_hints": "target-global",
+			"autocommit":      int64(1),
+		}}
+		target.sesSysVars = target.gSysVars.Clone()
+		target.GetTxnHandler().setAutocommitOn()
+		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
+
+		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			SystemVariablesExported: true,
+			SystemVariables:         exported,
+		}))
+		value, err := target.GetSessionSysVar("optimizer_hints")
+		require.NoError(t, err)
+		require.Equal(t, "inherited-before-global-set", value)
+		runtimeValue, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("optimizer_hints")
+		require.True(t, ok)
+		require.Equal(t, "global-hint", runtimeValue)
+
+		autocommit, err := target.GetSessionSysVar("autocommit")
+		require.NoError(t, err)
+		require.Equal(t, int64(0), autocommit)
+		require.False(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
+		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT))
+		require.Equal(t, uint16(0), target.GetTxnHandler().GetServerStatus()&SERVER_STATUS_AUTOCOMMIT)
+	})
+
 	t.Run("reject user-level locks", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

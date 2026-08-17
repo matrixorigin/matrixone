@@ -763,4 +763,9 @@ message MigrateSystemVariable {
   string Name = 1;
   plan.Expr Value = 2;
   bool NextTransaction = 3;
+  // RuntimeValue carries the effective service-runtime value for variables
+  // whose SQL SET path updates service-global planner state. It is kept
+  // separate from the session snapshot so a source SET GLOBAL cannot be
+  // overwritten by an inherited session value during migration.
+  plan.Expr RuntimeValue = 4;
 }
