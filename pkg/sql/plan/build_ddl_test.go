@@ -945,6 +945,750 @@ func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
 	require.Equal(t, rootSQL, createSQL)
 }
 
+func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
+	const rootSQL = "create view v_star as select * from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+	require.Len(t, tableDef.GetCols(), 4)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_name`")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_regionkey`")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_comment`")
+
+	createSQL := tableDefCreateSQL(tableDef)
+	require.Equal(t, viewData.Stmt, createSQL)
+
+	ctx.tables["v_star"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_star"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_star"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_star", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+
+	missingStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select n_extra from v_star", 1)
+	require.NoError(t, err)
+	defer missingStmt.Free()
+	_, err = BuildPlan(ctx, missingStmt, false)
+	require.ErrorContains(t, err, "column n_extra does not exist")
+}
+
+func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) {
+	const rootSQL = "create view v_star_agg as select * from (select id,min(ti) from (select * from t1) t1 group by id) sub"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	ctx.tables["t1"] = &plan.TableDef{
+		Name:      "t1",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{Name: "id", OriginName: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+			{Name: "ti", OriginName: "ti", Typ: plan.Type{Id: int32(types.T_uint8)}, Default: &plan.Default{NullAbility: true}},
+		},
+	}
+	ctx.objects["t1"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "t1"}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+	require.Equal(t, []string{"id", "min(ti)"}, []string{tableDef.GetCols()[0].Name, tableDef.GetCols()[1].Name})
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "`sub`.`min(ti)`")
+	require.Contains(t, viewData.Stmt, "min(`t1`.`ti`)")
+	require.Contains(t, viewData.Stmt, "as `min(ti)`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_star_agg"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_star_agg"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_star_agg"}
+
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_star_agg", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "min(ti)"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func TestGenViewTableDefDoesNotRewriteCountStar(t *testing.T) {
+	const rootSQL = "create view v_count as select count(*) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+	require.Equal(t, rootSQL, tableDefCreateSQL(tableDef))
+}
+
+func TestGenViewTableDefFreezesSampleStar(t *testing.T) {
+	const rootSQL = "create view v_sample as select sample(*, 100 percent) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "sample(`nation`.`n_nationkey`, `nation`.`n_name`, `nation`.`n_regionkey`, `nation`.`n_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_sample"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_sample"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_sample"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func TestGenViewTableDefExpandsOuterStarWithNestedSample(t *testing.T) {
+	const rootSQL = "create view v_outer_sample as select * from nation where exists (select sample(*, 100 percent) from region)"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "sample(`region`.`r_regionkey`, `region`.`r_name`, `region`.`r_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.NotContains(t, viewData.Stmt, "`nation`.*")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_outer_sample"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_outer_sample"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_outer_sample"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_outer_sample", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func TestGenViewTableDefRewritesSubqueryInsideSampleColumns(t *testing.T) {
+	const rootSQL = "create view v_sample_subquery as select sample((select * from one_col union all select 1), 1 rows) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	addOneColViewStarTestTable(ctx.MockCompilerContext)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "select * from `one_col`")
+	require.Contains(t, viewData.Stmt, "select `one_col`.`id` as `id` from `one_col`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	ctx.tables["v_sample_subquery"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_sample_subquery"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_sample_subquery"}
+	appendOneColExtraColumn(ctx.MockCompilerContext)
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_sample_subquery", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	_, err = BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+}
+
+func TestGenViewTableDefExpandsMixedStarAndSample(t *testing.T) {
+	const rootSQL = "create view v_mixed_sample as select *, sample(*, 100 percent) from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "sample(`nation`.`n_nationkey`, `nation`.`n_name`, `nation`.`n_regionkey`, `nation`.`n_comment`, 100.0 percent)")
+	require.NotContains(t, viewData.Stmt, "sample(*")
+	require.NotContains(t, viewData.Stmt, "`nation`.*")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+}
+
+func TestGenViewTableDefExpandsGroupingSetStars(t *testing.T) {
+	tests := []struct {
+		name     string
+		viewName string
+		stmt     string
+	}{
+		{name: "rollup", viewName: "v_rollup", stmt: "create view v_rollup as select * from one_col group by id with rollup"},
+		{name: "cube", viewName: "v_cube", stmt: "create view v_cube as select * from one_col group by cube(id)"},
+		{name: "grouping sets", viewName: "v_grouping_sets", stmt: "create view v_grouping_sets as select * from one_col group by grouping sets ((id), ())"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             tt.stmt,
+			}
+			addOneColViewStarTestTable(ctx.MockCompilerContext)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tt.stmt, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateView().GetTableDef()
+			require.NotNil(t, tableDef)
+
+			var viewData ViewData
+			require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+			require.NotContains(t, viewData.Stmt, "*")
+			require.Contains(t, viewData.Stmt, "`one_col`.`id`")
+			require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+			ctx.tables[tt.viewName] = DeepCopyTableDef(tableDef, true)
+			ctx.objects[tt.viewName] = &plan.ObjectRef{SchemaName: "tpch", ObjName: tt.viewName}
+			appendOneColExtraColumn(ctx.MockCompilerContext)
+			selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from "+tt.viewName, 1)
+			require.NoError(t, err)
+			defer selectStmt.Free()
+			_, err = BuildPlan(ctx, selectStmt, false)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestGenViewTableDefPersistsExpandedUnionStars(t *testing.T) {
+	const rootSQL = "create view v_union as select * from nation union all select * from nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Equal(t, 2, strings.Count(viewData.Stmt, "`nation`.`n_nationkey`"))
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+}
+
+func TestNormalSelectDoesNotCaptureExpandedStarList(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = builder.bindSelect(stmt.(*tree.Select), bindCtx, true)
+	require.NoError(t, err)
+	require.Nil(t, bindCtx.expandedSelectLists)
+}
+
+func TestStableViewStarHelpersCoverASTShapes(t *testing.T) {
+	starExpr := tree.SelectExpr{Expr: tree.UnqualifiedStar{}}
+	qualifiedStar := tree.SelectExpr{Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("t", 1))}
+	columnExpr := tree.SelectExpr{Expr: tree.NewUnresolvedColName("c")}
+	sampleStar, err := tree.NewSamplePercentFuncExpression1(50, true, nil)
+	require.NoError(t, err)
+	sampleColumn, err := tree.NewSamplePercentFuncExpression1(50, false, tree.Exprs{tree.NewUnresolvedColName("c")})
+	require.NoError(t, err)
+
+	require.False(t, viewSelectHasStar(nil))
+	require.True(t, selectExprHasStar(starExpr))
+	require.True(t, selectExprHasStar(qualifiedStar))
+	require.False(t, selectExprHasStar(columnExpr))
+	require.True(t, selectExprHasStar(tree.SelectExpr{Expr: sampleStar}))
+	require.False(t, selectExprHasStar(tree.SelectExpr{Expr: sampleColumn}))
+
+	starClause := &tree.SelectClause{Exprs: tree.SelectExprs{starExpr}}
+	columnClause := &tree.SelectClause{Exprs: tree.SelectExprs{columnExpr}}
+	wrappedStar := &tree.Select{Select: starClause}
+	parenStar := &tree.ParenSelect{Select: wrappedStar}
+	union := &tree.UnionClause{Left: starClause, Right: columnClause}
+	require.True(t, selectStatementHasStar(starClause))
+	require.True(t, selectStatementHasStar(wrappedStar))
+	require.True(t, selectStatementHasStar(parenStar))
+	require.True(t, selectStatementHasStar(union))
+	require.False(t, selectStatementHasStar(nil))
+	require.False(t, selectStatementHasStar(columnClause))
+
+}
+
+func TestStableViewStarHelpersRewriteNestedTableExpressions(t *testing.T) {
+	makeStarSelect := func() (*tree.Select, *tree.SelectClause) {
+		clause := &tree.SelectClause{
+			Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}},
+			From:  &tree.From{},
+		}
+		return &tree.Select{Select: clause}, clause
+	}
+	replacement := func() tree.SelectExprs {
+		return tree.SelectExprs{{Expr: tree.NewUnresolvedColName("stable_col")}}
+	}
+
+	selectTable, selectClause := makeStarSelect()
+	subquerySelect, subqueryClause := makeStarSelect()
+	aliasedSelect, aliasedClause := makeStarSelect()
+	parenSelect, parenClause := makeStarSelect()
+	joinLeft, joinLeftClause := makeStarSelect()
+	joinRight, joinRightClause := makeStarSelect()
+	applyLeft, applyLeftClause := makeStarSelect()
+	applyRight, applyRightClause := makeStarSelect()
+	sourceSelect, sourceClause := makeStarSelect()
+
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		selectClause:     replacement(),
+		subqueryClause:   replacement(),
+		aliasedClause:    replacement(),
+		parenClause:      replacement(),
+		joinLeftClause:   replacement(),
+		joinRightClause:  replacement(),
+		applyLeftClause:  replacement(),
+		applyRightClause: replacement(),
+		sourceClause:     replacement(),
+	}
+	tables := tree.TableExprs{
+		selectTable,
+		&tree.Subquery{Select: subquerySelect},
+		&tree.AliasedTableExpr{Expr: aliasedSelect},
+		&tree.ParenTableExpr{Expr: parenSelect},
+		tree.NewJoinTableExpr(tree.JOIN_TYPE_INNER, joinLeft, joinRight, nil),
+		&tree.ApplyTableExpr{Left: applyLeft, Right: applyRight},
+		tree.NewStatementSource(sourceSelect),
+		&tree.TableName{},
+	}
+	stableTables, rewritten := viewTableExprsWithExpandedStars(tables, expanded)
+	require.True(t, rewritten)
+	require.Len(t, stableTables, len(tables))
+	require.NotSame(t, tables[0], stableTables[0])
+
+	stableFrom, rewritten := viewFromWithExpandedStars(&tree.From{Tables: tables}, expanded)
+	require.True(t, rewritten)
+	require.Len(t, stableFrom.Tables, len(tables))
+	_, rewritten = viewFromWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewTableExprsWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+
+	stable, rewritten := viewSelectWithExpandedStars(&tree.Select{Select: &tree.SelectClause{From: &tree.From{Tables: tables}}}, expanded)
+	require.True(t, rewritten)
+	require.NotNil(t, stable)
+	_, rewritten = viewSelectWithExpandedStars(nil, expanded)
+	require.False(t, rewritten)
+
+	// Exercise the statement wrappers and their defensive failure paths.
+	wrapped := &tree.Select{Select: &tree.SelectClause{From: &tree.From{Tables: tree.TableExprs{&tree.ParenTableExpr{Expr: selectTable}}}}}
+	_, rewritten = viewSelectStatementWithExpandedStars(wrapped, expanded)
+	require.True(t, rewritten)
+	paren := &tree.ParenSelect{Select: selectTable}
+	_, rewritten = viewSelectStatementWithExpandedStars(paren, expanded)
+	require.True(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.ParenSelect{Select: &tree.Select{}}, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.Select{Select: nil}, expanded)
+	require.False(t, rewritten)
+	_, rewritten = viewSelectStatementWithExpandedStars(&tree.UnionClause{Left: nil, Right: selectTable}, expanded)
+	require.False(t, rewritten)
+}
+
+func TestGenViewTableDefPersistsExpandedCTEStars(t *testing.T) {
+	const rootSQL = "create view v_cte as with recursive c(n_nationkey,n_name,n_regionkey,n_comment) as (select * from nation union all select n_nationkey,n_name,n_regionkey,n_comment from c where false) select * from c"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Stmt, "with recursive `c`")
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_cte"] = DeepCopyTableDef(tableDef, true)
+	ctx.objects["v_cte"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_cte"}
+	ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &plan.ColDef{
+		Name:       "n_extra",
+		OriginName: "n_extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_cte", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func addOneColViewStarTestTable(ctx *MockCompilerContext) {
+	ctx.tables["one_col"] = &plan.TableDef{
+		Name:      "one_col",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{Name: "id", OriginName: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+		},
+	}
+	ctx.objects["one_col"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "one_col"}
+}
+
+func appendOneColExtraColumn(ctx *MockCompilerContext) {
+	ctx.tables["one_col"].Cols = append(ctx.tables["one_col"].Cols, &plan.ColDef{
+		Name:       "extra",
+		OriginName: "extra",
+		Typ:        plan.Type{Id: int32(types.T_int32)},
+		Default:    &plan.Default{NullAbility: true},
+	})
+}
+
+func TestGenViewTableDefPersistsExpandedExpressionSubqueryStars(t *testing.T) {
+	tests := []struct {
+		name      string
+		viewName  string
+		rootSQL   string
+		headings  []string
+		stableCol string
+	}{
+		{
+			name:      "scalar subquery in select list",
+			viewName:  "v_nested_scalar",
+			rootSQL:   "create view v_nested_scalar as select (select * from one_col) as x",
+			headings:  []string{"x"},
+			stableCol: "`one_col`.`id`",
+		},
+		{
+			name:      "in subquery in where",
+			viewName:  "v_nested_in",
+			rootSQL:   "create view v_nested_in as select n_nationkey from nation where n_nationkey in (select * from one_col)",
+			headings:  []string{"n_nationkey"},
+			stableCol: "`one_col`.`id`",
+		},
+		{
+			name:      "in subquery in join on",
+			viewName:  "v_join_star",
+			rootSQL:   "create view v_join_star as select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey and n.n_nationkey in (select * from one_col)",
+			headings:  []string{"n_nationkey"},
+			stableCol: "`one_col`.`id`",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             tt.rootSQL,
+			}
+			addOneColViewStarTestTable(ctx.MockCompilerContext)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tt.rootSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			tableDef := p.GetDdl().GetCreateView().GetTableDef()
+			require.NotNil(t, tableDef)
+
+			var viewData ViewData
+			require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+			require.NotContains(t, viewData.Stmt, "*")
+			require.Contains(t, viewData.Stmt, tt.stableCol)
+			require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+			stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+			require.NoError(t, err)
+			defer stableStmt.Free()
+			_, err = BuildPlan(ctx, stableStmt, false)
+			require.NoError(t, err)
+
+			ctx.tables[tt.viewName] = DeepCopyTableDef(tableDef, true)
+			ctx.objects[tt.viewName] = &plan.ObjectRef{SchemaName: "tpch", ObjName: tt.viewName}
+			appendOneColExtraColumn(ctx.MockCompilerContext)
+
+			selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from "+tt.viewName, 1)
+			require.NoError(t, err)
+			defer selectStmt.Free()
+			selectPlan, err := BuildPlan(ctx, selectStmt, false)
+			require.NoError(t, err)
+			require.Equal(t, tt.headings, selectPlan.GetQuery().GetHeadings())
+		})
+	}
+}
+
+func TestBuildAlterViewPersistsExpandedJoinOnSubqueryStars(t *testing.T) {
+	const alterSQL = "alter view v_join_star as select n.n_nationkey from nation n join region r on n.n_regionkey = r.r_regionkey and n.n_nationkey in (select * from one_col)"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             alterSQL,
+	}
+	addOneColViewStarTestTable(ctx.MockCompilerContext)
+	ctx.tables["v_join_star"] = &plan.TableDef{
+		Name:      "v_join_star",
+		TableType: catalog.SystemViewRel,
+		Cols: []*plan.ColDef{
+			{Name: "n_nationkey", OriginName: "n_nationkey", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+		},
+		ViewSql: &plan.ViewDef{View: `{"Stmt":"create view v_join_star as select n_nationkey from nation","DefaultDatabase":"tpch","SecurityType":"DEFINER"}`},
+	}
+	ctx.objects["v_join_star"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v_join_star"}
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, alterSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetAlterView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.NotContains(t, viewData.Stmt, "*")
+	require.Contains(t, viewData.Stmt, "`one_col`.`id`")
+	require.Equal(t, viewData.Stmt, tableDefCreateSQL(tableDef))
+
+	stableStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewData.Stmt, 1)
+	require.NoError(t, err)
+	defer stableStmt.Free()
+	_, err = BuildPlan(ctx, stableStmt, false)
+	require.NoError(t, err)
+
+	ctx.tables["v_join_star"] = DeepCopyTableDef(tableDef, true)
+	appendOneColExtraColumn(ctx.MockCompilerContext)
+	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select * from v_join_star", 1)
+	require.NoError(t, err)
+	defer selectStmt.Free()
+	selectPlan, err := BuildPlan(ctx, selectStmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"n_nationkey"}, selectPlan.GetQuery().GetHeadings())
+}
+
+func TestStableViewSQLWithExpandedStarsRewritesAlterExpressionSubquery(t *testing.T) {
+	const alterSQL = "alter view v_nested_scalar as select (select * from one_col) as x"
+	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, alterSQL, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	alterView := parsed.(*tree.AlterView)
+	rootClause := alterView.AsSource.Select.(*tree.SelectClause)
+	subquery := rootClause.Exprs[0].Expr.(*tree.Subquery)
+	subqueryClause := subquery.Select.(*tree.ParenSelect).Select.Select.(*tree.SelectClause)
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		subqueryClause: {{Expr: tree.NewUnresolvedColName("id")}},
+	}
+
+	got, rewritten := stableViewSQLWithExpandedStars(NewMockCompilerContext(false), alterView.AsSource, alterSQL, expanded)
+	require.True(t, rewritten)
+	require.Contains(t, got, "create view")
+	require.NotContains(t, got, "*")
+	require.Contains(t, got, "`id`")
+}
+
+func TestStableViewStarHelpersRewriteCTEUnionAndRecursiveBranches(t *testing.T) {
+	makeStarSelect := func() (*tree.Select, *tree.SelectClause) {
+		clause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}}, From: &tree.From{}}
+		return &tree.Select{Select: clause}, clause
+	}
+	left, leftClause := makeStarSelect()
+	right, rightClause := makeStarSelect()
+	union := &tree.UnionClause{Left: left, Right: right}
+	with := &tree.With{
+		IsRecursive: true,
+		CTEs: []*tree.CTE{
+			{Name: &tree.AliasClause{Alias: "c"}, Stmt: union},
+		},
+	}
+	root := &tree.Select{With: with, Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("c", 1))}}, From: &tree.From{}}}
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		leftClause:  {{Expr: tree.NewUnresolvedColName("left_col")}},
+		rightClause: {{Expr: tree.NewUnresolvedColName("right_col")}},
+	}
+	require.True(t, viewSelectHasStar(root))
+	stable, rewritten := viewSelectWithExpandedStars(root, expanded)
+	require.True(t, rewritten)
+	require.NotNil(t, stable)
+	stableWith := stable.With
+	require.NotNil(t, stableWith)
+	require.Len(t, stableWith.CTEs, 1)
+	stableUnion, ok := stableWith.CTEs[0].Stmt.(*tree.UnionClause)
+	require.True(t, ok)
+	stableLeft := stableUnion.Left.(*tree.Select).Select.(*tree.SelectClause)
+	stableRight := stableUnion.Right.(*tree.Select).Select.(*tree.SelectClause)
+	require.Equal(t, "left_col", stableLeft.Exprs[0].Expr.(*tree.UnresolvedName).ColName())
+	require.Equal(t, "right_col", stableRight.Exprs[0].Expr.(*tree.UnresolvedName).ColName())
+}
+
+func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
+	const viewSQL = "create view v_star as select * from nation"
+	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, viewSQL, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	createView := parsed.(*tree.CreateView)
+	stmt := createView.AsSource
+	clause := stmt.Select.(*tree.SelectClause)
+	expanded := map[*tree.SelectClause]tree.SelectExprs{
+		clause: {{Expr: tree.NewUnresolvedColName("stable_col")}},
+	}
+	ctx := NewMockCompilerContext(false)
+
+	got, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, "", expanded)
+	require.Equal(t, "", got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, viewSQL, nil)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+	noStar := &tree.Select{Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("c")}}, From: &tree.From{}}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, noStar, viewSQL, expanded)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+
+	sampleStar, err := tree.NewSamplePercentFuncExpression1(50, true, nil)
+	require.NoError(t, err)
+	sample := &tree.Select{Select: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: sampleStar}}, From: &tree.From{}}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, sample, viewSQL, map[*tree.SelectClause]tree.SelectExprs{
+		sample.Select.(*tree.SelectClause): expanded[clause],
+	})
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+
+	wrongClause := &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.UnqualifiedStar{}}}, From: &tree.From{}}
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, &tree.Select{Select: wrongClause}, viewSQL, expanded)
+	require.Equal(t, viewSQL, got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, "not valid sql", expanded)
+	require.Equal(t, "not valid sql", got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, viewSQL+";"+viewSQL, expanded)
+	require.Equal(t, viewSQL+";"+viewSQL, got)
+	require.False(t, rewritten)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, stmt, "select * from nation", expanded)
+	require.Equal(t, "select * from nation", got)
+	require.False(t, rewritten)
+
+	alterSQL := "alter view v_star as select * from nation"
+	alterStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, alterSQL, 1)
+	require.NoError(t, err)
+	defer alterStmt.Free()
+	alterView := alterStmt.(*tree.AlterView)
+	alterSource := alterView.AsSource
+	alterClause := alterSource.Select.(*tree.SelectClause)
+	got, rewritten = stableViewSQLWithExpandedStars(ctx, alterSource, alterSQL, map[*tree.SelectClause]tree.SelectExprs{
+		alterClause: expanded[clause],
+	})
+	require.True(t, rewritten)
+	require.Contains(t, got, "create view")
+}
+
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"

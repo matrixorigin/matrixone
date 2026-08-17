@@ -4705,6 +4705,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var helpFunc *helpFunc
 	var boundTimeWindowGroupBy *plan.Expr
 	var rollupFilter bool
+	var expandedSelectClause *tree.SelectClause
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
@@ -4793,6 +4794,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		expandedSelectClause = selectClause
 		// Keep the query-block aggregate state active while HAVING, SELECT
 		// projection, and ORDER BY are bound. bindSelectClause initializes the
 		// state after the pre-aggregation WHERE has been bound, so correlated
@@ -4804,7 +4806,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		defer func() {
 			ctx.pendingAggregateQuery = previousPendingAggregateQuery
 		}()
-
 		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
 			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
 			// the same parsed SELECT once per reference, so keep the declaration
@@ -4924,6 +4925,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				if isRoot {
 					builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 				}
+				captureGroupingSetViewStarExpansion(ctx, expandedSelectClause, selectStmts, hiddenResultLen)
 				return
 			}
 		}
@@ -4956,6 +4958,30 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		}
 	default:
 		return 0, moerr.NewNYIf(builder.GetContext(), "statement '%s'", tree.String(stmt, dialect.MYSQL))
+	}
+	// Capture the visible projection for view definitions. SAMPLE(*) expands to
+	// sampled columns while binding, so the persisted AST must keep SAMPLE but
+	// replace its wildcard with the columns visible at CREATE VIEW time.
+	if ctx.captureViewStarExpansion && expandedSelectClause != nil {
+		if ctx.expandedSelectLists == nil {
+			ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+		}
+		sampleStarColumns, captureErr := sampleStarColumnsForView(builder, ctx, expandedSelectClause)
+		if captureErr != nil {
+			err = captureErr
+			return
+		}
+		headings := ctx.headings
+		if len(headings) > len(selectList) {
+			headings = headings[len(headings)-len(selectList):]
+		}
+		ctx.expandedSelectLists[expandedSelectClause] = cloneViewSelectExprsForView(
+			ctx,
+			expandedSelectClause,
+			selectList,
+			headings,
+			sampleStarColumns,
+		)
 	}
 
 	if astTimeWindow != nil && boundTimeWindowGroupBy != nil {
@@ -8508,6 +8534,148 @@ func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
 	}
 	cloned := cloneTreeValue(reflect.ValueOf(astExpr), make(map[treeClonePointer]reflect.Value))
 	return cloned.Interface().(tree.Expr)
+}
+
+func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
+	if len(exprs) == 0 {
+		return nil
+	}
+	cloned := make(tree.SelectExprs, len(exprs))
+	for i := range exprs {
+		cloned[i].Expr = cloneTreeExpr(exprs[i].Expr)
+		if exprs[i].As != nil {
+			cloned[i].As = tree.NewCStr(exprs[i].As.Origin(), 1)
+		}
+	}
+	return cloned
+}
+
+func cloneTreeSelectExprsWithStableHeadings(exprs tree.SelectExprs, headings []string) tree.SelectExprs {
+	cloned := cloneTreeSelectExprs(exprs)
+	for i := range cloned {
+		if cloned[i].As != nil && !cloned[i].As.Empty() {
+			continue
+		}
+		if i < len(headings) && headings[i] != "" {
+			cloned[i].As = tree.NewCStr(headings[i], 1)
+		}
+	}
+	return cloned
+}
+
+func cloneTreeExprs(exprs tree.Exprs) tree.Exprs {
+	if len(exprs) == 0 {
+		return nil
+	}
+	cloned := make(tree.Exprs, len(exprs))
+	for i, expr := range exprs {
+		cloned[i] = cloneTreeExpr(expr)
+	}
+	return cloned
+}
+
+func sampleStarColumnsForView(
+	builder *QueryBuilder,
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+) (tree.Exprs, error) {
+	if builder == nil || ctx == nil || selectClause == nil {
+		return nil, nil
+	}
+	for _, selectExpr := range selectClause.Exprs {
+		sample, ok := selectExpr.Expr.(*tree.SampleExpr)
+		if !ok {
+			continue
+		}
+		_, isStar := sample.GetColumns()
+		if !isStar {
+			continue
+		}
+		accountID, err := builder.compCtx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		columns, _, err := ctx.unfoldStar(builder.GetContext(), "", accountID == catalog.System_Account)
+		if err != nil {
+			return nil, err
+		}
+		result := make(tree.Exprs, 0, len(columns))
+		for _, column := range columns {
+			result = append(result, cloneTreeExpr(column.Expr))
+		}
+		return result, nil
+	}
+	return nil, nil
+}
+
+func cloneViewSelectExprsForView(
+	ctx *BindContext,
+	selectClause *tree.SelectClause,
+	exprs tree.SelectExprs,
+	headings []string,
+	sampleStarColumns tree.Exprs,
+) tree.SelectExprs {
+	cloned := cloneTreeSelectExprsWithStableHeadings(exprs, headings)
+	if ctx == nil || selectClause == nil ||
+		!selectClauseHasSampleExpr(selectClause) {
+		return cloned
+	}
+
+	sampleStart := ctx.sampleFunc.start
+	sampleEnd := sampleStart + ctx.sampleFunc.offset
+	if sampleStart < 0 || sampleEnd > len(cloned) || sampleStart >= sampleEnd {
+		return cloned
+	}
+
+	var sampleExpr tree.SelectExpr
+	foundSample := false
+	for _, expr := range selectClause.Exprs {
+		if _, ok := expr.Expr.(*tree.SampleExpr); ok {
+			sampleExpr = expr
+			foundSample = true
+			break
+		}
+	}
+	if !foundSample {
+		return cloned
+	}
+	stableSample := cloneTreeSelectExprs(tree.SelectExprs{sampleExpr})[0]
+	if len(sampleStarColumns) > 0 {
+		if sample, ok := stableSample.Expr.(*tree.SampleExpr); ok {
+			sample.SetColumns(cloneTreeExprs(sampleStarColumns), false)
+		}
+	}
+
+	stable := make(tree.SelectExprs, 0, len(cloned)-ctx.sampleFunc.offset+1)
+	stable = append(stable, cloned[:sampleStart]...)
+	stable = append(stable, stableSample)
+	stable = append(stable, cloned[sampleEnd:]...)
+	return stable
+}
+
+func captureGroupingSetViewStarExpansion(
+	ctx *BindContext,
+	original *tree.SelectClause,
+	branches []*tree.SelectClause,
+	hiddenResultLen int,
+) {
+	if ctx == nil || !ctx.captureViewStarExpansion || original == nil || len(branches) == 0 {
+		return
+	}
+	if ctx.expandedSelectLists == nil {
+		ctx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
+	for _, branch := range branches {
+		expanded, ok := ctx.expandedSelectLists[branch]
+		if !ok {
+			continue
+		}
+		if hiddenResultLen > 0 && hiddenResultLen < len(expanded) {
+			expanded = expanded[:len(expanded)-hiddenResultLen]
+		}
+		ctx.expandedSelectLists[original] = cloneTreeSelectExprs(expanded)
+		return
+	}
 }
 
 type treeClonePointer struct {
