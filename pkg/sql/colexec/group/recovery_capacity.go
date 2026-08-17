@@ -21,9 +21,8 @@ import (
 )
 
 const (
-	groupSpillHashBytes      = uint64(8)
-	groupSpillSelectionBytes = uint64(1)
-	groupSpillRowIDBytes     = uint64(4)
+	groupSpillHashBytes  = uint64(8)
+	groupSpillRowIDBytes = uint64(4)
 )
 
 func groupRecoveryAdd(left, right uint64) (uint64, error) {
@@ -42,10 +41,11 @@ func groupRecoveryMul(left, right uint64) (uint64, error) {
 
 // ensureRecoveryCapacity reserves the minimum reusable headroom needed to
 // partition all state that can exist after the next input chunk. Spill needs
-// exactly one uint64 hash per resident group plus one byte of selection state
-// and one int32 row id for the largest aggregate chunk. The row ids implement
-// an O(rows) counting partition; keeping them in the floor avoids an
-// unaccounted 32*8K stack matrix precisely when spill runs under pressure.
+// exactly one uint64 hash per resident group plus one int32 row id for the
+// largest aggregate chunk. The row ids implement an O(rows) counting
+// partition and are also the selection consumed directly by the accounted
+// spill codec; keeping them in the floor avoids an unaccounted 32*8K stack
+// matrix precisely when spill runs under pressure.
 // Serialization is streaming and its I/O buffers are optional, so no guessed
 // per-column payload belongs in this hard reservation. Physical scratch later
 // borrows this floor through the operator's recovery capacity class, avoiding
@@ -101,12 +101,11 @@ func (ctr *container) recoveryCapacityCovers(incomingRows int) bool {
 		return false
 	}
 	target := groups * groupSpillHashBytes
-	selectionAndRows := chunkRows *
-		(groupSpillSelectionBytes + groupSpillRowIDBytes)
-	if selectionAndRows > math.MaxUint64-target {
+	rowIDBytes := chunkRows * groupSpillRowIDBytes
+	if rowIDBytes > math.MaxUint64-target {
 		return false
 	}
-	target += selectionAndRows
+	target += rowIDBytes
 	return target <= ctr.recoveryCapacityFloor
 }
 
@@ -127,18 +126,9 @@ func (ctr *container) recoveryCapacityTarget(incomingRows int) (uint64, error) {
 		return 0, err
 	}
 	chunkRows := min(groups, uint64(aggBatchSize))
-	selectionBytes, err := groupRecoveryMul(chunkRows, groupSpillSelectionBytes)
-	if err != nil {
-		return 0, err
-	}
 	rowIDBytes, err := groupRecoveryMul(chunkRows, groupSpillRowIDBytes)
 	if err != nil {
 		return 0, err
 	}
-	target, err := groupRecoveryAdd(hashBytes, selectionBytes)
-	if err != nil {
-		return 0, err
-	}
-	target, err = groupRecoveryAdd(target, rowIDBytes)
-	return target, err
+	return groupRecoveryAdd(hashBytes, rowIDBytes)
 }
