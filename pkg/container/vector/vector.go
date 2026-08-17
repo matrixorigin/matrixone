@@ -42,18 +42,19 @@ const (
 	DIST            // dictionary vector
 )
 
-// PrepareParamKind preserves the source conversion category of a transient
-// text vector produced by MySQL prepared-statement execution.
-type PrepareParamKind uint8
+// PrepareParamKind is the compatibility name for the conversion domain of a
+// transient prepared value. Source category and binary-string domain are
+// intentionally represented by independent semantic axes in package types.
+type PrepareParamKind = types.StringConversionKind
 
 // Values are bit-packed into bool sections for remote Process transport. Keep
 // the numeric assignments stable and within three bits.
 const (
-	PrepareParamNone PrepareParamKind = iota
-	PrepareParamInteger
-	PrepareParamFloat
-	PrepareParamDecimal
-	PrepareParamBoolean
+	PrepareParamNone    = types.StringConversionString
+	PrepareParamInteger = types.StringConversionInteger
+	PrepareParamFloat   = types.StringConversionFloat
+	PrepareParamDecimal = types.StringConversionDecimal
+	PrepareParamBoolean = types.StringConversionBoolean
 )
 
 // MergePrepareParamKinds folds two observed source categories.  Equal
@@ -2028,14 +2029,52 @@ func (v *Vector) GetIsBinaryStringAt(row int) bool {
 	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
 		return false
 	}
-	switch v.typ.Oid {
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return true
-	}
 	if v.binaryStringRowsActive {
 		return v.binaryStringRows.Contains(uint64(row))
 	}
+	if v.staticBinaryStringType() {
+		return true
+	}
 	return v.binaryString
+}
+
+// GetRuntimeStringDomainAt returns only the row-level runtime override. Static
+// type semantics are deliberately represented by RuntimeStringInherit.
+func (v *Vector) GetRuntimeStringDomainAt(row int) types.RuntimeStringDomain {
+	if v == nil {
+		return types.RuntimeStringInherit
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if row < 0 || row >= v.length || v.IsNull(uint64(row)) {
+		return types.RuntimeStringInherit
+	}
+	if v.binaryStringRowsActive {
+		if v.binaryStringRows.Contains(uint64(row)) {
+			return types.RuntimeStringBinary
+		}
+		return types.RuntimeStringText
+	}
+	if v.binaryString {
+		return types.RuntimeStringBinary
+	}
+	return types.RuntimeStringInherit
+}
+
+func (v *Vector) staticBinaryStringType() bool {
+	if v == nil {
+		return false
+	}
+	if v.typ.Charset == types.CharsetBinary {
+		return true
+	}
+	switch v.typ.Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
 }
 
 // GetBinaryStringMetadataAt reports only dynamic byte-string provenance.
@@ -2121,6 +2160,18 @@ func (v *Vector) SetBinaryStringRows(rows []bool) error {
 }
 
 func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
+	return v.setBinaryStringRowsWithMP(rows, mp, false)
+}
+
+// SetSelectedValueBinaryStringRowsWithMP installs selected-value semantics.
+// Unlike ordinary propagation, an explicit text row is retained when the
+// resolved result type is binary, so CASE/IF-style ownership can override the
+// static common type without allocating on uniform ordinary paths.
+func (v *Vector) SetSelectedValueBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
+	return v.setBinaryStringRowsWithMP(rows, mp, true)
+}
+
+func (v *Vector) setBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool, selectedValue bool) error {
 	if len(rows) != v.length {
 		return moerr.NewInvalidInputNoCtxf(
 			"binary-string row count %d does not match vector length %d", len(rows), v.length)
@@ -2129,7 +2180,8 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 		v.resetBinaryString()
 		return nil
 	}
-	if v.IsConst() {
+	overrideStatic := selectedValue && v.staticBinaryStringType()
+	if v.IsConst() && !overrideStatic {
 		if v.IsNull(0) {
 			v.setBinaryStringScalar(false)
 		} else {
@@ -2147,12 +2199,16 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 			binaryCount++
 		}
 	}
-	if binaryCount == 0 {
+	if binaryCount == 0 && !overrideStatic {
 		v.setBinaryStringScalar(false)
 		return nil
 	}
 	if binaryCount == nonNull {
-		v.setBinaryStringScalar(true)
+		if overrideStatic {
+			v.resetBinaryString()
+		} else {
+			v.setBinaryStringScalar(true)
+		}
 		return nil
 	}
 	if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
@@ -2165,7 +2221,13 @@ func (v *Vector) SetBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool) error {
 			v.binaryStringRows.Add(uint64(row))
 		}
 	}
-	v.normalizeBinaryStringRows()
+	if !overrideStatic {
+		v.normalizeBinaryStringRows()
+	} else {
+		// An active bitmap is the tri-state marker: set rows are explicit
+		// binary, clear rows are explicit text, and no bitmap means inherit.
+		v.binaryString = binaryCount != 0
+	}
 	return nil
 }
 

@@ -589,6 +589,8 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	require.Equal(t, "12", rawExpr.GetLit().GetSval())
 	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
 	require.False(t, rawExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		rawExpr.GetLit().GetLiteralForm())
 
 	testCases := []struct {
 		name  string
@@ -630,6 +632,13 @@ func TestBindScoreBinaryHexnumKeepsBinarySemanticsExceptNumericCast(t *testing.T
 	plainHexExpr, err := binder.bindNumVal(plainHex, plan.Type{})
 	require.NoError(t, err)
 	require.True(t, plainHexExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_HEX,
+		plainHexExpr.GetLit().GetLiteralForm())
+	bit := tree.NewNumVal("0b1", "0b1", false, tree.P_bit)
+	bitExpr, err := binder.bindNumVal(bit, plan.Type{})
+	require.NoError(t, err)
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BIT,
+		bitExpr.GetLit().GetLiteralForm())
 
 	bitOrExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "|", []*plan.Expr{rawExpr, plainHexExpr})
 	require.NoError(t, err)
@@ -650,6 +659,8 @@ func TestBindScoreBinaryStringUsesBinaryStringSemantics(t *testing.T) {
 	require.Equal(t, "1", rawExpr.GetLit().GetSval())
 	require.Equal(t, int32(types.T_varbinary), rawExpr.Typ.Id)
 	require.False(t, rawExpr.GetLit().GetIsBin())
+	require.Equal(t, plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+		rawExpr.GetLit().GetLiteralForm())
 
 	castExpr, err := binder.bindNumVal(binStr, plan.Type{Id: int32(types.T_uint64)})
 	require.NoError(t, err)

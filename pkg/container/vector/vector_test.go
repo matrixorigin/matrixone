@@ -2044,6 +2044,67 @@ func TestBinaryStringMetadataUnionMultiAndLifecycle(t *testing.T) {
 	bulkNull.Free(mp)
 }
 
+func TestSelectedValueRuntimeStringDomainOverridesStaticBinary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_varbinary.ToType()
+	vec := NewVec(typ)
+	uniform := NewVec(typ)
+	t.Cleanup(func() {
+		uniform.Free(mp)
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+	require.NoError(t, AppendBytesList(uniform, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	before := mp.CurrNB()
+	require.NoError(t, uniform.SetSelectedValueBinaryStringRowsWithMP([]bool{true, true}, mp))
+	require.Equal(t, before, mp.CurrNB())
+	require.False(t, uniform.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, uniform.GetRuntimeStringDomainAt(0))
+
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("text"), []byte("binary")}, nil, mp))
+
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.True(t, vec.GetIsBinaryStringAt(0), "static binary type applies while runtime semantics inherit")
+	require.NoError(t, vec.SetSelectedValueBinaryStringRowsWithMP([]bool{false, true}, mp))
+	require.True(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringBinary, vec.GetRuntimeStringDomainAt(1))
+	require.False(t, vec.GetIsBinaryStringAt(0), "selected text overrides the common binary type")
+	require.True(t, vec.GetIsBinaryStringAt(1))
+
+	vec.CleanOnlyData()
+	require.NoError(t, AppendBytes(vec, []byte("reused"), false, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.True(t, vec.GetIsBinaryStringAt(0))
+}
+
+func TestSelectedValueRuntimeStringDomainAllocationFailureIsAtomic(t *testing.T) {
+	mp := mpool.MustNewZero()
+	state := newTestVectorAllocationAccount(t, 8<<20, 3)
+
+	vec := newAccountedTestVector(t, types.T_varbinary.ToType(), state.selection)
+	values := make([][]byte, 1024)
+	rows := make([]bool, len(values))
+	for row := range values {
+		values[row] = []byte("a")
+		rows[row] = row%2 != 0
+	}
+	require.NoError(t, vec.PreExtend(len(values), mp))
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+		finalizeTestVectorAllocationAccount(t, state)
+	}()
+
+	err := vec.SetSelectedValueBinaryStringRowsWithMP(rows, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
+}
+
 func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)

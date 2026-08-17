@@ -176,6 +176,16 @@ func TestExprStructuralHashDistinguishesIsBin(t *testing.T) {
 	require.True(t, exprStructuralEqual(b, c))
 }
 
+func TestExprStructuralHashDistinguishesLiteralForm(t *testing.T) {
+	a := strLit("1")
+	b := strLit("1")
+	a.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	b.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BIT
+
+	require.NotEqual(t, exprStructuralHash(a), exprStructuralHash(b))
+	require.False(t, exprStructuralEqual(a, b))
+}
+
 func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
 	literal := strLit("encoded")
 	serializedLiteral := DeepCopyExpr(literal)

@@ -148,16 +148,28 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	}
 }
 
-// literalWithoutDiagnosticProvenance returns a shallow copy only when a
-// diagnostic-only field must be removed before deriving executable identity.
-// Keep all value-bearing fields, including IsBin and Src, intact.
-func literalWithoutDiagnosticProvenance(lit *plan.Literal) *plan.Literal {
-	if lit == nil || !lit.IsSerialized {
+// literalForExecutableIdentity returns a shallow copy only when diagnostic or
+// wire-compatibility fields must be normalized. Keep value-bearing fields,
+// including IsBin, non-text LiteralForm, and Src, intact.
+func literalForExecutableIdentity(lit *plan.Literal) *plan.Literal {
+	if lit == nil || !lit.IsSerialized && lit.LiteralForm != plan.StringLiteralForm_STRING_LITERAL_TEXT {
 		return lit
 	}
 	literalCopy := *lit
 	literalCopy.IsSerialized = false
+	// NONE is the wire-compatible spelling of an ordinary text literal in
+	// plans produced before LiteralForm existed.
+	if literalCopy.LiteralForm == plan.StringLiteralForm_STRING_LITERAL_TEXT {
+		literalCopy.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
+	}
 	return &literalCopy
+}
+
+func executableLiteralForm(form plan.StringLiteralForm) plan.StringLiteralForm {
+	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT {
+		return plan.StringLiteralForm_STRING_LITERAL_NONE
+	}
+	return form
 }
 
 func hashLitInto(h writeByter, lit *plan.Literal) {
@@ -210,6 +222,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 		} else {
 			writeByte(h, 0)
 		}
+		writeUint32(h, uint32(executableLiteralForm(lit.LiteralForm)))
 	case *plan.Literal_Bval:
 		writeByte(h, 12)
 		if v.Bval {
@@ -239,7 +252,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 	default:
 		// Uncommon literal variants — fall back to marshal.
 		writeByte(h, 0xff)
-		if b, err := literalWithoutDiagnosticProvenance(lit).Marshal(); err == nil {
+		if b, err := literalForExecutableIdentity(lit).Marshal(); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
@@ -388,7 +401,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Fval == bv.Fval
 	case *plan.Literal_Sval:
 		bv, ok := b.Value.(*plan.Literal_Sval)
-		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin
+		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin &&
+			executableLiteralForm(a.LiteralForm) == executableLiteralForm(b.LiteralForm)
 	case *plan.Literal_Bval:
 		bv, ok := b.Value.(*plan.Literal_Bval)
 		return ok && av.Bval == bv.Bval
@@ -412,8 +426,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Jsonval == bv.Jsonval
 	default:
 		// Uncommon literal variant — binary fallback.
-		ab, aerr := literalWithoutDiagnosticProvenance(a).Marshal()
-		bb, berr := literalWithoutDiagnosticProvenance(b).Marshal()
+		ab, aerr := literalForExecutableIdentity(a).Marshal()
+		bb, berr := literalForExecutableIdentity(b).Marshal()
 		if aerr != nil || berr != nil {
 			return false
 		}
