@@ -6878,6 +6878,26 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
 	require.NoError(t, err)
 	require.Equal(t, sidecarSQL, strings.TrimSpace(prepared.Sql))
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.rewriteEnabled.Store(false)
+	const nonPolicyJSON = `/*+ {"optimizer":"keep"} */ select 1`
+	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_PREPARE, data: []byte(nonPolicyJSON)})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, nonPolicyJSON, strings.TrimSpace(prepared.Sql))
 }
 
 func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {

@@ -5217,9 +5217,11 @@ func wrapNativePrepareSQL(name, materializedSQL string) string {
 	if strings.HasPrefix(trimmed, "/*+") || strings.HasPrefix(trimmed, "/*!+") {
 		if end := strings.Index(trimmed, "*/"); end >= 0 {
 			content, ok := leadingHintContent(trimmed)
+			content = strings.TrimSpace(content)
 			var policy map[string]json.RawMessage
-			if ok && json.Unmarshal([]byte(strings.TrimSpace(content)), &policy) == nil &&
-				(policy["rewrites"] != nil || policy["remapdb"] != nil) {
+			decodeErr := json.Unmarshal([]byte(content), &policy)
+			isPolicy := policy["rewrites"] != nil || policy["remapdb"] != nil
+			if ok && strings.HasPrefix(content, "{") && (decodeErr != nil || isPolicy) {
 				end += 2
 				return fmt.Sprintf("%s prepare %s from %s", trimmed[:end], quotePrepareStmtName(name),
 					strings.TrimSpace(trimmed[end:]))
