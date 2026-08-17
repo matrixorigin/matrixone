@@ -603,6 +603,14 @@ type BindContext struct {
 	boundCtes map[string]*CTERef
 	headings  []string
 
+	// captureViewStarExpansion is enabled only while binding a CREATE/ALTER
+	// VIEW definition. Ordinary SELECT planning must not clone its select list
+	// just to support view metadata persistence.
+	captureViewStarExpansion bool
+	// expandedSelectLists records the expanded output for each SELECT clause
+	// participating in a view definition, including UNION branches.
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
+
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
