@@ -1076,20 +1076,7 @@ func TestLocalE2EYearPartitionDateCase(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 6))
-	for _, row := range [][]driver.Value{
-		{int64(6), int64(155)},
-		{int64(1), int64(20)},
-		{int64(2), int64(50)},
-		{int64(2), int64(50)},
-		{int64(2), int64(50)},
-		{int64(2), int64(50)},
-		{int64(1), int64(5)},
-		{int64(1), int64(50)},
-		{int64(0), nil},
-	} {
-		mock.ExpectQuery("SELECT COUNT").
-			WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(row...))
-	}
+	expectYearPartitionDateQueries(mock, yearPartitionDateRows())
 	mock.ExpectQuery("EXPLAIN SELECT").
 		WillReturnRows(sqlmock.NewRows([]string{"plan"}).AddRow("Iceberg: residual_filter=true"))
 
@@ -1102,6 +1089,85 @@ func TestLocalE2EYearPartitionDateCase(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2EYearPartitionDateCaseFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(sqlmock.Sqlmock)
+		wantErrSub string
+	}{
+		{
+			name: "query failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				mock.ExpectQuery("SELECT COUNT").WillReturnError(errors.New("date query failed"))
+			},
+			wantErrSub: "date query failed",
+		},
+		{
+			name: "result mismatch",
+			setup: func(mock sqlmock.Sqlmock) {
+				rows := yearPartitionDateRows()
+				rows[0] = []driver.Value{int64(5), int64(155)}
+				expectYearPartitionDateQueries(mock, rows)
+			},
+			wantErrSub: "year partition date filter result mismatch",
+		},
+		{
+			name: "explain query failure",
+			setup: func(mock sqlmock.Sqlmock) {
+				expectYearPartitionDateQueries(mock, yearPartitionDateRows())
+				mock.ExpectQuery("EXPLAIN SELECT").WillReturnError(errors.New("explain query failed"))
+			},
+			wantErrSub: "explain query failed",
+		},
+		{
+			name: "explain semantic marker missing",
+			setup: func(mock sqlmock.Sqlmock) {
+				expectYearPartitionDateQueries(mock, yearPartitionDateRows())
+				mock.ExpectQuery("EXPLAIN SELECT").
+					WillReturnRows(sqlmock.NewRows([]string{"plan"}).AddRow("Iceberg: residual filter unavailable"))
+			},
+			wantErrSub: "EXPLAIN omitted Iceberg residual filter",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := newLocalE2ESQLMock(t)
+			defer db.Close()
+			mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 6))
+			tt.setup(mock)
+
+			result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).yearPartitionDateCase(context.Background())
+			if result.Status != "failed" || !strings.Contains(result.Error, tt.wantErrSub) {
+				t.Fatalf("expected failure containing %q, got %+v", tt.wantErrSub, result)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func yearPartitionDateRows() [][]driver.Value {
+	return [][]driver.Value{
+		{int64(6), int64(155)},
+		{int64(1), int64(20)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(1), int64(5)},
+		{int64(1), int64(50)},
+		{int64(0), nil},
+	}
+}
+
+func expectYearPartitionDateQueries(mock sqlmock.Sqlmock, rows [][]driver.Value) {
+	for _, row := range rows {
+		mock.ExpectQuery("SELECT COUNT").
+			WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(row...))
 	}
 }
 
