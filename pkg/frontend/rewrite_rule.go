@@ -80,8 +80,17 @@ func normalizeRewriteRules(
 	rules map[string]string,
 	lowerCaseTableNames int64,
 ) (map[string]string, error) {
+	normalized, _, err := normalizeRewriteRulesWithSelected(ctx, rules, lowerCaseTableNames)
+	return normalized, err
+}
+
+func normalizeRewriteRulesWithSelected(
+	ctx context.Context,
+	rules map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, map[string]string, error) {
 	if len(rules) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	normalized := make(map[string]string, len(rules))
 	originalKeys := make(map[string]string, len(rules))
@@ -94,7 +103,7 @@ func normalizeRewriteRules(
 		rule := rules[key]
 		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if previous, ok := originalKeys[canonicalKey]; ok {
 			if key != canonicalKey || previous == canonicalKey {
@@ -104,7 +113,7 @@ func normalizeRewriteRules(
 		originalKeys[canonicalKey] = key
 		normalized[canonicalKey] = rule
 	}
-	return normalized, nil
+	return normalized, originalKeys, nil
 }
 
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
@@ -315,25 +324,25 @@ func rewriteSingleSQL(
 	// remapdb (database-name substitution) is applied before the table rewrites
 	// and does not stack: a database maps to one target, so the inline hint
 	// overrides the session variable for the same source database.
-	if err = validateRawRewriteRules(ctx, cache, lowerCaseTableNames, sqlMode); err != nil {
-		return sql, err
-	}
-	if err = validateRawRewriteRules(ctx, sessionRules, lowerCaseTableNames, sqlMode); err != nil {
-		return sql, err
-	}
-	if err = validateRawRewriteRules(ctx, inlineRules, lowerCaseTableNames, sqlMode); err != nil {
-		return sql, err
-	}
-	normalizedRoleRules, err := normalizeRewriteRules(ctx, cache, lowerCaseTableNames)
+	normalizedRoleRules, roleSelected, err := normalizeRewriteRulesWithSelected(ctx, cache, lowerCaseTableNames)
 	if err != nil {
 		return sql, err
 	}
-	normalizedSessionRules, err := normalizeRewriteRules(ctx, sessionRules, lowerCaseTableNames)
+	normalizedSessionRules, sessionSelected, err := normalizeRewriteRulesWithSelected(ctx, sessionRules, lowerCaseTableNames)
 	if err != nil {
 		return sql, err
 	}
-	normalizedInlineRules, err := normalizeRewriteRules(ctx, inlineRules, lowerCaseTableNames)
+	normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
 	if err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, cache, roleSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, sessionRules, sessionSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
 		return sql, err
 	}
 	chains := make(map[string][]string,
@@ -420,11 +429,11 @@ func rewriteSQLFromMaterializedPolicyWithSQLMode(
 	if err != nil {
 		return innerSQL, err
 	}
-	if err = validateRawRewriteRules(ctx, inlineRules, lowerCaseTableNames, sqlMode); err != nil {
+	normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
+	if err != nil {
 		return innerSQL, err
 	}
-	normalizedInlineRules, err := normalizeRewriteRules(ctx, inlineRules, lowerCaseTableNames)
-	if err != nil {
+	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
 		return innerSQL, err
 	}
 	for key, rule := range normalizedInlineRules {
@@ -451,13 +460,20 @@ func rewriteSQLFromMaterializedPolicyWithSQLMode(
 	return hint + " " + innerSQL, nil
 }
 
-func validateRawRewriteRules(ctx context.Context, rules map[string]string, lowerCaseTableNames int64, sqlMode string) error {
+func validateDiscardedRewriteRules(ctx context.Context, rules, selected map[string]string, lowerCaseTableNames int64, sqlMode string) error {
 	keys := make([]string, 0, len(rules))
 	for key := range rules {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
+		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+		if err != nil {
+			return err
+		}
+		if selected[canonicalKey] == key {
+			continue
+		}
 		value := rules[key]
 		if value == "" {
 			return moerr.NewParseError(ctx, "statement")

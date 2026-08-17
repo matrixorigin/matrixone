@@ -862,6 +862,22 @@ func TestRewritePolicyModeTwoUsesComparisonIdentity(t *testing.T) {
 	require.Contains(t, normalized, "casedb.t")
 }
 
+func BenchmarkRewriteSingleSQLPersistentMultiRulePolicy(b *testing.B) {
+	rules := make(map[string]string, 32)
+	for i := range 32 {
+		key := fmt.Sprintf("policy_db.t%d", i)
+		rules[key] = fmt.Sprintf("select * from %s where tenant_id = %d", key, i)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, 1, ""); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

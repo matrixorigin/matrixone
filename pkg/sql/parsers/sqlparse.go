@@ -542,6 +542,8 @@ func decodeRewriteHintWithLowerCaseTableNames(
 	if len(rm.RawRewrites) > 0 {
 		rewrites = make(map[string][]string, len(rm.RawRewrites))
 		originalKeys := make(map[string]string, len(rm.RawRewrites))
+		decodedChains := make(map[string][]string, len(rm.RawRewrites))
+		canonicalKeys := make(map[string]string, len(rm.RawRewrites))
 		keys := make([]string, 0, len(rm.RawRewrites))
 		for key := range rm.RawRewrites {
 			keys = append(keys, key)
@@ -564,17 +566,12 @@ func decodeRewriteHintWithLowerCaseTableNames(
 			if derr != nil {
 				return nil, nil, derr
 			}
-			// Validate every input value before equivalent keys are collapsed.
-			// Key selection controls execution precedence, not policy validity.
-			if validateRewriteChain != nil {
-				if derr = validateRewriteChain(sqls); derr != nil {
-					return nil, nil, derr
-				}
-			}
 			canonicalKey, _, _, derr := NormalizeRewriteKey(ctx, db+"."+table, lowerCaseTableNames)
 			if derr != nil {
 				return nil, nil, derr
 			}
+			decodedChains[k] = sqls
+			canonicalKeys[k] = canonicalKey
 			if previous, exists := originalKeys[canonicalKey]; exists {
 				// Preserve the historical exact execution-key rule when equivalent
 				// mode-1 spellings coexist. Otherwise the sorted first key wins.
@@ -584,6 +581,19 @@ func decodeRewriteHintWithLowerCaseTableNames(
 			}
 			originalKeys[canonicalKey] = k
 			rewrites[canonicalKey] = sqls
+		}
+		// Winners are parsed once below while constructing their AST. Parse only
+		// discarded equivalent values here so every raw input is still validated
+		// exactly once before it can be ignored.
+		if validateRewriteChain != nil {
+			for _, k := range keys {
+				if originalKeys[canonicalKeys[k]] == k {
+					continue
+				}
+				if err = validateRewriteChain(decodedChains[k]); err != nil {
+					return nil, nil, err
+				}
+			}
 		}
 	}
 	return rewrites, remapDb, nil
@@ -649,10 +659,13 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 				if parseErr != nil {
 					return moerr.NewParseError(ctx, parseErr.Error())
 				}
+				valid := false
 				switch st.(type) {
 				case *tree.Select, *tree.ParenSelect:
-					// ok
-				default:
+					valid = true
+				}
+				st.Free()
+				if !valid {
 					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
 				}
 			}
