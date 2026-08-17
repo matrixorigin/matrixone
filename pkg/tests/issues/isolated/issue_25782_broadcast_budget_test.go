@@ -43,7 +43,7 @@ const (
 //
 //   - a #25782-like grouped child feeds a parallel low-NDV LEFT JOIN;
 //   - the low-NDV join selects broadcast rather than shuffle;
-//   - an admitted control returns all joined rows;
+//   - an admitted control returns the correct joined-row count;
 //   - a larger build is rejected before it can exceed the hard query budget;
 //   - the rejected broadcast build never enters spill and leaves the CN usable.
 //
@@ -107,7 +107,10 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 		"create table broadcast_build (k bigint not null, payload bigint not null) cluster by k")
 	execJoinSpillSQL(t, ctx, conn, "insert into broadcast_probe values (1)")
 
-	query := `select b.payload
+	// The outer aggregate is intentionally blocking: the SQL protocol may send
+	// SELECT metadata before execution, but it must not publish a result row
+	// until every parallel join dependency has reached a terminal state.
+	query := `select count(b.payload)
 		from broadcast_probe p
 		left join (
 			select k, payload
@@ -124,30 +127,30 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	controlPlan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.Contains(t, controlPlan, "Aggregate", "the public witness must retain the grouped build child:\n%s", controlPlan)
 	require.NotContains(t, controlPlan, "shuffle:", "low-NDV join must remain broadcast:\n%s", controlPlan)
-	controlPayloads, err := func() (_ []int64, err error) {
+	controlCount, err := func() (_ int64, err error) {
 		controlResult, err := conn.QueryContext(ctx, query)
 		if err != nil {
-			return nil, err
+			return 0, err
 		}
 		defer func() {
 			err = errors.Join(err, controlResult.Close(), controlResult.Err())
 		}()
 
-		payloads := make([]int64, 0, 1)
+		var count int64
+		rows := 0
 		for controlResult.Next() {
-			var payload sql.NullInt64
-			if err = controlResult.Scan(&payload); err != nil {
-				return nil, err
+			if err = controlResult.Scan(&count); err != nil {
+				return 0, err
 			}
-			if !payload.Valid {
-				return nil, errors.New("admitted broadcast join returned an unmatched NULL payload")
-			}
-			payloads = append(payloads, payload.Int64)
+			rows++
 		}
-		return payloads, nil
+		if rows != 1 {
+			return 0, fmt.Errorf("admitted broadcast join returned %d aggregate rows", rows)
+		}
+		return count, nil
 	}()
 	require.NoError(t, err)
-	require.Equal(t, []int64{1}, controlPayloads)
+	require.Equal(t, int64(1), controlCount)
 
 	execJoinSpillSQL(t, ctx, conn, "truncate table broadcast_build")
 	execJoinSpillSQL(t, ctx, conn, fmt.Sprintf(
@@ -158,26 +161,30 @@ func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
 	plan := queryJoinSpillText(t, ctx, conn, "explain "+query)
 	require.Contains(t, plan, "Aggregate", "the rejected plan must retain the grouped build child:\n%s", plan)
 	require.NotContains(t, plan, "shuffle:", "low-NDV join must remain broadcast:\n%s", plan)
+	// The parallel plan above is the public topology witness. Execute the
+	// protocol error check with one consumer: independent parallel pipelines can
+	// legitimately stream rows before a sibling pipeline fails, and MySQL has no
+	// cross-pipeline result rollback. The HashJoin unit contract separately
+	// proves that every consumer of one failed shared JoinMap stops before probe.
+	execJoinSpillSQL(t, ctx, conn, "set @@max_dop = 1")
 
 	spillBefore := promtestutil.ToFloat64(
 		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
-	// The frontend returns this terminal build failure before creating a result
-	// set, which is stronger than checking that a partially read result set is
-	// empty: no probe row can have escaped the failed dependency.
+	// SELECT metadata is staged before pipeline execution. Depending on packet
+	// buffering, the driver can therefore surface the terminal build error from
+	// QueryContext or from Rows.Next/Err. The blocking root makes the no-row
+	// assertion independent of parallel pipeline scheduling.
 	failedResult, err := conn.QueryContext(ctx, query)
 	if failedResult != nil {
-		// Cleanup only. Do not fold Rows.Close or Rows.Err into err: either can
-		// observe a terminal error while draining an already exposed result set.
-		defer func() {
-			if closeErr := failedResult.Close(); closeErr != nil {
-				t.Logf("unexpected failed broadcast result close error: %v", closeErr)
-			}
-			if rowsErr := failedResult.Err(); rowsErr != nil {
-				t.Logf("unexpected failed broadcast result rows error: %v", rowsErr)
-			}
+		func() {
+			defer func() {
+				err = errors.Join(err, failedResult.Close())
+			}()
+			require.False(t, failedResult.Next(),
+				"failed broadcast build exposed a result row before its terminal error")
+			err = errors.Join(err, failedResult.Err())
 		}()
 	}
-	require.Nil(t, failedResult, "failed broadcast build exposed a result set before its terminal error")
 	require.Error(t, err)
 	var mysqlErr *mysqlDriver.MySQLError
 	require.True(t, errors.As(err, &mysqlErr), "expected MySQL protocol error, got %T: %v", err, err)

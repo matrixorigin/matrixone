@@ -1979,6 +1979,116 @@ func TestColDef2MysqlColumnStringMetadata(t *testing.T) {
 	}
 }
 
+func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
+	mock := plan.NewMockOptimizer(false)
+	queryPlan, err := buildSingleSql(mock, t,
+		"select partition_info, aes_encrypt(rel_createsql, 'key'), rel_createsql, relname from mo_catalog.mo_tables")
+	require.NoError(t, err)
+
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 4)
+
+	want := []struct {
+		name      string
+		oid       types.T
+		mysqlType defines.MysqlType
+		charset   uint16
+		blobFlags uint16
+		length    uint32
+		checkLen  bool
+	}{
+		{
+			name:      "partition_info",
+			oid:       types.T_blob,
+			mysqlType: defines.MYSQL_TYPE_BLOB,
+			charset:   charsetBinary,
+			blobFlags: uint16(defines.BLOB_FLAG | defines.BINARY_FLAG),
+			length:    math.MaxUint16,
+			checkLen:  true,
+		},
+		{
+			name:      "aes_encrypt(rel_createsql, key)",
+			oid:       types.T_blob,
+			mysqlType: defines.MYSQL_TYPE_BLOB,
+			charset:   charsetBinary,
+			blobFlags: uint16(defines.BLOB_FLAG | defines.BINARY_FLAG),
+			length:    math.MaxUint32,
+			checkLen:  true,
+		},
+		{
+			name:      "rel_createsql",
+			oid:       types.T_text,
+			mysqlType: defines.MYSQL_TYPE_BLOB,
+			charset:   charsetVarchar,
+			blobFlags: uint16(defines.BLOB_FLAG),
+		},
+		{name: "relname", oid: types.T_varchar, mysqlType: defines.MYSQL_TYPE_VAR_STRING, charset: charsetVarchar},
+	}
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	for i, expected := range want {
+		column := columns[i]
+		require.Equal(t, expected.name, column.Name)
+		require.Equal(t, int32(expected.oid), column.Typ.Id)
+
+		mysqlColumn, err := colDef2MysqlColumn(context.Background(), column)
+		require.NoError(t, err)
+		require.Equal(t, expected.mysqlType, mysqlColumn.ColumnType())
+		require.Equal(t, expected.charset, mysqlColumn.Charset())
+		blobFlagMask := uint16(defines.BLOB_FLAG | defines.BINARY_FLAG)
+		require.Equal(t, expected.blobFlags, mysqlColumn.Flag()&blobFlagMask)
+		if expected.checkLen {
+			require.Equal(t, expected.length, mysqlColumn.Length())
+		}
+
+		packet := proto.makeColumnDefinition41Payload(mysqlColumn, int(COM_QUERY))
+		pos := HeaderOffset
+		for range 6 {
+			_, next, ok := proto.readStringLenEnc(packet, pos)
+			require.True(t, ok)
+			pos = next
+		}
+		_, pos, ok := proto.io.ReadUint8(packet, pos)
+		require.True(t, ok)
+		packetCharset, pos, ok := proto.io.ReadUint16(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, expected.charset, packetCharset)
+		packetLength, pos, ok := proto.io.ReadUint32(packet, pos)
+		require.True(t, ok)
+		if expected.checkLen {
+			require.Equal(t, expected.length, packetLength)
+		}
+		packetType, pos, ok := proto.io.ReadUint8(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, uint8(expected.mysqlType), packetType)
+		packetFlags, _, ok := proto.io.ReadUint16(packet, pos)
+		require.True(t, ok)
+		require.Equal(t, expected.blobFlags, packetFlags&blobFlagMask)
+	}
+}
+
+func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		width  int32
+		length uint32
+	}{
+		{name: "unknown expression bound", width: 0, length: math.MaxUint32},
+		{name: "N", width: math.MaxUint16, length: math.MaxUint16},
+		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col := new(MysqlColumn)
+			require.NoError(t, setMysqlColumnTypeInfo(
+				context.Background(), types.New(types.T_blob, tc.width, 0), col))
+			require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+			require.Equal(t, uint16(charsetBinary), col.Charset())
+			require.Equal(t, tc.length, col.Length())
+			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())
+		})
+	}
+}
+
 func TestColDef2MysqlColumnConstraintFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name string

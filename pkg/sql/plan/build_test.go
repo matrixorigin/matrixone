@@ -1834,15 +1834,36 @@ func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 		FROM nation
 		GROUP BY name`,
 		`
-		SELECT n_regionkey
-		FROM nation
-		GROUP BY n_regionkey
-		HAVING EXISTS (
-			SELECT n_name
-			FROM nation2
-			GROUP BY n_name
-			HAVING COUNT(*) > nation.n_regionkey
-		)`,
+			SELECT n_regionkey
+			FROM nation
+			GROUP BY n_regionkey
+			HAVING EXISTS (
+				SELECT n_name
+				FROM nation2
+				GROUP BY n_name
+				HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT n_nationkey,
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			GROUP BY n_nationkey`,
+		`
+			SELECT n_name,
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			WHERE n_regionkey = 1
+			GROUP BY n_name`,
 	}
 
 	for _, sql := range sqls {
@@ -1850,6 +1871,277 @@ func TestOnlyFullGroupByAllowsCorrelatedSubqueryOnGroupedColumn(t *testing.T) {
 		_, err := runOneStmt(mock, t, sql)
 		require.NoError(t, err, sql)
 	}
+}
+
+func TestOnlyFullGroupByAllowsCorrelatedHavingOnUngroupedOuterQuery(t *testing.T) {
+	sqls := []string{
+		`
+		SELECT nation.n_regionkey,
+		       EXISTS (
+		           SELECT nation2.n_name
+		           FROM nation2
+		           GROUP BY nation2.n_name
+		           HAVING COUNT(*) >= nation.n_regionkey
+		       ) AS ex
+		FROM nation
+		ORDER BY nation.n_regionkey`,
+		`
+		SELECT nation.n_regionkey,
+		       EXISTS (
+		           SELECT 1
+		           FROM nation2
+		           HAVING COUNT(*) >= nation.n_regionkey
+		       ) AS ex
+		FROM nation
+		ORDER BY nation.n_regionkey`,
+		`
+			SELECT nation.n_regionkey,
+			       EXISTS (
+			           SELECT n_nationkey
+			           FROM nation2
+			           GROUP BY n_nationkey
+			           HAVING n_nationkey >= nation.n_regionkey
+			       ) AS ex
+			FROM nation
+			ORDER BY nation.n_regionkey`,
+		`
+			SELECT n_regionkey
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT MAX(EXISTS (
+			    SELECT n_nationkey
+			    FROM nation2
+			    GROUP BY n_nationkey
+			    HAVING n_nationkey >= nation.n_regionkey
+			))
+			FROM nation`,
+		`
+			SELECT 1
+			FROM nation
+			HAVING MAX(EXISTS (
+			    SELECT n_nationkey
+			    FROM nation2
+			    GROUP BY n_nationkey
+			    HAVING n_nationkey >= nation.n_regionkey
+			))`,
+		`
+			SELECT n_nationkey,
+			       MAX(EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) >= nation.n_regionkey
+			       ))
+			FROM nation
+			GROUP BY n_nationkey`,
+		`
+			SELECT n_nationkey
+			FROM nation
+			GROUP BY n_nationkey
+			HAVING MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))`,
+		`
+			SELECT SUM(n_nationkey),
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation
+			WHERE n_regionkey = 1`,
+		`
+			SELECT EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       ),
+			       SUM(n_nationkey)
+			FROM nation
+			WHERE n_regionkey = 1`,
+		`
+			SELECT MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))
+			FROM nation
+			WHERE n_regionkey = 1`,
+		`
+			SELECT SUM(n_nationkey)
+			FROM nation
+			WHERE EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_regionkey
+			)`,
+		`
+			SELECT SUM(n.n_nationkey)
+			FROM nation n
+			JOIN region r ON EXISTS (
+			    SELECT n2.n_name
+			    FROM nation2 n2
+			    GROUP BY n2.n_name
+			    HAVING COUNT(*) > n.n_regionkey
+			)`,
+		`
+			SELECT 1
+			FROM nation
+			WHERE n_regionkey = 1
+			HAVING MAX(EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) >= nation.n_regionkey
+			))`,
+	}
+
+	for _, sql := range sqls {
+		mock := NewMockOptimizer(false)
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING EXISTS (
+		    SELECT n_name
+		    FROM nation2
+		    GROUP BY n_name
+		    HAVING COUNT(*) > nation.n_regionkey
+		)`)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == plan.Node_FILTER && len(node.FilterList) > 0 {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
+}
+
+func TestOnlyFullGroupByWindowOnlyHavingBuildsPreWindowFilter(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT ROW_NUMBER() OVER ()
+		FROM nation
+		HAVING rand() > -1`)
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	found := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_WINDOW || len(node.Children) == 0 {
+			continue
+		}
+		if planSubtreeHasFilter(query, node.Children[0]) {
+			found = true
+			break
+		}
+	}
+	require.True(t, found)
+}
+
+func TestForUpdateLocksAfterCorrelatedNonAggregateHaving(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING EXISTS (
+		    SELECT n_name
+		    FROM nation2
+		    GROUP BY n_name
+		    HAVING COUNT(*) > nation.n_regionkey
+		)
+		FOR UPDATE`)
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	var lockNode *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP {
+			lockNode = node
+			break
+		}
+	}
+	require.NotNil(t, lockNode)
+	require.Len(t, lockNode.Children, 1)
+
+	// The correlated HAVING is flattened into a MARK JOIN and a FILTER.  The
+	// lock must consume that filtered row set, rather than the raw outer scan.
+	lockedInput := query.Nodes[lockNode.Children[0]]
+	require.Equal(t, plan.Node_FILTER, lockedInput.NodeType)
+	require.True(t, lockedInput.FilterIsBarrier)
+	require.NotEmpty(t, lockedInput.Children)
+	require.True(t, planSubtreeHasNodeType(query, lockedInput.Children[0], plan.Node_JOIN))
+	require.True(t, planSubtreeHasJoinType(query, lockedInput.Children[0], plan.Node_MARK))
+}
+
+func planSubtreeHasNodeType(query *plan.Query, nodeID int32, nodeType plan.Node_NodeType) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node.NodeType == nodeType {
+		return true
+	}
+	for _, childID := range node.Children {
+		if planSubtreeHasNodeType(query, childID, nodeType) {
+			return true
+		}
+	}
+	return false
+}
+
+func planSubtreeHasJoinType(query *plan.Query, nodeID int32, joinType plan.Node_JoinType) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node.NodeType == plan.Node_JOIN && node.JoinType == joinType {
+		return true
+	}
+	for _, childID := range node.Children {
+		if planSubtreeHasJoinType(query, childID, joinType) {
+			return true
+		}
+	}
+	return false
+}
+
+func planSubtreeHasFilter(query *plan.Query, nodeID int32) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if len(node.FilterList) > 0 {
+		return true
+	}
+	for _, childID := range node.Children {
+		if planSubtreeHasFilter(query, childID) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T) {
@@ -1864,9 +2156,64 @@ func TestOnlyFullGroupByRejectsCorrelatedSubqueryOnUngroupedColumn(t *testing.T)
 		GROUP BY n_name`, "nation.n_comment"},
 		{`
 		SELECT n_name
-		FROM nation
-		GROUP BY n_name
-		HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+			FROM nation
+			GROUP BY n_name
+			HAVING (SELECT COUNT(*) FROM nation2 n2 WHERE n2.n_name = nation.n_comment) > 0`, "nation.n_comment"},
+		{`
+			SELECT SUM(n_regionkey),
+			       EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       )
+			FROM nation`, "nation.n_regionkey"},
+		{`
+			SELECT EXISTS (
+			           SELECT n_name
+			           FROM nation2
+			           GROUP BY n_name
+			           HAVING COUNT(*) > nation.n_regionkey
+			       ),
+			       SUM(n_regionkey)
+			FROM nation`, "nation.n_regionkey"},
+		{`
+			SELECT SUM(n_regionkey)
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)`, "nation.n_comment"},
+		{`
+			SELECT 1
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)
+			ORDER BY SUM(n_regionkey)`, "nation.n_comment"},
+		{`
+			SELECT 1
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			) AND SUM(n_regionkey) > 0`, "nation.n_comment"},
+		{`
+			SELECT SUM(SUM(n_regionkey)) OVER ()
+			FROM nation
+			HAVING EXISTS (
+			    SELECT n_name
+			    FROM nation2
+			    GROUP BY n_name
+			    HAVING COUNT(*) > nation.n_comment
+			)`, "nation.n_comment"},
 	}
 
 	for _, tt := range sqls {

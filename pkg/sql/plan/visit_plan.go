@@ -154,6 +154,20 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if node.GapFillStart != nil {
+		node.GapFillStart, err = rule.ApplyExpr(node.GapFillStart)
+		if err != nil {
+			return err
+		}
+	}
+
+	if node.GapFillEnd != nil {
+		node.GapFillEnd, err = rule.ApplyExpr(node.GapFillEnd)
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.BlockFilterList {
 		node.BlockFilterList[i], err = rule.ApplyExpr(node.BlockFilterList[i])
 		if err != nil {

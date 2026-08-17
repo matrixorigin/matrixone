@@ -270,9 +270,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SpillMem: node.SpillMem, OriginViews: slices.Clone(node.OriginViews), DirectView: node.DirectView,
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos), GapFillMode: node.GapFillMode,
+		GapFillStart: DeepCopyExpr(node.GapFillStart), GapFillEnd: DeepCopyExpr(node.GapFillEnd),
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct, FuzzyBuildSide: node.FuzzyBuildSide,
 		GroupByHashKey: slices.Clone(node.GroupByHashKey), FilterIsBarrier: node.FilterIsBarrier,
-		PartitionByCount: node.PartitionByCount,
+		PartitionByCount: node.PartitionByCount, DedupInputKeysUnique: node.DedupInputKeysUnique,
 	}
 	ret.LockTargets = make([]*plan.LockTarget, len(node.LockTargets))
 	for i := range node.LockTargets {
