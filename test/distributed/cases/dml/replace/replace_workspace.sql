@@ -19,7 +19,7 @@ begin;
 replace into t_replace_shuffle_capture select a, a, 24472 from t2;
 rollback;
 
--- issue #27212: an AP MergeTop nested below HashBuild must publish its final
+-- An AP MergeTop nested below HashBuild must publish its final
 -- LIMIT batch once instead of replaying it until the CN runs out of memory.
 create table t_replace_mergetop_once(a int primary key, marker int);
 insert into t_replace_mergetop_once select a, 0 from t2;
