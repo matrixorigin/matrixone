@@ -30,11 +30,35 @@ select @uv_matrix_large + 1;
 9007199254740994
 set @uv_matrix_text = '1.5';
 select @uv_matrix_text + 0;
-➤ @uv_matrix_text + 0[3,38,18]  𝄀
-1.500000000000000000
+➤ @uv_matrix_text + 0[-5,64,0]  𝄀
+1.5
 select concat(@uv_matrix_text, ':text');
 ➤ concat(@uv_matrix_text, :text)[12,65535,0]  𝄀
 1.5:text
+set @uv_matrix_prepared_text = '1';
+prepare uv_matrix_text_ps from 'select @uv_matrix_prepared_text + 0';
+execute uv_matrix_text_ps;
+➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
+1
+set @uv_matrix_prepared_text = '1.5x';
+execute uv_matrix_text_ps;
+➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
+1.5
+set @uv_matrix_prepared_text = '-2.25abc';
+execute uv_matrix_text_ps;
+➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
+-2.25
+deallocate prepare uv_matrix_text_ps;
+set @uv_matrix_prepared_text = '1.5';
+prepare uv_matrix_text_ps from 'select @uv_matrix_prepared_text + 0';
+execute uv_matrix_text_ps;
+➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
+1.5
+set @uv_matrix_prepared_text = '2abc';
+execute uv_matrix_text_ps;
+➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
+2
+deallocate prepare uv_matrix_text_ps;
 set @uv_matrix_a = 1, @uv_matrix_b = 2;
 select @uv_matrix_a + @uv_matrix_b;
 ➤ @uv_matrix_a + @uv_matrix_b[-5,64,0]  𝄀

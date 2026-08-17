@@ -130,8 +130,8 @@ func TestUserVariableNumericContextCoercesNumericString(t *testing.T) {
 	varTypes := userVariableEffectiveTypes(logicPlan)
 	variableType, ok := varTypes["numeric_text_var"]
 	require.True(t, ok, "numeric string user variable is missing from the plan")
-	require.True(t, types.T(variableType.Id).ToType().IsDecimal(),
-		"numeric string user variable was not bound to a decimal context: %s",
+	require.True(t, types.T(variableType.Id).ToType().IsFloat(),
+		"numeric string user variable was not bound to a stable float context: %s",
 		types.T(variableType.Id).ToType())
 }
 
@@ -158,10 +158,40 @@ func TestUserVariableNumericContextCoercesNumericPrefixes(t *testing.T) {
 	varTypes := userVariableEffectiveTypes(logicPlan)
 	integerType, ok := varTypes["integer_prefix_var"]
 	require.True(t, ok)
-	require.True(t, types.T(integerType.Id).ToType().IsIntOrUint())
+	require.True(t, types.T(integerType.Id).ToType().IsFloat())
 	decimalType, ok := varTypes["decimal_prefix_var"]
 	require.True(t, ok)
-	require.True(t, types.T(decimalType.Id).ToType().IsDecimal() || types.T(decimalType.Id).ToType().IsFloat())
+	require.True(t, types.T(decimalType.Id).ToType().IsFloat())
+}
+
+func TestPreparedTextUserVariableUsesValueIndependentNumericContext(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	currentValue := "1"
+	optimizer.ctxt.ResolveVariableFunc = func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if name == "prepared_text_var" && !isSystemVar {
+			return currentValue, nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariable(name, isSystemVar, isGlobalVar)
+	}
+	optimizer.ctxt.ResolveVariableTypeFunc = func(name string, isSystemVar, isGlobalVar bool) (Type, error) {
+		if name == "prepared_text_var" && !isSystemVar {
+			return makeSimplePlan2Type(types.T_text), nil
+		}
+		return (&MockCompilerContext{ctx: optimizer.ctxt.ctx}).ResolveVariableType(name, isSystemVar, isGlobalVar)
+	}
+
+	preparedPlan, err := runOneStmt(optimizer, t,
+		"prepare prepared_text_ps from 'select @prepared_text_var + 0'")
+	require.NoError(t, err)
+	prepare := preparedPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	first := userVariableEffectiveTypes(prepare.GetPlan())["prepared_text_var"]
+
+	currentValue = "1.5"
+	second := userVariableEffectiveTypes(prepare.GetPlan())["prepared_text_var"]
+
+	require.Equal(t, types.T_float64, types.T(first.Id))
+	require.Equal(t, types.T_float64, types.T(second.Id))
 }
 
 func TestUserVariableNumericContextCoercesNonNumericStringsToFloat(t *testing.T) {

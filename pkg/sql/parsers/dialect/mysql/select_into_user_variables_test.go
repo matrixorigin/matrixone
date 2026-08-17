@@ -148,7 +148,12 @@ func TestSelectIntoUserVariablesRejectsOwnerlessEnclosingStatements(t *testing.T
 		"set @bad_outer = (select 1 into @bad_inner)",
 		"do (select 1 into @bad_do)",
 		"call uv_proc((select 1 into @bad_call))",
+		"set @bad_outer = sample((select 1 into @bad_sample_set), 1 rows)",
+		"do sample((select 1 into @bad_sample_do), 1 rows)",
+		"call uv_proc(sample((select 1 into @bad_sample_call), 1 rows))",
 		"show tables where exists (select 1 into @bad_show)",
+		"insert into uv_target partition (p = (select 1 into @bad_partition)) values (1)",
+		"load data infile 'dummy.csv' into table uv_target set a = (select 1 into @bad_load_set)",
 	}
 
 	for _, testCase := range testCases {

@@ -28,6 +28,24 @@ set @uv_matrix_text = '1.5';
 select @uv_matrix_text + 0;
 select concat(@uv_matrix_text, ':text');
 
+-- Matrix D2: prepared text variables keep a value-independent floating-point
+-- context while each execution applies MySQL's numeric-prefix conversion.
+set @uv_matrix_prepared_text = '1';
+prepare uv_matrix_text_ps from 'select @uv_matrix_prepared_text + 0';
+execute uv_matrix_text_ps;
+set @uv_matrix_prepared_text = '1.5x';
+execute uv_matrix_text_ps;
+set @uv_matrix_prepared_text = '-2.25abc';
+execute uv_matrix_text_ps;
+deallocate prepare uv_matrix_text_ps;
+
+set @uv_matrix_prepared_text = '1.5';
+prepare uv_matrix_text_ps from 'select @uv_matrix_prepared_text + 0';
+execute uv_matrix_text_ps;
+set @uv_matrix_prepared_text = '2abc';
+execute uv_matrix_text_ps;
+deallocate prepare uv_matrix_text_ps;
+
 -- Matrix E: independent numeric user variables and explicit casts.
 set @uv_matrix_a = 1, @uv_matrix_b = 2;
 select @uv_matrix_a + @uv_matrix_b;

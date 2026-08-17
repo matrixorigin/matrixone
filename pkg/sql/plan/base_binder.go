@@ -426,12 +426,19 @@ func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
 // resolveUserVariableNumericType returns the numeric type to use when a user
 // variable participates in an arithmetic expression. Variables assigned a
 // numeric value already carry that assignment type. Text-backed variables are
-// still accepted by MySQL in numeric contexts; when their current value is a
-// numeric string, infer a numeric target instead of letting an integer sibling
-// literal force an invalid integer cast.
+// evaluated through one value-independent floating-point target: their
+// contents can change after PREPARE, so selecting BIGINT/DECIMAL from the
+// value observed during binding would freeze the wrong cast in the prepared
+// plan. The explicit cast overload consumes MySQL's numeric prefix at runtime.
 func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
-	if typ, ok := b.resolveUserVariableType(expr); ok && makeTypeByPlan2Type(typ).IsNumeric() {
-		return typ, true
+	if typ, ok := b.resolveUserVariableType(expr); ok {
+		resolved := makeTypeByPlan2Type(typ)
+		if resolved.IsNumeric() {
+			return typ, true
+		}
+		if isStringBackedType(resolved) {
+			return makeSimplePlan2Type(types.T_float64), true
+		}
 	}
 	if b.builder == nil || b.builder.compCtx == nil {
 		return Type{}, false
@@ -440,103 +447,14 @@ func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, b
 	if err != nil {
 		return Type{}, false
 	}
-	var text string
-	switch value := value.(type) {
-	case string:
-		text = value
-	case []byte:
-		text = string(value)
+	switch value.(type) {
+	case string, []byte:
+		// The variable is text-backed but its value is resolved again when a
+		// prepared plan executes. Keep the target stable across all contents.
+		return makeSimplePlan2Type(types.T_float64), true
 	default:
 		return Type{}, false
 	}
-	trimmed := strings.TrimSpace(text)
-	prefix, decimal, ok := userVariableNumericPrefix(trimmed)
-	if !ok {
-		// MySQL coerces non-numeric and empty strings to zero in arithmetic
-		// contexts (with a truncation warning only for a non-empty value).
-		// Keep the expression on the permissive floating-point cast path so
-		// the value is not rejected by an integer sibling's strict cast.
-		return makeSimplePlan2Type(types.T_float64), true
-	}
-	if decimal {
-		if prefix == trimmed {
-			if _, err = types.ParseDecimal128(prefix, 38, 18); err == nil {
-				typ := types.T_decimal128.ToType()
-				typ.Width, typ.Scale = 38, 18
-				return makePlan2Type(&typ), true
-			}
-		}
-		// A decimal prefix followed by non-numeric text is evaluated through
-		// the floating-point MySQL coercion path.  The explicit cast overload
-		// consumes the same prefix at execution time.
-		if _, err = strconv.ParseFloat(prefix, 64); err == nil {
-			return makeSimplePlan2Type(types.T_float64), true
-		}
-		return Type{}, false
-	}
-	if _, err = strconv.ParseInt(prefix, 10, 64); err == nil {
-		return makeSimplePlan2Type(types.T_int64), true
-	}
-	if _, err = strconv.ParseUint(prefix, 10, 64); err == nil {
-		return makeSimplePlan2Type(types.T_uint64), true
-	}
-	if _, err = types.ParseDecimal128(prefix, 38, 18); err == nil {
-		typ := types.T_decimal128.ToType()
-		typ.Width, typ.Scale = 38, 18
-		return makePlan2Type(&typ), true
-	}
-	return Type{}, false
-}
-
-// userVariableNumericPrefix extracts the decimal prefix consumed by MySQL's
-// numeric coercion.  It deliberately stops before trailing non-numeric text,
-// while accepting a decimal point and a complete exponent when present.
-func userVariableNumericPrefix(s string) (prefix string, decimal, ok bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", false, false
-	}
-	i := 0
-	if s[i] == '+' || s[i] == '-' {
-		i++
-	}
-	digitsStart := i
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	hasDigits := i > digitsStart
-	if i < len(s) && s[i] == '.' {
-		decimal = true
-		i++
-		fractionStart := i
-		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-			i++
-		}
-		if i == fractionStart && !hasDigits {
-			return "", false, false
-		}
-		hasDigits = hasDigits || i > fractionStart
-	}
-	if !hasDigits {
-		return "", false, false
-	}
-	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
-		exponentStart := i
-		i++
-		if i < len(s) && (s[i] == '+' || s[i] == '-') {
-			i++
-		}
-		exponentDigitsStart := i
-		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-			i++
-		}
-		if i > exponentDigitsStart {
-			decimal = true
-		} else {
-			i = exponentStart
-		}
-	}
-	return s[:i], decimal, true
 }
 
 const (

@@ -700,6 +700,26 @@ func ValidateSelectIntoStatementRoot(stmt Statement) string {
 				return err
 			}
 		}
+	case *SetVar:
+		for _, assignment := range node.Assignments {
+			if assignment != nil && (exprHasNestedInto(assignment.Value) ||
+				exprHasNestedInto(assignment.Reserved)) {
+				return MisplacedIntoClauseMessage
+			}
+		}
+	case *Do:
+		if exprsHaveInto(node.Exprs) {
+			return MisplacedIntoClauseMessage
+		}
+	case *CallStmt:
+		if exprsHaveInto(node.Args) {
+			return MisplacedIntoClauseMessage
+		}
+	case *ShowTables:
+		if node.Like != nil && exprHasNestedInto(node.Like) ||
+			(node.Where != nil && exprHasNestedInto(node.Where.Expr)) {
+			return MisplacedIntoClauseMessage
+		}
 	default:
 		// SET, DO, CALL, SHOW predicates, and other statement roots do not
 		// provide an owner for a SELECT assignment.  Reflection is deliberate
@@ -773,6 +793,15 @@ func selectTreeHasUserVariableInto(value reflect.Value) bool {
 				if len(node.IntoVars) > 0 {
 					return true
 				}
+			case Expr:
+				// Expression nodes may own private child fields (for example
+				// SampleExpr.columns).  Once the expression is interfaceable,
+				// use the user-variable-only expression traversal instead of
+				// reflecting through those private fields, which are not
+				// interfaceable.  EXPORT clauses are handled by the enclosing
+				// statement validators and must not make PERFORM report the
+				// user-variable error.
+				return exprHasUserVariableInto(node)
 			}
 		}
 		return selectTreeHasUserVariableInto(value.Elem())
@@ -969,6 +998,297 @@ func exprsHaveInto(exprs Exprs) bool {
 	for _, expr := range exprs {
 		if exprHasNestedInto(expr) {
 			return true
+		}
+	}
+	return false
+}
+
+// The generic SELECT-into checks distinguish a user-variable assignment from
+// an INTO OUTFILE export.  PERFORM uses that distinction: a nested user
+// variable has no owner and must be rejected by the parser, while a nested
+// export is retained for the planner's existing PERFORM-specific diagnostic.
+// Keep this traversal separate from exprHasNestedInto so private expression
+// fields (notably SampleExpr.columns) are still visited without treating an
+// export as a user-variable assignment.
+func withHasUserVariableInto(with *With) bool {
+	if with == nil {
+		return false
+	}
+	for _, cte := range with.CTEs {
+		if cte != nil && statementHasUserVariableInto(cte.Stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementHasUserVariableInto(stmt Statement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return selectStatementHasUserVariableInto(node)
+	case *ValuesStatement:
+		for _, row := range node.Rows {
+			if exprsHaveUserVariableInto(row) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectStatementHasUserVariableInto(stmt SelectStatement) bool {
+	switch node := stmt.(type) {
+	case *Select:
+		return len(node.IntoVars) > 0 ||
+			withHasUserVariableInto(node.With) ||
+			selectStatementHasUserVariableInto(node.Select) ||
+			timeWindowHasUserVariableInto(node.TimeWindow) ||
+			orderByHasUserVariableInto(node.OrderBy) ||
+			limitHasUserVariableInto(node.Limit)
+	case *SelectClause:
+		if len(node.IntoVars) > 0 || selectExprsHaveUserVariableInto(node.Exprs) {
+			return true
+		}
+		if node.From != nil && tableExprsHaveUserVariableInto(node.From.Tables) {
+			return true
+		}
+		if node.Where != nil && exprHasUserVariableInto(node.Where.Expr) {
+			return true
+		}
+		if node.Having != nil && exprHasUserVariableInto(node.Having.Expr) {
+			return true
+		}
+		return groupByHasUserVariableInto(node.GroupBy)
+	case *ParenSelect:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *UnionClause:
+		return selectStatementHasUserVariableInto(node.Left) ||
+			selectStatementHasUserVariableInto(node.Right)
+	case *ValuesClause:
+		for _, row := range node.Rows {
+			if exprsHaveUserVariableInto(row) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectExprsHaveUserVariableInto(exprs SelectExprs) bool {
+	for _, expr := range exprs {
+		if exprHasUserVariableInto(expr.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprsHaveUserVariableInto(exprs TableExprs) bool {
+	for _, expr := range exprs {
+		if tableExprHasUserVariableInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableExprHasUserVariableInto(expr TableExpr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *AliasedTableExpr:
+		return tableExprHasUserVariableInto(node.Expr)
+	case *ParenTableExpr:
+		return tableExprHasUserVariableInto(node.Expr)
+	case *JoinTableExpr:
+		return tableExprHasUserVariableInto(node.Left) ||
+			tableExprHasUserVariableInto(node.Right) ||
+			joinCondHasUserVariableInto(node.Cond)
+	case *ApplyTableExpr:
+		return tableExprHasUserVariableInto(node.Left) ||
+			tableExprHasUserVariableInto(node.Right)
+	case *TableFunction:
+		return exprHasUserVariableInto(node.Func) ||
+			(node.SelectStmt != nil && selectStatementHasUserVariableInto(node.SelectStmt))
+	case *TableName:
+		if node.AtTsExpr != nil && exprHasUserVariableInto(node.AtTsExpr.Expr) {
+			return true
+		}
+		if node.IcebergRef != nil {
+			return exprHasUserVariableInto(node.IcebergRef.Snapshot) ||
+				exprHasUserVariableInto(node.IcebergRef.Timestamp)
+		}
+		return false
+	case *StatementSource:
+		return statementHasUserVariableInto(node.Statement)
+	case SelectStatement:
+		return selectStatementHasUserVariableInto(node)
+	}
+	return false
+}
+
+func joinCondHasUserVariableInto(cond JoinCond) bool {
+	switch node := cond.(type) {
+	case *OnJoinCond:
+		return exprHasUserVariableInto(node.Expr)
+	}
+	return false
+}
+
+func groupByHasUserVariableInto(groupBy *GroupByClause) bool {
+	if groupBy == nil {
+		return false
+	}
+	for _, exprs := range groupBy.GroupByExprsList {
+		if exprsHaveUserVariableInto(exprs) {
+			return true
+		}
+	}
+	return exprsHaveUserVariableInto(groupBy.GroupingSet)
+}
+
+func orderByHasUserVariableInto(orderBy OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && exprHasUserVariableInto(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitHasUserVariableInto(limit *Limit) bool {
+	return limit != nil && (exprHasUserVariableInto(limit.Offset) ||
+		exprHasUserVariableInto(limit.Count))
+}
+
+func timeWindowHasUserVariableInto(timeWindow *TimeWindow) bool {
+	if timeWindow == nil {
+		return false
+	}
+	if timeWindow.Interval != nil && exprHasUserVariableInto(timeWindow.Interval.Val) {
+		return true
+	}
+	if timeWindow.Sliding != nil && exprHasUserVariableInto(timeWindow.Sliding.Val) {
+		return true
+	}
+	return timeWindow.Fill != nil && exprHasUserVariableInto(timeWindow.Fill.Val)
+}
+
+func exprsHaveUserVariableInto(exprs Exprs) bool {
+	for _, expr := range exprs {
+		if exprHasUserVariableInto(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func frameHasUserVariableInto(frame *FrameClause) bool {
+	if frame == nil {
+		return false
+	}
+	return frameBoundHasUserVariableInto(frame.Start) ||
+		frameBoundHasUserVariableInto(frame.End)
+}
+
+func frameBoundHasUserVariableInto(bound *FrameBound) bool {
+	return bound != nil && exprHasUserVariableInto(bound.Expr)
+}
+
+func exprHasUserVariableInto(expr Expr) bool {
+	switch node := expr.(type) {
+	case nil:
+		return false
+	case *Subquery:
+		return selectStatementHasUserVariableInto(node.Select)
+	case *ParenExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *BinaryExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *UnaryExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *ComparisonExpr:
+		return exprHasUserVariableInto(node.Left) ||
+			exprHasUserVariableInto(node.Right) ||
+			exprHasUserVariableInto(node.Escape)
+	case *AndExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *XorExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *OrExpr:
+		return exprHasUserVariableInto(node.Left) || exprHasUserVariableInto(node.Right)
+	case *NotExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNullExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotNullExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsUnknownExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotUnknownExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsTrueExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotTrueExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsFalseExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *IsNotFalseExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *FuncExpr:
+		if exprsHaveUserVariableInto(node.Exprs) ||
+			orderByHasUserVariableInto(node.OrderBy) {
+			return true
+		}
+		if node.WindowSpec != nil {
+			return exprsHaveUserVariableInto(node.WindowSpec.PartitionBy) ||
+				orderByHasUserVariableInto(node.WindowSpec.OrderBy) ||
+				frameHasUserVariableInto(node.WindowSpec.Frame)
+		}
+		return false
+	case *SerialExtractExpr:
+		return exprHasUserVariableInto(node.SerialExpr) ||
+			exprHasUserVariableInto(node.IndexExpr)
+	case *CastExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *BitCastExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *Tuple:
+		return exprsHaveUserVariableInto(node.Exprs)
+	case *RangeCond:
+		return exprHasUserVariableInto(node.Left) ||
+			exprHasUserVariableInto(node.From) ||
+			exprHasUserVariableInto(node.To)
+	case *CaseExpr:
+		if exprHasUserVariableInto(node.Expr) || exprHasUserVariableInto(node.Else) {
+			return true
+		}
+		for _, when := range node.Whens {
+			if when != nil && (exprHasUserVariableInto(when.Cond) ||
+				exprHasUserVariableInto(when.Val)) {
+				return true
+			}
+		}
+		return false
+	case *IntervalExpr:
+		return exprHasUserVariableInto(node.Expr)
+	case *DefaultVal:
+		return exprHasUserVariableInto(node.Expr)
+	case *UpdateVal:
+		return false
+	case *SampleExpr:
+		return exprsHaveUserVariableInto(node.columns)
+	case *FullTextMatchExpr:
+		if exprHasUserVariableInto(node.Pattern) {
+			return true
+		}
+		for _, keyPart := range node.KeyParts {
+			if keyPart != nil && (exprHasUserVariableInto(keyPart.ColName) ||
+				exprHasUserVariableInto(keyPart.Expr)) {
+				return true
+			}
 		}
 	}
 	return false
