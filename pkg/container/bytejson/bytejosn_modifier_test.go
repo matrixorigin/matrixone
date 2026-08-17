@@ -306,15 +306,20 @@ func TestAppendBinaryNumber(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gotType, gotBuf, err := appendBinaryNumber(nil, tt.input)
+			exportedType, exportedBuf, exportedErr := AppendBinaryNumber(nil, tt.input)
 
 			if tt.wantErr {
 				require.Error(t, err)
+				require.Error(t, exportedErr)
 				return
 			}
 
 			require.NoError(t, err)
+			require.NoError(t, exportedErr)
 			require.Equal(t, tt.wantType, gotType)
 			require.NotEmpty(t, gotBuf)
+			require.Equal(t, gotType, exportedType)
+			require.Equal(t, gotBuf, exportedBuf)
 		})
 	}
 }

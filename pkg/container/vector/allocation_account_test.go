@@ -286,6 +286,25 @@ func TestVectorAllocationAccountBitmapResetReuseAndFree(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestVectorAllocationAccountBitmapUsesExclusiveRowBoundary(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 4)
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+
+	require.NoError(t, vec.PreExtendBitmap(64, mp))
+	require.Equal(t, 1, vec.nsp.GetBitmap().ExternalStorageCapacity())
+	require.Equal(t, 1, vec.gsp.GetBitmap().ExternalStorageCapacity())
+	require.Equal(t, uint64(16), state.account.Snapshot().Used)
+	vec.SetLength(64)
+	vec.SetAllNulls(64)
+	vec.GetGrouping().AddRange(0, 64)
+	require.Equal(t, 64, vec.GetNulls().Count())
+	require.Equal(t, 64, vec.GetGrouping().Count())
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountBitmapShrinkUsesNoScratch(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 8<<20, 16)
 	mp := mpool.MustNewZero()
@@ -1561,6 +1580,79 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 
 	vec.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
+}
+
+func TestSelectedRowsBinaryStringDecodeAllocationFailureIsAtomic(t *testing.T) {
+	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
+	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+	require.NoError(t, AppendBytes(source, []byte("text"), false, mp))
+	require.NoError(t,
+		source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+	var encoded bytes.Buffer
+	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{0, 1}))
+
+	destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	err := destination.UnmarshalSelectedRowsFrom(&encoded, 2, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, destination.Length())
+	require.False(t, destination.HasBinaryStringMetadata())
+	require.Equal(t, uint64(twoVarlenaRowsBytes), state.account.Snapshot().Used)
+
+	destination.Free(mp)
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestSelectedBatchBinaryStringPreflightClosesExactCapacity(t *testing.T) {
+	run := func(limit uint64) (uint64, bool, error) {
+		state := newTestVectorAllocationAccount(t, limit, 16)
+		mp := mpool.MustNewZero()
+		source := NewVec(types.T_text.ToType())
+		require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
+		require.NoError(t, AppendBytes(source, []byte("text"), false, mp))
+		require.NoError(t,
+			source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+		destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+
+		err := destination.PreExtendSelectedBatch(
+			source, 0, 2, []uint8{1, 1}, 2, mp)
+		admitted := state.account.Snapshot().Used
+		published := false
+		if err == nil {
+			err = destination.UnionBatchPreflighted(
+				source, 0, 2, []uint8{1, 1}, mp)
+			published = err == nil
+			if published {
+				require.Equal(t, admitted, state.account.Snapshot().Used)
+				require.True(t, destination.GetBinaryStringMetadataAt(0))
+				require.False(t, destination.GetBinaryStringMetadataAt(1))
+			}
+		}
+
+		destination.Free(mp)
+		source.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+		require.Zero(t, mp.CurrNB())
+		return admitted, published, err
+	}
+
+	admitted, published, err := run(1 << 20)
+	require.NoError(t, err)
+	require.True(t, published)
+	require.Positive(t, admitted)
+
+	exact, published, err := run(admitted)
+	require.NoError(t, err)
+	require.True(t, published)
+	require.Equal(t, admitted, exact)
+
+	_, published, err = run(admitted - 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, published, "capacity rejection must happen before publication")
 }
 
 func TestBinaryStringConstantMarkerStaysScalar(t *testing.T) {

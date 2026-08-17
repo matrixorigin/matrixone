@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -78,6 +79,18 @@ func (s *stubFileService) Cost() *fileservice.CostAttr {
 }
 
 func (s *stubFileService) Close(ctx context.Context) {
+}
+
+func TestGetObjectResultColumnsUseBinaryBlobMetadata(t *testing.T) {
+	columns := newGetObjectResultColumns()
+	require.Len(t, columns, 5)
+
+	data := columns[0]
+	require.Equal(t, "data", data.Name())
+	require.Equal(t, defines.MYSQL_TYPE_BLOB, data.ColumnType())
+	require.Equal(t, uint16(charsetBinary), data.Charset())
+	require.Equal(t, uint32(getObjectChunkSize), data.Length())
+	require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), data.Flag())
 }
 
 func Test_handleGetObject(t *testing.T) {

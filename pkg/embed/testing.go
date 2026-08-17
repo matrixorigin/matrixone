@@ -17,22 +17,18 @@ package embed
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
 var (
-	basicClusterState SharedTestCluster
+	basicClusterState    SharedTestCluster
+	singleCNClusterState SharedTestCluster
 )
 
 // SharedTestCluster serializes tests that reuse an expensive embedded cluster
@@ -125,25 +121,40 @@ func StartTestCluster(opts ...Option) (Cluster, error) {
 }
 
 const (
+	// Two CNs cover the multi-CN behavior exercised by the shared test
+	// cluster. Tests that specifically validate three-CN topology start their
+	// own cluster with an explicit CN count.
+	basicClusterCNCount                        = 2
 	basicClusterHAKeeperStoreTimeout           = 60 * time.Second
 	basicClusterHAKeeperCheckInterval          = time.Second
 	basicClusterHAKeeperBootstrapRetryInterval = 500 * time.Millisecond
 	basicClusterServiceStartupRetryInterval    = 100 * time.Millisecond
+	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
 )
 
-func startBasicCluster() (Cluster, error) {
-	return StartTestCluster(
-		WithCNCount(3),
+func startBasicCluster(cnCount int) (Cluster, error) {
+	c, err := StartTestCluster(
+		WithCNCount(cnCount),
 		WithPreStart(adjustBasicClusterService),
 	)
+	if err != nil {
+		return c, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), basicClusterTaskServiceReadyTimeout)
+	defer cancel()
+	if err := waitBasicClusterTaskServices(ctx, c, cnCount); err != nil {
+		return cleanupClusterOnError(c, err)
+	}
+	return c, nil
 }
 
 func adjustBasicClusterService(svc ServiceOperator) {
+	adjustClusterStartupRetryIntervals(svc)
+
 	switch svc.ServiceType() {
 	case metadata.ServiceType_CN:
 		svc.Adjust(
 			func(config *ServiceConfig) {
-				config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
 				config.CN.LockService.MaxFixedSliceSize = 10001
 				config.CN.LockService.MaxLockRowCount = 10000
 				config.CN.Frontend.SkipCheckUser = false
@@ -158,55 +169,76 @@ func adjustBasicClusterService(svc ServiceOperator) {
 		svc.Adjust(
 			func(config *ServiceConfig) {
 				config.LogService.HAKeeperCheckInterval.Duration = basicClusterHAKeeperCheckInterval
-				config.LogService.HAKeeperBootstrapRetryInterval.Duration = basicClusterHAKeeperBootstrapRetryInterval
 				config.LogService.HAKeeperConfig.TNStoreTimeout.Duration =
 					basicClusterHAKeeperStoreTimeout
 				config.LogService.HAKeeperConfig.CNStoreTimeout.Duration =
 					basicClusterHAKeeperStoreTimeout
 			},
 		)
+	}
+}
+
+// adjustClusterStartupRetryIntervals keeps test-only cluster startup
+// responsive while services are converging. These intervals only affect the
+// polling cadence; readiness is still gated by the same HAKeeper state and
+// shard conditions.
+func adjustClusterStartupRetryIntervals(svc ServiceOperator) {
+	switch svc.ServiceType() {
+	case metadata.ServiceType_LOG:
+		svc.Adjust(func(config *ServiceConfig) {
+			config.LogService.HAKeeperBootstrapRetryInterval.Duration =
+				basicClusterHAKeeperBootstrapRetryInterval
+		})
 	case metadata.ServiceType_TN:
-		svc.Adjust(
-			func(config *ServiceConfig) {
-				config.HAKeeperRunningRetryInterval.Duration = basicClusterServiceStartupRetryInterval
-			},
-		)
+		svc.Adjust(func(config *ServiceConfig) {
+			config.HAKeeperRunningRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+		})
+	case metadata.ServiceType_CN:
+		svc.Adjust(func(config *ServiceConfig) {
+			config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+		})
 	}
 }
 
-func prepareBasicCluster(c Cluster) {
-	// Initialize essential frontend/session state using SQL executor
-	svc, e := c.GetCNService(0)
-	if e != nil {
-		return
-	}
-	// Create and register a TaskService for embed cluster
-	// Build a simple address factory using CN SQL address
-	cfg := svc.GetServiceConfig()
-	sqlAddr := fmt.Sprintf("%s:%d", cfg.CN.Frontend.Host, cfg.CN.Frontend.Port)
-	addressFactory := func(ctx context.Context, random bool) (string, error) { return sqlAddr, nil }
-	holder := taskservice.NewTaskServiceHolder(mruntime.ServiceRuntime(svc.ServiceID()), addressFactory)
-	// register special user for task framework
-	username := "task_user"
-	password := "task_pass"
-	frontend.SetSpecialUser(username, []byte(password))
-	_ = holder.Create(logservicepb.CreateTaskService{
-		User: logservicepb.TaskTableUser{
-			Username: username,
-			Password: password,
-		},
-		TaskDatabase: "mo_task",
-	})
-	if ts, ok := holder.Get(); ok {
-		mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("task-service", ts)
-	}
-
-	// Also prepare and register a ParameterUnit for compile path fallback
-	pu := config.NewParameterUnit(&cfg.CN.Frontend, nil, nil, nil)
-	mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("parameter-unit", pu)
+type taskServiceGetter interface {
+	GetTaskService() (taskservice.TaskService, bool)
 }
 
-// RunBaseClusterTests starting an integration test for a 1 log, 1tn, 3cn base cluster is very slow
+func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) error {
+	for index := 0; index < cnCount; index++ {
+		svc, err := c.GetCNService(index)
+		if err != nil {
+			return err
+		}
+		getter, ok := svc.RawService().(taskServiceGetter)
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf(
+				"CN %s does not expose its task service", svc.ServiceID())
+		}
+		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
+			return moerr.NewInternalErrorf(
+				ctx, "CN %s task service did not become ready: %v", svc.ServiceID(), err)
+		}
+	}
+	return nil
+}
+
+func waitTaskServiceReady(
+	ctx context.Context,
+	getter taskServiceGetter,
+	retryInterval time.Duration,
+) error {
+	for {
+		if service, ok := getter.GetTaskService(); ok && service != nil {
+			return nil
+		}
+		if err := waitStartupRetry(ctx, retryInterval); err != nil {
+			return err
+		}
+	}
+}
+
+// RunBaseClusterTests starting an integration test for a 1 log, 1tn, 2cn base cluster is very slow
 // due to the amount of time it takes to start a cluster (10-20s) when there are a very large number
 // of test cases. So for some special cases that don't need to be restarted, a basicCluster can be
 // reused to run the test cases. in summary, the basic cluster will only be started once!
@@ -215,8 +247,25 @@ func RunBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
-	basicClusterState.Run(t, startBasicCluster, func(c Cluster) {
-		prepareBasicCluster(c)
+	basicClusterState.Run(t, func() (Cluster, error) {
+		return startBasicCluster(basicClusterCNCount)
+	}, func(c Cluster) {
+		fn(c)
+	})
+}
+
+// RunSingleCNBaseClusterTests reuses the same base-cluster configuration with
+// one CN. A test package should use this only when every shared-cluster case in
+// that package is single-CN; mixing both helpers would start two fixtures and
+// defeat the lifecycle saving.
+func RunSingleCNBaseClusterTests(
+	t testReporter,
+	fn func(Cluster),
+) {
+	t.Helper()
+	singleCNClusterState.Run(t, func() (Cluster, error) {
+		return startBasicCluster(1)
+	}, func(c Cluster) {
 		fn(c)
 	})
 }

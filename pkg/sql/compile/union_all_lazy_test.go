@@ -20,12 +20,15 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -258,6 +261,150 @@ func TestCompilePlanScopeKeepsNestedUnionAllConcurrentWithoutLimit(t *testing.T)
 	require.Len(t, inner.PreScopes, 2)
 
 	freeLazyUnionAllTestScope(c, outer)
+}
+
+func TestScalarUnionAllRunsBranchesInStatementOrder(t *testing.T) {
+	compilerCtx := plan2.NewMockCompilerContext(true)
+	statements, err := mysql.Parse(
+		compilerCtx.GetContext(),
+		"SELECT 3 UNION ALL SELECT 1 UNION ALL SELECT 2",
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Len(t, query.Steps, 1)
+
+	c := newLazyUnionAllTestCompile(t)
+	c.pn = logicPlan
+	nodes, rootIdx := query.Nodes, query.Steps[0]
+	require.Equal(t, planpb.Node_PROJECT, nodes[rootIdx].NodeType)
+	require.Len(t, nodes[rootIdx].Children, 1)
+	unionIdx := nodes[rootIdx].Children[0]
+	require.Truef(t, orderedScalarUnionAll(unionIdx, nodes), "unexpected scalar UNION ALL plan: %v", query)
+	var valueScan *planpb.Node
+	for _, node := range nodes {
+		if node.NodeType == planpb.Node_VALUE_SCAN {
+			valueScan = node
+			break
+		}
+	}
+	require.NotNil(t, valueScan)
+	valueScan.RowsetData = &planpb.RowsetData{}
+	require.False(t, orderedScalarUnionAll(unionIdx, nodes), "VALUES inputs keep the general UNION ALL topology")
+	valueScan.RowsetData = nil
+
+	scopes, err := c.compilePlanScope(0, rootIdx, nodes)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	root := scopes[0]
+	require.True(t, root.LazyPreScopes)
+	require.Len(t, root.PreScopes, 3)
+	var unionOp *unionall.UnionAll
+	require.NoError(t, vm.HandleAllOp(root.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if candidate, ok := op.(*unionall.UnionAll); ok && candidate.SequentialBranches > 0 {
+			unionOp = candidate
+		}
+		return nil
+	}))
+	require.NotNil(t, unionOp)
+	require.Equal(t, 3, unionOp.SequentialBranches)
+
+	var got []int64
+	root.setRootOperator(output.NewArgument().WithFunc(
+		func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+			if bat == nil {
+				return nil
+			}
+			got = append(got, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+			return nil
+		},
+	))
+	c.scopes = []*Scope{root}
+	c.InitPipelineContextToExecuteQuery()
+
+	require.NoError(t, root.MergeRun(c))
+	require.Equal(t, []int64{3, 1, 2}, got)
+
+	freeLazyUnionAllTestScope(c, root)
+}
+
+func TestScalarUnionAllInsideJoinKeepsConcurrentTopology(t *testing.T) {
+	nodes := []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{2}},
+		{NodeType: planpb.Node_UNION_ALL, Children: []int32{1, 3}},
+		{NodeType: planpb.Node_TABLE_SCAN},
+		{NodeType: planpb.Node_JOIN, Children: []int32{4, 5}},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{6}},
+	}
+	query := &planpb.Query{Steps: []int32{7}, Nodes: nodes}
+
+	require.True(t, orderedScalarUnionAll(4, nodes))
+	require.False(t, orderedScalarUnionAllResult(0, 4, query))
+
+	query.Steps[0] = 7
+	nodes[7].Children[0] = 4
+	require.True(t, orderedScalarUnionAllResult(0, 4, query))
+}
+
+func TestOrderedScalarUnionAllRejectsMalformedPlans(t *testing.T) {
+	tests := []struct {
+		name    string
+		nodeIdx int32
+		nodes   []*planpb.Node
+	}{
+		{name: "negative node index", nodeIdx: -1},
+		{name: "node index past end", nodeIdx: 1, nodes: []*planpb.Node{{}}},
+		{name: "nil node", nodes: []*planpb.Node{nil}},
+		{name: "unsupported node type", nodes: []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}}},
+		{name: "union without two children", nodes: []*planpb.Node{{NodeType: planpb.Node_UNION_ALL}}},
+		{name: "project without one child", nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT}}},
+		{
+			name:  "project with invalid child",
+			nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT, Children: []int32{1}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.False(t, orderedScalarUnionAll(test.nodeIdx, test.nodes))
+		})
+	}
+}
+
+func TestOrderedScalarUnionAllResultRejectsMalformedPlans(t *testing.T) {
+	tests := []struct {
+		name    string
+		step    int32
+		nodeIdx int32
+		query   *planpb.Query
+	}{
+		{name: "nil query"},
+		{name: "negative step", step: -1, query: &planpb.Query{}},
+		{name: "step past end", step: 1, query: &planpb.Query{Steps: []int32{0}}},
+		{name: "negative node index", nodeIdx: -1, query: &planpb.Query{Steps: []int32{0}}},
+		{
+			name:    "node index past end",
+			nodeIdx: 1,
+			query:   &planpb.Query{Steps: []int32{0}, Nodes: []*planpb.Node{{}}},
+		},
+		{
+			name:  "invalid result root",
+			query: &planpb.Query{Steps: []int32{1}, Nodes: []*planpb.Node{{}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.False(t, orderedScalarUnionAllResult(test.step, test.nodeIdx, test.query))
+		})
+	}
 }
 
 func compileNestedLazyUnionAllTestScope(

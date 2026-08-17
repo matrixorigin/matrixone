@@ -139,7 +139,10 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
 	ctr.isStrHash = keyWidth > 8
-	if err = ctr.hash.BuildHashTable(proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable, 1024); err != nil {
+	if err = ctr.hash.BuildHashTable(
+		proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable,
+		false, 1024, nil, nil,
+	); err != nil {
 		return err
 	}
 
@@ -153,7 +156,10 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 			nullsLast = true
 		}
 		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
-		ctr.compares[i] = compare.New(typ, desc, nullsLast)
+		// Top-N order keys must use the same total order as the window sorter.
+		// In particular, native float comparison is not a strict weak order for
+		// NaNs and can make the heap discard rows from the SQL-order prefix.
+		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
 	}
 	return nil
 }
@@ -255,7 +261,7 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 			return err
 		}
 		count := min(hashmap.UnitLimit, input.RowCount()-start)
-		groupIDs, _, err := ctr.hash.Itr.Insert(start, count, ctr.partitionEval.Vec)
+		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, ctr.partitionEval.Vec)
 		if err != nil {
 			return err
 		}
