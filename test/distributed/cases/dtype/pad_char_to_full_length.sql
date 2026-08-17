@@ -113,6 +113,21 @@ select count(y) from (
         select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
     ) d
 ) q;
+select count(*) from (
+    select distinct x from (
+        select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+    ) d
+) q;
+select count(*) from (
+    select distinct x from (
+        select min(coalesce(c, v)) as x from pad_char_promoted group by id
+    ) d
+) q;
+select count(*) from (
+    select distinct x from (
+        select max(coalesce(c, v)) as x from pad_char_promoted group by id
+    ) d
+) q;
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
 select count(distinct coalesce(c, v)), sum(id) from pad_char_promoted;
 select group_concat(distinct coalesce(c, v) order by id) from pad_char_promoted;
@@ -210,6 +225,21 @@ where x not in ('MO', 'XX');
 select count(y) from (
     select distinct y from (
         select lag(coalesce(c, v)) over (order by id) as y from pad_char_window
+    ) d
+) q;
+select count(*) from (
+    select distinct x from (
+        select any_value(coalesce(c, v)) as x from pad_char_promoted group by id
+    ) d
+) q;
+select count(*) from (
+    select distinct x from (
+        select min(coalesce(c, v)) as x from pad_char_promoted group by id
+    ) d
+) q;
+select count(*) from (
+    select distinct x from (
+        select max(coalesce(c, v)) as x from pad_char_promoted group by id
     ) d
 ) q;
 select count(distinct coalesce(c, v), 1) from pad_char_promoted;
