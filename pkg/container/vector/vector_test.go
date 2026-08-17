@@ -2105,6 +2105,77 @@ func TestSelectedValueRuntimeStringDomainAllocationFailureIsAtomic(t *testing.T)
 	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
 }
 
+func TestExplicitTextRuntimeDomainSurvivesVectorLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	newText := func(t *testing.T) *Vector {
+		t.Helper()
+		vec := NewVec(types.T_varbinary.ToType())
+		require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("b"), []byte("a")}, nil, mp))
+		require.NoError(t, vec.SetSelectedValueBinaryStringRowsWithMP([]bool{false, false}, mp))
+		for row := 0; row < vec.Length(); row++ {
+			require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+			require.False(t, vec.GetIsBinaryStringAt(row))
+		}
+		return vec
+	}
+	assertText := func(t *testing.T, vec *Vector) {
+		t.Helper()
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+				require.False(t, vec.GetIsBinaryStringAt(row))
+			}
+		}
+	}
+
+	source := newText(t)
+	defer source.Free(mp)
+	dup, err := source.Dup(mp)
+	require.NoError(t, err)
+	assertText(t, dup)
+	dup.Free(mp)
+	window, err := source.Window(0, source.Length())
+	require.NoError(t, err)
+	assertText(t, window)
+	window.Free(mp)
+
+	nullable := newText(t)
+	nullable.SetNull(0)
+	assertText(t, nullable)
+	nullable.SetLength(1)
+	assertText(t, nullable)
+	nullable.Free(mp)
+
+	shrunk := newText(t)
+	shrunk.Shrink([]int64{1}, false)
+	assertText(t, shrunk)
+	shrunk.Free(mp)
+	shuffled := newText(t)
+	require.NoError(t, shuffled.Shuffle([]int64{1, 0}, mp))
+	assertText(t, shuffled)
+	shuffled.Free(mp)
+
+	sorted := newText(t)
+	sorted.InplaceSortAndCompact()
+	assertText(t, sorted)
+	sorted.Free(mp)
+
+	union := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, union.UnionBatch(source, 0, source.Length(), nil, mp))
+	assertText(t, union)
+	union.Free(mp)
+	copyVec := newText(t)
+	require.NoError(t, copyVec.Copy(source, 0, 1, mp))
+	assertText(t, copyVec)
+	copyVec.Free(mp)
+
+	geometry := NewVec(types.T_geometry.ToType())
+	require.NoError(t, AppendBytes(geometry, []byte("shape"), false, mp))
+	require.Equal(t, types.RuntimeStringInherit, geometry.GetRuntimeStringDomainAt(0))
+	require.False(t, geometry.GetIsBinaryStringAt(0))
+	geometry.Free(mp)
+}
+
 func TestRollbackAppendAfterBinaryRowsNormalizeToScalar(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mp.Free(nil)

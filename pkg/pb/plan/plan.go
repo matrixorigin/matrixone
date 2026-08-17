@@ -42,7 +42,10 @@ func (p *Plan) MarshalBinary() ([]byte, error) {
 }
 
 func (p *Plan) UnmarshalBinary(data []byte) error {
-	return p.Unmarshal(data)
+	if err := p.Unmarshal(data); err != nil {
+		return err
+	}
+	return validateStringLiteralFormsInOwner(p)
 }
 
 func (m *OnUpdate) MarshalBinary() ([]byte, error) {
@@ -50,7 +53,10 @@ func (m *OnUpdate) MarshalBinary() ([]byte, error) {
 }
 
 func (m *OnUpdate) UnmarshalBinary(data []byte) error {
-	return m.Unmarshal(data)
+	if err := m.Unmarshal(data); err != nil {
+		return err
+	}
+	return m.Expr.ValidateStringLiteralForms()
 }
 
 func (m *Default) MarshalBinary() ([]byte, error) {
@@ -58,7 +64,10 @@ func (m *Default) MarshalBinary() ([]byte, error) {
 }
 
 func (m *Default) UnmarshalBinary(data []byte) error {
-	return m.Unmarshal(data)
+	if err := m.Unmarshal(data); err != nil {
+		return err
+	}
+	return m.Expr.ValidateStringLiteralForms()
 }
 
 func (m *GeneratedCol) MarshalBinary() ([]byte, error) {
@@ -66,7 +75,10 @@ func (m *GeneratedCol) MarshalBinary() ([]byte, error) {
 }
 
 func (m *GeneratedCol) UnmarshalBinary(data []byte) error {
-	return m.Unmarshal(data)
+	if err := m.Unmarshal(data); err != nil {
+		return err
+	}
+	return m.Expr.ValidateStringLiteralForms()
 }
 
 func (m CreateTable) IsSystemExternalRel() bool {

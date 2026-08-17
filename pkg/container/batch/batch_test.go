@@ -827,6 +827,29 @@ func TestPrepareParamKindTransportMixedBinaryKeepsUniformKind(t *testing.T) {
 	require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(1))
 }
 
+func TestPrepareParamKindTransportPreservesUniformExplicitText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytesList(
+		source.Vecs[0], [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	require.NoError(t, source.Vecs[0].SetSelectedValueBinaryStringRowsWithMP(
+		[]bool{false, false}, mp))
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	var wire bytes.Buffer
+	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.NoError(t, err)
+	decoded := NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
+	for row := 0; row < decoded.Vecs[0].Length(); row++ {
+		require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(row))
+		require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(row))
+	}
+}
+
 func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	mp := mpool.MustNewZero()
 	var nilBatch *Batch
@@ -1169,7 +1192,7 @@ func TestPrepareParamKindStreamingMalformedReuseClearsMetadata(t *testing.T) {
 	encoded, legacy := makePrepareParamKindStreamingWire(t)
 	secondModeOffset := len(legacy) + 4 + 4 + 8 + 1 + 4 + 3
 	malformed := append([]byte(nil), encoded...)
-	malformed[secondModeOffset] = 0xff
+	malformed[secondModeOffset] = 0x3f
 
 	mp := mpool.MustNewZero()
 	target := NewOffHeapEmpty()

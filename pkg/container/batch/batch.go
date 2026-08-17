@@ -38,6 +38,7 @@ const (
 	prepareParamKindBatchModeUniform = byte(1)
 	prepareParamKindBatchModeRows    = byte(2)
 	prepareParamKindBatchBinaryFlag  = byte(0x80)
+	prepareParamKindBatchTextFlag    = byte(0x40)
 	prepareParamKindBatchMaxRows     = int32(1 << 24)
 )
 
@@ -46,6 +47,25 @@ type prepareParamKindBatchRecord struct {
 	kind         vector.PrepareParamKind
 	encodedRows  []byte
 	binaryString bool
+	textString   bool
+}
+
+func setBatchVectorRuntimeStringDomain(
+	vec *vector.Vector,
+	binaryString bool,
+	textString bool,
+	mp *mpool.MPool,
+) error {
+	if binaryString && textString {
+		return moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
+	}
+	if textString {
+		return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp)
+	}
+	if binaryString {
+		return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, mp)
+	}
+	return vec.SetRuntimeStringDomainWithMP(types.RuntimeStringInherit, mp)
 }
 
 func New(attrs []string) *Batch {
@@ -262,6 +282,9 @@ func (bat *Batch) AppendPrepareParamKindMetadataTo(w io.Writer) error {
 				encoded := byte(vec.GetPrepareParamKindAt(row))
 				if vec.GetBinaryStringMetadataAt(row) {
 					encoded |= prepareParamKindBatchBinaryFlag
+				}
+				if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
+					encoded |= prepareParamKindBatchTextFlag
 				}
 				if err := writeBatchMarshalByte(w, encoded); err != nil {
 					return err
@@ -565,14 +588,16 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 		var applyErr error
 		switch record.mode {
 		case prepareParamKindBatchModeNone:
-			vec.SetIsBinaryString(record.binaryString)
+			applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
 		case prepareParamKindBatchModeUniform:
 			if record.kind == vector.PrepareParamNone {
 				applyErr = moerr.NewInvalidInputNoCtx("uniform prepared parameter metadata cannot be None")
 			} else {
 				vec.SetPrepareParamKind(record.kind)
 			}
-			vec.SetIsBinaryString(record.binaryString)
+			if applyErr == nil {
+				applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
+			}
 		case prepareParamKindBatchModeRows:
 			if len(record.encodedRows) != vec.Length() {
 				applyErr = moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
@@ -580,6 +605,7 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 				applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
 					bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
 					prepareParamKindBatchBinaryFlag,
+					prepareParamKindBatchTextFlag,
 				)
 			}
 		default:
@@ -720,10 +746,16 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 			return fail(err)
 		}
 		binaryString := mode&prepareParamKindBatchBinaryFlag != 0
-		mode &^= prepareParamKindBatchBinaryFlag
+		textString := mode&prepareParamKindBatchTextFlag != 0
+		if binaryString && textString {
+			return fail(moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive"))
+		}
+		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
 		switch mode {
 		case prepareParamKindBatchModeNone:
-			bat.Vecs[i].SetIsBinaryString(binaryString)
+			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
+				return fail(err)
+			}
 		case prepareParamKindBatchModeUniform:
 			kind, err := readByte()
 			if err != nil {
@@ -734,7 +766,9 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 				return fail(moerr.NewInvalidInputNoCtx("invalid uniform prepared parameter metadata kind"))
 			}
 			bat.Vecs[i].SetPrepareParamKind(vector.PrepareParamKind(kind))
-			bat.Vecs[i].SetIsBinaryString(binaryString)
+			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
+				return fail(err)
+			}
 		case prepareParamKindBatchModeRows:
 			count, err := types.ReadInt32(limited)
 			if err != nil {
@@ -753,6 +787,7 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 			}
 			if err := bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
 				limited, int(count), mp, prepareParamKindBatchBinaryFlag,
+				prepareParamKindBatchTextFlag,
 			); err != nil {
 				return fail(err)
 			}
@@ -881,7 +916,11 @@ func parsePrepareParamKindBatchTrailer(
 			return nil, 0, err
 		}
 		records[i].binaryString = mode&prepareParamKindBatchBinaryFlag != 0
-		mode &^= prepareParamKindBatchBinaryFlag
+		records[i].textString = mode&prepareParamKindBatchTextFlag != 0
+		if records[i].binaryString && records[i].textString {
+			return nil, 0, moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
+		}
+		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
 		records[i].mode = mode
 		switch mode {
 		case prepareParamKindBatchModeNone:
@@ -910,7 +949,10 @@ func parsePrepareParamKindBatchTrailer(
 			rowEnd := rowStart + int(count)
 			records[i].encodedRows = ext[rowStart:rowEnd]
 			for _, encoded := range records[i].encodedRows {
-				kind := encoded &^ prepareParamKindBatchBinaryFlag
+				if encoded&prepareParamKindBatchBinaryFlag != 0 && encoded&prepareParamKindBatchTextFlag != 0 {
+					return nil, 0, moerr.NewInvalidInputNoCtx("binary and text row flags are mutually exclusive")
+				}
+				kind := encoded &^ (prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag)
 				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}

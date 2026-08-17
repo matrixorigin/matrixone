@@ -1,0 +1,160 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"fmt"
+	"reflect"
+)
+
+// ValidateStringLiteralForms rejects unknown wire enum values at a plan owner
+// boundary. Protobuf intentionally preserves unknown enum integers, so callers
+// must validate a decoded expression before treating its literal provenance as
+// executable state.
+func (m *Expr) ValidateStringLiteralForms() error {
+	return m.walkStringLiterals(func(lit *Literal) error {
+		if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
+			lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
+			return fmt.Errorf("invalid string literal form %d", lit.LiteralForm)
+		}
+		return nil
+	})
+}
+
+// NormalizeTextLiteralFormsForCompatibility maps the explicit ordinary TEXT
+// spelling to the zero value used by older serialized plans. Semantic forms
+// such as HEX, BIT, and BINARY_INTRODUCER remain distinct.
+func (m *Expr) NormalizeTextLiteralFormsForCompatibility() error {
+	if err := m.ValidateStringLiteralForms(); err != nil {
+		return err
+	}
+	return m.walkStringLiterals(func(lit *Literal) error {
+		if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_TEXT {
+			lit.LiteralForm = StringLiteralForm_STRING_LITERAL_NONE
+		}
+		return nil
+	})
+}
+
+func (m *Expr) walkStringLiterals(visitor func(*Literal) error) error {
+	if m == nil {
+		return nil
+	}
+	if lit := m.GetLit(); lit != nil {
+		if err := visitor(lit); err != nil {
+			return err
+		}
+		return lit.Src.walkStringLiterals(visitor)
+	}
+	if fn := m.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if err := arg.walkStringLiterals(visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if list := m.GetList(); list != nil {
+		for _, item := range list.List {
+			if err := item.walkStringLiterals(visitor); err != nil {
+				return err
+			}
+		}
+	}
+	if window := m.GetW(); window != nil {
+		if err := window.WindowFunc.walkStringLiterals(visitor); err != nil {
+			return err
+		}
+		for _, item := range window.PartitionBy {
+			if err := item.walkStringLiterals(visitor); err != nil {
+				return err
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				if err := order.Expr.walkStringLiterals(visitor); err != nil {
+					return err
+				}
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil {
+				if err := window.Frame.Start.Val.walkStringLiterals(visitor); err != nil {
+					return err
+				}
+			}
+			if window.Frame.End != nil {
+				return window.Frame.End.Val.walkStringLiterals(visitor)
+			}
+		}
+	}
+	return nil
+}
+
+// validateStringLiteralFormsInOwner validates every expression nested in a
+// decoded plan without coupling this boundary check to every plan node shape.
+func validateStringLiteralFormsInOwner(owner any) error {
+	seen := make(map[uintptr]struct{})
+	var walk func(reflect.Value) error
+	walk = func(value reflect.Value) error {
+		if !value.IsValid() {
+			return nil
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return nil
+			}
+			return walk(value.Elem())
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return nil
+			}
+			if expr, ok := value.Interface().(*Expr); ok {
+				return expr.ValidateStringLiteralForms()
+			}
+			pointer := value.Pointer()
+			if _, ok := seen[pointer]; ok {
+				return nil
+			}
+			seen[pointer] = struct{}{}
+			return walk(value.Elem())
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			for field := 0; field < value.NumField(); field++ {
+				if value.Type().Field(field).PkgPath == "" {
+					if err := walk(value.Field(field)); err != nil {
+						return err
+					}
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for item := 0; item < value.Len(); item++ {
+				if err := walk(value.Index(item)); err != nil {
+					return err
+				}
+			}
+		case reflect.Map:
+			iterator := value.MapRange()
+			for iterator.Next() {
+				if err := walk(iterator.Value()); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(reflect.ValueOf(owner))
+}

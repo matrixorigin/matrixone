@@ -70,6 +70,30 @@ func TestDataBranchColumnClassification(t *testing.T) {
 	))
 }
 
+func TestDataBranchGeneratedColumnsTreatLegacyNoneAsOrdinaryText(t *testing.T) {
+	makeGenerated := func(form plan.StringLiteralForm) *plan.GeneratedCol {
+		return &plan.GeneratedCol{IsStored: true, Expr: &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value:       &plan.Literal_Sval{Sval: "x"},
+				LiteralForm: form,
+			}},
+		}}
+	}
+	require.True(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(plan.StringLiteralForm_STRING_LITERAL_NONE),
+		makeGenerated(plan.StringLiteralForm_STRING_LITERAL_TEXT),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(plan.StringLiteralForm_STRING_LITERAL_TEXT),
+		makeGenerated(plan.StringLiteralForm_STRING_LITERAL_HEX),
+	))
+	require.False(t, dataBranchGeneratedColumnsEqual(
+		makeGenerated(plan.StringLiteralForm(99)),
+		makeGenerated(plan.StringLiteralForm(99)),
+	))
+}
+
 func TestPrepareDataBranchWorkerValidatesBeforeAllocation(t *testing.T) {
 	t.Run("invalid diff projection", func(t *testing.T) {
 		tblStuff := tableStuff{}
