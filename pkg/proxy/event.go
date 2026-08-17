@@ -158,7 +158,7 @@ type setVarEvent struct {
 	baseEvent
 	// stmt is the statement that will be sent to server.
 	stmt string
-	// systemStmt excludes user-variable assignments. On protocol v21 it is
+	// systemStmt excludes user-variable assignments. On protocol v22 it is
 	// replayed only after the target CN has installed the evaluated user values.
 	systemStmt string
 }
