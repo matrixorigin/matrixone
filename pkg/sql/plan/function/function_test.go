@@ -60,6 +60,18 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 
 		{
 			shouldCast: true,
+			in:         [2]types.Type{types.T_json.ToType(), types.T_bool.ToType()},
+			want:       [2]types.Type{types.T_bool.ToType(), types.T_bool.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_bool.ToType(), types.T_json.ToType()},
+			want:       [2]types.Type{types.T_bool.ToType(), types.T_bool.ToType()},
+		},
+
+		{
+			shouldCast: true,
 			in:         [2]types.Type{types.T_binary.ToType(), types.T_blob.ToType()},
 			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
 		},
