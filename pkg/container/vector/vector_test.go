@@ -66,6 +66,16 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestRuntimeStringDomainRejectsNonStringVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	require.ErrorContains(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp),
+		"requires a MySQL string vector")
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAppendCheckpointRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())

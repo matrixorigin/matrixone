@@ -19,15 +19,37 @@ import (
 	"reflect"
 )
 
+func isPlanMySQLStringType(id int32) bool {
+	switch id {
+	case 60, 61, 64, 65, 70, 71:
+		return true
+	default:
+		return false
+	}
+}
+
 // ValidateStringLiteralForms rejects unknown wire enum values at a plan owner
 // boundary. Protobuf intentionally preserves unknown enum integers, so callers
 // must validate a decoded expression before treating its literal provenance as
 // executable state.
 func (m *Expr) ValidateStringLiteralForms() error {
-	return m.walkStringLiterals(func(lit *Literal) error {
+	return m.walkStringLiterals(func(expr *Expr, lit *Literal) error {
 		if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
 			lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
 			return fmt.Errorf("invalid string literal form %d", lit.LiteralForm)
+		}
+		if lit.LiteralForm != StringLiteralForm_STRING_LITERAL_NONE {
+			if lit.Isnull || lit.Value == nil {
+				return fmt.Errorf("string literal form requires a non-NULL literal value")
+			}
+			if _, ok := lit.Value.(*Literal_Sval); !ok || !isPlanMySQLStringType(expr.Typ.Id) {
+				return fmt.Errorf("string literal form requires a string literal and string type")
+			}
+			binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+				lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
+			if lit.IsBin != binarySyntax {
+				return fmt.Errorf("string literal form and isBin disagree")
+			}
 		}
 		return nil
 	})
@@ -40,7 +62,7 @@ func (m *Expr) NormalizeTextLiteralFormsForCompatibility() error {
 	if err := m.ValidateStringLiteralForms(); err != nil {
 		return err
 	}
-	return m.walkStringLiterals(func(lit *Literal) error {
+	return m.walkStringLiterals(func(_ *Expr, lit *Literal) error {
 		if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_TEXT {
 			lit.LiteralForm = StringLiteralForm_STRING_LITERAL_NONE
 		}
@@ -48,12 +70,12 @@ func (m *Expr) NormalizeTextLiteralFormsForCompatibility() error {
 	})
 }
 
-func (m *Expr) walkStringLiterals(visitor func(*Literal) error) error {
+func (m *Expr) walkStringLiterals(visitor func(*Expr, *Literal) error) error {
 	if m == nil {
 		return nil
 	}
 	if lit := m.GetLit(); lit != nil {
-		if err := visitor(lit); err != nil {
+		if err := visitor(m, lit); err != nil {
 			return err
 		}
 		return lit.Src.walkStringLiterals(visitor)
@@ -100,6 +122,10 @@ func (m *Expr) walkStringLiterals(visitor func(*Literal) error) error {
 		}
 	}
 	return nil
+}
+
+func (p *Plan) ValidateStringLiteralForms() error {
+	return validateStringLiteralFormsInOwner(p)
 }
 
 // validateStringLiteralFormsInOwner validates every expression nested in a

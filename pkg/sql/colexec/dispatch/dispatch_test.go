@@ -48,6 +48,32 @@ type emptyDispatchChild struct {
 	called chan struct{}
 }
 
+func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	vec := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, proc.Mp()))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	runtime := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		}
+	})
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, err := marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.ErrorContains(t, err, "MORPCVersion22")
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	_, err = marshalRemoteBatch(proc, bat, &bytes.Buffer{})
+	require.NoError(t, err)
+}
+
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	close(child.called)
 	return vm.NewCallResult(), nil

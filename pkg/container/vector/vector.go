@@ -2042,6 +2042,10 @@ func (v *Vector) HasBinaryStringMetadata() bool {
 	return v != nil && (v.binaryString || v.binaryStringRowsActive)
 }
 
+func (v *Vector) HasExplicitTextStringMetadata() bool {
+	return v != nil && v.binaryStringRowsActive && v.textStringRows != nil && v.textStringRows.Count() != 0
+}
+
 func (v *Vector) SetIsBinaryString(binaryString bool) {
 	v.setBinaryStringScalar(binaryString)
 }
@@ -2219,6 +2223,9 @@ func (v *Vector) setRuntimeStringDomainAt(
 	normalize bool,
 	pool *mpool.MPool,
 ) error {
+	if v != nil && domain != types.RuntimeStringInherit && !v.typ.Oid.IsMySQLString() {
+		return moerr.NewInvalidInputNoCtx("runtime string domain requires a MySQL string vector")
+	}
 	if domain == types.RuntimeStringInherit {
 		return v.setIsBinaryStringAt(row, false, normalize, pool)
 	}
@@ -2250,8 +2257,57 @@ func (v *Vector) setRuntimeStringDomainAt(
 	return nil
 }
 
+func (v *Vector) SetRuntimeStringDomainAtWithMP(
+	row int, domain types.RuntimeStringDomain, mp *mpool.MPool,
+) error {
+	return v.setRuntimeStringDomainAt(row, domain, true, mp)
+}
+
+func (v *Vector) SetRuntimeStringDomainsWithMP(
+	domains []types.RuntimeStringDomain, mp *mpool.MPool,
+) error {
+	if len(domains) != v.length {
+		return moerr.NewInvalidInputNoCtx("runtime string domain row count mismatch")
+	}
+	needsRows := false
+	first := types.RuntimeStringInherit
+	seen := false
+	for row, domain := range domains {
+		if domain > types.RuntimeStringBinary ||
+			domain != types.RuntimeStringInherit && !v.typ.Oid.IsMySQLString() {
+			return moerr.NewInvalidInputNoCtx("invalid runtime string domain")
+		}
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		if !seen {
+			first, seen = domain, true
+		} else if domain != first {
+			needsRows = true
+		}
+		needsRows = needsRows || domain == types.RuntimeStringText
+	}
+	if needsRows {
+		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+			return err
+		}
+	}
+	v.resetBinaryString()
+	for row, domain := range domains {
+		if err := v.setRuntimeStringDomainAt(row, domain, false, mp); err != nil {
+			v.resetBinaryString()
+			return err
+		}
+	}
+	v.normalizeBinaryStringRows()
+	return nil
+}
+
 // SetRuntimeStringDomainWithMP installs one uniform runtime override.
 func (v *Vector) SetRuntimeStringDomainWithMP(domain types.RuntimeStringDomain, mp *mpool.MPool) error {
+	if v != nil && !v.typ.Oid.IsMySQLString() && domain != types.RuntimeStringInherit {
+		return moerr.NewInvalidInputNoCtx("runtime string domain requires a MySQL string vector")
+	}
 	switch domain {
 	case types.RuntimeStringInherit:
 		v.resetBinaryString()
@@ -3241,6 +3297,9 @@ func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool
 	if err := SetBytesAt(v, idx, source.GetBytesAt(sourceRow), mp); err != nil {
 		return err
 	}
+	if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(idx) {
+		return v.SetRuntimeStringDomainWithMP(domain, mp)
+	}
 	return v.setRuntimeStringDomainAt(idx, domain, true, mp)
 }
 
@@ -3267,6 +3326,9 @@ func (v *Vector) SetRawBytesAtFrom(idx int, source *Vector, sourceRow int, mp *m
 	}
 	if err := v.SetRawBytesAt(idx, source.GetRawBytesAt(sourceRow), mp); err != nil {
 		return err
+	}
+	if !v.binaryStringRowsActive && !v.hasPrepareParamValueExcept(idx) {
+		return v.SetRuntimeStringDomainWithMP(domain, mp)
 	}
 	return v.setRuntimeStringDomainAt(idx, domain, true, mp)
 }

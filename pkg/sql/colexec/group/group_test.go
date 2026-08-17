@@ -1069,10 +1069,10 @@ func TestMergeGroupRejectsInvalidPrepareParamKindTrailer(t *testing.T) {
 		{
 			name: "unsupported version",
 			mutate: func(extra []byte, trailerOffset int) []byte {
-				extra[trailerOffset+3] = 4
+				extra[trailerOffset+3] = 5
 				return extra
 			},
-			wantErr: "unsupported aggregate prepared parameter trailer version 4",
+			wantErr: "unsupported aggregate prepared parameter trailer version 5",
 		},
 		{
 			name: "aggregate count mismatch",

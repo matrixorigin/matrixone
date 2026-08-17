@@ -40,7 +40,9 @@ const (
 	prepareParamKindTrailerVersion       = byte(1)
 	prepareParamKindTrailerRowsVersion   = byte(2)
 	prepareParamKindTrailerBinaryVersion = byte(3)
+	prepareParamKindTrailerDomainVersion = byte(4)
 	prepareParamKindTrailerRowsMarker    = byte(0x80)
+	prepareParamKindTrailerTextMarker    = byte(0x40)
 	prepareParamKindTrailerMaxRows       = int32(1 << 24)
 )
 
@@ -49,6 +51,7 @@ type prepareParamKindSummary struct {
 	seen         bool
 	rows         bool
 	binaryString bool
+	textString   bool
 }
 
 func (s *prepareParamKindSummary) observe(kind vector.PrepareParamKind) {
@@ -105,9 +108,11 @@ func newPrepareParamKindRowsSource(
 		}
 		kind := vec.GetPrepareParamKindAt(row)
 		source.summary.observe(kind)
-		binaryString := vec.GetBinaryStringMetadataAt(row)
+		domain := vec.GetRuntimeStringDomainAt(row)
+		binaryString := domain == types.RuntimeStringBinary
 		source.summary.binaryString = source.summary.binaryString || binaryString
-		if hasExactRows && (kind != vector.PrepareParamNone || binaryString) {
+		source.summary.textString = source.summary.textString || domain == types.RuntimeStringText
+		if hasExactRows && (kind != vector.PrepareParamNone || domain != types.RuntimeStringInherit) {
 			source.summary.rows = true
 		}
 	}
@@ -137,9 +142,11 @@ func newPrepareParamKindSelectedRowsSource(
 		}
 		kind := vec.GetPrepareParamKindAt(int(row))
 		source.summary.observe(kind)
-		binaryString := vec.GetBinaryStringMetadataAt(int(row))
+		domain := vec.GetRuntimeStringDomainAt(int(row))
+		binaryString := domain == types.RuntimeStringBinary
 		source.summary.binaryString = source.summary.binaryString || binaryString
-		if hasExactRows && (kind != vector.PrepareParamNone || binaryString) {
+		source.summary.textString = source.summary.textString || domain == types.RuntimeStringText
+		if hasExactRows && (kind != vector.PrepareParamNone || domain != types.RuntimeStringInherit) {
 			source.summary.rows = true
 		}
 	}
@@ -149,7 +156,7 @@ func newPrepareParamKindSelectedRowsSource(
 	return source, nil
 }
 
-func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVersion bool) error {
+func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, domainVersion bool) error {
 	if source == nil || source.rowCount == 0 {
 		return nil
 	}
@@ -178,9 +185,13 @@ func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVers
 				"invalid aggregate prepared parameter row kind %d", kind)
 		}
 		encoded := byte(kind)
-		if binaryVersion && !nullValue &&
-			source.vec.GetBinaryStringMetadataAt(row) {
-			encoded |= prepareParamKindTrailerRowsMarker
+		if domainVersion && !nullValue {
+			switch source.vec.GetRuntimeStringDomainAt(row) {
+			case types.RuntimeStringBinary:
+				encoded |= prepareParamKindTrailerRowsMarker
+			case types.RuntimeStringText:
+				encoded |= prepareParamKindTrailerTextMarker
+			}
 		}
 		buffer[buffered] = encoded
 		buffered++
@@ -274,7 +285,8 @@ func (r *prepareParamKindObservingReader) Read(value []byte) (int, error) {
 	for _, encoded := range value[:n] {
 		if r.binaryVersion {
 			r.summary.binaryString = r.summary.binaryString || encoded&prepareParamKindTrailerRowsMarker != 0
-			encoded &^= prepareParamKindTrailerRowsMarker
+			r.summary.textString = r.summary.textString || encoded&prepareParamKindTrailerTextMarker != 0
+			encoded &^= prepareParamKindTrailerRowsMarker | prepareParamKindTrailerTextMarker
 		}
 		r.summary.observe(vector.PrepareParamKind(encoded))
 	}
@@ -302,7 +314,7 @@ func (target *prepareParamKindRowsTarget) restore(
 			}
 			for _, encoded := range buffer[:n] {
 				if binaryVersion {
-					encoded &^= prepareParamKindTrailerRowsMarker
+					encoded &^= prepareParamKindTrailerRowsMarker | prepareParamKindTrailerTextMarker
 				}
 				if vector.PrepareParamKind(encoded) > vector.PrepareParamBoolean {
 					return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtxf(
@@ -320,7 +332,7 @@ func (target *prepareParamKindRowsTarget) restore(
 		}
 		if binaryVersion {
 			return vec.SetPrepareParamKindsAndBinaryStringFromReader(
-				observed, count, mp, prepareParamKindTrailerRowsMarker)
+				observed, count, mp, prepareParamKindTrailerRowsMarker, prepareParamKindTrailerTextMarker)
 		}
 		return vec.SetPrepareParamKindsFromReader(observed, count, mp)
 	}
@@ -368,6 +380,29 @@ func (target *prepareParamKindRowsTarget) setBinarySummary(binaryString bool) {
 	}
 }
 
+func (target *prepareParamKindRowsTarget) setStringDomainSummary(
+	domain types.RuntimeStringDomain, mp *mpool.MPool,
+) error {
+	if target == nil || target.accessor == nil {
+		return nil
+	}
+	set := func(vec *vector.Vector) error {
+		if vec != nil {
+			return vec.SetRuntimeStringDomainWithMP(domain, mp)
+		}
+		return nil
+	}
+	if !target.flat {
+		return set(target.accessor.PrepareParamKindVectorForChunk(target.chunk))
+	}
+	for chunk := 0; chunk < target.accessor.PrepareParamKindChunkCount(); chunk++ {
+		if err := set(target.accessor.PrepareParamKindVectorForChunk(chunk)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func prepareParamKindWireV1Enabled(proc *process.Process) bool {
 	if proc == nil {
 		return false
@@ -394,6 +429,19 @@ func binaryStringWireEnabled(proc *process.Process) bool {
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion18
+}
+
+func explicitTextWireEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion22
 }
 
 func hasPrepareParamKindPreservingAgg(aggs []aggexec.AggFuncExecExpression) bool {
@@ -430,6 +478,14 @@ func writePrepareParamKindTrailer(
 		version = prepareParamKindTrailerBinaryVersion
 	} else if rowsVersion {
 		version = prepareParamKindTrailerRowsVersion
+	}
+	textVersion := false
+	for i := range sources {
+		textVersion = textVersion || sources[i].summary.textString
+	}
+	if textVersion {
+		version = prepareParamKindTrailerDomainVersion
+		binaryVersion = true
 	}
 	if _, err := writeGroupSpillBytes(writer, []byte{
 		prepareParamKindTrailerMagic0,
@@ -486,11 +542,17 @@ func writePrepareParamKindTrailer(
 			return err
 		}
 		if binaryVersion {
-			binaryString := byte(0)
-			if i < len(sources) && sources[i].summary.binaryString {
-				binaryString = 1
+			domain := byte(0)
+			if version == prepareParamKindTrailerDomainVersion {
+				if i < len(sources) && sources[i].summary.binaryString {
+					domain = byte(types.RuntimeStringBinary)
+				} else if i < len(sources) && sources[i].summary.textString {
+					domain = byte(types.RuntimeStringText)
+				}
+			} else if i < len(sources) && sources[i].summary.binaryString {
+				domain = 1
 			}
-			if _, err := writeGroupSpillBytes(writer, []byte{binaryString}); err != nil {
+			if _, err := writeGroupSpillBytes(writer, []byte{domain}); err != nil {
 				return err
 			}
 		}
@@ -535,11 +597,11 @@ func readPrepareParamKindTrailer(
 		return nil, err
 	}
 	if version != prepareParamKindTrailerVersion && version != prepareParamKindTrailerRowsVersion &&
-		version != prepareParamKindTrailerBinaryVersion {
+		version != prepareParamKindTrailerBinaryVersion && version != prepareParamKindTrailerDomainVersion {
 		return nil, moerr.NewInternalErrorf(ctx,
 			"unsupported aggregate prepared parameter trailer version %d", version)
 	}
-	if version == prepareParamKindTrailerBinaryVersion && !allowBinaryString {
+	if (version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion) && !allowBinaryString {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"aggregate binary-string metadata requires MORPCVersion18")
 	}
@@ -562,7 +624,7 @@ func readPrepareParamKindTrailer(
 			return nil, err
 		}
 		if (version == prepareParamKindTrailerRowsVersion ||
-			version == prepareParamKindTrailerBinaryVersion) &&
+			version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion) &&
 			encoded == prepareParamKindTrailerRowsMarker {
 			rowCount, err := types.ReadInt32(reader)
 			if err != nil {
@@ -591,7 +653,7 @@ func readPrepareParamKindTrailer(
 			}
 			summary, err := targets[i].restore(
 				reader, int(rowCount), mp,
-				version == prepareParamKindTrailerBinaryVersion,
+				version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion,
 			)
 			if err != nil {
 				return nil, err
@@ -606,18 +668,29 @@ func readPrepareParamKindTrailer(
 				"invalid aggregate prepared parameter state %d", encoded)
 		}
 		summaries[i] = prepareParamKindSummary{kind: kind, seen: seen}
-		if version == prepareParamKindTrailerBinaryVersion {
-			binaryString, err := types.ReadByte(reader)
+		if version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion {
+			domain, err := types.ReadByte(reader)
 			if err != nil {
 				return nil, err
 			}
-			if binaryString > 1 {
+			if version == prepareParamKindTrailerBinaryVersion && domain > 1 ||
+				version == prepareParamKindTrailerDomainVersion && types.RuntimeStringDomain(domain) > types.RuntimeStringBinary {
 				return nil, moerr.NewInternalErrorNoCtx(
 					"invalid aggregate binary provenance summary")
 			}
-			summaries[i].binaryString = binaryString == 1
+			if version == prepareParamKindTrailerBinaryVersion {
+				summaries[i].binaryString = domain == 1
+			} else {
+				summaries[i].binaryString = types.RuntimeStringDomain(domain) == types.RuntimeStringBinary
+				summaries[i].textString = types.RuntimeStringDomain(domain) == types.RuntimeStringText
+			}
 			if i < int32(len(targets)) {
 				targets[i].setBinarySummary(summaries[i].binaryString)
+				if summaries[i].textString {
+					if err := targets[i].setStringDomainSummary(types.RuntimeStringText, mp); err != nil {
+						return nil, err
+					}
+				}
 			}
 		}
 	}

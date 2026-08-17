@@ -43,18 +43,20 @@
 
 ## Vector 表示与复杂度
 
-Vector 复用现有 scalar + bitmap 存储，不增加普通行的结构体大小：
+Vector 复用 scalar + 两张按需分配、互斥的 bitmap（binary override 与 text override），不增加普通行的结构体大小：
 
 | 存储状态 | runtime 含义 |
 | --- | --- |
 | bitmap inactive，`binaryString=false` | inherit |
 | bitmap inactive，`binaryString=true` | uniform explicit binary |
-| bitmap active，bit=0 | explicit text |
-| bitmap active，bit=1 | explicit binary |
+| bitmap active，binary=0、text=0 | inherit |
+| bitmap active，binary=0、text=1 | explicit text |
+| bitmap active，binary=1、text=0 | explicit binary |
+| bitmap active，binary=1、text=1 | 非法，owner boundary 必须拒绝 |
 
-静态 binary 类型在 bitmap inactive 时仍由 `types.Type` 提供 binary 有效域。selected-value API 在静态 binary 公共类型中保留 bitmap，使 bit=0 能覆盖为 text；全 binary 的普通路径折叠为 inherit，不分配 sidecar。
+静态 binary 类型在 bitmap inactive 或 active/neither 时仍由 `types.Type` 提供 binary 有效域。selected-value API 在静态 binary 公共类型中设置 text bitmap，使其能显式覆盖为 text；全 binary 的普通路径可使用 scalar fast path。
 
-bitmap 通过 Vector 现有 MPool/allocation-account 生命周期管理。容量预留失败不得发布 active 状态；`CleanOnlyData`、reset 和 free 清除逻辑状态，已有容量可以安全复用。getter 为 O(1)，普通 uniform 路径不扫描整列。
+两张 bitmap 通过 Vector 现有 MPool/allocation-account 生命周期管理并原子扩容。最坏内存成本为 2 bit/row；普通 inherit 或 uniform binary 路径不分配 sidecar。容量预留失败不得发布 active 状态；`CleanOnlyData`、reset 和 free 清除逻辑状态，已有容量可以安全复用。getter 为 O(1)。
 
 ## Wire 兼容
 

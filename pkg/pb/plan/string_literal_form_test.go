@@ -37,14 +37,22 @@ func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	require.ErrorContains(t, (&GeneratedCol{}).UnmarshalBinary(encoded), "invalid string literal form 99")
 }
 
+func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {
+	expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{
+		Value: &Literal_I64Val{I64Val: 1}, LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+	}}}
+	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "requires a string literal")
+}
+
 func TestNormalizeTextLiteralFormsForCompatibility(t *testing.T) {
 	expr := &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{
-		{Expr: &Expr_Lit{Lit: &Literal{
+		{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
 			Value:       &Literal_Sval{Sval: "text"},
 			LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
 		}}},
-		{Expr: &Expr_Lit{Lit: &Literal{
+		{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
 			Value:       &Literal_Sval{Sval: "hex"},
+			IsBin:       true,
 			LiteralForm: StringLiteralForm_STRING_LITERAL_HEX,
 		}}},
 	}}}}

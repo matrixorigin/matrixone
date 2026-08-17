@@ -199,6 +199,18 @@ func (bat *Batch) HasBinaryStringMetadata() bool {
 	return false
 }
 
+func (bat *Batch) HasExplicitTextStringMetadata() bool {
+	if bat == nil {
+		return false
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil && vec.HasExplicitTextStringMetadata() {
+			return true
+		}
+	}
+	return false
+}
+
 // PrepareParamKindMetadataSize validates the transient trailer and returns its
 // exact wire size. Zero means that no trailer is required.
 func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {

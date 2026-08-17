@@ -150,6 +150,24 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
+	var validatePlans func(*pipeline.Pipeline) error
+	validatePlans = func(scope *pipeline.Pipeline) error {
+		if scope == nil {
+			return nil
+		}
+		if err := scope.GetQry().ValidateStringLiteralForms(); err != nil {
+			return err
+		}
+		for _, child := range scope.GetChildren() {
+			if err := validatePlans(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err = validatePlans(p); err != nil {
+		return nil, err
+	}
 	if isRemote {
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err

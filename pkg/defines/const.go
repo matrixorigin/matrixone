@@ -57,7 +57,8 @@ const (
 	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
 	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
 	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
-	MORPCLatestVersion       = MORPCVersion21
+	MORPCVersion22     int64 = 22 // explicit-text runtime string provenance
+	MORPCLatestVersion       = MORPCVersion22
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

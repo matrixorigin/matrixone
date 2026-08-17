@@ -367,7 +367,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKind          vector.PrepareParamKind
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
-	flowControlBinaryStrings []bool
+	flowControlStringDomains []types.RuntimeStringDomain
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -836,8 +836,8 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlKinds != nil {
 		expr.flowControlKinds = expr.flowControlKinds[:0]
 	}
-	if expr.flowControlBinaryStrings != nil {
-		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:0]
+	if expr.flowControlStringDomains != nil {
+		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
 }
 
@@ -855,16 +855,16 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows i
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows int) {
-	if rows <= len(expr.flowControlBinaryStrings) {
+	if rows <= len(expr.flowControlStringDomains) {
 		return
 	}
-	old := len(expr.flowControlBinaryStrings)
-	if rows <= cap(expr.flowControlBinaryStrings) {
-		expr.flowControlBinaryStrings = expr.flowControlBinaryStrings[:rows]
-		clear(expr.flowControlBinaryStrings[old:])
+	old := len(expr.flowControlStringDomains)
+	if rows <= cap(expr.flowControlStringDomains) {
+		expr.flowControlStringDomains = expr.flowControlStringDomains[:rows]
+		clear(expr.flowControlStringDomains[old:])
 		return
 	}
-	expr.flowControlBinaryStrings = append(expr.flowControlBinaryStrings, make([]bool, rows-old)...)
+	expr.flowControlStringDomains = append(expr.flowControlStringDomains, make([]types.RuntimeStringDomain, rows-old)...)
 }
 
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
@@ -881,10 +881,10 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
-			binaryString := value.GetBinaryStringMetadataAt(row)
-			if binaryString || len(expr.flowControlBinaryStrings) != 0 {
+			domain := value.GetRuntimeStringDomainAt(row)
+			if domain != types.RuntimeStringInherit || len(expr.flowControlStringDomains) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
-				expr.flowControlBinaryStrings[row] = binaryString
+				expr.flowControlStringDomains[row] = domain
 			}
 			kind := value.GetPrepareParamKindAt(row)
 			if !expr.flowControlKindSeen {
@@ -912,9 +912,9 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
-	if len(expr.flowControlBinaryStrings) != 0 {
+	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
-		if err := result.SetBinaryStringRowsWithMP(expr.flowControlBinaryStrings[:rows], mp); err != nil {
+		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
 			return err
 		}
 	}
