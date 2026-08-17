@@ -60,7 +60,6 @@ func TestStrHashIteratorScratchGrowsLazily(t *testing.T) {
 	coreBytes := cap(itr.keys) * int(
 		unsafe.Sizeof([]byte(nil))+
 			unsafe.Sizeof(uint64(0))+
-			unsafe.Sizeof(int(0))+
 			unsafe.Sizeof(int64(0))+
 			unsafe.Sizeof([3]uint64{}),
 	)
@@ -286,78 +285,6 @@ func assertStrIteratorScratchCapacity(t *testing.T, itr *strHashmapIterator, wan
 	t.Helper()
 	require.Equal(t, want, cap(itr.keys))
 	require.Equal(t, want, cap(itr.values))
-	require.Equal(t, want, cap(itr.keyLengths))
 	require.Equal(t, want, cap(itr.zValues))
 	require.Equal(t, want, cap(itr.strHashStates))
-}
-
-var benchmarkStrIterator Iterator
-
-func BenchmarkNewStrHashIterator(b *testing.B) {
-	mp := mpool.MustNewZero()
-	hashMap, err := NewStrHashMap(false, mp)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer hashMap.Free()
-
-	b.Run("eager-unit-limit", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			benchmarkStrIterator = newEagerStrHashIterator(hashMap)
-		}
-	})
-	b.Run("lazy", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			benchmarkStrIterator = hashMap.NewIterator()
-		}
-	})
-}
-
-func BenchmarkStrHashIteratorFirstFind(b *testing.B) {
-	for _, count := range []int{1, 2, 8, 16, 256} {
-		b.Run(fmt.Sprintf("rows-%d", count), func(b *testing.B) {
-			mp := mpool.MustNewZero()
-			hashMap, err := NewStrHashMap(false, mp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			defer hashMap.Free()
-			vec := newVector(count, types.T_varchar.ToType(), mp, false, nil)
-			defer vec.Free(mp)
-
-			b.Run("eager-unit-limit", func(b *testing.B) {
-				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
-					itr := newEagerStrHashIterator(hashMap)
-					if _, _, err := itr.Find(0, count, []*vector.Vector{vec}); err != nil {
-						b.Fatal(err)
-					}
-					benchmarkStrIterator = itr
-				}
-			})
-			b.Run("lazy", func(b *testing.B) {
-				b.ReportAllocs()
-				for i := 0; i < b.N; i++ {
-					itr := hashMap.NewIterator()
-					if _, _, err := itr.Find(0, count, []*vector.Vector{vec}); err != nil {
-						b.Fatal(err)
-					}
-					benchmarkStrIterator = itr
-				}
-			})
-		})
-	}
-}
-
-func newEagerStrHashIterator(hashMap *StrHashMap) Iterator {
-	return &strHashmapIterator{
-		mp:            hashMap,
-		keys:          make([][]byte, UnitLimit),
-		values:        make([]uint64, UnitLimit),
-		keyLengths:    make([]int, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
-	}
 }

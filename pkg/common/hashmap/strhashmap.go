@@ -109,14 +109,14 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	}
 	itr.ensureCapacity(count)
 	for i := 0; i < count; i++ {
-		itr.keyLengths[i] = 0
+		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
 	add := func(row int, size int) error {
-		if size < 0 || itr.keyLengths[row] > maxInt-size {
+		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		itr.keyLengths[row] += size
+		itr.zValues[row] += int64(size)
 		return nil
 	}
 	for _, vec := range vecs {
@@ -231,13 +231,14 @@ func (itr *strHashmapIterator) prepareHashKeys(
 
 	total := 0
 	for i := 0; i < count; i++ {
-		if itr.keyLengths[i] < 16 {
-			itr.keyLengths[i] = 16
+		if itr.zValues[i] < 16 {
+			itr.zValues[i] = 16
 		}
-		if total > maxInt-itr.keyLengths[i] {
+		keyLength := int(itr.zValues[i])
+		if total > maxInt-keyLength {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		total += itr.keyLengths[i]
+		total += keyLength
 	}
 	if cap(itr.keyBuffer) < total {
 		itr.clearKeys()
@@ -276,7 +277,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	storage := itr.keyBuffer
 	offset := 0
 	for i := 0; i < count; i++ {
-		end := offset + itr.keyLengths[i]
+		end := offset + int(itr.zValues[i])
 		itr.keys[i] = storage[offset:offset:end]
 		offset = end
 	}

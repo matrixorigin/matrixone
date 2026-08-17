@@ -326,7 +326,6 @@ func StrIteratorCapacity(itr Iterator) int {
 	}
 	add(cap(it.keys), unsafe.Sizeof([]byte(nil)))
 	add(cap(it.values), unsafe.Sizeof(uint64(0)))
-	add(cap(it.keyLengths), unsafe.Sizeof(int(0)))
 	add(cap(it.zValues), unsafe.Sizeof(int64(0)))
 	add(cap(it.nonMatching), unsafe.Sizeof(bool(false)))
 	add(cap(it.strHashStates), unsafe.Sizeof([3]uint64{}))
@@ -366,19 +365,16 @@ func (itr *strHashmapIterator) clearKeys() {
 func (itr *strHashmapIterator) ensureCapacity(count int) {
 	if count <= cap(itr.keys) &&
 		count <= cap(itr.values) &&
-		count <= cap(itr.keyLengths) &&
 		count <= cap(itr.zValues) &&
 		count <= cap(itr.strHashStates) {
 		itr.keys = itr.keys[:count]
 		itr.values = itr.values[:count]
-		itr.keyLengths = itr.keyLengths[:count]
 		itr.zValues = itr.zValues[:count]
 		itr.strHashStates = itr.strHashStates[:count]
 		return
 	}
 	itr.keys = make([][]byte, count)
 	itr.values = make([]uint64, count)
-	itr.keyLengths = make([]int, count)
 	itr.zValues = make([]int64, count)
 	itr.strHashStates = make([][3]uint64, count)
 }

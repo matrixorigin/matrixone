@@ -225,7 +225,6 @@ type strHashmapIterator struct {
 	keyBuffer           []byte
 	keyBufferMP         *mpool.MPool
 	keyBufferAllocation *IteratorAllocation
-	keyLengths          []int
 	// zValues: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	zValues       []int64
 	nonMatching   []bool
