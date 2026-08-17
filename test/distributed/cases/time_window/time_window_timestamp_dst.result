@@ -24,14 +24,14 @@ group by k interval(event_ts, 2, hour)
 order by _wstart;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[-5,64,0]  𝄀
 2026-03-08 00:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
-2026-03-08 03:00:00  ¦  2026-03-08 05:00:00  ¦  2
+2026-03-08 03:00:00  ¦  2026-03-08 04:00:00  ¦  2
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_gap
 group by k interval(event_ts, 2, hour) gapfill(partition)
 order by _wstart;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 2026-03-08 00:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
-2026-03-08 03:00:00  ¦  2026-03-08 05:00:00  ¦  2
+2026-03-08 03:00:00  ¦  2026-03-08 04:00:00  ¦  2
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_gap
 where event_ts >= '2026-03-08 00:00:00'
@@ -49,7 +49,7 @@ order by _wstart;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 2026-03-08 00:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
 2026-03-08 01:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
-2026-03-08 03:00:00  ¦  2026-03-08 05:00:00  ¦  2
+2026-03-08 03:00:00  ¦  2026-03-08 04:00:00  ¦  2
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_gap
 group by k interval(event_ts, 2, hour) sliding(1, hour) gapfill(partition)
@@ -57,7 +57,7 @@ order by _wstart;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 2026-03-08 00:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
 2026-03-08 01:00:00  ¦  2026-03-08 03:00:00  ¦  1  𝄀
-2026-03-08 03:00:00  ¦  2026-03-08 05:00:00  ¦  2
+2026-03-08 03:00:00  ¦  2026-03-08 04:00:00  ¦  2
 create table tw_dst_day(k int, event_ts timestamp(6), value int);
 insert into tw_dst_day values
 (1, '2026-03-08 00:00:00', 1),
