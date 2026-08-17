@@ -580,6 +580,9 @@ func TestTimestampWindowStartAlignsSlidingKeyInSessionTimezone(t *testing.T) {
 
 func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
 	arg := &TimeWin{
 		WStart: true,

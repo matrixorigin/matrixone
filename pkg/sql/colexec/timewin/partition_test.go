@@ -908,6 +908,47 @@ func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
 	}
 }
 
+func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+	for _, gapFill := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := newPartArg(t, proc, hour, false)
+			arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+			arg.Interval = hour
+			arg.Sliding = hour
+			arg.GapFill = gapFill
+			proc.GetSessionInfo().TimeZone = zone
+
+			in := batch.New([]string{"ts", "val"})
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+				types.Datetime(first),
+				types.Datetime(second),
+			}, nil, proc.Mp()))
+			in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+			in.SetRowCount(2)
+
+			starts, sums := runTemporalBoundArg(t, arg, proc, in)
+			require.Equal(t, []types.Datetime{
+				mustDatetime(t, "2026-11-01 01:00:00"),
+				mustDatetime(t, "2026-11-01 01:00:00"),
+			}, starts)
+			require.Equal(t, []int64{1, 2}, sums)
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
 func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(

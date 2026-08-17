@@ -1819,6 +1819,30 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 	if roundTrip < civil {
 		boundary += types.Timestamp(civil - roundTrip)
 	}
+
+	// A repeated civil hour contains two distinct aligned instants.  Resolving
+	// the target wall clock through time.Location chooses one occurrence and can
+	// jump over the other one.  Prefer the instant-step candidate when it is an
+	// aligned civil boundary that falls before the wall-clock target; this keeps
+	// the fold occurrence in the same grid sequence while retaining civil-day
+	// behavior across ordinary DST transitions.
+	if interval != 0 {
+		candidateRaw := int64(value)
+		if (interval > 0 && candidateRaw <= math.MaxInt64-interval) ||
+			(interval < 0 && candidateRaw >= math.MinInt64-interval) {
+			candidate := types.Timestamp(candidateRaw + interval)
+			candidateCivil := candidate.ToDatetime(loc)
+			grid := interval
+			if grid < 0 {
+				grid = -grid
+			}
+			if candidate != boundary && candidateCivil%types.Datetime(grid) == 0 &&
+				((interval > 0 && candidateCivil >= value.ToDatetime(loc) && candidateCivil <= civil && candidate < boundary) ||
+					(interval < 0 && candidateCivil <= value.ToDatetime(loc) && candidateCivil >= civil && candidate > boundary)) {
+				return candidate
+			}
+		}
+	}
 	return boundary
 }
 

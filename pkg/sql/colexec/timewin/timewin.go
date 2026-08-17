@@ -660,7 +660,13 @@ func (ctr *container) advanceWindowBoundaryBy(value types.Datetime, count int64,
 	if count == 0 {
 		return value
 	}
-	return ctr.advanceWindowBoundary(value, types.Datetime(count)*delta, proc)
+	if ctr.tsOid != types.T_timestamp {
+		return value + types.Datetime(count)*delta
+	}
+	for i := int64(0); i < count; i++ {
+		value = ctr.advanceWindowBoundary(value, delta, proc)
+	}
+	return value
 }
 
 func (ctr *container) windowBoundaryDistance(start, end types.Datetime, proc *process.Process) types.Datetime {
@@ -1077,11 +1083,11 @@ func (ctr *container) appendGapFillBounds(t *TimeWin, count int64, proc *process
 	}
 	ctr.wStart = slices.Grow(ctr.wStart, int(count))
 	ctr.wEnd = slices.Grow(ctr.wEnd, int(count))
-	start := ctr.left
+	left := ctr.left
 	for i := int64(0); i < count; i++ {
-		left := ctr.advanceWindowBoundaryBy(start, i, t.Sliding, proc)
 		ctr.wStart = append(ctr.wStart, left)
 		ctr.wEnd = append(ctr.wEnd, ctr.advanceWindowBoundary(left, t.Interval, proc))
+		left = ctr.advanceWindowBoundary(left, t.Sliding, proc)
 	}
 }
 

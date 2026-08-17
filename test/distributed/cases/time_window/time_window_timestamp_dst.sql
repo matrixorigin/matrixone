@@ -68,6 +68,18 @@ from tw_dst_fall
 interval(event_ts, 1, hour)
 order by ws, we;
 
+set time_zone = '+00:00';
+create table tw_dst_fall_gap(k int, event_ts timestamp(6), value int);
+insert into tw_dst_fall_gap values
+  (1, '2026-11-01 05:30:00', 1),
+  (1, '2026-11-01 06:30:00', 2);
+set time_zone = 'America/New_York';
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_fall_gap
+group by k interval(event_ts, 1, hour) gapfill(partition)
+order by _wstart, _wend;
+
 create table tw_dst_day_fall(k int, event_ts timestamp(6), value int);
 insert into tw_dst_day_fall values
   (1, '2026-11-01 04:00:00', 1),
