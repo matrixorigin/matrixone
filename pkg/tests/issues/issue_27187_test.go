@@ -82,13 +82,13 @@ func TestIssue27187JSONExtractBooleanComparison(t *testing.T) {
 		rows, err = db.QueryContext(ctx,
 			"select id from "+dbName+".t where json_extract(j, '$.enabled') = false order by id")
 		require.NoError(t, err)
+		defer rows.Close()
 		require.True(t, rows.Next())
 		var id int
 		require.NoError(t, rows.Scan(&id))
 		require.Equal(t, 2, id)
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
 
 		var decimalZero, decimalNonZero bool
 		require.NoError(t, db.QueryRowContext(ctx, `select

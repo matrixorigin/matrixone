@@ -693,10 +693,10 @@ create database test;
 use test;
 create table json_bool_compare_test(id int primary key, doc json);
 insert into json_bool_compare_test values
-    (1, '{"enabled":true}'),
-    (2, '{"enabled":false}'),
-    (3, '{}'),
-    (4, '{"enabled":null}');
+(1, '{"enabled":true}'),
+(2, '{"enabled":false}'),
+(3, '{}'),
+(4, '{"enabled":null}');
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
 count(*)
 1
