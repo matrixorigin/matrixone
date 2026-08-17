@@ -122,6 +122,13 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		return expr, nil
+	} else if b.builder.mysqlFullGroupByCompat && b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() {
+		// MySQL permits HAVING as a post-filter on a non-aggregate query block.
+		// In that case it has no ONLY_FULL_GROUP_BY implications and the column
+		// must remain a raw input reference. This is used by JDBC metadata
+		// queries such as DatabaseMetaData.getTables(), which filter a projected
+		// alias with HAVING without GROUP BY or an aggregate.
+		return b.baseBindColRef(astExpr, depth, isRoot)
 	} else if b.builder.mysqlCompatible {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {

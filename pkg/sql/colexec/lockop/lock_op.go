@@ -186,6 +186,13 @@ func mergeableLockTargets(left, right lockTarget) bool {
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
+func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
+	if lockOp.ctr.hasNewVersionInRange != nil {
+		return lockOp.ctr.hasNewVersionInRange
+	}
+	return hasNewVersionInRange
+}
+
 func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionInRangeFunc {
 	return func(
 		proc *process.Process,
@@ -199,9 +206,10 @@ func (lockOp *LockOp) hasNewVersionInRangeForTargets(group []int) hasNewVersionI
 		from timestamp.Timestamp,
 		to timestamp.Timestamp,
 	) (bool, error) {
+		hasNewVersionInRange := lockOp.getHasNewVersionInRangeFunc()
 		for _, groupIdx := range group {
 			groupTarget := lockOp.targets[groupIdx]
-			changed, err := lockOp.ctr.hasNewVersionInRange(
+			changed, err := hasNewVersionInRange(
 				proc,
 				lockOp.ctr.relations[groupIdx],
 				analyzer,
@@ -319,7 +327,7 @@ func performLock(
 		// order. Use one full-domain range lock for the group. This keeps the
 		// operator streaming and bounds memory independently of input size.
 		lockTable := target.lockTable || len(group) > 1
-		hasNewVersionInRangeFunc := lockOp.ctr.hasNewVersionInRange
+		hasNewVersionInRangeFunc := lockOp.getHasNewVersionInRangeFunc()
 		if len(group) > 1 {
 			hasNewVersionInRangeFunc = lockOp.hasNewVersionInRangeForTargets(group)
 		}

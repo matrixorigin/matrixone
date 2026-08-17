@@ -2039,6 +2039,49 @@ func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
 	require.True(t, found)
 }
 
+func TestOnlyFullGroupByAllowsNonAggregateHavingOnInformationSchemaView(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t, `
+		SELECT TABLE_SCHEMA AS TABLE_CAT,
+		       NULL AS TABLE_SCHEM,
+		       TABLE_NAME,
+		       CASE
+		           WHEN TABLE_TYPE = 'BASE TABLE' THEN
+		               CASE
+		                   WHEN TABLE_SCHEMA = 'mysql'
+		                       OR TABLE_SCHEMA = 'performance_schema'
+		                   THEN 'SYSTEM TABLE'
+		                   ELSE 'TABLE'
+		               END
+		           WHEN TABLE_TYPE = 'TEMPORARY' THEN 'LOCAL_TEMPORARY'
+		           ELSE TABLE_TYPE
+		       END AS TABLE_TYPE,
+		       TABLE_COMMENT AS REMARKS,
+		       NULL AS TYPE_CAT,
+		       NULL AS TYPE_SCHEM,
+		       NULL AS TYPE_NAME,
+		       NULL AS SELF_REFERENCING_COL_NAME,
+		       NULL AS REF_GENERATION
+		FROM information_schema.tables
+		WHERE TABLE_SCHEMA = 'benchbase'
+		HAVING TABLE_TYPE IN ('TABLE', NULL, NULL, NULL, NULL)
+		ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME`)
+	require.NoError(t, err)
+	for _, node := range p.GetQuery().Nodes {
+		require.NotEqual(t, plan.Node_AGG, node.NodeType)
+	}
+}
+
+func TestMatrixOneNativeStillRejectsNonAggregateHavingColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING n_nationkey > 0`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
 func TestOnlyFullGroupByWindowOnlyHavingBuildsPreWindowFilter(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t, `

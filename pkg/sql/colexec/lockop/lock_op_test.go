@@ -2091,6 +2091,20 @@ func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
 	require.Equal(t, []int32{3, 7}, checked)
 }
 
+func TestLockOpMergedTargetsUseDefaultVersionRangeChecker(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	defer arg.Release()
+	pkType := types.T_int32.ToType()
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
+
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
 func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		pkType := types.T_int32.ToType()
