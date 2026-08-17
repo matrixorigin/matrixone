@@ -782,6 +782,13 @@ func TestSession_Migrate(t *testing.T) {
 		// filtered system-variable statement against the final user-variable snapshot.
 		require.NoError(t, source.SetUserDefinedVar("mode", "PIPES_AS_CONCAT", "set @mode = 'PIPES_AS_CONCAT'"))
 		require.NoError(t, source.SetSessionSysVar(context.Background(), "sql_mode", "ANSI_QUOTES"))
+		for _, name := range []string{
+			"character_set_client", "character_set_connection", "character_set_results",
+		} {
+			require.NoError(t, source.SetSessionSysVar(context.Background(), name, "latin1"))
+		}
+		require.NoError(t, source.GetTxnHandler().setNextTxnIsolation(
+			context.Background(), txn.TxnIsolation_RC, false))
 		routine := &Routine{mc: newMigrateController()}
 		routine.setSession(source)
 		exported := &query.MigrateConnFromResponse{}
@@ -810,6 +817,16 @@ func TestSession_Migrate(t *testing.T) {
 		sqlMode, err := target.GetSessionSysVar("sql_mode")
 		require.NoError(t, err)
 		require.Equal(t, "ANSI_QUOTES", sqlMode)
+		for _, name := range []string{
+			"character_set_client", "character_set_connection", "character_set_results",
+		} {
+			charset, err := target.GetSessionSysVar(name)
+			require.NoError(t, err)
+			require.Equal(t, "latin1", charset)
+		}
+		nextIsolation, hasNextIsolation := target.GetTxnHandler().nextTxnIsolationSnapshot()
+		require.True(t, hasNextIsolation)
+		require.Equal(t, txn.TxnIsolation_RC, nextIsolation)
 		require.Equal(t, "d1", target.GetDatabaseName())
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
 

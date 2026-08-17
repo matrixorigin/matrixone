@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -78,22 +79,41 @@ func (c *clientConn) migrateConnToContext(
 	if parent == nil {
 		parent = context.Background()
 	}
+	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
+	defer cancel()
+
+	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported
+	typedMigrationSupported := false
+	addr := ""
+	if typedMigration {
+		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+		if addr == "" {
+			return moerr.NewInternalError(ctx, "cannot get query service address")
+		}
+		targetProtocol, err := c.getTargetProtocolVersion(ctx, addr)
+		if err != nil {
+			return err
+		}
+		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+	}
+
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
 	// Currently, the session variable transferred is not used anywhere else,
 	// and just used here.
-	if _, err := execStmtWithContext(parent, sc, internalStmt{
+	if _, err := execStmtWithContext(ctx, sc, internalStmt{
 		cmdType: cmdQuery,
 		s:       "/* cloud_nonuser */ set transferred=1;",
 	}, nil); err != nil {
 		return err
 	}
 
-	// Old CNs do not export evaluated user variables. Preserve the legacy raw
-	// replay path until the cluster-wide protocol reaches v22.
-	if !info.UserDefinedVarsExported {
+	// Preserve raw replay whenever the target cannot consume typed state or the
+	// source did not export evaluated user variables. Typed system variables can
+	// still be applied by the target after that replay.
+	if !typedMigrationSupported || !info.UserDefinedVarsExported {
 		for _, stmt := range c.migration.setVarStmts {
-			if _, err := execStmtWithContext(parent, sc, internalStmt{
+			if _, err := execStmtWithContext(ctx, sc, internalStmt{
 				cmdType: cmdQuery,
 				s:       stmt,
 			}, nil); err != nil {
@@ -104,9 +124,11 @@ func (c *clientConn) migrateConnToContext(
 	}
 
 	// Then, migrate other info with RPC.
-	addr := getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 	if addr == "" {
-		return moerr.NewInternalError(parent, "cannot get query service address")
+		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
+	}
+	if addr == "" {
+		return moerr.NewInternalError(ctx, "cannot get query service address")
 	}
 	c.log.Info("connection migrate to server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -120,22 +142,53 @@ func (c *clientConn) migrateConnToContext(
 		DB:                      info.DB,
 		PrepareStmts:            info.PrepareStmts,
 		LastAffectedRows:        info.LastAffectedRows,
-		UserDefinedVars:         info.UserDefinedVars,
-		UserDefinedVarsExported: info.UserDefinedVarsExported,
-		SystemVariables:         info.SystemVariables,
-		SystemVariablesExported: info.SystemVariablesExported,
+		UserDefinedVars:         nil,
+		UserDefinedVarsExported: false,
+		SystemVariables:         nil,
+		SystemVariablesExported: false,
 	}
-	if info.UserDefinedVarsExported && !info.SystemVariablesExported {
+	if typedMigrationSupported {
+		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars
+		req.MigrateConnToRequest.UserDefinedVarsExported = info.UserDefinedVarsExported
+		req.MigrateConnToRequest.SystemVariables = info.SystemVariables
+		req.MigrateConnToRequest.SystemVariablesExported = info.SystemVariablesExported
+	}
+	if typedMigrationSupported && info.UserDefinedVarsExported && !info.SystemVariablesExported {
 		req.MigrateConnToRequest.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
-	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
 	}
 	c.queryClient.Release(resp)
 	return nil
+}
+
+func (c *clientConn) getTargetProtocolVersion(ctx context.Context, addr string) (int64, error) {
+	if c.queryClient == nil {
+		return 0, moerr.NewInternalError(ctx, "query client is not initialized")
+	}
+	req := c.queryClient.NewRequest(query.CmdMethod_GetProtocolVersion)
+	req.GetProtocolVersion = &query.GetProtocolVersionRequest{}
+	resp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if err != nil {
+		if resp != nil {
+			c.queryClient.Release(resp)
+		}
+		return 0, moerr.AttachCause(ctx, err)
+	}
+	if resp == nil || resp.GetProtocolVersion == nil {
+		if resp != nil {
+			c.queryClient.Release(resp)
+		}
+		return 0, moerr.NewInternalError(ctx, "target query service returned no protocol version")
+	}
+	version := resp.GetProtocolVersion.Version
+	c.queryClient.Release(resp)
+	if version <= 0 {
+		return 0, moerr.NewInternalErrorf(ctx, "target query service returned invalid protocol version %d", version)
+	}
+	return version, nil
 }
 
 func (c *clientConn) migrateConnContext(

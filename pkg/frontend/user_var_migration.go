@@ -82,6 +82,16 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 		names = append(names, canonicalName)
 	}
 	sort.Strings(names)
+	var nextTxnIsolationValue string
+	var hasNextTxnIsolation bool
+	if isolation, ok := ses.GetTxnHandler().nextTxnIsolationSnapshot(); ok {
+		var supported bool
+		nextTxnIsolationValue, supported = txnIsolationToSystemValue(isolation)
+		if !supported {
+			return nil, moerr.NewInternalError(ctx, "cannot migrate unsupported next transaction isolation")
+		}
+		hasNextTxnIsolation = true
+	}
 
 	result := make([]*query.MigrateSystemVariable, 0, len(names))
 	for _, name := range names {
@@ -101,6 +111,18 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 			Name:  name,
 			Value: encoded,
 		})
+		if name == transactionIsolationSystemVariable && hasNextTxnIsolation {
+			nextEncoded, err := encodeUserDefinedVarValue(ctx, nextTxnIsolationValue, false)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(ctx,
+					"cannot encode next transaction isolation for connection migration: %v", err)
+			}
+			result = append(result, &query.MigrateSystemVariable{
+				Name:            name,
+				Value:           nextEncoded,
+				NextTransaction: true,
+			})
+		}
 	}
 	if (&query.MigrateConnToRequest{SystemVariables: result}).ProtoSize() > maxMigrateUserDefinedVarsSize {
 		return nil, moerr.NewInternalError(ctx, "session system variables exceed the connection migration size limit")
@@ -142,15 +164,16 @@ func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefined
 }
 
 type migratedSystemVariable struct {
-	name  string
-	value any
+	name            string
+	value           any
+	nextTransaction bool
 }
 
 func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVariable) ([]migratedSystemVariable, error) {
 	if (&query.MigrateConnToRequest{SystemVariables: vars}).ProtoSize() > maxMigrateUserDefinedVarsSize {
 		return nil, moerr.NewInternalError(ctx, "session system variables exceed the connection migration size limit")
 	}
-	seen := make(map[string]struct{}, len(vars))
+	seen := make(map[string]struct{}, len(vars)*2)
 	result := make([]migratedSystemVariable, 0, len(vars))
 	for _, item := range vars {
 		if err := context.Cause(ctx); err != nil {
@@ -160,10 +183,18 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 			return nil, moerr.NewInternalError(ctx, "invalid session system variable in connection migration")
 		}
 		name := canonicalSystemVariableName(item.Name)
-		if _, exists := seen[name]; exists {
+		if item.NextTransaction && name != transactionIsolationSystemVariable {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"next transaction scope is invalid for session system variable %q", name)
+		}
+		seenKey := name
+		if item.NextTransaction {
+			seenKey += ":next"
+		}
+		if _, exists := seen[seenKey]; exists {
 			return nil, moerr.NewInternalErrorf(ctx, "duplicate session system variable %q in connection migration", name)
 		}
-		seen[name] = struct{}{}
+		seen[seenKey] = struct{}{}
 		if _, ok := gSysVarsDefs[name]; !ok {
 			return nil, moerr.NewInternalErrorf(ctx, "unknown session system variable %q in connection migration", name)
 		}
@@ -171,7 +202,16 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, migratedSystemVariable{name: name, value: value})
+		if item.NextTransaction {
+			if _, err := txnIsolationFromSystemValue(ctx, value); err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, migratedSystemVariable{
+			name:            name,
+			value:           value,
+			nextTransaction: item.NextTransaction,
+		})
 	}
 	return result, nil
 }

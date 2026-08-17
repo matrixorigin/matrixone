@@ -762,4 +762,5 @@ message MongoDBClientRetireResponse {
 message MigrateSystemVariable {
   string Name = 1;
   plan.Expr Value = 2;
+  bool NextTransaction = 3;
 }

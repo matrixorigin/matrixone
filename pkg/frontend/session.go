@@ -2644,6 +2644,20 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	}
 	if req.SystemVariablesExported {
 		for _, variable := range systemVars {
+			if variable.nextTransaction {
+				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
+				if err != nil {
+					return err
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				continue
+			}
 			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}

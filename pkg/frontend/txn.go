@@ -378,6 +378,15 @@ func (th *TxnHandler) setNextTxnIsolation(
 	return nil
 }
 
+func (th *TxnHandler) nextTxnIsolationSnapshot() (pbtxn.TxnIsolation, bool) {
+	if th == nil {
+		return 0, false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.nextTxnIsolation, th.hasNextTxnIsolation
+}
+
 // txnIsolationUnsafe returns the isolation override for the transaction being
 // created and whether a next-transaction override must be consumed after New
 // successfully publishes an owned operator. The caller must hold th.mu.

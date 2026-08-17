@@ -239,12 +239,31 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "transaction_isolation", vars[0].name)
 	require.Equal(t, "ANSI_QUOTES", vars[0].value)
+	nextValue := plan2.MakePlan2StringConstExprWithType("READ-COMMITTED")
+	vars, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: "transaction_isolation", Value: value},
+		{Name: "tx_isolation", Value: nextValue, NextTransaction: true},
+	})
+	require.NoError(t, err)
+	require.Len(t, vars, 2)
+	require.False(t, vars[0].nextTransaction)
+	require.True(t, vars[1].nextTransaction)
+	require.Equal(t, "READ-COMMITTED", vars[1].value)
 
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
 		{Name: "tx_isolation", Value: value},
 		{Name: "transaction_isolation", Value: value},
 	})
 	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: "transaction_isolation", Value: nextValue, NextTransaction: true},
+		{Name: "tx_isolation", Value: nextValue, NextTransaction: true},
+	})
+	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: "sql_mode", Value: nextValue, NextTransaction: true},
+	})
+	require.ErrorContains(t, err, "next transaction scope is invalid")
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Name: "unknown", Value: value}})
 	require.ErrorContains(t, err, "unknown session system variable")
 	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Value: value}})
