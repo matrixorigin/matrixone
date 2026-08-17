@@ -11323,6 +11323,79 @@ func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractOracleOwnershipMatrix(t *testing.T) {
+	type want struct {
+		hour           uint32
+		minute, second uint8
+		null           bool
+	}
+
+	cases := []struct {
+		input string
+		want  want
+	}{
+		{input: "01:01:0 abc", want: want{hour: 1, minute: 1}},
+		{input: "01:01:1 abc", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "01:01:01 abc", want: want{}},
+		{input: "01:01:0 000", want: want{hour: 1, minute: 1}},
+		{input: "01:01:01 000", want: want{}},
+		{input: "01:01:01 123", want: want{null: true}},
+		{input: "01:01:01 123 ", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "01:01:01 a:b", want: want{}},
+		{input: "01:01:01: +", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1 2", want: want{second: 1}},
+		{input: "1 2:3", want: want{hour: 26, minute: 3}},
+		{input: "12 3:4", want: want{hour: 291, minute: 4}},
+		{input: "1-2-3 4:5:6", want: want{second: 1}},
+		{input: "12-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "123-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "1234-2-3 4:5:6", want: want{hour: 4, minute: 5, second: 6}},
+		{input: "12345-2-3 4:5:6", want: want{null: true}},
+		{input: "2024-12-20 12", want: want{hour: 12}},
+		{input: "2024-12-20 12:", want: want{hour: 12}},
+		{input: "2024-12-20 12::56", want: want{hour: 12, minute: 56}},
+	}
+
+	inputs := make([]string, 0, len(cases))
+	wants := make([]want, 0, len(cases))
+	for _, tc := range cases {
+		inputs = append(inputs, tc.input)
+		wants = append(wants, tc.want)
+	}
+
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			nulls := make([]bool, len(wants))
+			hours := make([]uint32, len(wants))
+			minutes := make([]uint8, len(wants))
+			seconds := make([]uint8, len(wants))
+			for i, expected := range wants {
+				nulls[i] = expected.null
+				hours[i] = expected.hour
+				minutes[i] = expected.minute
+				seconds[i] = expected.second
+			}
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{name: "hour", fn: StringToHour, expect: NewFunctionTestResult(types.T_uint32.ToType(), false, hours, nulls)},
+				{name: "minute", fn: StringToMinute, expect: NewFunctionTestResult(types.T_uint8.ToType(), false, minutes, nulls)},
+				{name: "second", fn: StringToSecond, expect: NewFunctionTestResult(types.T_uint8.ToType(), false, seconds, nulls)},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractOracleMatrix843(t *testing.T) {
 	cases := make([]string, 0, 843)
 	years := []string{"0", "1", "12", "123", "2024", "12345"}
