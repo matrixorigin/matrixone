@@ -272,7 +272,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 								}
 								ctr.matched, allocationErr = colexec.NewAccountedBitmap(
 									rows, proc.Mp(), dedupJoin.allocationAccount,
-									hashbuild.HashBuildAllocationOwner,
+									mpool.AllocationOwnerHashBuild,
 									dedupJoinAllocationSiteMatched,
 								)
 							}
@@ -351,7 +351,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
 				Budget:                    budget,
-			}, dedupJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			}, dedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -399,7 +399,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			rows,
 			proc.Mp(),
 			dedupJoin.allocationAccount,
-			hashbuild.HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			dedupJoinAllocationSiteMatched,
 		)
 		if err != nil {
@@ -449,7 +449,7 @@ func (ctr *container) initCaptureBuffers(ap *DedupJoin, proc *process.Process) e
 		ctr.batchRowCount,
 		proc.Mp(),
 		ap.allocationAccount,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		dedupJoinAllocationSiteCaptured,
 	)
 	if err != nil {
@@ -666,7 +666,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			count,
 			proc.Mp(),
 			ap.allocationAccount,
-			hashbuild.HashBuildAllocationOwner,
+			mpool.AllocationOwnerHashBuild,
 			dedupJoinAllocationSiteFinalizeSelections,
 		)
 		if err != nil {

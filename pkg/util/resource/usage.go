@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package resource defines the allocation-free resource accounting algebra.
-// It intentionally depends only on the standard library so producers can use
-// one model without introducing an execution or observability dependency cycle.
+// Package resource defines the bounded resource accounting algebra. Its
+// producer hot path and additive core are allocation-free; sparse owner detail
+// allocates only while reducing terminal summaries. The package intentionally
+// depends only on the standard library so producers can use one model without
+// introducing an execution or observability dependency cycle.
 package resource
 
 import (
@@ -40,7 +42,7 @@ func (f QualityFlags) String() string {
 	if f == 0 {
 		return "complete"
 	}
-	names := make([]string, 0, 8)
+	names := make([]string, 0, 9)
 	for _, flag := range [...]struct {
 		value QualityFlags
 		name  string
@@ -53,6 +55,7 @@ func (f QualityFlags) String() string {
 		{QualityCrossPoolFree, "cross-pool-free"},
 		{QualityNonZeroLiveAtSeal, "live-at-seal"},
 		{QualityAggregated, "aggregated"},
+		{QualityMissingAllocationOwner, "missing-allocation-owner"},
 	} {
 		if f&flag.value != 0 {
 			names = append(names, flag.name)
@@ -92,6 +95,7 @@ const (
 	QualityCrossPoolFree
 	QualityNonZeroLiveAtSeal
 	QualityAggregated
+	QualityMissingAllocationOwner
 )
 
 // Usage contains only additive quantities. It is deliberately compact enough

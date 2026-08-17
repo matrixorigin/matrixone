@@ -75,9 +75,9 @@ func TestHashJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 
-	admission := &process.HashBuildBudgetError{
-		Kind:      process.HashBuildBudgetErrorAdmission,
-		Component: process.HashBuildBudgetComponentMemory,
+	admission := &process.ExecutionResourceError{
+		Kind:      process.ExecutionResourceErrorAdmission,
+		Component: process.ExecutionResourceComponentMemory,
 		Requested: 2,
 		Used:      1,
 		Cap:       1,
@@ -110,9 +110,9 @@ func TestHashJoinCallConvertsTerminalBudgetAdmission(t *testing.T) {
 	_, callErr = arg.Call(proc)
 	require.Error(t, callErr)
 	require.True(t, moerr.IsMoErrCode(callErr, moerr.ErrOOM), callErr)
-	require.NotErrorIs(t, callErr, process.ErrHashBuildBudgetAdmission)
+	require.NotErrorIs(t, callErr, process.ErrExecutionResourceAdmission)
 	require.NotContains(t, callErr.Error(), "convert go error")
-	require.NotContains(t, callErr.Error(), process.ErrHashBuildBudgetAdmission.Error())
+	require.NotContains(t, callErr.Error(), process.ErrExecutionResourceAdmission.Error())
 	require.Contains(t, callErr.Error(), "hash build memory budget exceeded")
 }
 
@@ -127,7 +127,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 	rootProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rootProc.SetMessageBoard(message.NewMessageBoard())
 	rootProc.BuildPipelineContext(ctx)
-	budget, err := rootProc.GetHashBuildBudget()
+	budget, err := rootProc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
 	require.NoError(t, err)
@@ -275,7 +275,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 		require.Nil(t, outcome.result.Batch)
 		require.Error(t, buildErr)
 		require.True(t, moerr.IsMoErrCode(buildErr, moerr.ErrOOM), buildErr)
-		require.NotErrorIs(t, buildErr, process.ErrHashBuildBudgetAdmission)
+		require.NotErrorIs(t, buildErr, process.ErrExecutionResourceAdmission)
 		require.Contains(t, buildErr.Error(), "hash build memory budget exceeded")
 	case <-ctx.Done():
 		t.Fatalf("HashBuild did not publish its terminal error: %v", ctx.Err())
@@ -288,7 +288,7 @@ func TestBroadcastBudgetFailureUnblocksParallelHashJoinConsumers(t *testing.T) {
 			require.Nil(t, outcome.result.Batch, "consumer %d emitted a partial probe result", outcome.index)
 			require.Error(t, outcome.err)
 			require.True(t, moerr.IsMoErrCode(outcome.err, moerr.ErrOOM), outcome.err)
-			require.NotErrorIs(t, outcome.err, process.ErrHashBuildBudgetAdmission)
+			require.NotErrorIs(t, outcome.err, process.ErrExecutionResourceAdmission)
 			require.Equal(t, buildErr.Error(), outcome.err.Error())
 			require.Zero(t, consumers[outcome.index].probe.calls.Load(),
 				"consumer %d must fail before reading probe input", outcome.index)

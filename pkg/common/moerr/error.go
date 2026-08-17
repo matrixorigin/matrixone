@@ -188,6 +188,7 @@ const (
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
+	ErrFieldSpecifiedTwice                      uint16 = 20477
 
 	// Group 5: rpc errors
 	//
@@ -521,6 +522,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
+	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1755,6 +1757,10 @@ func NewErrTooManyFields(ctx context.Context) *Error {
 
 func NewErrDupFieldName(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrDupFieldName, k)
+}
+
+func NewFieldSpecifiedTwice(ctx context.Context, column string) *Error {
+	return newError(ctx, ErrFieldSpecifiedTwice, column)
 }
 
 func NewErrKeyColumnDoesNotExist(ctx context.Context, k any) *Error {

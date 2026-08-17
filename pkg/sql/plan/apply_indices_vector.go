@@ -57,12 +57,49 @@ func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int
 	return nil
 }
 
+// buildVectorSortContextFromSort builds the same context as buildVectorSortContext, but
+// anchored at the Top-K SORT itself rather than at a PROJECT above it.
+//
+// The project-anchored form only sees a Top-K whose parent is a PROJECT, so any consumer
+// between the two hides it: an outer ORDER BY leaves Project->Sort->Sort->Scan, where the
+// resolver's single hop is spent on the outer sort (#25967), and a join leaves the Top-K
+// as a join input with no project above it at all (#25974). Both then fall back to a full
+// scan with an exact sort — correct, but the index is silently unused. Anchoring here
+// makes the Top-K rewritable wherever it sits; applyIndices repoints whichever parent it
+// has from the returned node id.
+//
+// projNode is deliberately left nil: there is no project to mutate or read column
+// requirements from, which the rewrites detect (see spliceVectorRewrite, and the
+// index-only gate in applyIndicesForSortUsingIvfflat).
+func (builder *QueryBuilder) buildVectorSortContextFromSort(sortNode *plan.Node) *vectorSortContext {
+	if sortNode == nil || sortNode.NodeType != plan.Node_SORT || len(sortNode.OrderBy) != 1 {
+		return nil
+	}
+	// Only a Top-K carries its own limit. A bare ordering node (the outer ORDER BY of
+	// #25967) has none, and rewriting it would discard the ordering its consumer wants.
+	if sortNode.Limit == nil {
+		return nil
+	}
+	// NOTE: only the plain shape is handled here. The vector-provider join
+	// (buildVectorSortContextThroughJoin) also hides behind a consumer in principle, but
+	// no SQL shape reachable in testing produces that context — it needs a single-row,
+	// NOT NULL, limit-1 provider join all at once — so a sort-anchored fallback for it
+	// would be unverifiable code. Left deliberately out; see the decision log.
+	return builder.buildVectorSortContextFrom(nil, sortNode)
+}
+
 func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vectorSortContext {
 	sortNode := builder.resolveSortNode(projNode, 1)
 	if sortNode == nil || len(sortNode.OrderBy) != 1 {
 		return nil
 	}
+	return builder.buildVectorSortContextFrom(projNode, sortNode)
+}
 
+// buildVectorSortContextFrom is the shared body of the project- and sort-anchored
+// builders: everything below the Top-K sort is resolved identically, only the anchor
+// differs. projNode may be nil.
+func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan.Node) *vectorSortContext {
 	scanNode := builder.resolveScanNodeWithIndex(sortNode, 1)
 	if scanNode == nil {
 		return nil
@@ -77,11 +114,37 @@ func (builder *QueryBuilder) buildVectorSortContext(projNode *plan.Node) *vector
 		}
 		childNode = builder.qry.Nodes[sortNode.Children[0]]
 		if childNode.NodeType == plan.Node_PROJECT {
-			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+			// Bounds-check: the ORDER BY column indexes the child project's list, but the
+			// two can disagree. `select count(*) from (<top-k>) t` prunes the derived
+			// table's projection to nothing while the sort still carries ColPos from
+			// before pruning, so indexing blind panics with index out of range.
+			col := orderExpr.GetCol()
+			if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childNode.ProjectList) {
+				return nil
+			}
+			distFnExpr = childNode.ProjectList[col.ColPos].GetF()
 		}
 		if distFnExpr == nil {
 			return nil
 		}
+	}
+
+	// SORT anchor only (projNode == nil): the child PROJECT is detached and each of its
+	// non-distance expressions is published through idxColMap, which applyIndices then
+	// substitutes into EVERY ancestor referencing that column -- a deep copy per reference.
+	// Fine for a column reference, wrong for anything evaluated: two ancestors would each
+	// get their own rand()/uuid()/now(), so the value a JOIN predicate admitted a row on can
+	// differ from the value projected out of it, and moving evaluation above a JOIN changes
+	// how many times it runs.
+	//
+	// The PROJECT anchor is unaffected: spliceVectorRewrite applies its remap to that one
+	// node, so the expression is still evaluated exactly once.
+	//
+	// exprCanRemoveProject is the planner's existing answer to this same question --
+	// removeSimpleProjections refuses to inline a PROJECT holding a CannotFold or
+	// IsRealTimeRelated function. Reuse it rather than restate it, so the two cannot drift.
+	if projNode == nil && childNode != nil && !vectorChildProjectIsDetachable(childNode, orderExpr) {
+		return nil
 	}
 
 	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
@@ -113,7 +176,6 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 	if sortNode == nil || len(sortNode.OrderBy) != 1 {
 		return nil
 	}
-
 	joinNode, childNode := builder.resolveJoinNodeForVectorSort(sortNode)
 	if joinNode == nil || len(joinNode.Children) != 2 || !isVectorProviderJoin(joinNode) {
 		return nil
@@ -604,6 +666,103 @@ func (builder *QueryBuilder) validateVectorIndexSortRewrite(vecCtx *vectorSortCo
 	// which is not equivalent to a true farthest-neighbor query. Keep the original
 	// execution path so the query naturally falls back to the exact/force behavior.
 	return false, nil
+}
+
+// spliceVectorRewrite attaches the rewritten Top-K subtree (newRootID) where the original
+// one was, and returns the node id the caller must hand back to applyIndices.
+//
+// Two anchors exist. When the rewrite was entered from the PROJECT directly above the
+// Top-K sort, that project keeps its identity: its child pointer is repointed and any
+// column remap is applied to it directly, so the returned id is unchanged.
+//
+// When the rewrite was entered from the SORT itself — the Top-K sits under an outer
+// ORDER BY (#25967) or is a join input (#25974), so there is no project to mutate — the
+// new subtree root is returned instead, and applyIndices' caller repoints the parent via
+// `node.Children[i] = applyIndices(childID, ...)`. The remap goes into idxColMap rather
+// than into one node, because the columns it renames (the CTE's distance output becoming
+// the index score) are read by ancestors this function cannot see; applyIndices walks
+// children first and then calls replaceColumnsForNode on each ancestor, so every consumer
+// picks the mapping up on the way back out.
+func (builder *QueryBuilder) spliceVectorRewrite(
+	vecCtx *vectorSortContext,
+	nodeID int32,
+	newRootID int32,
+	remap map[[2]int32]*plan.Expr,
+	idxColMap map[[2]int32]*plan.Expr,
+) int32 {
+	if vecCtx.projNode != nil {
+		vecCtx.projNode.Children[0] = newRootID
+		if len(remap) > 0 {
+			replaceColumnsForNode(vecCtx.projNode, remap)
+		}
+		return nodeID
+	}
+	for k, v := range remap {
+		idxColMap[k] = v
+	}
+	return newRootID
+}
+
+// vectorChildProjectIsDetachable reports whether the PROJECT below the Top-K may be removed
+// with its expressions republished to arbitrarily many ancestors.
+//
+// The distance entry is exempt: it is replaced by a single ColRef to the index score, so it
+// is not duplicated however many ancestors read it. Every other entry is deep-copied per
+// reference, which is only sound for something whose value does not depend on being
+// evaluated once -- precisely what exprCanRemoveProject already decides.
+func vectorChildProjectIsDetachable(childNode *plan.Node, orderExpr *plan.Expr) bool {
+	sortIdx := -1
+	if col := orderExpr.GetCol(); col != nil {
+		sortIdx = int(col.ColPos)
+	}
+	for i, proj := range childNode.ProjectList {
+		if i == sortIdx {
+			continue
+		}
+		if !exprCanRemoveProject(proj) {
+			return false
+		}
+	}
+	return true
+}
+
+// vectorRemapForChildProject builds the column remap for the PROJECT that sits between the
+// Top-K sort and the scan: the sorted-on column becomes the index score, and the rest pass
+// through (optionally rewritten to the table function's columns for an index-only scan).
+// Returns nil when there is no such project, in which case scanRemap applies as-is.
+func vectorRemapForChildProject(
+	childNode *plan.Node,
+	orderExpr *plan.Expr,
+	scoreExpr *plan.Expr,
+	scanRemap map[[2]int32]*plan.Expr,
+) map[[2]int32]*plan.Expr {
+	if childNode == nil {
+		return scanRemap
+	}
+	// sortIdx = -1 when the ORDER BY carries the distance call itself rather than a
+	// reference to the child's projected column (buildVectorSortContextThroughJoin sets
+	// childNode regardless of that form). There is then no column to replace with the
+	// score, but the child is still being detached, so every other column it projects
+	// must be remapped or ancestors keep dangling references to a node that has left the
+	// plan.
+	sortIdx := -1
+	if col := orderExpr.GetCol(); col != nil {
+		sortIdx = int(col.ColPos)
+	}
+	remap := make(map[[2]int32]*plan.Expr, len(childNode.ProjectList))
+	for i, proj := range childNode.ProjectList {
+		key := [2]int32{childNode.BindingTags[0], int32(i)}
+		if i == sortIdx {
+			remap[key] = DeepCopyExpr(scoreExpr)
+			continue
+		}
+		if scanRemap != nil {
+			remap[key] = replaceColumnsForExpr(DeepCopyExpr(proj), scanRemap)
+			continue
+		}
+		remap[key] = proj
+	}
+	return remap
 }
 
 func (builder *QueryBuilder) stabilizeExactVectorSort(vecCtx *vectorSortContext) {

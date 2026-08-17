@@ -132,6 +132,45 @@ select p.id, (select sum(c.v) from child_agg c where c.corr_key = p.corr_key hav
 2  ¦  null  𝄀
 3  ¦  null  𝄀
 4  ¦  null
+set @@sql_mode = 'ONLY_FULL_GROUP_BY';
+select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) as ex from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select p.id, exists (select 1 from child_agg c having count(*) >= p.id) as ex from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  0
+select p.id, exists (select corr_key from child_agg group by corr_key having corr_key >= p.id) as ex from parent_agg p order by p.id;
+➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+select p.id, exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p group by p.id order by p.id;
+➤ id[4,32,0]  ¦  ex[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  0
+select p.id from parent_agg p having exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.id) order by p.id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select sum(p.id), exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex from parent_agg p;
+-- @regex("must appear in the GROUP BY clause", true)
+must appear in the GROUP BY clause
+select exists (select c.corr_key from child_agg c group by c.corr_key having count(*) >= p.corr_key) as ex, sum(p.id) from parent_agg p;
+-- @regex("must appear in the GROUP BY clause", true)
+must appear in the GROUP BY clause
+select count(*) as parent_count from parent_agg;
+➤ parent_count[-5,64,0]  𝄀
+4
+set @@sql_mode = default;
 SELECT `t0`.`id`, `t0`.`name`, (SELECT COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON)) AS `__prisma_data__` FROM (SELECT `t3`.`__prisma_data__` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t0`.`id` = `t1`.`authorId` /* root select */) AS `t2` /* inner select */) AS `t3` /* middle select */) AS `t4` /* outer select */) AS `posts` FROM `Author` AS `t0` ORDER BY `t0`.`id` ASC;
 ➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  posts[-1,2147483647,0]  𝄀
 1  ¦  Zero  ¦  []  𝄀

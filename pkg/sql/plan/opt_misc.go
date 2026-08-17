@@ -121,8 +121,16 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	case plan.Node_LOCK_OP:
+		childParentType := node.NodeType
+		if _, preserve := builder.preserveLockProjection[nodeID]; preserve {
+			// A preserved pass-through lock can feed positional consumers such as a
+			// shared SINK. Keep its immediate PROJECT as the stable row-image
+			// boundary; inlining that PROJECT changes the binding tag and can make
+			// every downstream sink column resolve to input column zero.
+			childParentType = plan.Node_UNKNOWN
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -358,9 +366,18 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	for i := range cols {
 		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			newCol := projExpr.Expr.(*plan.Expr_Col).Col
-			cols[i].RelPos = newCol.RelPos
-			cols[i].ColPos = newCol.ColPos
+			// A []plan.ColRef can only hold a column, so a mapping to any other
+			// expression form (a CTE projecting `id+1`, a cast) has nowhere to go here.
+			// Assert-and-panic would take down the CN; leaving the ref alone keeps the
+			// list valid. Vector rewrites publish such maps into idxColMap, which
+			// applyIndices then applies to every ancestor including nodes carrying
+			// UpdateCtxList / DedupJoinCtx.OldColList.
+			colExpr, isCol := projExpr.Expr.(*plan.Expr_Col)
+			if !isCol || colExpr.Col == nil {
+				continue
+			}
+			cols[i].RelPos = colExpr.Col.RelPos
+			cols[i].ColPos = colExpr.Col.ColPos
 		}
 	}
 }

@@ -50,6 +50,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/fastrand"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -63,6 +64,27 @@ const (
 
 // Compare is a comparison function for keys.
 type Compare func(a, b []byte) int
+
+// AddPlan fixes the physical tower height of one node before it is admitted.
+// The fields are intentionally private: plans are created from the complete
+// immutable key and can then be reproduced without retaining row-sized
+// metadata between admission and publication.
+type AddPlan struct {
+	height uint32
+}
+
+// MakeAddPlan derives a stable skiplist height from the complete key.  The
+// probability table is the same one used by the legacy random-height path, so
+// planned nodes retain the same expected search and storage complexity while
+// exposing their exact physical footprint before insertion.
+func MakeAddPlan(key []byte) AddPlan {
+	rnd := uint32(xxhash.Sum64(key))
+	height := uint32(1)
+	for height < maxHeight && rnd <= probabilities[height] {
+		height++
+	}
+	return AddPlan{height: height}
+}
 
 // ErrRecordExists indicates that an entry with the specified key already
 // exists in the skiplist. Duplicate entries are not directly supported and
@@ -97,7 +119,7 @@ type Inserter struct {
 
 // Add TODO(peter)
 func (ins *Inserter) Add(list *Skiplist, key, value []byte) error {
-	return list.addInternal(key, value, ins)
+	return list.addInternal(key, value, ins, nil)
 }
 
 var (
@@ -170,10 +192,37 @@ func (s *Skiplist) Size() uint32 { return s.arena.Size() }
 // Add returns ErrArenaFull.
 func (s *Skiplist) Add(key, value []byte) error {
 	var ins Inserter
-	return s.addInternal(key, value, &ins)
+	return s.addInternal(key, value, &ins, nil)
 }
 
-func (s *Skiplist) addInternal(key, value []byte, ins *Inserter) error {
+// AddWithPlan adds a key using the exact tower height selected by MakeAddPlan.
+// Callers that reserve ArenaFootprint before publishing a larger transaction
+// can therefore guarantee that insertion itself does not allocate or fail for
+// lack of arena capacity.
+func (s *Skiplist) AddWithPlan(key, value []byte, plan AddPlan) error {
+	if plan.height < 1 || plan.height > maxHeight {
+		return moerr.NewInternalErrorNoCtx("invalid skiplist add plan")
+	}
+	var ins Inserter
+	return s.addInternal(key, value, &ins, &plan)
+}
+
+// Contains reports whether key is already present without allocating a node or
+// changing the list. Callers that admit a later Add use it to avoid reserving
+// capacity for duplicate records.
+func (s *Skiplist) Contains(key []byte) bool {
+	if s == nil {
+		return false
+	}
+	var ins Inserter
+	return s.findSplice(key, &ins)
+}
+
+func (s *Skiplist) addInternal(
+	key, value []byte,
+	ins *Inserter,
+	plan *AddPlan,
+) error {
 	if s.findSplice(key, ins) {
 		// Found a matching node, but handle case where it's been deleted.
 		return ErrRecordExists
@@ -186,7 +235,17 @@ func (s *Skiplist) addInternal(key, value []byte, ins *Inserter) error {
 		runtime.Gosched()
 	}
 
-	nd, height, err := s.newNode(key, value)
+	var (
+		nd     *node
+		height uint32
+		err    error
+	)
+	if plan == nil {
+		nd, height, err = s.newNode(key, value)
+	} else {
+		height = plan.height
+		nd, err = s.newNodeAtHeight(key, value, height)
+	}
 	if err != nil {
 		return err
 	}
@@ -311,6 +370,14 @@ func (s *Skiplist) newNode(
 	key, value []byte,
 ) (nd *node, height uint32, err error) {
 	height = s.randomHeight()
+	nd, err = s.newNodeAtHeight(key, value, height)
+	return
+}
+
+func (s *Skiplist) newNodeAtHeight(
+	key, value []byte,
+	height uint32,
+) (nd *node, err error) {
 	nd, err = newNode(s.arena, height, key, value)
 	if err != nil {
 		return
@@ -327,7 +394,7 @@ func (s *Skiplist) newNode(
 		listHeight = s.Height()
 	}
 
-	return
+	return nd, nil
 }
 
 func (s *Skiplist) randomHeight() uint32 {
