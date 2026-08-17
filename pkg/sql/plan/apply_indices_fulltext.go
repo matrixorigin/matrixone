@@ -1780,19 +1780,55 @@ func collectDrivingFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Ex
 //
 //   - AND-reachable only. Under an OR or a NOT the predicate does not have to hold for a
 //     returned row, so the engine must not drop anything on its account.
-//   - Each bound is widened OUTWARD by one float32 ULP. The SQL comparison is evaluated in
-//     double while the engine scores in float32, so a bound converted naively could round the
-//     wrong way and drop a row the SQL predicate keeps. The plan keeps its own Filter above
-//     the join, so a slightly wide range costs one comparison and never a row.
+//   - Each bound is rounded OUTWARD in float32 space (scoreBoundDown / scoreBoundUp). The SQL
+//     comparison is evaluated in double while the engine scores in float32, so a bound
+//     converted naively could round the wrong way and drop a row the SQL predicate keeps. The
+//     plan keeps its own Filter above the join, so a slightly wide range costs one comparison
+//     and never a row.
 //
 // Returns nil when nothing is pushable.
+// scoreBoundDown returns the largest float32 that is still <= v, and scoreBoundUp the
+// smallest float32 that is still >= v.
+//
+// The adjustment has to happen in float32 space, after the conversion. Nudging the float64
+// literal by one float64 ULP first does not work: float64->float32 rounds to NEAREST, so a
+// literal sitting more than half a float32 ULP away from its neighbour still converts to the
+// same float32 and the nudge is swallowed, landing the bound on the WRONG side of v. Two
+// literals that do it, both reachable from ordinary SQL:
+//
+//	score > 0.5000000447034836  -- float64 nudge yields Min 0.5000000596046448 > v, so a
+//	                              score of exactly 0.5000000596046448 (which satisfies the
+//	                              SQL predicate) is dropped by the exclusive minimum.
+//	score < 0.5000000149011612  -- float64 nudge yields Max 0.5 < v, so a score of exactly
+//	                              0.5 (which satisfies the SQL predicate) is dropped.
+//
+// Converting first and stepping outward only when the conversion landed inward keeps the
+// invariant the engine relies on -- lower bound <= literal, upper bound >= literal -- and is
+// also tighter than an unconditional widen: an exactly representable literal such as 0.5
+// needs no slack at all.
+func scoreBoundDown(v float64) float32 {
+	f := float32(v)
+	if float64(f) > v {
+		f = math.Nextafter32(f, float32(math.Inf(-1)))
+	}
+	return f
+}
+
+func scoreBoundUp(v float64) float32 {
+	f := float32(v)
+	if float64(f) < v {
+		f = math.Nextafter32(f, float32(math.Inf(1)))
+	}
+	return f
+}
+
 func (builder *QueryBuilder) fulltext2ScoreRangeFromFilters(filters []*plan.Expr, matchFn *plan.Function) *fulltext2.ScoreRange {
 	var out *fulltext2.ScoreRange
 	setMin := func(v float64, inclusive bool) {
 		if out == nil {
 			out = &fulltext2.ScoreRange{}
 		}
-		f := float32(math.Nextafter(v, math.Inf(-1))) // widen downward
+		f := scoreBoundDown(v)
 		if !out.HasMin || f > out.Min {
 			out.Min, out.HasMin, out.MinInclusive = f, true, inclusive
 		}
@@ -1801,7 +1837,7 @@ func (builder *QueryBuilder) fulltext2ScoreRangeFromFilters(filters []*plan.Expr
 		if out == nil {
 			out = &fulltext2.ScoreRange{}
 		}
-		f := float32(math.Nextafter(v, math.Inf(1))) // widen upward
+		f := scoreBoundUp(v)
 		if !out.HasMax || f < out.Max {
 			out.Max, out.HasMax, out.MaxInclusive = f, true, inclusive
 		}

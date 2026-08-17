@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -288,6 +290,118 @@ func TestFulltext2ScoreRangeFromFilters(t *testing.T) {
 		[]*plan.Expr{scoreFn(">", m(), scoreFn("+", cst(1), cst(2)))}, hello))
 	// no score predicate at all
 	require.Nil(t, builder.fulltext2ScoreRangeFromFilters([]*plan.Expr{scoreFn(">", scoreLit(), cst(1))}, hello))
+}
+
+// pushKeeps mirrors fulltext2.ScoreRange.contains (unexported there) so this package can
+// assert what the engine will actually do with the bounds the planner hands it.
+func pushKeeps(r *fulltext2.ScoreRange, score float32) bool {
+	if r.HasMin {
+		if r.MinInclusive && score < r.Min {
+			return false
+		}
+		if !r.MinInclusive && score <= r.Min {
+			return false
+		}
+	}
+	if r.HasMax {
+		if r.MaxInclusive && score > r.Max {
+			return false
+		}
+		if !r.MaxInclusive && score >= r.Max {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFulltext2ScoreRangeRoundsOutwardAtMidpoints pins the conversion direction.
+//
+// The engine scores in float32 while the SQL literal is a double, so the pushed bound must
+// land OUTWARD of the literal: any float32 score the SQL predicate keeps has to survive
+// ScoreRange.contains, because the engine drops rejected rows before the plan's own Filter
+// ever sees them. Rounding inward silently loses rows.
+//
+// Every literal here sits strictly between two float32 values, more than half a float32 ULP
+// from one of them -- the case an exactly representable literal like 0.5 cannot express, and
+// the case a float64-space nudge gets wrong, because float64->float32 rounds to nearest and
+// swallows the nudge.
+func TestFulltext2ScoreRangeRoundsOutwardAtMidpoints(t *testing.T) {
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{ftScanNode(7)}}}
+	hello := matchFn("hello", 0, "body")
+	m := func() *plan.Expr { return matchExpr(matchFn("hello", 0, "body")) }
+	cst := func(v float64) *plan.Expr { return makePlan2Float64ConstExprWithType(v) }
+
+	// float32(lowLit) rounds UP, away from a correct lower bound.
+	const lowLit = 0.5000000447034836
+	// float32(highLit) rounds DOWN, away from a correct upper bound.
+	const highLit = 0.5000000149011612
+
+	// The two float32 neighbours straddling both literals.
+	half := float32(0.5)
+	nextUp := math.Nextafter32(half, float32(math.Inf(1))) // 0.5000000596046448
+
+	for _, tc := range []struct {
+		op    string
+		lit   float64
+		score float32 // a float32 score the SQL predicate keeps
+		lower bool
+	}{
+		{">", lowLit, nextUp, true},
+		{">=", lowLit, nextUp, true},
+		{"<", highLit, half, false},
+		{"<=", highLit, half, false},
+	} {
+		t.Run(tc.op, func(t *testing.T) {
+			r := builder.fulltext2ScoreRangeFromFilters(
+				[]*plan.Expr{scoreFn(tc.op, m(), cst(tc.lit))}, hello)
+			require.NotNil(t, r)
+
+			if tc.lower {
+				require.True(t, r.HasMin)
+				require.LessOrEqual(t, float64(r.Min), tc.lit,
+					"a lower bound must never round inward past the SQL literal")
+			} else {
+				require.True(t, r.HasMax)
+				require.GreaterOrEqual(t, float64(r.Max), tc.lit,
+					"an upper bound must never round inward past the SQL literal")
+			}
+
+			// The SQL predicate keeps this score; so must the pushed range.
+			var sqlKeeps bool
+			switch tc.op {
+			case ">":
+				sqlKeeps = float64(tc.score) > tc.lit
+			case ">=":
+				sqlKeeps = float64(tc.score) >= tc.lit
+			case "<":
+				sqlKeeps = float64(tc.score) < tc.lit
+			case "<=":
+				sqlKeeps = float64(tc.score) <= tc.lit
+			}
+			require.True(t, sqlKeeps, "test setup: the probe score must satisfy the SQL predicate")
+			require.True(t, pushKeeps(r, tc.score),
+				"the engine would drop a row the SQL predicate keeps")
+		})
+	}
+}
+
+// TestScoreBoundHelpersPreserveInvariant sweeps the bound helpers across float32
+// neighbourhoods and their midpoints: down <= v <= up, with no exceptions.
+func TestScoreBoundHelpersPreserveInvariant(t *testing.T) {
+	for _, base := range []float32{0, 0.5, 1, 1e-8, 12.34, 3.4e38} {
+		f := base
+		for i := 0; i < 500; i++ {
+			next := math.Nextafter32(f, float32(math.Inf(1)))
+			for _, v := range []float64{float64(f), (float64(f) + float64(next)) / 2} {
+				require.LessOrEqual(t, float64(scoreBoundDown(v)), v)
+				require.GreaterOrEqual(t, float64(scoreBoundUp(v)), v)
+			}
+			f = next
+		}
+	}
+	// An exactly representable literal needs no slack at all.
+	require.Equal(t, float32(0.5), scoreBoundDown(0.5))
+	require.Equal(t, float32(0.5), scoreBoundUp(0.5))
 }
 
 // ftScanNodeWithIndex builds a TABLE_SCAN carrying one classic FULLTEXT index on `body`,

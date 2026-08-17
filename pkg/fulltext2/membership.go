@@ -106,10 +106,11 @@ type prefilter struct {
 // document outside it instead of handing it to the plan's Filter above the join.
 //
 // Both ends are optional and carry their own inclusivity so `>`, `>=`, `<`, `<=` and any
-// AND-combination of them map onto one object. The planner widens each bound by one float32
-// ULP outward before pushing it (see fulltext2ScoreRangeFromFilters): the SQL comparison runs
-// in double while scores are float32, and the engine must never drop a row the SQL predicate
-// would keep. The plan keeps its own Filter, so a slightly wide range costs nothing.
+// AND-combination of them map onto one object. The planner rounds each bound OUTWARD in
+// float32 space before pushing it (see fulltext2ScoreRangeFromFilters): the SQL comparison
+// runs in double while scores are float32, and the engine must never drop a row the SQL
+// predicate would keep. Callers can therefore rely on Min <= the SQL literal and Max >= it.
+// The plan keeps its own Filter, so a slightly wide range costs nothing.
 type ScoreRange struct {
 	Min          float32 `json:"min,omitempty"`
 	Max          float32 `json:"max,omitempty"`
