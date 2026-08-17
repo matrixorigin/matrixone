@@ -18,6 +18,8 @@ The exact named-dependency path constructs temporary BTree keys and scans retain
 
 The design goal is therefore correctness and measurable invalidation precision, not a predetermined throughput target. A production change is justified only if it removes material lookup cost without causing an unacceptable rebuild or cache-miss rate.
 
+The common negative path is an explicit non-regression requirement: after cache and object warm-up, a `HasNewerVersion` check that finds no newer catalog version must add zero heap allocations attributable to the check and must meet a pre-agreed latency budget for the production entry point. The budget must be measured against the current exact-history implementation at p50/p95/p99 under representative cache state. Cold initialization, caller-owned allocations, and unrelated rebuild work are outside this requirement; an implementation that cannot satisfy both the allocation-free steady-state path and the latency budget remains rejected.
+
 ## Measured Attribution Evidence
 
 The allocation cost is present in a real TPCC attribution window, not only in a local microbenchmark. The comparison uses M-profile run `31691323156` with 220,625 completed transactions and MAC-profile run `31998721900` with 225,236 completed transactions.
