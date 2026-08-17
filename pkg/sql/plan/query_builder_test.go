@@ -4847,7 +4847,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -4900,7 +4900,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -4918,7 +4918,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -4985,7 +4985,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)

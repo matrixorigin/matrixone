@@ -480,23 +480,25 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 	return nil
 }
 
-func (ag *aggState) writeSpillState(
+func (ag *aggState) writeSpillStateRows(
 	mp *mpool.MPool,
 	info *aggInfo,
-	flags []uint8,
+	rows []int32,
 	writer io.Writer,
 ) (int32, error) {
-	if len(flags) > AggBatchSize || len(flags) > int(ag.length) {
+	if len(rows) > AggBatchSize {
 		return 0, moerr.NewInvalidInputNoCtxf(
-			"aggregate spill selection length %d exceeds state row count %d",
-			len(flags), ag.length)
+			"aggregate spill selection length %d exceeds work unit %d",
+			len(rows), AggBatchSize)
 	}
-	var cnt int32
-	for _, selected := range flags {
-		if selected != 0 {
-			cnt++
+	for _, row := range rows {
+		if row < 0 || row >= ag.length {
+			return 0, moerr.NewInvalidInputNoCtxf(
+				"aggregate spill row %d exceeds state row count %d",
+				row, ag.length)
 		}
 	}
+	cnt := int32(len(rows))
 	if err := types.WriteInt32(writer, cnt); err != nil {
 		return 0, err
 	}
@@ -509,20 +511,12 @@ func (ag *aggState) writeSpillState(
 	}
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
-			written, err := vec.MarshalSelectedFlagsTo(writer, flags)
-			if err != nil {
+			if err := vec.MarshalSelectedRowsTo(writer, rows); err != nil {
 				return 0, err
-			}
-			if written != int(cnt) {
-				return 0, moerr.NewInternalErrorNoCtx(
-					"aggregate spill selection count mismatch")
 			}
 		}
 		if info.makeMarshalerUnmarshaler != nil {
-			for row, selected := range flags {
-				if selected == 0 {
-					continue
-				}
+			for _, row := range rows {
 				if ag.mobs[row] == nil {
 					if err := types.WriteInt32(writer, 0); err != nil {
 						return 0, err
@@ -540,11 +534,9 @@ func (ag *aggState) writeSpillState(
 	if ag.argSkl == nil {
 		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
-	for row, selected := range flags {
-		if selected != 0 {
-			if err := ag.writeStateArg(mp, int32(row), writer, info); err != nil {
-				return 0, err
-			}
+	for _, row := range rows {
+		if err := ag.writeStateArg(mp, row, writer, info); err != nil {
+			return 0, err
 		}
 	}
 	return cnt, nil
@@ -1485,37 +1477,28 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.
 	return nil
 }
 
-func (ae *aggExec) SaveSpillIntermediateResult(
-	cnt int64,
+func (ae *aggExec) SaveSpillIntermediateRows(
 	chunk int,
-	flags []uint8,
+	rows []int32,
 	writer io.Writer,
 ) error {
-	if ae == nil || writer == nil || cnt < 0 {
+	if ae == nil || writer == nil {
 		return moerr.NewInvalidInputNoCtx("invalid aggregate spill state")
 	}
-	if chunk < 0 || chunk >= len(ae.state) || len(flags) == 0 {
+	if chunk < 0 || chunk >= len(ae.state) || len(rows) == 0 {
 		return moerr.NewInternalErrorNoCtx("aggregate spill state chunk is invalid")
-	}
-	if len(flags) > int(ae.state[chunk].length) {
-		return moerr.NewInvalidInputNoCtxf(
-			"aggregate spill selection length %d exceeds state row count %d",
-			len(flags), ae.state[chunk].length)
-	}
-	if cnt > int64(len(flags)) {
-		return moerr.NewInvalidInputNoCtx("aggregate spill selection is invalid")
 	}
 	if err := types.WriteUint64(writer, spillMagicNumber); err != nil {
 		return err
 	}
-	written, err := ae.state[chunk].writeSpillState(
-		ae.mp, &ae.aggInfo, flags, writer)
+	written, err := ae.state[chunk].writeSpillStateRows(
+		ae.mp, &ae.aggInfo, rows, writer)
 	if err != nil {
 		return err
 	}
-	if int64(written) != cnt {
+	if int(written) != len(rows) {
 		return moerr.NewInternalErrorNoCtxf(
-			"aggregate spill count %d does not match %d", written, cnt)
+			"aggregate spill count %d does not match %d", written, len(rows))
 	}
 	return types.WriteUint64(writer, spillMagicNumber)
 }

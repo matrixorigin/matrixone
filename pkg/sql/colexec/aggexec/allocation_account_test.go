@@ -268,8 +268,8 @@ func TestAccountedDistinctGroupConcatDeduplicatesAndMerges(t *testing.T) {
 		PreflightBatchMerge(right, 0, []uint64{1}))
 	require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
 	var encoded bytes.Buffer
-	require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateResult(
-		1, 0, []uint8{1}, &encoded))
+	require.NoError(t, left.(SpillStateCodec).SaveSpillIntermediateRows(
+		0, []int32{0}, &encoded))
 	restored := makeExec()
 	require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
 		bytes.NewReader(encoded.Bytes()), mp))
@@ -551,8 +551,8 @@ func TestAccountedHLLPreflightRollbackAndSpillRoundTrip(t *testing.T) {
 
 	var encoded bytes.Buffer
 	codec := exec.(SpillStateCodec)
-	require.NoError(t, codec.SaveSpillIntermediateResult(
-		2, 0, []uint8{1, 1}, &encoded))
+	require.NoError(t, codec.SaveSpillIntermediateRows(
+		0, []int32{0, 1}, &encoded))
 	restored, err := MakeAgg(
 		mp, AggIdOfApproxCount, false, types.T_int64.ToType())
 	require.NoError(t, err)
@@ -644,8 +644,8 @@ func TestAccountedApproxPercentilePreflightAndSpillRoundTrip(t *testing.T) {
 
 	var encoded bytes.Buffer
 	codec := exec.(SpillStateCodec)
-	require.NoError(t, codec.SaveSpillIntermediateResult(
-		1, 0, []uint8{1}, &encoded))
+	require.NoError(t, codec.SaveSpillIntermediateRows(
+		0, []int32{0}, &encoded))
 	restored, err := MakeAgg(
 		mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
 	require.NoError(t, err)
