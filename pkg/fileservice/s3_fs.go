@@ -1494,8 +1494,6 @@ var _ CachingFileService = new(S3FS)
 func (s *S3FS) Close(ctx context.Context) {
 	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
 	caches.close(ctx)
-	s.memCache = nil
-	s.diskCache = nil
 }
 
 func (s *S3FS) FlushCache(ctx context.Context) {

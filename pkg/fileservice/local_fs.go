@@ -1351,8 +1351,6 @@ var _ CachingFileService = new(LocalFS)
 func (l *LocalFS) Close(ctx context.Context) {
 	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
 	caches.close(ctx)
-	l.memCache = nil
-	l.diskCache = nil
 	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
 
