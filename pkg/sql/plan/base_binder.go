@@ -1004,6 +1004,18 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	outer *Type,
 	functionTarget bool,
 ) (*Expr, error) {
+	// A direct user variable assigned from text must retain string semantics
+	// when it is merely being coerced to a DML/projection target.  In
+	// particular, inserting CAST(? AS CHAR) into BIT uses the source bytes
+	// ("5" -> 53), whereas an arithmetic expression such as @v + 0 must enter
+	// the numeric context below.  Do not let the target-type propagation turn
+	// the former into a value-dependent numeric cast.
+	if outer != nil && isDirectUserVariableExpr(astExpr) {
+		paramType := b.numericParamType
+		b.numericParamType = nil
+		defer func() { b.numericParamType = paramType }()
+		return b.impl.BindExpr(astExpr, depth, false)
+	}
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
@@ -1032,6 +1044,18 @@ func (b *baseBinder) bindNumericExprWithContextMode(
 	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 
 	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func isDirectUserVariableExpr(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	variable, ok := expr.(*tree.VarExpr)
+	return ok && !variable.System
 }
 
 func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth int32) (*Expr, error) {

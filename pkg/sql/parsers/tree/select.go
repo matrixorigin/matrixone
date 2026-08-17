@@ -702,8 +702,12 @@ func ValidateSelectIntoStatementRoot(stmt Statement) string {
 		}
 	case *SetVar:
 		for _, assignment := range node.Assignments {
-			if assignment != nil && (exprHasNestedInto(assignment.Value) ||
-				exprHasNestedInto(assignment.Reserved)) {
+			// A nested user-variable assignment has no owner in SET and must
+			// be rejected.  INTO OUTFILE is deliberately left to the existing
+			// planner diagnostic; it is a distinct export action and is kept
+			// valid by the expression-value path used by SET tests.
+			if assignment != nil && (exprHasUserVariableInto(assignment.Value) ||
+				exprHasUserVariableInto(assignment.Reserved)) {
 				return MisplacedIntoClauseMessage
 			}
 		}
