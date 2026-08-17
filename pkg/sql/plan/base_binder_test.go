@@ -32,6 +32,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMissingColumnWithStaleAliasUsesBadFieldError(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.aliasMap["missing_col"] = &aliasItem{idx: 0}
+	binder := &baseBinder{sysCtx: context.Background(), ctx: ctx}
+
+	_, err := binder.baseBindColRef(tree.NewUnresolvedColName("missing_col"), 0, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+	require.Equal(t, "42S22", moErr.SqlState())
+	require.EqualError(t, moErr, "invalid input: column missing_col does not exist")
+}
+
 func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	scopes := []map[string]interface{}{{
 		"p1": "10.00",
