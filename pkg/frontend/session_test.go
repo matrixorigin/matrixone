@@ -880,6 +880,64 @@ func TestSession_Migrate(t *testing.T) {
 		require.ErrorContains(t, getErr, "does not exist")
 	})
 
+	t.Run("typed system variables preserve side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		targetRuntime := runtime.ServiceRuntime(target.service)
+		oldRuntimeValues := make(map[string]interface{})
+		oldRuntimePresent := make(map[string]bool)
+		for _, name := range []string{
+			"optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter",
+		} {
+			oldRuntimeValues[name], oldRuntimePresent[name] = targetRuntime.GetGlobalVariables(name)
+			targetRuntime.SetGlobalVariables(name, "migration-side-effect-sentinel")
+		}
+		defer func() {
+			for name, value := range oldRuntimeValues {
+				if oldRuntimePresent[name] {
+					targetRuntime.SetGlobalVariables(name, value)
+				} else {
+					targetRuntime.CompareAndDeleteGlobalVariables(name, "migration-side-effect-sentinel")
+				}
+			}
+		}()
+
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			SystemVariablesExported: true,
+			SystemVariables: []*query.MigrateSystemVariable{
+				{Name: "optimizer_hints", Value: plan2.MakePlan2StringConstExprWithType("forceOneCN=1")},
+				{Name: "runtime_filter_limit_in", Value: plan2.MakePlan2Int64ConstExprWithType(77)},
+				{Name: "runtime_filter_limit_bloom_filter", Value: plan2.MakePlan2Int64ConstExprWithType(88)},
+				{Name: "disable_agg_statement", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+			},
+		})
+		require.NoError(t, err)
+
+		for name, expected := range map[string]interface{}{
+			"optimizer_hints":                   "forceOneCN=1",
+			"runtime_filter_limit_in":           int64(77),
+			"runtime_filter_limit_bloom_filter": int64(88),
+		} {
+			value, ok := targetRuntime.GetGlobalVariables(name)
+			require.True(t, ok, name)
+			require.Equal(t, expected, value, name)
+		}
+		require.True(t, target.disableAgg)
+	})
+
 	t.Run("reject user-level locks", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

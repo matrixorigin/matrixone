@@ -2661,6 +2661,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
 				return moerr.AttachCause(migrationCtx, err)
 			}
+			ses.applySessionSysVarSideEffects(variable.name, variable.value)
 		}
 	} else {
 		for _, stmt := range req.SetVarStmts {
@@ -2694,6 +2695,16 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return cause
 	}
 	return nil
+}
+
+func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
+	switch strings.ToLower(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
+	case "disable_agg_statement":
+		boolVal := InitSystemVariableBoolType("_")
+		ses.disableAgg = boolVal.IsTrue(value)
+	}
 }
 
 func (ses *Session) GetLogger() SessionLogger {
