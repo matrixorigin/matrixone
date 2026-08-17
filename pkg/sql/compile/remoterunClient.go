@@ -102,6 +102,9 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 
 		return nil, err
 	}
+	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
+		sender.warningSink = sink
+	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -427,6 +430,11 @@ type messageSenderOnClient struct {
 
 	// anal was used to merge remote-run's cost analysis information.
 	anal *AnalyzeModule
+
+	// warningSink is the session-owned diagnostic destination on the initiating
+	// process. Remote terminal warnings are applied here only after the remote
+	// pipeline has finished, preserving one warning per actual evaluated row.
+	warningSink warningDiagnosticSink
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -909,6 +917,11 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	}
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
+	}
+	if sender.warningSink != nil {
+		for _, warning := range envelope.WarningDiagnostics {
+			sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
+		}
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {

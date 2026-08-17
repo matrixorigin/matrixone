@@ -18,11 +18,9 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -315,23 +313,6 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 	if expr == nil {
 		return false, nil
 	}
-	// A user-variable reference is folded on the initiating CN before the
-	// scope is sent to a remote CN.  The remote process deliberately has no
-	// frontend session, so a numeric cast there cannot append its MySQL warning
-	// (1292) to SHOW WARNINGS.  Evaluate the complete foldable expression here
-	// while the original session is still attached, solely to publish that
-	// diagnostic.  Evaluating the complete expression (instead of every nested
-	// cast) preserves flow-control semantics: an unselected IF/CASE branch must
-	// not produce a warning.  The expression is still folded and executed
-	// remotely below; this does not change its value or execution ownership.
-	appendRemoteNumericCoercionDiagnostic(expr, proc)
-	return foldVarExprsInExprInPlaceNoDiagnostic(expr, proc)
-}
-
-func foldVarExprsInExprInPlaceNoDiagnostic(expr *plan.Expr, proc *process.Process) (bool, error) {
-	if expr == nil {
-		return false, nil
-	}
 	if _, ok := expr.Expr.(*plan.Expr_V); ok {
 		vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
@@ -346,119 +327,7 @@ func foldVarExprsInExprInPlaceNoDiagnostic(expr *plan.Expr, proc *process.Proces
 		expr.Expr = &plan.Expr_Lit{Lit: lit}
 		return true, nil
 	}
-	return foldVarExprsInValueWithDiagnostics(reflect.ValueOf(expr.Expr), nil, proc, false)
-}
-
-func isRemoteNumericCast(f *plan.Function, expr *plan.Expr) bool {
-	if f == nil || f.Func == nil || expr == nil {
-		return false
-	}
-	if f.Func.GetObjName() != "cast" {
-		return false
-	}
-	return types.T(expr.Typ.Id).ToType().IsNumeric()
-}
-
-// remoteExprHasOnlyFoldableInputs prevents the diagnostic-only evaluation from
-// trying to read columns or other row-dependent expressions from the empty
-// const-fold batch. The actual expression is still folded normally below.
-func remoteExprHasOnlyFoldableInputs(expr *plan.Expr) bool {
-	if expr == nil {
-		return true
-	}
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Lit, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec:
-		return true
-	case *plan.Expr_F:
-		if e.F == nil {
-			return true
-		}
-		for _, arg := range e.F.Args {
-			if !remoteExprHasOnlyFoldableInputs(arg) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_List:
-		if e.List == nil {
-			return true
-		}
-		for _, item := range e.List.List {
-			if !remoteExprHasOnlyFoldableInputs(item) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
-	}
-}
-
-func remoteExprContainsNumericCast(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if f := expr.GetF(); f != nil {
-		if isRemoteNumericCast(f, expr) {
-			return true
-		}
-		for _, arg := range f.Args {
-			if remoteExprContainsNumericCast(arg) {
-				return true
-			}
-		}
-		return false
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if remoteExprContainsNumericCast(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func remoteExprFunctionsCanFold(expr *plan.Expr, proc *process.Process) bool {
-	if expr == nil {
-		return true
-	}
-	if f := expr.GetF(); f != nil {
-		if f.Func == nil || proc == nil {
-			return false
-		}
-		overload, err := function.GetFunctionById(proc.Ctx, f.Func.Obj)
-		if err != nil || overload.CannotFold() || overload.IsRealTimeRelated() {
-			return false
-		}
-		for _, arg := range f.Args {
-			if !remoteExprFunctionsCanFold(arg, proc) {
-				return false
-			}
-		}
-		return true
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if !remoteExprFunctionsCanFold(item, proc) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func appendRemoteNumericCoercionDiagnostic(expr *plan.Expr, proc *process.Process) {
-	if proc == nil || proc.GetSession() == nil ||
-		!remoteExprContainsNumericCast(expr) ||
-		!remoteExprHasOnlyFoldableInputs(expr) ||
-		!remoteExprFunctionsCanFold(expr, proc) {
-		return
-	}
-	if _, free, err := colexec.GetReadonlyResultFromExpression(
-		proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch}); err == nil {
-		free()
-	}
+	return foldVarExprsInValue(reflect.ValueOf(expr.Expr), nil, proc)
 }
 
 func foldVarExprInSettableValue(v reflect.Value, proc *process.Process) (bool, error) {
@@ -478,15 +347,6 @@ func foldVarExprInSettableValue(v reflect.Value, proc *process.Process) (bool, e
 }
 
 func foldVarExprsInValue(v reflect.Value, seen map[uintptr]struct{}, proc *process.Process) (bool, error) {
-	return foldVarExprsInValueWithDiagnostics(v, seen, proc, true)
-}
-
-func foldVarExprsInValueWithDiagnostics(
-	v reflect.Value,
-	seen map[uintptr]struct{},
-	proc *process.Process,
-	diagnostics bool,
-) (bool, error) {
 	if !v.IsValid() {
 		return false, nil
 	}
@@ -495,7 +355,7 @@ func foldVarExprsInValueWithDiagnostics(
 		if v.IsNil() {
 			return false, nil
 		}
-		return foldVarExprsInValueWithDiagnostics(v.Elem(), seen, proc, diagnostics)
+		return foldVarExprsInValue(v.Elem(), seen, proc)
 	}
 
 	if v.Kind() == reflect.Pointer {
@@ -503,17 +363,7 @@ func foldVarExprsInValueWithDiagnostics(
 			return false, nil
 		}
 		if v.Type() == planExprPtrType {
-			if diagnostics {
-				return foldVarExprInSettableValue(v, proc)
-			}
-			expr, _ := v.Interface().(*plan.Expr)
-			folded, err := foldVarExprsInExprInPlaceNoDiagnostic(expr, proc)
-			foldedExpr := expr
-			if err != nil || !folded || !v.CanSet() {
-				return false, err
-			}
-			v.Set(reflect.ValueOf(foldedExpr))
-			return true, nil
+			return foldVarExprInSettableValue(v, proc)
 		}
 		if v.CanSet() && containsVarExprInValue(v, nil) {
 			copied := reflect.New(v.Type().Elem())
@@ -533,7 +383,7 @@ func foldVarExprsInValueWithDiagnostics(
 			return hiddenFolded, nil
 		}
 		seen[ptr] = struct{}{}
-		folded, err := foldVarExprsInValueWithDiagnostics(v.Elem(), seen, proc, diagnostics)
+		folded, err := foldVarExprsInValue(v.Elem(), seen, proc)
 		return hiddenFolded || folded, err
 	}
 
@@ -546,7 +396,7 @@ func foldVarExprsInValueWithDiagnostics(
 		copied := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
 		reflect.Copy(copied, v)
 		for i := 0; i < copied.Len(); i++ {
-			itemFolded, err := foldVarExprsInValueWithDiagnostics(copied.Index(i), seen, proc, diagnostics)
+			itemFolded, err := foldVarExprsInValue(copied.Index(i), seen, proc)
 			if err != nil {
 				return false, err
 			}
@@ -557,7 +407,7 @@ func foldVarExprsInValueWithDiagnostics(
 		}
 	case reflect.Array:
 		for i := 0; i < v.Len(); i++ {
-			itemFolded, err := foldVarExprsInValueWithDiagnostics(v.Index(i), seen, proc, diagnostics)
+			itemFolded, err := foldVarExprsInValue(v.Index(i), seen, proc)
 			if err != nil {
 				return false, err
 			}
@@ -575,15 +425,7 @@ func foldVarExprsInValueWithDiagnostics(
 			valueFolded := false
 			if value.Type() == planExprPtrType {
 				expr, _ := value.Interface().(*plan.Expr)
-				var foldedExpr *plan.Expr
-				var exprFolded bool
-				var err error
-				if diagnostics {
-					foldedExpr, exprFolded, err = foldVarExprsInExpr(expr, proc)
-				} else {
-					foldedExpr = plan2.DeepCopyExpr(expr)
-					exprFolded, err = foldVarExprsInExprInPlaceNoDiagnostic(foldedExpr, proc)
-				}
+				foldedExpr, exprFolded, err := foldVarExprsInExpr(expr, proc)
 				if err != nil {
 					return false, err
 				}
@@ -612,7 +454,7 @@ func foldVarExprsInValueWithDiagnostics(
 			if !field.IsExported() || field.Name == "OperatorBase" {
 				continue
 			}
-			fieldFolded, err := foldVarExprsInValueWithDiagnostics(v.Field(i), seen, proc, diagnostics)
+			fieldFolded, err := foldVarExprsInValue(v.Field(i), seen, proc)
 			if err != nil {
 				return false, err
 			}

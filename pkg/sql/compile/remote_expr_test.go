@@ -16,14 +16,18 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -55,7 +59,7 @@ func (s *remoteWarningSession) AppendWarningDiagnostic(code uint16, msg string) 
 	}{code: code, msg: msg})
 }
 
-func TestFoldVarExprRemoteNumericCastAppendsWarning(t *testing.T) {
+func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &remoteWarningSession{}
 	proc.Session = session
@@ -81,9 +85,63 @@ func TestFoldVarExprRemoteNumericCastAppendsWarning(t *testing.T) {
 	folded, err := foldVarExprsInExprInPlace(cast, proc)
 	require.NoError(t, err)
 	require.True(t, folded)
+	require.Empty(t, session.warnings)
+
+	input := batch.NewWithSize(1)
+	dummy := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(dummy, int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(dummy, int64(2), false, proc.Mp()))
+	defer dummy.Free(proc.Mp())
+	input.Vecs[0] = dummy
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
 	require.Len(t, session.warnings, 1)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestRemoteNumericCoercionWarningsFollowEvaluatedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	sourceType := types.T_text.ToType()
+	source := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&sourceType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		source,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+
+	input := batch.NewWithSize(1)
+	values := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("12abc"), []byte("12abc")}, nil,
+		types.T_text.ToType(), proc.Mp())
+	defer values.Free(proc.Mp())
+	input.Vecs[0] = values
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
+	require.Len(t, session.warnings, 2)
+
+	session.warnings = nil
+	input.SetRowCount(0)
+	vec, free, err = colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 0, vec.Length())
+	free()
+	require.Empty(t, session.warnings)
 }
 
 func TestFoldVarExprRemoteNumericCastSkipsUnselectedBranchWarning(t *testing.T) {
@@ -124,7 +182,29 @@ func TestFoldVarExprRemoteNumericCastSkipsUnselectedBranchWarning(t *testing.T) 
 	folded, err := foldVarExprsInExprInPlace(iff, proc)
 	require.NoError(t, err)
 	require.True(t, folded)
+	input := batch.NewWithSize(1)
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, iff, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
 	require.Empty(t, session.warnings)
+}
+
+func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
+	session := &remoteWarningSession{}
+	sender := &messageSenderOnClient{warningSink: session}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "first"},
+			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "second"},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Len(t, session.warnings, 2)
+	require.Equal(t, "first", session.warnings[0].msg)
+	require.Equal(t, "second", session.warnings[1].msg)
 }
 
 func TestScopeContainsVarExpr(t *testing.T) {

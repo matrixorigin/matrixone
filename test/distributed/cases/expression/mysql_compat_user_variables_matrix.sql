@@ -88,6 +88,16 @@ use mysql_compat_user_variables_matrix;
 create table uv_matrix_src(id int primary key, v varchar(10));
 insert into uv_matrix_src values (1, 'one'), (2, 'two');
 
+-- Matrix D4: remote row evaluation reports one warning per evaluated row and
+-- does not report a warning for a filtered-empty input.
+set @uv_matrix_rows_warn = '12abc';
+select @uv_matrix_rows_warn + 0 from uv_matrix_src order by id;
+show warnings;
+select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 1;
+show warnings;
+select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 99;
+show warnings;
+
 -- Matrix G: both documented SELECT ... INTO positions are accepted.
 select id into @uv_matrix_pre_id from uv_matrix_src where id = 2;
 select @uv_matrix_pre_id;

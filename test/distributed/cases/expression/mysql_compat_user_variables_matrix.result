@@ -114,6 +114,23 @@ create database mysql_compat_user_variables_matrix;
 use mysql_compat_user_variables_matrix;
 create table uv_matrix_src(id int primary key, v varchar(10));
 insert into uv_matrix_src values (1, 'one'), (2, 'two');
+set @uv_matrix_rows_warn = '12abc';
+select @uv_matrix_rows_warn + 0 from uv_matrix_src order by id;
+➤ @uv_matrix_rows_warn + 0[-5,64,0]  𝄀
+12
+12
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
+select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 1;
+➤ @uv_matrix_rows_warn + 0[-5,64,0]  𝄀
+12
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
+select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 99;
+show warnings;
 select id into @uv_matrix_pre_id from uv_matrix_src where id = 2;
 select @uv_matrix_pre_id;
 ➤ @uv_matrix_pre_id[4,32,0]  𝄀

@@ -54,6 +54,7 @@ const (
 type remoteTerminalEnvelope struct {
 	models.PhyPlan
 	TerminalResourceVersion   uint32                           `json:"terminal_resource_version,omitempty"`
+	WarningDiagnostics        []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
 	Delta                     resource.Delta                   `json:"resource_delta"`
 	Memory                    resource.MemoryTotals            `json:"memory"`
 	Allocation                resource.AllocationAccountTotals `json:"allocation_account"`

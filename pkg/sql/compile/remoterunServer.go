@@ -386,6 +386,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					runCompile.MessageBoard = message.NewMessageBoard()
 					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
 				}
+				if runCompile.proc.GetSession() == receiver.warningSession {
+					receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
+				}
 				runCompile.clear()
 				return nil
 			}))
@@ -781,6 +784,8 @@ type messageReceiverOnServer struct {
 	resourceMissingMemoryDomains      uint64
 	resourcePendingAllocationGroups   []remoteAllocationGroupPending
 	resourceCompletedAllocationGroups []string
+	warningSession                    *remoteWarningCollector
+	warningDiagnostics                []remoteWarningDiagnostic
 }
 
 func newMessageReceiverOnServer(
@@ -908,6 +913,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	receiver.warningSession = &remoteWarningCollector{}
+	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 	}
@@ -1177,6 +1184,10 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
 	}
+	envelope.WarningDiagnostics = append(
+		envelope.WarningDiagnostics,
+		receiver.warningDiagnostics...,
+	)
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
