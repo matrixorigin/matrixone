@@ -626,6 +626,14 @@ type BindContext struct {
 	results    []*plan.Expr
 	windows    []*plan.Expr
 	times      []*plan.Expr
+
+	// pendingAggregateQuery is set after the pre-aggregate FROM/JOIN/WHERE/GROUP
+	// BY clauses are bound and before HAVING, projection, and ORDER BY. At that
+	// point SELECT/HAVING/ORDER BY aggregates may not have been appended to
+	// aggregates yet, but the query block is already an implicit aggregate query
+	// for ONLY_FULL_GROUP_BY correlation checks.
+	pendingAggregateQuery bool
+
 	// timeBoundaryType is the public type for _wstart/_wend. It is filled once
 	// the time-window grouping key is bound, before the SELECT projection binds
 	// boundary column references.
@@ -684,6 +692,11 @@ type BindContext struct {
 	bindingTree *BindingTreeNode
 
 	parent *BindContext
+	// aggregateInputParent is set on a subquery context when that subquery is
+	// bound as an aggregate argument of its parent query. Correlations back to
+	// this parent are per-row aggregate inputs, not bare aggregate-query output
+	// columns for ONLY_FULL_GROUP_BY validation.
+	aggregateInputParent *BindContext
 
 	defaultDatabase string
 
@@ -776,6 +789,8 @@ type baseBinder struct {
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
+	subqueryInAggregateInput         bool
+	aggregateInputCorrelation        bool
 }
 
 type boundColumn struct {
@@ -834,8 +849,9 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg    bool
-	rollupHaving bool
+	insideAgg     bool
+	rollupHaving  bool
+	bindingHaving bool
 }
 
 type ProjectionBinder struct {
