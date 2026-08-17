@@ -20,7 +20,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	stderrors "errors"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
@@ -421,6 +424,51 @@ func TestRowGroupPlanningRejectsFooterOutsideRemainingMemory(t *testing.T) {
 		api.ServerPlanningAuto,
 	)
 	assertIcebergCode(t, err, api.ErrPlanningLimitExceeded)
+}
+
+func TestLocalScanPlannerReadsFragmentedSignedParquetFooterThroughProvider(t *testing.T) {
+	// Invariant: a signed range response must provide every requested byte even
+	// when the HTTP transport fragments it. This is the externally reachable
+	// parquet.OpenFile -> icebergObjectReaderAt -> ProviderObjectReader path.
+	const fragmentSize = 4096
+	data := writePlannerWideParquet(t, 128)
+	transport := &fragmentedParquetRangeTransport{data: data, fragmentSize: fragmentSize}
+	now := time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)
+	reader := icebergio.ProviderObjectReader{
+		Provider: icebergio.RemoteSigningProvider{
+			Signer: signedParquetTestSigner{request: icebergio.SignedRequest{
+				URL:       "https://signed.example.test/warehouse/data.parquet",
+				ExpiresAt: now.Add(time.Hour),
+			}},
+			BuildFileService: icebergio.SignedHTTPFileServiceBuilder{HTTPClient: &http.Client{Transport: transport}}.Build,
+			Now:              func() time.Time { return now },
+		},
+		ScopeForLocation: func(location string) icebergio.ObjectScope {
+			return icebergio.ObjectScope{
+				AccountID:       1,
+				CatalogID:       2,
+				StorageLocation: location,
+				Endpoint:        "s3.example.test",
+				Region:          "us-east-1",
+				Bucket:          "warehouse",
+				Principal:       "test",
+			}
+		},
+	}
+	planner := LocalScanPlanner{ObjectReader: reader}
+	file := api.DataFile{FilePath: "s3://warehouse/data.parquet", FileSizeInBytes: int64(len(data))}
+	footers, err := planner.readParquetRowGroupFooters(context.Background(), api.Schema{
+		Fields: []api.SchemaField{{ID: 1, Name: "col_000", Type: api.IcebergType{Kind: api.TypeLong}}},
+	}, file, 64<<20, api.ServerPlanningAuto)
+	if err != nil {
+		t.Fatalf("read signed fragmented Parquet footer: %v (last range %q)", err, transport.lastRange)
+	}
+	if len(footers) != 1 || footers[0].RowCount != 1 {
+		t.Fatalf("unexpected Parquet row-group footers: %+v", footers)
+	}
+	if transport.maxRange <= fragmentSize {
+		t.Fatalf("Parquet footer did not exercise a fragmented range: largest request=%d fragment=%d", transport.maxRange, fragmentSize)
+	}
 }
 
 func TestLocalScanPlannerPrunesManifestByIdentityPartitionSummary(t *testing.T) {
@@ -1493,6 +1541,97 @@ func writePlannerInt64ParquetWithRowGroups(t *testing.T, values []int64, rowsPer
 	}
 	return buf.Bytes()
 }
+
+func writePlannerWideParquet(t *testing.T, columns int) []byte {
+	t.Helper()
+	schemaFields := make(parquet.Group, columns)
+	row := make(parquet.Row, columns)
+	for idx := 0; idx < columns; idx++ {
+		name := "col_" + strconv.FormatInt(int64(idx), 10)
+		if idx < 100 {
+			name = "col_0" + strconv.FormatInt(int64(idx), 10)
+		}
+		if idx < 10 {
+			name = "col_00" + strconv.FormatInt(int64(idx), 10)
+		}
+		schemaFields[name] = parquet.FieldID(parquet.Leaf(parquet.Int64Type), idx+1)
+		row[idx] = parquet.Int64Value(int64(idx)).Level(0, 0, idx)
+	}
+	var buf bytes.Buffer
+	writer := parquet.NewWriter(&buf, parquet.NewSchema("wide", schemaFields))
+	if _, err := writer.WriteRows([]parquet.Row{row}); err != nil {
+		t.Fatalf("write wide Parquet row: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close wide Parquet writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+type signedParquetTestSigner struct {
+	request icebergio.SignedRequest
+}
+
+func (s signedParquetTestSigner) Sign(context.Context, string, string) (icebergio.SignedRequest, error) {
+	return s.request, nil
+}
+
+type fragmentedParquetRangeTransport struct {
+	data         []byte
+	fragmentSize int
+	maxRange     int64
+	lastRange    string
+}
+
+func (t *fragmentedParquetRangeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.lastRange = req.Header.Get("Range")
+	rangeHeader := strings.TrimPrefix(t.lastRange, "bytes=")
+	parts := strings.Split(rangeHeader, "-")
+	if len(parts) != 2 || rangeHeader == t.lastRange {
+		return nil, stderrors.New("missing or invalid Range header")
+	}
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	end, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if start < 0 || end < start || end >= int64(len(t.data)) {
+		return nil, stderrors.New("requested Parquet range is outside fixture")
+	}
+	payload := t.data[start : end+1]
+	if int64(len(payload)) > t.maxRange {
+		t.maxRange = int64(len(payload))
+	}
+	return &http.Response{
+		StatusCode:    http.StatusPartialContent,
+		Body:          &fragmentedParquetReadCloser{data: payload, fragmentSize: t.fragmentSize},
+		ContentLength: int64(len(payload)),
+		Header:        make(http.Header),
+		Request:       req,
+	}, nil
+}
+
+type fragmentedParquetReadCloser struct {
+	data         []byte
+	fragmentSize int
+}
+
+func (r *fragmentedParquetReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	if len(p) > r.fragmentSize {
+		p = p[:r.fragmentSize]
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func (*fragmentedParquetReadCloser) Close() error { return nil }
 
 func icebergDateDays(year int, month time.Month, day int) int64 {
 	date := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
