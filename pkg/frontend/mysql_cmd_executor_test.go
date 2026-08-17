@@ -6865,6 +6865,19 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, selected.RewriteOption)
 	require.Len(t, selected.RewriteOption.Rewrites["review27190.t"], 1)
+
+	ses.rewriteEnabled.Store(false)
+	const sidecarSQL = "/*+ SIDECAR */ select 1"
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(sidecarSQL),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, sidecarSQL, strings.TrimSpace(prepared.Sql))
 }
 
 func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {
