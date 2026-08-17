@@ -534,12 +534,41 @@ func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 
 	window := &TimeWin{Interval: types.Datetime(types.MicroSecsPerSec), Sliding: types.Datetime(types.MicroSecsPerSec)}
 	ctr := container{tsVec: []*vector.Vector{ts}}
-	require.NoError(t, ctr.firstWindow(window))
+	require.NoError(t, ctr.firstWindow(window, proc))
 
 	require.Equal(t, types.ZeroDatetime, ctr.left)
 	require.Equal(t, types.ZeroDatetime, ctr.right)
 	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
 	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
+}
+
+func TestTimestampWindowStartAlignsSlidingKeyInSessionTimezone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zone := time.FixedZone("UTC+8", 8*60*60)
+	proc.GetSessionInfo().TimeZone = zone
+	key, err := types.ParseTimestamp(zone, "2020-01-11 00:00:00", 6)
+	require.NoError(t, err)
+
+	ctr := container{tsOid: types.T_timestamp}
+	start := ctr.windowStart(
+		types.Datetime(key),
+		types.Datetime(100*types.SecsPerDay*types.MicroSecsPerSec),
+		proc,
+	)
+
+	require.Equal(t, mustDatetime(t, "2019-12-08 00:00:00"), types.Timestamp(start).ToDatetime(zone))
+
+	zone, err = time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	key, err = types.ParseTimestamp(zone, "2026-03-20 00:00:00", 6)
+	require.NoError(t, err)
+	start = ctr.windowStart(
+		types.Datetime(key),
+		types.Datetime(100*types.SecsPerDay*types.MicroSecsPerSec),
+		proc,
+	)
+	require.Equal(t, mustDatetime(t, "2025-12-16 00:00:00"), types.Timestamp(start).ToDatetime(zone))
 }
 
 func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
@@ -560,11 +589,14 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	// The planner's mo_win_truncate expression supplies pre-aligned TIMESTAMP
+	// keys. This operator-level test verifies that their distinct instants pass
+	// through unchanged across DST gaps and folds.
 	inputTs := []types.Timestamp{
-		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 30, 0, 0, time.UTC).UnixMicro()),
-		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 30, 0, 0, time.UTC).UnixMicro()),
-		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro()),
-		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
 	}
 	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], inputTs, nil, proc.Mp()))
 	bat.Vecs[0].SetLength(len(inputTs))

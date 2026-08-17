@@ -13109,6 +13109,9 @@ func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
 
 func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
 	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
 	fallFirst := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
 	fallSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
@@ -13132,6 +13135,60 @@ func TestMoWinTruncateTimestampPreservesInstantIdentity(t *testing.T) {
 	require.Equal(t, types.ZeroTimestamp, got[0])
 	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro()), got[1])
 	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()), got[2])
+}
+
+func TestMoWinTruncateTimestampUsesSessionTimezoneForBucketAlignment(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)
+	value := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 2, 30, 0, 0, time.UTC).UnixMicro())
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, value}, nil, proc.Mp()))
+	values.SetLength(2)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 2, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 2, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 2, nil))
+
+	got := vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())
+	require.Equal(t, types.ZeroTimestamp, got[0])
+	require.Equal(t, types.UnixMicroToTimestamp(time.Date(2025, 12, 31, 16, 0, 0, 0, time.UTC).UnixMicro()), got[1])
+}
+
+func TestMoWinTruncateTimestampUsesBoundaryOffsetAcrossDST(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = location
+	value, err := types.ParseTimestamp(location, "2026-03-20 12:00:00", 6)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(values, value, false, proc.Mp()))
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(100), 1, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Day), 1, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_timestamp.ToTypeWithScale(6), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, TruncateTimestamp([]*vector.Vector{values, diff, unit}, result, proc, 1, nil))
+
+	want, err := types.ParseTimestamp(location, "2025-12-16 00:00:00", 6)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Timestamp](result.GetResultVector())[0])
 }
 
 func TestMoWinTruncateTimestampOverloadDoesNotCastToDatetime(t *testing.T) {

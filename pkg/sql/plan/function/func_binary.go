@@ -1764,7 +1764,13 @@ func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			}
 			continue
 		}
-		if err = rs.Append(types.Timestamp(int64(v)-int64(v)%t), false); err != nil {
+		civil := v.ToDatetime(proc.GetSessionInfo().TimeZone)
+		truncatedCivil := types.Datetime(int64(civil) - int64(civil)%t)
+		truncated := types.Timestamp(int64(v) - int64(civil)%t)
+		if truncated.ToDatetime(proc.GetSessionInfo().TimeZone) != truncatedCivil {
+			truncated = truncatedCivil.ToTimestamp(proc.GetSessionInfo().TimeZone)
+		}
+		if err = rs.Append(truncated, false); err != nil {
 			return err
 		}
 	}

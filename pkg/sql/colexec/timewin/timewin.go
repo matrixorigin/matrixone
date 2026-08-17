@@ -217,7 +217,7 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	}
 
 	ctr.boundedGapFill = true
-	ctr.gapFillStart = start - start%timeWin.Interval
+	ctr.gapFillStart = ctr.windowStart(start, timeWin.Interval, proc)
 	ctr.gapFillEnd = finish
 	if ctr.gapFillStart < finish {
 		ctr.gapFillRows = int64((finish-ctr.gapFillStart-1)/timeWin.Sliding) + 1
@@ -324,7 +324,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case firstWindow:
 
-			if err = ctr.firstWindow(timeWin); err != nil {
+			if err = ctr.firstWindow(timeWin, proc); err != nil {
 				return result, err
 			}
 			ctr.status = fill
@@ -422,7 +422,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case fill:
 
-			if err = ctr.fillRows(timeWin); err != nil {
+			if err = ctr.fillRows(timeWin, proc); err != nil {
 				return result, err
 			}
 
@@ -638,6 +638,22 @@ func (ctr *container) zeroWindowValue() types.Datetime {
 	return types.ZeroDatetime
 }
 
+func (ctr *container) windowStart(value, interval types.Datetime, proc *process.Process) types.Datetime {
+	if ctr.tsOid == types.T_timestamp {
+		// mo_win_truncate aligns TIMESTAMP keys to the interval/sliding divisor.
+		// Re-align the key to the full interval on the same session civil-time
+		// grid while subtracting from the original instant, preserving DST folds.
+		civil := types.Timestamp(value).ToDatetime(proc.GetSessionInfo().TimeZone)
+		truncatedCivil := civil - civil%interval
+		truncated := types.Timestamp(value - types.Datetime(int64(civil)%int64(interval)))
+		if truncated.ToDatetime(proc.GetSessionInfo().TimeZone) != truncatedCivil {
+			truncated = truncatedCivil.ToTimestamp(proc.GetSessionInfo().TimeZone)
+		}
+		return types.Datetime(truncated)
+	}
+	return value - value%interval
+}
+
 func (ctr *container) nextWindow(t *TimeWin) error {
 	emit := !ctr.withoutFill || t.GapFill
 	if emit {
@@ -694,7 +710,7 @@ func (ctr *container) resumeWindowAfterFlush(t *TimeWin) error {
 	return nil
 }
 
-func (ctr *container) firstWindow(t *TimeWin) error {
+func (ctr *container) firstWindow(t *TimeWin, proc *process.Process) error {
 	if ctr.partIdx < 0 {
 		ctr.partitionCount++
 		if t.GapFill && ctr.partitionCount > maxGapFillPartitions {
@@ -726,7 +742,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 		ctr.nextRight = ctr.nextLeft + t.Interval
 		ctr.zeroWindow = false
 	} else {
-		ctr.left = val - val%t.Interval
+		ctr.left = ctr.windowStart(val, t.Interval, proc)
 		ctr.right = ctr.left + t.Interval
 
 		ctr.nextLeft = ctr.left + t.Sliding
@@ -753,7 +769,7 @@ func (ctr *container) firstWindow(t *TimeWin) error {
 	return nil
 }
 
-func (ctr *container) fillRows(t *TimeWin) error {
+func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 	cnt := ctr.tsVec[ctr.curVecIdx].Length()
 	zeroValue := ctr.zeroWindowValue()
 
@@ -880,7 +896,7 @@ func (ctr *container) fillRows(t *TimeWin) error {
 			}
 		}
 		if ctr.hasGapFillBounds(t) && t.Sliding == t.Interval {
-			target := val - val%t.Interval
+			target := ctr.windowStart(val, t.Interval, proc)
 			flushed, err := ctr.advanceBoundedTumblingGap(t, target)
 			if err != nil {
 				return err

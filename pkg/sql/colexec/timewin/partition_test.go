@@ -1610,7 +1610,7 @@ func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
 		status:      fill,
 	}
 
-	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}))
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}, proc))
 	require.Equal(t, int32(fill), ctr.status)
 	require.LessOrEqual(t, ctr.left, nextValue)
 	require.Greater(t, ctr.right, nextValue)
@@ -1642,7 +1642,7 @@ func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
 		status:      fill,
 	}
 
-	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}))
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}, proc))
 	require.Equal(t, int32(nextWindow), ctr.status)
 	require.Equal(t, base, ctr.left)
 	require.Equal(t, base+interval, ctr.right)
