@@ -1644,6 +1644,18 @@ func isPositiveLiteralLimit(limit *plan.Expr) bool {
 	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
+// detectFullTextGuard reserves the scan that the fulltext rewrite is going to consume, so
+// applyIndicesForFilters leaves it alone instead of turning it into a secondary-index scan
+// first.
+//
+// Its predicate must stay identical to the one applyIndicesForProject rewrites on, wrapped
+// MATCHes included. A scan whose only MATCH is wrapped -- a projected `round(match(...),3)`
+// -- is just as much a fulltext scan as one with a bare MATCH, but it is invisible to
+// getFullTextMatchFromProject. Left out, such a scan goes unprotected: with any ordinary
+// index on a filtered column the regular-index rule rewrites it away, and by the time this
+// project is visited resolveFullTextIndexPath no longer finds a base scan to serve the
+// MATCH from -- so the MATCH survives into the executed plan and throws 20105. The bare
+// form of the same query is protected and works, which is what makes the gap easy to miss.
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 	path := builder.resolveFullTextIndexPath(projNode)
 	if path == nil {
@@ -1652,7 +1664,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	if path.aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-		if len(filterids) > 0 {
+		wrappedExprs, _ := builder.getWrappedFullTextMatches(nil, path.scanNode, filterids, nil)
+		if len(filterids) > 0 || len(wrappedExprs) > 0 {
 			return []int32{path.scanNode.NodeId}
 		}
 		return nil
@@ -1660,7 +1673,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	projids, _ := builder.getFullTextMatchFromProject(projNode, path.scanNode)
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-	if len(filterids) > 0 || len(projids) > 0 {
+	wrappedExprs, _ := builder.getWrappedFullTextMatches(projNode, path.scanNode, filterids, projids)
+	if len(filterids) > 0 || len(projids) > 0 || len(wrappedExprs) > 0 {
 		return []int32{path.scanNode.NodeId}
 	}
 	return nil
