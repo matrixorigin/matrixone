@@ -209,6 +209,23 @@ func TestPrepareParamKindTrailerV1ScalarRoundTrip(t *testing.T) {
 	require.True(t, seen)
 }
 
+func TestPrepareParamKindDomainTrailerRequiresExplicitTextCapability(t *testing.T) {
+	var encoded bytes.Buffer
+	encoded.Write([]byte{prepareParamKindTrailerMagic0, prepareParamKindTrailerMagic1,
+		prepareParamKindTrailerMagic2, prepareParamKindTrailerDomainVersion})
+	nAggs := int32(1)
+	encoded.Write(types.EncodeInt32(&nAggs))
+	encoded.WriteByte(0)
+	encoded.WriteByte(byte(types.RuntimeStringText))
+	var states aggexec.PrepareParamKindStates
+	states.Reset([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, nil, nil),
+	})
+	_, err := readPrepareParamKindTrailer(context.Background(), bytes.NewReader(encoded.Bytes()),
+		1, &states, nil, mpool.MustNewZero(), true)
+	require.ErrorContains(t, err, "MORPCVersion22")
+}
+
 func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sourceA := makePrepareParamKindVectorForTest(t, mp, []vector.PrepareParamKind{

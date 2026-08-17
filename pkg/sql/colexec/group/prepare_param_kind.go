@@ -278,6 +278,7 @@ type prepareParamKindObservingReader struct {
 	reader        io.Reader
 	summary       prepareParamKindSummary
 	binaryVersion bool
+	textVersion   bool
 }
 
 func (r *prepareParamKindObservingReader) Read(value []byte) (int, error) {
@@ -285,8 +286,11 @@ func (r *prepareParamKindObservingReader) Read(value []byte) (int, error) {
 	for _, encoded := range value[:n] {
 		if r.binaryVersion {
 			r.summary.binaryString = r.summary.binaryString || encoded&prepareParamKindTrailerRowsMarker != 0
-			r.summary.textString = r.summary.textString || encoded&prepareParamKindTrailerTextMarker != 0
-			encoded &^= prepareParamKindTrailerRowsMarker | prepareParamKindTrailerTextMarker
+			if r.textVersion {
+				r.summary.textString = r.summary.textString || encoded&prepareParamKindTrailerTextMarker != 0
+				encoded &^= prepareParamKindTrailerTextMarker
+			}
+			encoded &^= prepareParamKindTrailerRowsMarker
 		}
 		r.summary.observe(vector.PrepareParamKind(encoded))
 	}
@@ -298,12 +302,16 @@ func (target *prepareParamKindRowsTarget) restore(
 	rows int,
 	mp *mpool.MPool,
 	binaryVersion bool,
+	textVersions ...bool,
 ) (prepareParamKindSummary, error) {
 	if target == nil || reader == nil || rows <= 0 || target.expectedRows != rows {
 		return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtx(
 			"invalid prepared parameter row target")
 	}
-	observed := &prepareParamKindObservingReader{reader: reader, binaryVersion: binaryVersion}
+	textVersion := len(textVersions) == 1 && textVersions[0]
+	observed := &prepareParamKindObservingReader{
+		reader: reader, binaryVersion: binaryVersion, textVersion: textVersion,
+	}
 	if target.accessor == nil {
 		var buffer [256]byte
 		remaining := rows
@@ -314,7 +322,10 @@ func (target *prepareParamKindRowsTarget) restore(
 			}
 			for _, encoded := range buffer[:n] {
 				if binaryVersion {
-					encoded &^= prepareParamKindTrailerRowsMarker | prepareParamKindTrailerTextMarker
+					encoded &^= prepareParamKindTrailerRowsMarker
+					if textVersion {
+						encoded &^= prepareParamKindTrailerTextMarker
+					}
 				}
 				if vector.PrepareParamKind(encoded) > vector.PrepareParamBoolean {
 					return prepareParamKindSummary{}, moerr.NewInvalidInputNoCtxf(
@@ -331,6 +342,10 @@ func (target *prepareParamKindRowsTarget) restore(
 				"prepared parameter target vector row count changed")
 		}
 		if binaryVersion {
+			if !textVersion {
+				return vec.SetPrepareParamKindsAndBinaryStringFromReader(
+					observed, count, mp, prepareParamKindTrailerRowsMarker)
+			}
 			return vec.SetPrepareParamKindsAndBinaryStringFromReader(
 				observed, count, mp, prepareParamKindTrailerRowsMarker, prepareParamKindTrailerTextMarker)
 		}
@@ -570,6 +585,7 @@ func readPrepareParamKindTrailer(
 	targets []prepareParamKindRowsTarget,
 	mp *mpool.MPool,
 	allowBinaryString bool,
+	allowExplicitText ...bool,
 ) ([]prepareParamKindSummary, error) {
 	if nAggs < 0 || states == nil {
 		return nil, moerr.NewInvalidInputNoCtx(
@@ -604,6 +620,11 @@ func readPrepareParamKindTrailer(
 	if (version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion) && !allowBinaryString {
 		return nil, moerr.NewInvalidStateNoCtx(
 			"aggregate binary-string metadata requires MORPCVersion18")
+	}
+	textAllowed := len(allowExplicitText) == 1 && allowExplicitText[0]
+	if version == prepareParamKindTrailerDomainVersion && !textAllowed {
+		return nil, moerr.NewInvalidStateNoCtx(
+			"aggregate explicit-text metadata requires MORPCVersion22")
 	}
 	encodedAggs, err := types.ReadInt32(reader)
 	if err != nil {
@@ -654,6 +675,7 @@ func readPrepareParamKindTrailer(
 			summary, err := targets[i].restore(
 				reader, int(rowCount), mp,
 				version == prepareParamKindTrailerBinaryVersion || version == prepareParamKindTrailerDomainVersion,
+				version == prepareParamKindTrailerDomainVersion,
 			)
 			if err != nil {
 				return nil, err

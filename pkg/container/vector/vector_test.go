@@ -76,6 +76,21 @@ func TestRuntimeStringDomainRejectsNonStringVector(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestRuntimeStringDomainPublicSettersRejectUnknownAndKeepUniformFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("b")}, nil, mp))
+	require.ErrorContains(t, vec.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringDomain(99), mp),
+		"invalid runtime string domain")
+	require.NoError(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringBinary,
+	}, mp))
+	require.False(t, vec.HasBinaryStringRows())
+	require.Equal(t, types.RuntimeStringBinary, vec.GetRuntimeStringDomainAt(0))
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAppendCheckpointRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())

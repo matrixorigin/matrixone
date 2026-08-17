@@ -44,6 +44,15 @@ func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "requires a string literal")
 }
 
+func TestValidateStringLiteralFormsInNestedOwner(t *testing.T) {
+	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{{
+		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: "x"}, LiteralForm: StringLiteralForm(99),
+		}},
+	}}}
+	require.ErrorContains(t, ValidateStringLiteralFormsInOwner(&owner), "invalid string literal form 99")
+}
+
 func TestNormalizeTextLiteralFormsForCompatibility(t *testing.T) {
 	expr := &Expr{Expr: &Expr_F{F: &Function{Args: []*Expr{
 		{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{

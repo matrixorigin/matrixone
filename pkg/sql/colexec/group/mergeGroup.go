@@ -548,6 +548,7 @@ func (mergeGroup *MergeGroup) restorePartialPrepareParamKinds(
 		targets,
 		ctr.mp,
 		binaryStringWireEnabled(proc),
+		explicitTextWireEnabled(proc),
 	)
 	if err != nil {
 		return err

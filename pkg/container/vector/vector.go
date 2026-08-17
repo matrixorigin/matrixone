@@ -2223,6 +2223,9 @@ func (v *Vector) setRuntimeStringDomainAt(
 	normalize bool,
 	pool *mpool.MPool,
 ) error {
+	if domain > types.RuntimeStringBinary {
+		return moerr.NewInvalidInputNoCtx("invalid runtime string domain")
+	}
 	if v != nil && domain != types.RuntimeStringInherit && !v.typ.Oid.IsMySQLString() {
 		return moerr.NewInvalidInputNoCtx("runtime string domain requires a MySQL string vector")
 	}
@@ -2291,6 +2294,11 @@ func (v *Vector) SetRuntimeStringDomainsWithMP(
 		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
 			return err
 		}
+	} else {
+		if !seen {
+			first = types.RuntimeStringInherit
+		}
+		return v.SetRuntimeStringDomainWithMP(first, mp)
 	}
 	v.resetBinaryString()
 	for row, domain := range domains {

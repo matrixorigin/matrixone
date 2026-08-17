@@ -128,6 +128,10 @@ func (p *Plan) ValidateStringLiteralForms() error {
 	return validateStringLiteralFormsInOwner(p)
 }
 
+func ValidateStringLiteralFormsInOwner(owner any) error {
+	return validateStringLiteralFormsInOwner(owner)
+}
+
 // validateStringLiteralFormsInOwner validates every expression nested in a
 // decoded plan without coupling this boundary check to every plan node shape.
 func validateStringLiteralFormsInOwner(owner any) error {

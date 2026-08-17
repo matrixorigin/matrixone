@@ -386,6 +386,23 @@ func TestMinMaxEqualValuesFoldPrepareParamKinds(t *testing.T) {
 	}
 }
 
+func TestMinPreservesExplicitTextFromNullSlot(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(input, []byte("text"), false, mp))
+	require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_varbinary.ToType())
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+	results, err := agg.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+	results[0].Free(mp)
+	agg.Free()
+	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestMinMaxBatchMergeEqualValuesFoldsPrepareParamKinds(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

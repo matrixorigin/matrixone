@@ -4794,7 +4794,7 @@ func (m *Attribute) Unmarshal(dAtA []byte) error {
 			if m.Default == nil {
 				m.Default = &plan.Default{}
 			}
-			if err := m.Default.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.Default.UnmarshalBinary(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4830,7 +4830,7 @@ func (m *Attribute) Unmarshal(dAtA []byte) error {
 			if m.OnUpdate == nil {
 				m.OnUpdate = &plan.OnUpdate{}
 			}
-			if err := m.OnUpdate.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.OnUpdate.UnmarshalBinary(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
