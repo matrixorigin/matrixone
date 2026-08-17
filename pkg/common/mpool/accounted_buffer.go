@@ -251,6 +251,24 @@ func (b *AccountedBuffer) Reset() {
 	}
 }
 
+// Detach transfers the physical allocation to a caller that will release it
+// through the returned MPool. The allocation header keeps its immutable
+// account/owner/site provenance, so no counter or capacity ownership changes
+// at handoff.
+func (b *AccountedBuffer) Detach() ([]byte, *MPool, error) {
+	if b == nil || b.mp == nil || b.account == nil {
+		return nil, nil, ErrAllocationAccountInvalid
+	}
+	data, mp := b.data, b.mp
+	b.data = nil
+	b.mp = nil
+	b.account = nil
+	b.owner = 0
+	b.site = 0
+	b.capacityClass = AllocationCapacityClassDefault
+	return data, mp, nil
+}
+
 func (b *AccountedBuffer) Free() {
 	if b == nil {
 		return
@@ -263,4 +281,5 @@ func (b *AccountedBuffer) Free() {
 	b.account = nil
 	b.owner = 0
 	b.site = 0
+	b.capacityClass = AllocationCapacityClassDefault
 }

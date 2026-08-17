@@ -46,6 +46,12 @@ const (
 	joinKeyContractEquivalentFrom = hashmap.UnitLimit / 2
 )
 
+func TestHashJoinAllocationSiteLedger(t *testing.T) {
+	require.Equal(t, uint8(80), uint8(hashJoinAllocationSiteMatchedRows))
+	require.Equal(t, uint8(102), uint8(hashJoinAllocationSiteResultData))
+	require.Equal(t, uint8(105), uint8(hashJoinAllocationSiteResultGrouping))
+}
+
 type joinKeyContractValue struct {
 	value any
 	null  bool
@@ -567,7 +573,7 @@ func runHashJoinKeyContract(
 		if probe != nil {
 			probe.Clean(proc.Mp())
 		}
-		budget, budgetErr := proc.GetHashBuildBudget()
+		budget, budgetErr := proc.GetExecutionResourceBudget()
 		var used, diskUsed, fdUsed uint64
 		if budgetErr == nil {
 			used = budget.Used()

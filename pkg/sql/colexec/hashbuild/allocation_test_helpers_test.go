@@ -31,10 +31,10 @@ func newTestAllocationAccount(t testing.TB) *mpool.AllocationAccount {
 	return account
 }
 
-func installTestHashBuildBudget(
+func installTestExecutionResourceBudget(
 	t testing.TB,
 	op *HashBuild,
-	generation *process.HashBuildBudgetGeneration,
+	generation *process.ExecutionResourceGeneration,
 ) {
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
@@ -45,13 +45,13 @@ func installTestHashBuildBudget(
 	op.ctr.hashmapBuilder.setBudget(generation)
 }
 
-func installTestProcessHashBuildBudget(
+func installTestProcessExecutionResourceBudget(
 	t testing.TB,
 	op *HashBuild,
 	proc *process.Process,
-) *process.HashBuildBudgetGeneration {
+) *process.ExecutionResourceGeneration {
 	t.Helper()
-	generation, err := proc.GetHashBuildBudget()
+	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 4_096)
 	require.NoError(t, err)

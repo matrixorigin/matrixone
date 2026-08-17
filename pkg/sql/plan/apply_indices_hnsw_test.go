@@ -652,7 +652,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingHnsw(scanNodeID, vecCtx, multiTableIndex)
+	_, err := builder.applyIndicesForSortUsingHnsw(scanNodeID, vecCtx, multiTableIndex, nil)
 	require.NoError(t, err)
 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
@@ -753,7 +753,7 @@ func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.Ind
 		},
 	}
 
-	_, err := builder.applyIndicesForSortUsingHnsw(scanNodeID, vecCtx, multiTableIndex)
+	_, err := builder.applyIndicesForSortUsingHnsw(scanNodeID, vecCtx, multiTableIndex, nil)
 	require.NoError(t, err)
 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]

@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	"fmt"
 	io "io"
 
@@ -184,8 +183,8 @@ type AggFuncExec interface {
 	Flush() ([]*vector.Vector, error)
 
 	// Serialize intermediate result to bytes.
-	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
-	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
+	SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error
+	SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error
 	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error
 
 	Size() int64
@@ -210,32 +209,63 @@ func MergePreservesSource(exec AggFuncExec) bool {
 	return ok
 }
 
-// PrepareParamKindStateAccessor is an optional capability implemented by the
-// aggregate state backed executors.  It exposes the provenance of the value
-// vector without widening AggFuncExec (value-window and other non-serializable
-// executors do not have a chunk state to expose).  Group spill/partial codecs
-// use this capability to carry the winner category alongside the packed state
-// rows.
+// GroupAggFuncExec is the complete contract required by Group. Keeping this
+// separate from AggFuncExec lets window executors retain the common aggregate
+// API without making Group rediscover its stronger allocation, preflight,
+// spill, and prepared-parameter contracts at every call site.
+//
+// Once SetAllocationAccount succeeds, all fallible physical growth must be
+// covered by PreflightBatchFill/PreflightBatchMerge and the spill codec must be
+// usable without an unaccounted data-sized staging allocation.
+type GroupAggFuncExec interface {
+	AggFuncExec
+	AllocationAccountOwner
+	BatchCapacityPreflight
+	SpillStateCodec
+	PrepareParamKindStateAccessor
+
+	AdditionalMemorySize() int64
+	GetNumGroups() int
+	SetPrepareParamKind(vector.PrepareParamKind)
+}
+
+// AllocationAccountOwner is implemented by aggregate executors whose complete
+// retained state can participate in an operator's physical allocation
+// account.  It is deliberately separate from AggFuncExec: callers that do not
+// install a statement account keep the existing aggregate API, while an
+// accountable operator must reject an executor that does not implement this
+// closed lifecycle contract.
+type AllocationAccountOwner interface {
+	SetAllocationAccount(*AllocationAccount) error
+	ClearAllocationAccount(*AllocationAccount) error
+}
+
+// BatchCapacityPreflight reserves every fallible physical allocation a bounded
+// Group hash work unit can require after its non-mutating group preview is
+// known, without changing aggregate values. Group can therefore spill its
+// resident prefix and retry the same unpublished input unit on capacity
+// pressure.
+type BatchCapacityPreflight interface {
+	PreflightBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
+	PreflightBatchMerge(next AggFuncExec, offset int, groups []uint64) error
+}
+
+// SpillStateCodec is the bounded-memory, execution-local aggregate codec.
+// It is separate from the stable intermediate-result codec because spill must
+// stream selected physical rows without first allocating a selection Vector.
+// MakeGroupAgg admits only executors that implement this closed spill contract.
+type SpillStateCodec interface {
+	SaveSpillIntermediateRows(chunk int, rows []int32, writer io.Writer) error
+	UnmarshalSpillFromReader(reader io.Reader, mp *mpool.MPool) error
+}
+
+// PrepareParamKindStateAccessor exposes the result vectors whose winner
+// provenance is carried by Group's spill/partial wire extension. Group owns
+// the codec and streams directly between these vectors and the wire; the
+// aggregate does not materialize a second row-sized metadata slice.
 type PrepareParamKindStateAccessor interface {
-	HasBinaryStringMetadata() bool
-	PrepareParamKindsForChunk(chunk int) []vector.PrepareParamKind
-	PrepareParamKindsForSelection(flags [][]uint8) []vector.PrepareParamKind
-	// Row counts let transient provenance decoders validate an exact record
-	// before allocating its row payload. They are intentionally separate from
-	// the optional payload accessors because uniform states do not allocate.
-	PrepareParamKindRowCountForChunk(chunk int) int
-	PrepareParamKindRowCountFlat() int
-	PrepareParamKindSummaryForChunk(chunk int) (vector.PrepareParamKind, bool)
-	PrepareParamKindSummaryForSelection(flags [][]uint8) (vector.PrepareParamKind, bool)
-	RestorePrepareParamKindsForChunk(chunk int, kinds []vector.PrepareParamKind, mp *mpool.MPool) error
-	RestorePrepareParamKindsFlat(kinds []vector.PrepareParamKind, mp *mpool.MPool) error
-	BinaryStringRowsForChunk(chunk int) []bool
-	BinaryStringRowsForSelection(flags [][]uint8) []bool
-	BinaryStringSummaryForChunk(chunk int) bool
-	BinaryStringSummaryForSelection(flags [][]uint8) bool
-	RestoreBinaryStringRowsForChunk(chunk int, rows []bool, mp *mpool.MPool) error
-	RestoreBinaryStringRowsFlat(rows []bool, mp *mpool.MPool) error
-	SetBinaryStringSummary(binaryString bool)
+	PrepareParamKindChunkCount() int
+	PrepareParamKindVectorForChunk(chunk int) *vector.Vector
 }
 
 // indicate who implements the AggFuncExec interface.
@@ -252,6 +282,19 @@ func MakeAgg(
 	return makeAgg(mg, aggID, isDistinct, false, param...)
 }
 
+// MakeGroupAgg constructs an aggregate that satisfies Group's complete static
+// execution contract. Window-function executors are deliberately rejected.
+func MakeGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, false, allocation, extraInformation, param...)
+}
+
 // MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
 // during the MORPC v10 -> v11 rollout. It preserves the old bytewise text
 // MIN/MAX comparator without changing the argument or result type metadata.
@@ -261,6 +304,52 @@ func MakeAggWithLegacyTextMinMax(
 	param ...types.Type,
 ) (AggFuncExec, error) {
 	return makeAgg(mg, aggID, isDistinct, true, param...)
+}
+
+// MakeGroupAggWithLegacyTextMinMax is the Group-specific counterpart of
+// MakeAggWithLegacyTextMinMax for mixed-version remote pipelines.
+func MakeGroupAggWithLegacyTextMinMax(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	return makeGroupAgg(
+		mg, aggID, isDistinct, true, allocation, extraInformation, param...)
+}
+
+func makeGroupAgg(
+	mg *mpool.MPool,
+	aggID int64, isDistinct bool,
+	legacyTextMinMax bool,
+	allocation *AllocationAccount,
+	extraInformation any,
+	param ...types.Type,
+) (GroupAggFuncExec, error) {
+	exec, err := makeAgg(mg, aggID, isDistinct, legacyTextMinMax, param...)
+	if err != nil {
+		return nil, err
+	}
+	groupExec, ok := exec.(GroupAggFuncExec)
+	if !ok {
+		exec.Free()
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"aggregate %d does not support group execution", aggID)
+	}
+	if extraInformation != nil {
+		if err := groupExec.SetExtraInformation(extraInformation, 0); err != nil {
+			groupExec.Free()
+			return nil, err
+		}
+	}
+	if allocation != nil {
+		if err := groupExec.SetAllocationAccount(allocation); err != nil {
+			groupExec.Free()
+			return nil, err
+		}
+	}
+	return groupExec, nil
 }
 
 func makeAgg(
@@ -284,6 +373,11 @@ func makeSpecialAggExec(
 	mp *mpool.MPool,
 	id int64, isDistinct bool, legacyTextMinMax bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
+	if isDistinct &&
+		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) {
+		return nil, true, moerr.NewNotSupportedNoCtx(
+			"distinct bit operations are not supported")
+	}
 	if id == AggIdOfMaxBy && len(params) != 3 {
 		return nil, true, moerr.NewInternalErrorNoCtx("max_by requires value, order, and tie arguments")
 	}

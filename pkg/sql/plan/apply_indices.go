@@ -289,10 +289,12 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 		}
 	}
 
+	clear(builder.projectAnchoredSorts)
 	builder.collectSpecialIndexGuards(rootID)
 }
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
+	clear(builder.projectAnchoredSorts)
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -313,6 +315,18 @@ func (builder *QueryBuilder) collectSpecialIndexGuards(nodeID int32) {
 		}
 		if scanIDs := builder.detectVectorGuard(node); len(scanIDs) > 0 {
 			builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+		}
+		// This pre-pass visits a node before its children, so claiming the Top-K here
+		// settles the anchor for both the guard below and applyIndicesForSort.
+		if len(node.Children) == 1 && builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_SORT {
+			builder.markProjectAnchoredSort(node.Children[0])
+		}
+	}
+	if node.NodeType == plan.Node_SORT {
+		if _, anchored := builder.projectAnchoredSorts[node.NodeId]; !anchored {
+			if scanIDs := builder.detectVectorGuardFromSort(node); len(scanIDs) > 0 {
+				builder.registerProjectGuard(node.NodeId, specialIndexKindVector, scanIDs)
+			}
 		}
 	}
 
@@ -450,6 +464,12 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	case plan.Node_PROJECT:
 		//NOTE: This is the entry point for vector index rule on SORT NODE.
 		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
+
+	case plan.Node_SORT:
+		// Second entry point for the vector rule: a Top-K SORT whose parent is not a
+		// PROJECT (outer ORDER BY, or a join input) is invisible to the project-anchored
+		// path above, and would otherwise fall back to a full scan + exact sort.
+		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
 
 	}
 
@@ -615,60 +635,10 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
 	if vecCtx != nil {
-		multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
-		if err != nil {
-			return nodeID, err
+		newNodeID, handled, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+		if handled || err != nil {
+			return newNodeID, err
 		}
-		if len(multiTableIndexes) == 0 {
-			return nodeID, nil
-		}
-		// Preserve the dependency closure before a plugin is allowed to rewrite
-		// away the owning TABLE_SCAN. The final plan shape cannot be used as the
-		// source of truth after an index-only rewrite.
-		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
-			return nodeID, err
-		}
-
-		var multiTableIndexKeys []string
-		for key := range multiTableIndexes {
-			multiTableIndexKeys = append(multiTableIndexKeys, key)
-		}
-
-		// Plugin-mediated dispatch — every plugin-registered vector
-		// index exposes Hooks.ApplyForSort, which routes back into the
-		// builder's per-algo redirect (plugin_builder.go) and then into
-		// the real body in apply_indices_<algo>.go. The pluginless
-		// hardcoded switch was the bug surface that let CAGRA / IVF-PQ
-		// drift behind HNSW / IVF-FLAT; one loop here keeps the algo
-		// set canonical.
-		opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
-		for _, multiTableIndexKey := range multiTableIndexKeys {
-			multiTableIndex := multiTableIndexes[multiTableIndexKey]
-			// Defence in depth: collectVectorIndexes already filters
-			// via IsVectorIndexAlgo, but the dispatch site re-checks so
-			// a future change that loosens collectVectorIndexes can't
-			// silently route fulltext (or any other non-vector
-			// plugin-registered algo) through the vector ANN rewrite
-			// path. indexplugin.Get alone is not sufficient — fulltext
-			// is plugin-registered too.
-			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
-				continue
-			}
-			p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
-			if !ok {
-				continue
-			}
-			vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
-			newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
-			if err != nil {
-				return newNodeID, err
-			}
-			if applied {
-				return newNodeID, nil
-			}
-		}
-
-		builder.stabilizeExactVectorSort(vecCtx)
 	}
 	// 2. Regular Index Check
 	{
@@ -678,6 +648,119 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 	}
 
 	return nodeID, nil
+}
+
+// applyVectorIndexForSortContext runs the plugin-mediated vector rewrite for an
+// already-built context. Shared by both anchors: the PROJECT above a Top-K
+// (applyIndicesForProject) and the Top-K SORT itself (applyIndicesForSort), so the two
+// entry points cannot drift in which algorithms they dispatch to.
+//
+// handled=true means the caller must return immediately — either a plugin rewrote the
+// tree, or this is a vector shape over a table with no vector index and there is nothing
+// further to try.
+func (builder *QueryBuilder) applyVectorIndexForSortContext(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, bool, error) {
+	if vecCtx.projNode == nil && idxColMap == nil {
+		// A sort-anchored rewrite publishes its column remap through idxColMap — that is
+		// the only way ancestors learn the CTE's distance column became the index score.
+		// With no map the rewritten tree would keep dangling references to a PROJECT that
+		// is no longer in the plan, so decline instead of writing to a nil map (a panic)
+		// or dropping the remap (a wrong plan). The planner always supplies one; the
+		// plugin-facing ApplyForSortOpts.IdxColMap does not enforce it.
+		return nodeID, false, nil
+	}
+	multiTableIndexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+	if err != nil {
+		return nodeID, true, err
+	}
+	if len(multiTableIndexes) == 0 {
+		// Matches the original project-anchored behaviour: a vector Top-K over a
+		// table with no vector index is done here, it is not a regular-index shape.
+		return nodeID, true, nil
+	}
+	// Preserve the dependency closure before a plugin is allowed to rewrite
+	// away the owning TABLE_SCAN. The final plan shape cannot be used as the
+	// source of truth after an index-only rewrite.
+	if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
+		return nodeID, true, err
+	}
+
+	multiTableIndexKeys := make([]string, 0, len(multiTableIndexes))
+	for key := range multiTableIndexes {
+		multiTableIndexKeys = append(multiTableIndexKeys, key)
+	}
+
+	// Plugin-mediated dispatch — every plugin-registered vector
+	// index exposes Hooks.ApplyForSort, which routes back into the
+	// builder's per-algo redirect (plugin_builder.go) and then into
+	// the real body in apply_indices_<algo>.go. The pluginless
+	// hardcoded switch was the bug surface that let CAGRA / IVF-PQ
+	// drift behind HNSW / IVF-FLAT; one loop here keeps the algo
+	// set canonical.
+	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
+	for _, multiTableIndexKey := range multiTableIndexKeys {
+		multiTableIndex := multiTableIndexes[multiTableIndexKey]
+		// Defence in depth: collectVectorIndexes already filters
+		// via IsVectorIndexAlgo, but the dispatch site re-checks so
+		// a future change that loosens collectVectorIndexes can't
+		// silently route fulltext (or any other non-vector
+		// plugin-registered algo) through the vector ANN rewrite
+		// path. indexplugin.Get alone is not sufficient — fulltext
+		// is plugin-registered too.
+		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+			continue
+		}
+		p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
+		if !ok {
+			continue
+		}
+		vctxExt, mtiExt := toPlanplugin(vecCtx, multiTableIndex)
+		newNodeID, applied, err := p.Plan().ApplyForSort(builder, vctxExt, mtiExt, nodeID, opts)
+		if err != nil {
+			return newNodeID, true, err
+		}
+		if applied {
+			return newNodeID, true, nil
+		}
+	}
+
+	builder.stabilizeExactVectorSort(vecCtx)
+	return nodeID, false, nil
+}
+
+// markProjectAnchoredSort records that the PROJECT above this Top-K SORT will anchor the
+// vector rewrite, so the SORT-anchored entry point must leave it alone.
+func (builder *QueryBuilder) markProjectAnchoredSort(sortID int32) {
+	if builder.projectAnchoredSorts == nil {
+		builder.projectAnchoredSorts = make(map[int32]struct{})
+	}
+	builder.projectAnchoredSorts[sortID] = struct{}{}
+}
+
+// applyIndicesForSort is the SORT-anchored entry point for the vector rewrite. It fires
+// for a Top-K whose parent is not a PROJECT — under an outer ORDER BY (#25967) or as a
+// join input (#25974) — shapes the project-anchored path cannot see.
+//
+// It may return a DIFFERENT node id than it was given: the rewritten subtree replaces the
+// Top-K, and applyIndices assigns the result back into the parent's Children. Dropping the
+// return value orphans the rewrite.
+func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	if _, ok := builder.projectAnchoredSorts[nodeID]; ok {
+		// The PROJECT above will anchor this Top-K with full column information.
+		return nodeID, nil
+	}
+	defer builder.clearProjectGuard(nodeID)
+	vecCtx := builder.buildVectorSortContextFromSort(sortNode)
+	if vecCtx == nil {
+		return nodeID, nil
+	}
+	newNodeID, _, err := builder.applyVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+	return newNodeID, err
 }
 
 func (builder *QueryBuilder) buildRegularIndexTopSortContext(projNode *plan.Node) *regularIndexTopSortContext {
@@ -1529,6 +1612,21 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	if vecCtx == nil {
 		vecCtx = builder.buildVectorSortContextThroughJoin(projNode)
 	}
+	return builder.detectVectorGuardForContext(vecCtx)
+}
+
+// detectVectorGuardFromSort is the SORT-anchored counterpart of detectVectorGuard. A
+// Top-K reached only through the sort anchor (outer ORDER BY, join input) still owns its
+// TABLE_SCAN and must reserve it: applyIndices is post-order, so without a guard entry
+// applyIndicesForFilters rewrites that scan into a secondary-index join first, and by the
+// time the sort anchor runs resolveScanNodeWithIndex finds a JOIN instead of a scan and
+// the ANN rewrite silently never fires — leaving exactly the full-scan fallback #25967 /
+// #25974 are about, for any inner query that also has an indexed filter.
+func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []int32 {
+	return builder.detectVectorGuardForContext(builder.buildVectorSortContextFromSort(sortNode))
+}
+
+func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return nil
 	}
