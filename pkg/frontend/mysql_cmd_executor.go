@@ -532,8 +532,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
+		ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
+			if restoreErr := ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no"); restoreErr != nil {
+				ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", false)
+				return
+			}
+			ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		}()
 
 		sqlBuilder := strings.Builder{}
