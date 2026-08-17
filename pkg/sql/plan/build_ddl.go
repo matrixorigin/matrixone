@@ -5149,7 +5149,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			// column type from tableDef
 			fkData.ColTyps[i] = &colDef.Typ
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", keyPart.ColName.ColNameOrigin(), tableDef.Name)
+			return nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in the creating table '%v'", keyPart.ColName.ColNameOrigin(), tableDef.Name)
 		}
 	}
 
@@ -5323,7 +5323,7 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	// 2. check if the referred column does not exist in the parent table
 	for _, colName := range fkData.ColsReferred.Cols {
 		if _, exists := columnNamePos[colName]; !exists { // column exists in parent table
-			return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
+			return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' no exists in table '%v'", colName, fkData.ParentTableName)
 		}
 	}
 	if err := checkFkVirtualGeneratedColumns(ctx.GetContext(), parentTableDef, fkData.ColsReferred.Cols); err != nil {

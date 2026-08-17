@@ -222,6 +222,26 @@ func TestMissingColumnUsesMySQLBadFieldDiagnostic(t *testing.T) {
 			sql:     "LOAD DATA INLINE FORMAT='csv', DATA='1' INTO TABLE nation FIELDS TERMINATED BY ',' (missing_col)",
 			message: "internal error: column 'missing_col' does not exist",
 		},
+		{
+			name:    "generated column expression",
+			sql:     "CREATE TABLE generated_missing_column (a INT, b INT AS (missing_col))",
+			message: "invalid input: column 'missing_col' does not exist or cannot be referenced by a generated column",
+		},
+		{
+			name:    "check expression",
+			sql:     "CREATE TABLE check_missing_column (a INT, CHECK (missing_col > 0))",
+			message: "invalid input: column 'missing_col' does not exist or cannot be referenced by a generated column",
+		},
+		{
+			name:    "foreign key local column",
+			sql:     "CREATE TABLE foreign_key_local_missing_column (a INT, CONSTRAINT fk FOREIGN KEY (missing_col) REFERENCES nation(n_nationkey))",
+			message: "internal error: column 'missing_col' no exists in the creating table 'foreign_key_local_missing_column'",
+		},
+		{
+			name:    "foreign key referenced column",
+			sql:     "CREATE TABLE foreign_key_referenced_missing_column (a INT, CONSTRAINT fk FOREIGN KEY (a) REFERENCES nation(missing_col))",
+			message: "internal error: column 'missing_col' no exists in table 'nation'",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := buildMySQLDMLCompatibilityPlanWithPrepare(t, tc.sql, tc.isPrepareStmt)
@@ -234,6 +254,29 @@ func TestMissingColumnUsesMySQLBadFieldDiagnostic(t *testing.T) {
 			require.Equal(t, tc.message, moErr.Error())
 		})
 	}
+}
+
+func TestLegacyOnDuplicateUpdateMissingValueColumnUsesBadFieldDiagnostic(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	stmt, err := parsers.ParseOne(
+		ctx.GetContext(),
+		dialect.MYSQL,
+		"INSERT INTO nation VALUES (1, 'n', 1, 'comment') ON DUPLICATE KEY UPDATE n_name = missing_col",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	insertStmt, ok := stmt.(*tree.Insert)
+	require.True(t, ok)
+	_, err = buildInsert(insertStmt, ctx, false, false)
+	require.Error(t, err)
+	moErr, ok := err.(*moerr.Error)
+	require.True(t, ok, "unexpected error type %T: %v", err, err)
+	require.Equal(t, moerr.ErrBadFieldError, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_BAD_FIELD_ERROR), moErr.MySQLCode())
+	require.Equal(t, "42S22", moErr.SqlState())
+	require.Equal(t, "invalid input: column 'missing_col' does not exist", moErr.Error())
 }
 
 func requireMySQLUpdateTargetSubqueryCompatible(t *testing.T, sql string) {
