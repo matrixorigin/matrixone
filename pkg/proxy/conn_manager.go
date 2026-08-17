@@ -141,8 +141,9 @@ func (t cnTunnels) count() int {
 
 // connInfo contains label info and CN tunnels.
 type connInfo struct {
-	label     labelInfo
-	cnTunnels cnTunnels
+	label          labelInfo
+	cnTunnels      cnTunnels
+	lastSelectedCN string
 }
 
 // newConnInfo creates a new connection info.
@@ -187,7 +188,8 @@ func newConnManager() *connManager {
 }
 
 // selectOne select the most suitable CN server according the connection count
-// on each CN server. The least count CN server is returned.
+// on each CN server. The least count CN server is returned, with ties resolved
+// by round-robin selection for each label hash.
 // This method atomically increments the connection count for the selected CN server
 // by adding a placeholder tunnel, ensuring fair distribution during concurrent
 // connection establishment.
@@ -200,16 +202,13 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 	}
 
 	ci, ok := m.conns[hash]
-	// There are no connections yet on all CN servers of this tenant.
-	// Select the first CN server and add a placeholder tunnel atomically.
 	if !ok {
-		selected := cns[0]
-		m.conns[hash] = newConnInfo(cns[0].reqLabel)
-		m.conns[hash].cnTunnels.add(selected.uuid, newPlaceholderTunnel())
-		return selected
+		ci = newConnInfo(cns[0].reqLabel)
+		m.conns[hash] = ci
 	}
 
-	var ret *CNServer
+	var first *CNServer
+	var next *CNServer
 	var minCount = math.MaxInt
 	for _, cn := range cns {
 		tunnels, ok := ci.cnTunnels[cn.uuid]
@@ -218,17 +217,35 @@ func (m *connManager) selectOne(hash LabelHash, cns []*CNServer) *CNServer {
 			cnt = tunnels.count()
 		}
 
-		// Choose the CNServer that has the least connections on it.
+		// Choose the CNServer that has the least connections on it. Resolve ties
+		// in UUID order so fairness does not depend on the snapshot's map-derived
+		// candidate order.
 		if cnt < minCount {
-			ret = cn
 			minCount = cnt
+			first = cn
+			next = nil
+			if cn.uuid > ci.lastSelectedCN {
+				next = cn
+			}
+		} else if cnt == minCount {
+			if first == nil || cn.uuid < first.uuid {
+				first = cn
+			}
+			if cn.uuid > ci.lastSelectedCN && (next == nil || cn.uuid < next.uuid) {
+				next = cn
+			}
 		}
+	}
+	ret := next
+	if ret == nil {
+		ret = first
 	}
 
 	// Atomically increment the connection count for the selected CN server
 	// by adding a placeholder tunnel. This will be replaced by the real
 	// tunnel in connect() if successful, or removed in selectOneFailed() if failed.
 	if ret != nil {
+		ci.lastSelectedCN = ret.uuid
 		ci.cnTunnels.add(ret.uuid, newPlaceholderTunnel())
 	}
 
