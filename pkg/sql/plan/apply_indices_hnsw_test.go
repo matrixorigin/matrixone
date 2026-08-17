@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -768,30 +769,37 @@ func applyHnswAndGetTableConfig(t *testing.T, limit *plan.Expr) (vectorindex.Ind
 }
 
 // A prepared (non-literal) LIMIT with a residual filter cannot be over-fetched at
-// plan time: the search is flagged to over-fetch at EXECUTE, node.Limit is dropped
-// (so no plan-level top truncates the candidates), and the raw k travels on
-// IndexReaderParam.Limit as the TVF's only k channel (#26869).
+// plan time, so node.Limit carries an EXPRESSION that computes the over-fetched
+// budget k' at EXECUTE. node.Limit must never be nil here: it is the only
+// candidate-budget channel a pre-change CN reads, and a nil makes that CN default
+// to a single candidate and silently under-return (#26869, and the rolling-upgrade
+// hazard that motivated moving the budget back onto node.Limit).
 func TestApplyIndicesForSortUsingHnswFlagsPreparedLimitOverFetch(t *testing.T) {
 	paramLimit := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_uint64)},
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
 	}
 	cfg, tf := applyHnswAndGetTableConfig(t, paramLimit)
-	require.True(t, cfg.PostFilterOverFetch, "prepared LIMIT ? + filter must flag over-fetch")
-	require.Nil(t, tf.Limit, "node.Limit is always dropped; IndexReaderParam.Limit is the k channel")
-	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must be carried on IndexReaderParam.Limit")
+	require.False(t, cfg.PostFilterOverFetch,
+		"the budget is baked into node.Limit; a second EXECUTE-time over-fetch would compound the factor")
+	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
+	require.Nil(t, tf.Limit.GetLit(), "a prepared k resolves to the over-fetch expression, not a plan-time constant")
+	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k must still be carried on IndexReaderParam.Limit")
 	require.Nil(t, tf.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
 	require.Equal(t, uint64(0), tf.IndexReaderParam.GetOverFetchLimit(), "prepared ? has no plan-time over-fetch to display")
 }
 
-// A literal LIMIT with a filter takes the SAME single path as a prepared one:
-// raw k on IndexReaderParam.Limit, node.Limit dropped, flag on so the TVF
-// over-fetches at EXECUTE. The only difference from the prepared case is that
-// IndexReaderParam.Limit is a literal here rather than a parameter.
+// A literal LIMIT with a filter takes the SAME path as a prepared one, except the
+// budget folds at plan time: node.Limit is the literal k' rather than an
+// expression. The plan-level top therefore truncates at k', which is the budget
+// the search wants, so no candidate is lost before the post-filter JOIN.
 func TestApplyIndicesForSortUsingHnswLiteralLimitOverFetch(t *testing.T) {
 	cfg, tf := applyHnswAndGetTableConfig(t, makePlan2Uint64ConstExprWithType(2))
-	require.True(t, cfg.PostFilterOverFetch, "literal LIMIT + filter over-fetches at EXECUTE too")
-	require.Nil(t, tf.Limit, "node.Limit must be dropped so no plan-level top truncates candidates")
+	require.False(t, cfg.PostFilterOverFetch,
+		"the budget is baked into node.Limit; the TVF must not over-fetch a second time")
+	require.NotNil(t, tf.Limit, "an old CN reads node.Limit alone -- a nil there under-returns")
+	require.Equal(t, overfetch.PostFilterLimit(2), tf.Limit.GetLit().GetU64Val(),
+		"a literal k folds to the over-fetched budget (2 -> 12)")
 	require.NotNil(t, tf.IndexReaderParam.GetLimit(), "raw k carried on IndexReaderParam.Limit")
 	require.Equal(t, uint64(2), tf.IndexReaderParam.GetLimit().GetLit().GetU64Val(), "raw literal k, not over-fetched at plan time")
 	// EXPLAIN-only annotation: the over-fetched budget for a literal k (2 -> 12).

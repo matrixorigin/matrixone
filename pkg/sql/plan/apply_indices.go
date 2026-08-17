@@ -108,6 +108,102 @@ func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bo
 	return overfetch.PostFilterLimit(k)
 }
 
+// BuildOverFetchLimitExpr returns an expression evaluating to the over-fetched
+// candidate budget k' = overfetch.PostFilterLimit(k), for a k that may only be known
+// at EXECUTE (a prepared LIMIT ?). A literal k is folded here; a parameterized one
+// becomes an expression computing the same step function at runtime.
+//
+// Why the budget travels on node.Limit rather than on IndexReaderParam.Limit alone:
+// node.Limit is the ONLY candidate-budget channel a pre-change CN understands. A
+// vector provider child gives the FUNCTION_SCAN a child, so compileTableFunction
+// attaches the search operator to already-compiled child scopes, which may be Remote
+// — a new coordinator can therefore ship this operator to an old CN during a rolling
+// upgrade. That CN's Prepare reads arg.Limit alone, so a nil there makes it default
+// to one candidate and silently under-return before the post-filter JOIN.
+//
+// Carrying k' here needs no protocol capability and no low-version fallback, because
+// every function used (case, greatest, cast, *, +) long predates any CN this can be
+// mixed with, and evalLimitExpression has always evaluated a non-literal arg.Limit
+// through a general expression executor. Old and new CNs compute the same k'.
+//
+// The formula mirrors overfetch.PostFilterLimit exactly:
+//
+//	greatest(cast(k * factor(k) as uint64), k + 10)
+//
+// so the two implementations cannot drift into disagreeing about the budget.
+// TestOverFetchLimitExprMatchesGoFormula pins them together.
+func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPostMode bool) (*plan.Expr, error) {
+	if limit == nil {
+		return nil, nil
+	}
+	if lit := limit.GetLit(); lit != nil {
+		k := lit.GetU64Val()
+		if filteredPostMode {
+			return makePlan2Uint64ConstExprWithType(overfetch.FilteredPostModeLimit(k)), nil
+		}
+		return makePlan2Uint64ConstExprWithType(overfetch.PostFilterLimit(k)), nil
+	}
+
+	// factor(k): the same bucketed step function the Go helpers use.
+	bounds := overfetch.PostFilterFactorSteps()
+	if filteredPostMode {
+		bounds = overfetch.FilteredPostModeFactorSteps()
+	}
+	caseArgs := make([]*plan.Expr, 0, len(bounds)*2+1)
+	for _, step := range bounds {
+		cond, err := BindFuncExprImplByPlanExpr(ctx, "<", []*plan.Expr{
+			DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(step.Below)})
+		if err != nil {
+			return nil, err
+		}
+		caseArgs = append(caseArgs, cond, makePlan2Float64ConstExprWithType(step.Factor))
+	}
+	caseArgs = append(caseArgs, makePlan2Float64ConstExprWithType(overfetch.DefaultFactor(filteredPostMode)))
+	factor, err := BindFuncExprImplByPlanExpr(ctx, "case", caseArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	scaled, err := BindFuncExprImplByPlanExpr(ctx, "*", []*plan.Expr{DeepCopyExpr(limit), factor})
+	if err != nil {
+		return nil, err
+	}
+	// floor() before the cast is required, not cosmetic: Go's uint64(product)
+	// truncates while SQL CAST(... AS UNSIGNED) rounds half away from zero, so
+	// k=51 would give 76 in overfetch.Limit and 77 here. Truncating explicitly
+	// keeps the two definitions equal for every k.
+	truncated, err := BindFuncExprImplByPlanExpr(ctx, "floor", []*plan.Expr{scaled})
+	if err != nil {
+		return nil, err
+	}
+	scaledU64, err := appendCastBeforeExpr(ctx, truncated, plan.Type{
+		Id: int32(types.T_uint64), NotNullable: true})
+	if err != nil {
+		return nil, err
+	}
+
+	// The +10 floor keeps a small k from over-fetching too little to survive the filter.
+	minCandidates, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(overfetch.MinExtraCandidates)})
+	if err != nil {
+		return nil, err
+	}
+	budget, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*plan.Expr{scaledU64, minCandidates})
+	if err != nil {
+		return nil, err
+	}
+
+	// overfetch.Limit short-circuits k == 0 to 0; without the same guard the floor
+	// above would turn `LIMIT 0` into a 10-candidate search.
+	isZero, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(0)})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		isZero, makePlan2Uint64ConstExprWithType(0), budget})
+}
+
 func containsDynamicParam(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P, *plan.Expr_V:

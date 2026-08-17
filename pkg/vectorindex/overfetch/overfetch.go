@@ -26,33 +26,79 @@ package overfetch
 
 import "math"
 
+// MinExtraCandidates is the additive floor in Limit: every budget fetches at
+// least k+10, so a small k still has headroom the multiplier alone would not give.
+const MinExtraCandidates uint64 = 10
+
+// FactorStep is one bucket of the multiplier step function: k < Below uses Factor.
+// Steps are ordered ascending by Below and the last one falls through to the
+// package's default factor.
+type FactorStep struct {
+	Below  uint64
+	Factor float64
+}
+
+// postFilterSteps and filteredPostModeSteps are the single definition of each
+// step function. Both the Go helpers below and the planner's equivalent SQL
+// expression (BuildOverFetchLimitExpr) are derived from these tables, so the
+// value a new CN computes in Go and the value an old CN computes by evaluating
+// the pushed expression cannot drift apart.
+var (
+	postFilterSteps = []FactorStep{
+		{Below: 10, Factor: 5.0},  // Small limits: 5x
+		{Below: 50, Factor: 2.0},  // Medium limits: 2x
+		{Below: 100, Factor: 1.5}, // Large limits: 1.5x
+		{Below: 200, Factor: 1.3}, // Very large limits: 1.3x
+	}
+	postFilterDefaultFactor = 1.2 // Huge limits: 1.2x
+
+	filteredPostModeSteps = []FactorStep{
+		{Below: 50, Factor: 5.0},
+		{Below: 100, Factor: 2.0},
+		{Below: 200, Factor: 1.5},
+	}
+	filteredPostModeDefaultFactor = 1.3
+)
+
+// PostFilterFactorSteps returns the post-filter step table. The slice is copied so
+// a caller building an expression from it cannot mutate the shared definition.
+func PostFilterFactorSteps() []FactorStep {
+	return append([]FactorStep(nil), postFilterSteps...)
+}
+
+// FilteredPostModeFactorSteps returns the ivfflat filtered-post-mode step table.
+func FilteredPostModeFactorSteps() []FactorStep {
+	return append([]FactorStep(nil), filteredPostModeSteps...)
+}
+
+// DefaultFactor is the multiplier used above the last step of the chosen table.
+func DefaultFactor(filteredPostMode bool) float64 {
+	if filteredPostMode {
+		return filteredPostModeDefaultFactor
+	}
+	return postFilterDefaultFactor
+}
+
+func factorFromSteps(k uint64, steps []FactorStep, defaultFactor float64) float64 {
+	for _, step := range steps {
+		if k < step.Below {
+			return step.Factor
+		}
+	}
+	return defaultFactor
+}
+
 // PostFilterFactor returns the over-fetch multiplier for a post-filtered vector
 // search whose candidates are dropped by a residual filter after the search.
 func PostFilterFactor(k uint64) float64 {
-	if k < 10 {
-		return 5.0 // Small limits: 5x
-	} else if k < 50 {
-		return 2.0 // Medium limits: 2x
-	} else if k < 100 {
-		return 1.5 // Large limits: 1.5x
-	} else if k < 200 {
-		return 1.3 // Very large limits: 1.3x
-	}
-	return 1.2 // Huge limits: 1.2x
+	return factorFromSteps(k, postFilterSteps, postFilterDefaultFactor)
 }
 
 // FilteredPostModeFactor returns a fixed, more conservative multiplier for
 // ivfflat filtered post mode. It intentionally avoids statistics-based
 // heuristics so the behavior is predictable across plans.
 func FilteredPostModeFactor(k uint64) float64 {
-	if k < 50 {
-		return 5.0
-	} else if k < 100 {
-		return 2.0
-	} else if k < 200 {
-		return 1.5
-	}
-	return 1.3
+	return factorFromSteps(k, filteredPostModeSteps, filteredPostModeDefaultFactor)
 }
 
 // Limit applies factor to k, floored so it always fetches at least k+10, and
@@ -75,10 +121,10 @@ func Limit(k uint64, factor float64) uint64 {
 	}
 
 	withFloor := k
-	if k > math.MaxUint64-10 {
+	if k > math.MaxUint64-MinExtraCandidates {
 		withFloor = math.MaxUint64
 	} else {
-		withFloor += 10
+		withFloor += MinExtraCandidates
 	}
 	return max(multiplied, withFloor)
 }
