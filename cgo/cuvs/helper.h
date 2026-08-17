@@ -186,8 +186,12 @@ SearchResult cpu_topk_merge_sharded(const std::vector<SearchResult>& shard_resul
 //
 // A device must be current. `who` names the caller in the log line and the exception text.
 // out_free_bytes, when non-null, receives the free-memory reading that was used.
-int64_t rows_fitting_gpu_mem(int64_t requested_rows, size_t per_row_bytes,
-                             const char* who, size_t* out_free_bytes);
+// Pure query: how many rows of per_row_bytes fit ~60% of free VRAM. Does not log --
+// callers that are merely sizing something have capped nothing.
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes);
+
+// Caps requested_rows to what fits, logging only when it actually caps.
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who);
 
 } // namespace matrixone
 #endif

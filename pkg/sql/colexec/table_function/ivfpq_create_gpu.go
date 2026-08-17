@@ -389,9 +389,17 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// Per-row cost is not just the dataset. cuVS subsamples the k-means trainset as
 		// FLOAT32 whatever the storage type, so a quantized build still pays dim*4 for
 		// that fraction; leaving it out under-counts an int8 build by ~40%.
+		// Use the EFFECTIVE fraction, not the configured one. ivfpqConfig only forwards
+		// the config value when it is > 0 (model_gpu.go), so `kmeans_train_percent = 0`
+		// leaves cuVS on its own default of 0.5 -- and sizing against 0 there would
+		// under-count a dim-768 row by 1536 B, about a third, which is enough to spend
+		// the 60% headroom and OOM at the derived capacity.
+		trainFrac := u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction
+		if trainFrac <= 0 {
+			trainFrac = cuvs.DefaultIvfPqBuildParams().KmeansTrainsetFraction
+		}
 		perRow := uint64(u.idxcfg.CuvsIvfpq.Dimensions) * quantizationBytes(qt)
-		perRow += uint64(float64(u.idxcfg.CuvsIvfpq.Dimensions) * 4 *
-			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction)
+		perRow += uint64(float64(u.idxcfg.CuvsIvfpq.Dimensions) * 4 * trainFrac)
 
 		var rowsFit int64
 		if len(devices) > 0 {

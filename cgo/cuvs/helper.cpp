@@ -209,9 +209,7 @@ void cast_float_to_half_host(const float* __restrict__ src,
 #endif
 }
 
-int64_t rows_fitting_gpu_mem(int64_t requested_rows, size_t per_row_bytes,
-                             const char* who, size_t* out_free_bytes) {
-    if (requested_rows < 1) requested_rows = 1;
+int64_t rows_fitting_gpu_mem(size_t per_row_bytes, const char* who, size_t* out_free_bytes) {
     if (per_row_bytes == 0) {
         throw std::runtime_error(std::string(who) + ": per-row size is 0");
     }
@@ -224,7 +222,13 @@ int64_t rows_fitting_gpu_mem(int64_t requested_rows, size_t per_row_bytes,
     if (out_free_bytes) *out_free_bytes = free_bytes;
 
     int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row_bytes);
-    if (max_rows < 1) max_rows = 1;
+    return max_rows < 1 ? 1 : max_rows;
+}
+
+int64_t cap_rows_to_gpu_mem(int64_t requested_rows, size_t per_row_bytes, const char* who) {
+    if (requested_rows < 1) requested_rows = 1;
+    size_t free_bytes = 0;
+    int64_t max_rows = rows_fitting_gpu_mem(per_row_bytes, who, &free_bytes);
     if (requested_rows > max_rows) {
         std::cerr << "[" << who << "] capped " << requested_rows << " -> " << max_rows
                   << " rows to fit 60% of " << (free_bytes >> 20)
@@ -321,8 +325,7 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
         RAFT_CUDA_TRY(cudaSetDevice(device_id));
         size_t free_bytes = 0;
         int64_t rows = matrixone::rows_fitting_gpu_mem(
-            std::numeric_limits<int64_t>::max(), static_cast<size_t>(per_row_bytes),
-            "index capacity", &free_bytes);
+            static_cast<size_t>(per_row_bytes), "index capacity", &free_bytes);
         if (out_rows) *out_rows = rows;
         if (out_free_bytes) *out_free_bytes = static_cast<uint64_t>(free_bytes);
         return 0;

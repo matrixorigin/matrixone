@@ -1224,8 +1224,8 @@ public:
     // unchecked upload into a dead context and surface the real fault later as an opaque
     // allocation failure inside train().
     int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
-        return matrixone::rows_fitting_gpu_mem(
-            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer", nullptr);
+        return matrixone::cap_rows_to_gpu_mem(
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer");
     }
 
 
