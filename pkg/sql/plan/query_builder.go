@@ -4795,6 +4795,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		expandedSelectClause = selectClause
+		// Keep the query-block aggregate state active while HAVING, SELECT
+		// projection, and ORDER BY are bound. bindSelectClause initializes the
+		// state after the pre-aggregation WHERE has been bound, so correlated
+		// columns in WHERE remain tied to the raw input rather than being
+		// classified as aggregate outputs. The aggregate-input correlation flag
+		// remains use-site-specific and prevents this state from classifying
+		// per-row aggregate arguments as bare output columns.
+		previousPendingAggregateQuery := ctx.pendingAggregateQuery
+		defer func() {
+			ctx.pendingAggregateQuery = previousPendingAggregateQuery
+		}()
 		if selectClause.GroupBy != nil && (selectClause.GroupBy.Rollup || selectClause.GroupBy.Cube) {
 			// ROLLUP/CUBE expansion rewrites the clause below. CTE bodies may bind
 			// the same parsed SELECT once per reference, so keep the declaration
@@ -4922,6 +4933,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if nodeID, selectList, lockNode, notCacheable, boundTimeWindowGroupBy, havingBinder, boundHavingList, err = builder.bindSelectClause(
 			ctx,
 			selectClause,
+			astOrderBy,
 			astLimit,
 			astTimeWindow,
 			helpFunc,
@@ -5043,11 +5055,33 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		if boundOffsetExpr, boundCountExpr, rankOption, err = builder.bindLimit(ctx, astLimit, astRankOption); err != nil {
 			return
 		}
+	}
 
-		if astLimit != nil && lockNode != nil {
-			lockNode.Children[0] = nodeID
-			nodeID = builder.appendNode(lockNode, ctx)
+	// Keep the lock target collection in bindSelectClause, but attach the
+	// LOCK_OP only after any row-level HAVING rewrite has been applied.  A
+	// correlated HAVING is flattened into a MARK JOIN and FILTER; placing the
+	// lock before that rewrite would make the lock consume rows that the final
+	// predicate excludes.  Aggregate/sample plans keep their existing source
+	// row locking placement below.
+	appendLockNode := func() {
+		if lockNode == nil {
+			return
 		}
+		lockNode.Children[0] = nodeID
+		nodeID = builder.appendNode(lockNode, ctx)
+		lockNode = nil
+	}
+
+	var preWindowHavingList []*plan.Expr
+	if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		preWindowHavingList, _ = splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)
+	}
+	deferLockForHaving := lockNode != nil &&
+		!ctx.sampleFunc.hasSampleFunc &&
+		len(ctx.groups) == 0 && len(ctx.aggregates) == 0 && len(ctx.times) == 0 &&
+		len(boundHavingList) > 0 && (len(ctx.windows) == 0 || len(preWindowHavingList) > 0)
+	if !deferLockForHaving {
+		appendLockNode()
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
@@ -5103,6 +5137,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
 		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
+		}
+	} else if len(boundHavingList) > 0 && len(ctx.windows) == 0 && len(ctx.times) == 0 {
+		if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, boundHavingList); err != nil {
+			return
+		}
+		if deferLockForHaving {
+			// Keep the cardinality-changing HAVING above the lock.  The filter
+			// optimizer must not push it through LOCK_OP and widen the lock scope.
+			builder.qry.Nodes[nodeID].FilterIsBarrier = true
+		}
+		appendLockNode()
+	} else if len(boundHavingList) > 0 && len(ctx.windows) > 0 && len(ctx.times) == 0 {
+		if len(preWindowHavingList) > 0 {
+			if nodeID, err = builder.appendNonAggregateHavingNode(ctx, nodeID, preWindowHavingList); err != nil {
+				return
+			}
+			if deferLockForHaving {
+				builder.qry.Nodes[nodeID].FilterIsBarrier = true
+			}
+			appendLockNode()
 		}
 	}
 
@@ -6986,6 +7040,41 @@ func rollupWindowFuncMustBeMaterialized(expr *tree.FuncExpr) bool {
 	return function.GetFunctionIsAggregateByName(funcName) || strings.EqualFold(funcName, "grouping")
 }
 
+func queryBlockHasPendingAggregate(selectList tree.SelectExprs, having *tree.Where, orderBy tree.OrderBy) bool {
+	for _, item := range selectList {
+		if exprHasPendingAggregate(item.Expr) {
+			return true
+		}
+	}
+	if having != nil && exprHasPendingAggregate(having.Expr) {
+		return true
+	}
+	for _, order := range orderBy {
+		if order != nil && exprHasPendingAggregate(order.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasPendingAggregate(astExpr tree.Expr) bool {
+	found := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		switch e := expr.(type) {
+		case *tree.Subquery:
+			return false
+		case *tree.FuncExpr:
+			funcRef, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+			if ok && e.WindowSpec == nil && function.GetFunctionIsAggregateByName(funcRef.ColName()) {
+				found = true
+				return false
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 func rewriteRollupWindowExprs(exprs tree.Exprs, state *rollupWindowRewriteState) (tree.Exprs, bool) {
 	if len(exprs) == 0 {
 		return nil, true
@@ -7234,6 +7323,7 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 func (builder *QueryBuilder) bindSelectClause(
 	ctx *BindContext,
 	clause *tree.SelectClause,
+	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
@@ -7341,10 +7431,6 @@ func (builder *QueryBuilder) bindSelectClause(
 				LockTargets: lockTargets,
 				BindingTags: []int32{builder.genNewBindTag()},
 			}
-
-			if astLimit == nil {
-				nodeID = builder.appendNode(lockNode, ctx)
-			}
 		}
 	}
 
@@ -7383,7 +7469,6 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 		ctx.projectByAst = append(ctx.projectByAst, field)
 	}
-
 	// bind GROUP BY clause
 	if clause.GroupBy != nil || astTimeWindow != nil {
 		if boundTimeWindowGroupBy, err = builder.bindGroupBy(ctx, clause.GroupBy, selectList, astTimeWindow, helpFunc); err != nil {
@@ -7391,10 +7476,19 @@ func (builder *QueryBuilder) bindSelectClause(
 		}
 	}
 
+	// The WHERE clause is evaluated on the raw input before this query block's
+	// aggregate stage. Delay the pending-aggregate marker until WHERE and GROUP
+	// BY binding are complete, while keeping it active for HAVING, projection,
+	// and ORDER BY. This preserves legal per-row correlations in pre-aggregate
+	// filters without making aggregate-query validation order-dependent.
+	ctx.pendingAggregateQuery = ctx.pendingAggregateQuery ||
+		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
+
 	// bind HAVING clause
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		if boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder); err != nil {
+		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
+		if err != nil {
 			return
 		}
 	}
@@ -7630,6 +7724,10 @@ func (builder *QueryBuilder) bindHaving(
 		return
 	}
 	havingBinder.rollupHaving = clause.RollupHaving
+	havingBinder.bindingHaving = true
+	defer func() {
+		havingBinder.bindingHaving = false
+	}()
 	ctx.binder = havingBinder
 	return splitAndBindCondition(clause.Expr, AliasAfterColumn, ctx)
 }
@@ -8968,6 +9066,31 @@ func (builder *QueryBuilder) appendWhereNode(
 		FilterList:   boundFilterList,
 		NotCacheable: notCacheable,
 	}, ctx)
+}
+
+func (builder *QueryBuilder) appendNonAggregateHavingNode(
+	ctx *BindContext,
+	nodeID int32,
+	boundHavingList []*plan.Expr,
+) (newNodeID int32, err error) {
+	if len(boundHavingList) == 0 {
+		return nodeID, nil
+	}
+
+	newFilterList := make([]*plan.Expr, 0, len(boundHavingList))
+	for _, cond := range boundHavingList {
+		var expr *plan.Expr
+		if nodeID, expr, err = builder.flattenFilterSubqueries(nodeID, cond, ctx); err != nil {
+			return
+		}
+		newFilterList = append(newFilterList, expr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{nodeID},
+		FilterList: newFilterList,
+	}, ctx), nil
 }
 
 func (builder *QueryBuilder) appendSampleNode(

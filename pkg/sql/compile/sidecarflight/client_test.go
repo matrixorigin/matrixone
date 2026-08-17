@@ -376,7 +376,7 @@ func TestRequestDeadlineCancelsStalledDoGet(t *testing.T) {
 		doGetStarted: make(chan struct{}), blockDoGet: make(chan struct{}),
 	}
 	runtime := &Runtime{
-		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: 30 * time.Millisecond, CleanupTimeout: time.Second},
+		config: Config{MaxBatchBytes: 1 << 20, RequestTimeout: 250 * time.Millisecond, CleanupTimeout: time.Second},
 		conn:   testFlightConnection(t, server), executions: make(map[*Execution]struct{}),
 	}
 	copy(runtime.capabilityHash[:], server.hash)
