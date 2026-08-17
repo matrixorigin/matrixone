@@ -319,9 +319,12 @@ func (op *operator) startCNServiceLocked(
 }
 
 func (op *operator) verifySiriusBenchmarkNoGC() error {
+	// An individual embedded CN operator neither owns nor observes the TN that
+	// serves its snapshots. A sibling TN config is therefore not proof that GC
+	// is disabled on the actual TN, so embedded benchmark mode fails closed.
 	return cnservice.VerifySiriusBenchmarkNoGC(
 		&op.cfg.CN,
-		op.cfg.getTNServiceConfig().GCCfg.DisableGC,
+		false,
 	)
 }
 

@@ -44,9 +44,11 @@ data-dir = "/shared/matrixone-objects"
 The top-level `mo-service` launcher verifies that the paired TN has
 `disable-gc = true` before it starts the CN benchmark adapter. The CN and
 sidecar must see `data-dir` at the same path (or an equivalent shared object
-store mount). With a `-launch` manifest, the launcher reads the listed
-`tnservices` files for this proof; a standalone `-cfg` CN file must include a
-matching `[tn.GCCfg]` section.
+store mount). Start MatrixOne with a `-launch` manifest so the launcher can
+derive this proof from the same `tnservices` files it starts. A standalone
+`-cfg` CN and the embedded cluster API cannot establish which TN serves their
+snapshots, so they reject this benchmark mode even if their CN configuration
+contains a sibling `[tn.GCCfg]` section.
 
 ## Standalone sidecar
 

@@ -80,7 +80,9 @@ func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
 	op.serviceType = metadata.ServiceType_CN
 	op.cfg.CN.Sirius.Enabled = true
 	op.cfg.CN.Sirius.BenchmarkNoGC = true
-	require.ErrorContains(t, op.Start(), "disable-gc=true")
+	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
+	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
+	require.ErrorContains(t, op.Start(), "launcher-verified")
 	require.False(t, op.needsCleanup())
 }
 

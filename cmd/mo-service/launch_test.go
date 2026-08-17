@@ -274,9 +274,25 @@ func TestLaunchTNGCDisabledProof(t *testing.T) {
 	cn := writeLaunchTestFile(t, "benchmark-cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
 	launchStartService = func(_ context.Context, cfg *Config, _ *stopper.Stopper, _ chan struct{}) error {
 		require.True(t, cfg.benchmarkTNNoGC)
+		require.NoError(t, cfg.verifySiriusBenchmarkNoGC())
 		return nil
 	}
 	require.NoError(t, startCNServiceCluster(context.Background(), []string{cn}, nil, nil, true))
+}
+
+func TestStandaloneCNConfigCannotAssertTNGCDisabled(t *testing.T) {
+	cn := writeLaunchTestFile(t, "standalone-cn.toml", `service-type = "CN"
+[cn.sirius]
+enabled = true
+benchmark-no-gc = true
+[tn.GCCfg]
+disable-gc = true
+`)
+	cfg := NewConfig()
+	require.NoError(t, parseConfigFromFile(cn, cfg))
+	require.True(t, cfg.getTNServiceConfig().GCCfg.DisableGC)
+	require.False(t, cfg.benchmarkTNNoGC)
+	require.ErrorContains(t, startService(context.Background(), cfg, nil, nil), "launcher-verified")
 }
 
 func TestOrdinaryCNClusterDoesNotReadLaunchTNProof(t *testing.T) {

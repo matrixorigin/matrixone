@@ -89,7 +89,7 @@ func VerifySiriusBenchmarkNoGC(cfg *Config, tnGCDisabled bool) error {
 		return nil
 	}
 	if !tnGCDisabled {
-		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires TN GCCfg disable-gc=true")
+		return moerr.NewBadConfigNoCtx("Sirius benchmark-no-gc requires launcher-verified TN GCCfg disable-gc=true")
 	}
 	cfg.Sirius.benchmarkGCDisabled = true
 	return nil

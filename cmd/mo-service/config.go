@@ -100,7 +100,7 @@ type Dynamic struct {
 type Config struct {
 	// benchmarkTNNoGC is launcher-owned proof propagated from the TN service
 	// config when a launch manifest starts CN and TN from separate files. It is
-	// never decoded from TOML and is consumed only by startCNService.
+	// never decoded from TOML and is consumed only by CN startup validation.
 	benchmarkTNNoGC bool
 
 	// DataDir data dir
