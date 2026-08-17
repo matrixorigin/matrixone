@@ -58,6 +58,12 @@ func TestBatchMarshalAndUnmarshal(t *testing.T) {
 		var streamed bytes.Buffer
 		require.NoError(t, tc.bat.MarshalBinaryTo(&streamed))
 		require.Equal(t, data, streamed.Bytes())
+		transportSize, err := tc.bat.MarshalBinaryWithPrepareParamKindsSize()
+		require.NoError(t, err)
+		require.Equal(t, len(data), transportSize)
+		streamed.Reset()
+		require.NoError(t, tc.bat.MarshalBinaryWithPrepareParamKindsTo(&streamed))
+		require.Equal(t, data, streamed.Bytes())
 		require.ErrorIs(
 			t,
 			tc.bat.MarshalBinaryTo(shortBatchMarshalWriter{}),
@@ -771,6 +777,16 @@ func TestPrepareParamKindTransportRoundTripAndReuse(t *testing.T) {
 	require.Equal(t, wire.Bytes(), encoded)
 	require.Greater(t, len(encoded), len(legacy))
 	require.Equal(t, legacy, encoded[:len(legacy)])
+	streamSize, err := source.MarshalBinaryWithPrepareParamKindsSize()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), streamSize)
+	var streamed bytes.Buffer
+	require.NoError(t, source.MarshalBinaryWithPrepareParamKindsTo(&streamed))
+	require.Equal(t, encoded, streamed.Bytes())
+	require.ErrorIs(t,
+		source.MarshalBinaryWithPrepareParamKindsTo(shortBatchMarshalWriter{}),
+		io.ErrShortWrite,
+	)
 
 	decoded := NewOffHeapEmpty()
 	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(encoded, mp))
@@ -868,6 +884,32 @@ func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {
 	require.False(t, plainStatic.HasBinaryStringMetadata(),
 		"static binary semantics are already carried by the vector type")
 	plainStatic.Clean(mp)
+}
+
+func TestPrepareParamKindMarshalInvalidBoundaryMatrix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	var wire bytes.Buffer
+	_, err := nilBatch.MarshalBinaryWithPrepareParamKinds(&wire, true)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.ErrorIs(t, nilBatch.MarshalBinaryWithPrepareParamKindsTo(&wire), io.ErrClosedPipe)
+
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, mp))
+	bat.SetRowCount(1)
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamKind(255))
+	_, err = bat.PrepareParamKindMetadataSize()
+	require.Error(t, err)
+	_, err = bat.MarshalBinaryWithPrepareParamKindsSize()
+	require.Error(t, err)
+	bat.Vecs[0].SetPrepareParamKind(vector.PrepareParamInteger)
+	require.ErrorIs(t, bat.AppendPrepareParamKindMetadataTo(nil), io.ErrClosedPipe)
+	bat.Clean(mp)
+
+	_, err = NewWithSize(0).MarshalBinaryWithPrepareParamKinds(nil, true)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestPrepareParamKindTransportRejectsMalformedTrailer(t *testing.T) {
@@ -1037,6 +1079,50 @@ func TestPrepareParamKindStreamingRoundTrip(t *testing.T) {
 	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](target.Vecs[1], 2))
 	require.False(t, target.Vecs[1].HasPrepareParamKind())
 	target.Clean(mp)
+
+	spillTarget := NewOffHeapEmpty()
+	require.NoError(t, spillTarget.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+		bytes.NewReader(encoded), int64(len(encoded)), mp))
+	require.Equal(t, []vector.PrepareParamKind{
+		vector.PrepareParamFloat,
+		vector.PrepareParamNone,
+		vector.PrepareParamDecimal,
+	}, spillTarget.Vecs[0].GetPrepareParamKinds())
+	spillTarget.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestPrepareParamKindSpillStreamingRejectsBatchMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, test := range []struct {
+		name  string
+		attrs []string
+		extra []byte
+	}{
+		{name: "attributes", attrs: []string{"value"}},
+		{name: "extra buffer", extra: []byte("unaccounted payload")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := NewWithSize(1)
+			source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(1), false, mp))
+			source.Attrs = test.attrs
+			source.ExtraBuf = test.extra
+			source.SetRowCount(1)
+			var wire bytes.Buffer
+			require.NoError(t, source.MarshalBinaryWithPrepareParamKindsTo(&wire))
+
+			target := NewOffHeapEmpty()
+			err := target.UnmarshalFromReaderWithPrepareParamKindsForSpill(
+				bytes.NewReader(wire.Bytes()),
+				int64(wire.Len()),
+				mp,
+			)
+			require.Error(t, err)
+			target.Clean(mp)
+			source.Clean(mp)
+		})
+	}
 	require.Zero(t, mp.CurrNB())
 }
 

@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -231,14 +232,22 @@ func prepareNonMatchingMask(mask []bool, count int, enabled bool) []bool {
 const MaxStrIteratorCapacity = 64 * 1024
 
 func IteratorChangeOwner(itr Iterator, m HashMap) {
-	if it, ok := itr.(*intHashMapIterator); ok {
+	switch it := itr.(type) {
+	case *intHashMapIterator:
 		it.mp = m.(*IntHashMap)
-		return
+	case *transactionalIntIterator:
+		it.invalidatePreview()
+		it.mp = m.(*IntHashMap)
+	case *strHashmapIterator:
+		changeStrIteratorOwner(it, m.(*StrHashMap))
+	case *transactionalStrIterator:
+		it.invalidatePreview()
+		changeStrIteratorOwner(it.strHashmapIterator, m.(*StrHashMap))
 	}
-	it := itr.(*strHashmapIterator)
-	next := m.(*StrHashMap)
-	if it.mp != nil &&
-		it.mp.iteratorAllocation != next.iteratorAllocation {
+}
+
+func changeStrIteratorOwner(it *strHashmapIterator, next *StrHashMap) {
+	if it.mp != nil && it.mp.iteratorAllocation != next.iteratorAllocation {
 		it.releaseScratch()
 	}
 	it.mp = next
@@ -250,17 +259,44 @@ func IteratorClearOwner(itr Iterator) {
 	switch it := itr.(type) {
 	case *intHashMapIterator:
 		it.mp = nil
+	case *transactionalIntIterator:
+		it.invalidatePreview()
+		it.mp = nil
 	case *strHashmapIterator:
 		it.releaseAccountedScratch()
 		it.mp = nil
+	case *transactionalStrIterator:
+		it.invalidatePreview()
+		it.releaseAccountedScratch()
+		it.mp = nil
+	}
+}
+
+func (itr *transactionalStrIterator) invalidatePreview() {
+	if itr != nil {
+		itr.epoch++
+	}
+}
+
+func (itr *transactionalIntIterator) invalidatePreview() {
+	if itr != nil {
+		itr.epoch++
 	}
 }
 
 // StrIteratorCapacity reports the total capacity of all key buffers maintained
 // by a string iterator. Used to decide if a cached iterator should be kept.
 func StrIteratorCapacity(itr Iterator) int {
-	it, ok := itr.(*strHashmapIterator)
-	if !ok || it == nil {
+	var it *strHashmapIterator
+	switch typed := itr.(type) {
+	case *strHashmapIterator:
+		it = typed
+	case *transactionalStrIterator:
+		if typed != nil {
+			it = typed.strHashmapIterator
+		}
+	}
+	if it == nil {
 		return 0
 	}
 	return cap(it.keyBuffer)
@@ -289,6 +325,9 @@ func (itr *strHashmapIterator) releaseAccountedScratch() {
 }
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
+	if itr == nil || itr.mp == nil {
+		return nil, nil, mpool.ErrAllocationAccountInvalid
+	}
 	if err := itr.prepareHashKeys(vecs, start, count); err != nil {
 		return nil, nil, err
 	}
@@ -319,6 +358,228 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	return itr.values[:count], itr.zValues[:count], nil
 }
 
+func (itr *transactionalStrIterator) Find(
+	start, count int,
+	vecs []*vector.Vector,
+) ([]uint64, []int64, error) {
+	itr.invalidatePreview()
+	return itr.strHashmapIterator.Find(start, count, vecs)
+}
+
+func (itr *transactionalStrIterator) Preflight(
+	start, count int,
+	vecs []*vector.Vector,
+) error {
+	if itr == nil || itr.mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	itr.invalidatePreview()
+	return itr.prepareHashKeys(vecs, start, count)
+}
+
+func (itr *transactionalStrIterator) PreviewInsert(
+	start, count int,
+	vecs []*vector.Vector,
+	groupCount uint64,
+	plan *InsertPlan,
+) error {
+	if itr == nil || itr.mp == nil || plan == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	itr.invalidatePreview()
+	plan.reset()
+	if err := itr.prepareHashKeys(vecs, start, count); err != nil {
+		return err
+	}
+	defer func() {
+		for i := 0; i < count; i++ {
+			itr.keys[i] = itr.keys[i][:0]
+		}
+	}()
+	if count == 0 {
+		plan.base = groupCount
+		plan.version = itr.mp.hashMap.Version()
+		plan.epoch = itr.epoch
+		plan.complete = true
+		plan.strOwner = itr
+		plan.ready = true
+		return nil
+	}
+	copy(itr.zValues[:count], OneInt64s[:count])
+	clear(itr.values[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN)
+	itr.encodeHashKeys(vecs, start, count)
+	hashtable.BytesBatchGenHashStates(
+		&itr.keys[0], &itr.strHashStates[0], count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching)
+	useRing := !itr.mp.hasNull || itr.mp.rejectNaN
+	newGroups, version, complete, err := itr.mp.hashMap.PlanInsertStringBatch(
+		groupCount, itr.zValues[:count], itr.strHashStates[:count],
+		itr.values[:count], plan.slots[:count], plan.inserted[:count], useRing)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		if err = itr.mp.hashMap.FindPrehashedStringBatch(
+			itr.zValues[:count], itr.strHashStates[:count],
+			itr.values[:count], useRing); err != nil {
+			return err
+		}
+		newGroups, err = previewMissingStringStates(
+			groupCount, itr.zValues[:count], itr.strHashStates[:count],
+			itr.values[:count], plan.inserted[:count], useRing)
+		if err != nil {
+			return err
+		}
+	}
+	if hasNonMatching {
+		finishNonMatchingKeys(
+			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching)
+	}
+	plan.count = count
+	plan.newGroups = newGroups
+	plan.base = groupCount
+	plan.version = version
+	plan.epoch = itr.epoch
+	plan.complete = complete
+	plan.strOwner = itr
+	plan.ready = true
+	return nil
+}
+
+func (itr *transactionalStrIterator) CommitPreview(
+	plan *InsertPlan,
+) ([]uint64, []int64, error) {
+	if itr == nil || itr.mp == nil || plan == nil || !plan.ready ||
+		plan.strOwner != itr || plan.intOwner != nil ||
+		plan.epoch != itr.epoch ||
+		plan.count < 0 || plan.count > UnitLimit {
+		return nil, nil, mpool.ErrAllocationAccountInvariant
+	}
+	count := plan.count
+	more := plan.newGroups
+	plan.ready = false
+	itr.invalidatePreview()
+	if itr.mp.rows != plan.base {
+		return nil, nil, mpool.ErrAllocationAccountInvariant
+	}
+	// A duplicate-only unit has nothing to publish. Preview already produced
+	// the final group mapping, so avoid a second hash-table pass while still
+	// rejecting a plan invalidated by an independently mutated owner.
+	if more == 0 {
+		if !plan.complete || plan.version != itr.mp.hashMap.Version() {
+			return nil, nil, mpool.ErrAllocationAccountInvariant
+		}
+		return itr.values[:count], itr.zValues[:count], nil
+	}
+	if err := itr.mp.hashMap.ResizeWithPlan(
+		itr.mp.hashMap.PlanResize(more)); err != nil {
+		return nil, nil, err
+	}
+	useRing := !itr.mp.hasNull || itr.mp.rejectNaN
+	var originalZ [UnitLimit]int64
+	if itr.mp.rejectNaN {
+		copy(originalZ[:count], itr.zValues[:count])
+		for row, marked := range itr.nonMatching {
+			if marked {
+				itr.zValues[row] = 0
+			}
+		}
+	}
+	if !plan.complete || plan.version != itr.mp.hashMap.Version() {
+		var flags [UnitLimit]uint8
+		newGroups, version, complete, err := itr.mp.hashMap.PlanInsertStringBatch(
+			plan.base, itr.zValues[:count], itr.strHashStates[:count],
+			itr.values[:count], plan.slots[:count], flags[:count], useRing)
+		if err != nil {
+			if itr.mp.rejectNaN {
+				copy(itr.zValues[:count], originalZ[:count])
+			}
+			return nil, nil, err
+		}
+		if !complete || newGroups != more {
+			if itr.mp.rejectNaN {
+				copy(itr.zValues[:count], originalZ[:count])
+			}
+			return nil, nil, mpool.ErrAllocationAccountInvariant
+		}
+		for row := 0; row < count; row++ {
+			if flags[row] != plan.inserted[row] {
+				if itr.mp.rejectNaN {
+					copy(itr.zValues[:count], originalZ[:count])
+				}
+				return nil, nil, mpool.ErrAllocationAccountInvariant
+			}
+		}
+		plan.version = version
+		plan.complete = true
+	}
+	err := itr.mp.hashMap.CommitInsertStringBatchPlan(
+		plan.version, plan.base, itr.strHashStates[:count],
+		itr.values[:count], plan.slots[:count], plan.inserted[:count])
+	if itr.mp.rejectNaN {
+		copy(itr.zValues[:count], originalZ[:count])
+		for row, marked := range itr.nonMatching {
+			if marked {
+				itr.values[row] = 0
+			}
+		}
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	itr.mp.rows = plan.base + more
+	return itr.values[:count], itr.zValues[:count], nil
+}
+
+func previewMissingStringStates(
+	base uint64,
+	zValues []int64,
+	states [][3]uint64,
+	values []uint64,
+	inserted []uint8,
+	useRing bool,
+) (uint64, error) {
+	if len(values) < len(states) || len(inserted) < len(states) ||
+		useRing && len(zValues) < len(states) {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	clear(inserted[:len(states)])
+	next := base
+	var planned [UnitLimit * 2]uint16
+	const plannedMask = len(planned) - 1
+	for row, state := range states {
+		if useRing && zValues[row] == 0 {
+			values[row] = 0
+			continue
+		}
+		if values[row] > base {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		if values[row] != 0 {
+			continue
+		}
+		for slot := int(state[0]) & plannedMask; ; slot = (slot + 1) & plannedMask {
+			entry := planned[slot]
+			if entry == 0 {
+				next++
+				values[row] = next
+				inserted[row] = 1
+				planned[slot] = uint16(row + 1)
+				break
+			}
+			prior := int(entry - 1)
+			if states[prior] == state {
+				values[row] = values[prior]
+				break
+			}
+		}
+	}
+	return next - base, nil
+}
+
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
 	if !itr.mp.rejectNaN {
@@ -347,9 +608,19 @@ func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 	return zValues[0] != 0 && values[0] > before, nil
 }
 
+func (itr *transactionalStrIterator) DetectDup(
+	vecs []*vector.Vector,
+	row int,
+) (bool, error) {
+	itr.invalidatePreview()
+	return itr.strHashmapIterator.DetectDup(vecs, row)
+}
+
 func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
-
+	if itr == nil || itr.mp == nil {
+		return nil, nil, mpool.ErrAllocationAccountInvalid
+	}
 	if err = itr.prepareHashKeys(vecs, start, count); err != nil {
 		return nil, nil, err
 	}
@@ -382,6 +653,14 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}
 	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull && !itr.mp.rejectNaN, vs, zvs)
 	return vs, zvs, err
+}
+
+func (itr *transactionalStrIterator) Insert(
+	start, count int,
+	vecs []*vector.Vector,
+) ([]uint64, []int64, error) {
+	itr.invalidatePreview()
+	return itr.strHashmapIterator.Insert(start, count, vecs)
 }
 
 func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -426,6 +705,219 @@ func (itr *intHashMapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	return itr.values[:count], itr.zValues[:count], nil
 }
 
+func (itr *transactionalIntIterator) Find(
+	start, count int,
+	vecs []*vector.Vector,
+) ([]uint64, []int64, error) {
+	itr.invalidatePreview()
+	return itr.intHashMapIterator.Find(start, count, vecs)
+}
+
+func (itr *transactionalIntIterator) Preflight(
+	start, count int,
+	vecs []*vector.Vector,
+) error {
+	if itr == nil || itr.mp == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	itr.invalidatePreview()
+	if err := validateIteratorVectors(vecs, start, count); err != nil {
+		return err
+	}
+	itr.ensureCapacity(count)
+	return nil
+}
+
+func (itr *transactionalIntIterator) PreviewInsert(
+	start, count int,
+	vecs []*vector.Vector,
+	groupCount uint64,
+	plan *InsertPlan,
+) error {
+	if itr == nil || itr.mp == nil || plan == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	itr.invalidatePreview()
+	plan.reset()
+	if err := validateIteratorVectors(vecs, start, count); err != nil {
+		return err
+	}
+	itr.ensureCapacity(count)
+	if count == 0 {
+		plan.base = groupCount
+		plan.version = itr.mp.hashMap.Version()
+		plan.epoch = itr.epoch
+		plan.complete = true
+		plan.intOwner = itr
+		plan.ready = true
+		return nil
+	}
+	clear(itr.keys[:count])
+	clear(itr.keyOffs[:count])
+	defer func() {
+		clear(itr.keys[:count])
+		clear(itr.keyOffs[:count])
+	}()
+	copy(itr.zValues[:count], OneInt64s[:count])
+	itr.nonMatching = prepareNonMatchingMask(
+		itr.nonMatching, count, itr.mp.rejectNaN)
+	itr.encodeHashKeys(vecs, start, count)
+	hasNonMatching := markNonMatchingNaNs(
+		vecs, start, count, itr.zValues[:count], itr.nonMatching)
+	useRing := !itr.mp.hasNull || itr.mp.rejectNaN
+	newGroups, version, complete, err := itr.mp.hashMap.PlanInsertBatch(
+		count, groupCount, itr.zValues[:count], itr.hashes[:count],
+		unsafe.Pointer(&itr.keys[0]), itr.values[:count],
+		plan.slots[:count], plan.inserted[:count], useRing, false)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		if err = itr.mp.hashMap.FindPrehashedBatch(
+			itr.zValues[:count], itr.hashes[:count],
+			itr.values[:count], useRing); err != nil {
+			return err
+		}
+		newGroups, err = previewMissingIntHashes(
+			groupCount, itr.zValues[:count], itr.hashes[:count],
+			itr.values[:count], plan.inserted[:count], useRing)
+		if err != nil {
+			return err
+		}
+	}
+	if hasNonMatching {
+		finishNonMatchingKeys(
+			vecs, start, itr.values[:count], itr.zValues[:count], itr.nonMatching)
+	}
+	plan.count = count
+	plan.newGroups = newGroups
+	plan.base = groupCount
+	plan.version = version
+	plan.epoch = itr.epoch
+	plan.complete = complete
+	plan.intOwner = itr
+	plan.ready = true
+	return nil
+}
+
+func previewMissingIntHashes(
+	base uint64,
+	zValues []int64,
+	hashes []uint64,
+	values []uint64,
+	inserted []uint8,
+	useRing bool,
+) (uint64, error) {
+	if len(values) < len(hashes) || len(inserted) < len(hashes) ||
+		useRing && len(zValues) < len(hashes) {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	clear(inserted[:len(hashes)])
+	next := base
+	var planned [UnitLimit * 2]uint16
+	const plannedMask = len(planned) - 1
+	for row, hash := range hashes {
+		if useRing && zValues[row] == 0 {
+			values[row] = 0
+			continue
+		}
+		if values[row] > base {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		if values[row] != 0 {
+			continue
+		}
+		for slot := int(hash) & plannedMask; ; slot = (slot + 1) & plannedMask {
+			entry := planned[slot]
+			if entry == 0 {
+				next++
+				values[row] = next
+				inserted[row] = 1
+				planned[slot] = uint16(row + 1)
+				break
+			}
+			prior := int(entry - 1)
+			if hashes[prior] == hash {
+				values[row] = values[prior]
+				break
+			}
+		}
+	}
+	return next - base, nil
+}
+
+func (itr *transactionalIntIterator) CommitPreview(
+	plan *InsertPlan,
+) ([]uint64, []int64, error) {
+	if itr == nil || itr.mp == nil || plan == nil || !plan.ready ||
+		plan.intOwner != itr || plan.strOwner != nil ||
+		plan.epoch != itr.epoch ||
+		plan.count < 0 || plan.count > UnitLimit {
+		return nil, nil, mpool.ErrAllocationAccountInvariant
+	}
+	count := plan.count
+	more := plan.newGroups
+	plan.ready = false
+	itr.invalidatePreview()
+	if itr.mp.rows != plan.base {
+		return nil, nil, mpool.ErrAllocationAccountInvariant
+	}
+	// A duplicate-only unit has nothing to publish. Preview already produced
+	// the final group mapping, so avoid a second hash-table pass while still
+	// rejecting a plan invalidated by an independently mutated owner.
+	if more == 0 {
+		if !plan.complete || plan.version != itr.mp.hashMap.Version() {
+			return nil, nil, mpool.ErrAllocationAccountInvariant
+		}
+		return itr.values[:count], itr.zValues[:count], nil
+	}
+	if err := itr.mp.hashMap.ResizeWithPlan(
+		itr.mp.hashMap.PlanResize(more)); err != nil {
+		return nil, nil, err
+	}
+	if !plan.complete || plan.version != itr.mp.hashMap.Version() {
+		useRing := !itr.mp.hasNull || itr.mp.rejectNaN
+		var originalZ [UnitLimit]int64
+		if itr.mp.rejectNaN {
+			copy(originalZ[:count], itr.zValues[:count])
+			for row, marked := range itr.nonMatching {
+				if marked {
+					itr.zValues[row] = 0
+				}
+			}
+		}
+		var flags [UnitLimit]uint8
+		newGroups, version, complete, err := itr.mp.hashMap.PlanInsertBatch(
+			count, plan.base, itr.zValues[:count], itr.hashes[:count], nil,
+			itr.values[:count], plan.slots[:count], flags[:count],
+			useRing, true)
+		if itr.mp.rejectNaN {
+			copy(itr.zValues[:count], originalZ[:count])
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if !complete || newGroups != more {
+			return nil, nil, mpool.ErrAllocationAccountInvariant
+		}
+		for row := 0; row < count; row++ {
+			if flags[row] != plan.inserted[row] {
+				return nil, nil, mpool.ErrAllocationAccountInvariant
+			}
+		}
+		plan.version = version
+		plan.complete = true
+	}
+	if err := itr.mp.hashMap.CommitInsertBatchPlan(
+		plan.version, plan.base, itr.hashes[:count],
+		itr.values[:count], plan.slots[:count],
+		plan.inserted[:count]); err != nil {
+		return nil, nil, err
+	}
+	itr.mp.rows = plan.base + more
+	return itr.values[:count], itr.zValues[:count], nil
+}
+
 func (itr *intHashMapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
 	if itr == nil || itr.mp == nil {
 		return false, mpool.ErrAllocationAccountInvalid
@@ -436,6 +928,14 @@ func (itr *intHashMapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 		return false, err
 	}
 	return zValues[0] != 0 && values[0] > before, nil
+}
+
+func (itr *transactionalIntIterator) DetectDup(
+	vecs []*vector.Vector,
+	row int,
+) (bool, error) {
+	itr.invalidatePreview()
+	return itr.intHashMapIterator.DetectDup(vecs, row)
 }
 
 func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -481,6 +981,14 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}
 	updateHashTableRows(&itr.mp.rows, itr.mp.hasNull && !itr.mp.rejectNaN, vs, zvs)
 	return vs, zvs, err
+}
+
+func (itr *transactionalIntIterator) Insert(
+	start, count int,
+	vecs []*vector.Vector,
+) ([]uint64, []int64, error) {
+	itr.invalidatePreview()
+	return itr.intHashMapIterator.Insert(start, count, vecs)
 }
 
 func (itr *intHashMapIterator) ensureCapacity(count int) {

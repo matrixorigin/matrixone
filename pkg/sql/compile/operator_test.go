@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -365,6 +366,18 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	}
 }
 
+func TestDupOperatorOrderPreservesSpecsAndAllocationContract(t *testing.T) {
+	op := order.NewArgument()
+	defer op.Release()
+	op.OrderBySpec = []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}
+
+	duplicated := dupOperator(op, 0, 1).(*order.Order)
+	defer duplicated.Release()
+	require.Equal(t, op.OrderBySpec, duplicated.OrderBySpec)
+	_, ownsAllocation := any(duplicated).(executionAllocationAccountOwner)
+	require.True(t, ownsAllocation)
+}
+
 func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	innerOp := multi_update.NewArgument()
 	op := multi_update.NewPartitionMultiUpdate(innerOp)
@@ -667,20 +680,26 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 }
 
 func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	gapFillStart := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
+	gapFillEnd := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}}
 	node := &plan.Node{
-		NodeType:    plan.Node_TIME_WINDOW,
-		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
-		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
-		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
-		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
-		GapFillMode: plan.Node_GAP_FILL_PARTITION,
-		ProjectList: []*plan.Expr{},
-		BindingTags: []int32{},
-		AggList:     []*plan.Expr{},
+		NodeType:     plan.Node_TIME_WINDOW,
+		Interval:     makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:      []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:    &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:         &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode:  plan.Node_GAP_FILL_PARTITION,
+		GapFillStart: gapFillStart,
+		GapFillEnd:   gapFillEnd,
+		ProjectList:  []*plan.Expr{},
+		BindingTags:  []int32{},
+		AggList:      []*plan.Expr{},
 	}
 	arg := constructTimeWindow(context.Background(), node, nil)
 	require.True(t, arg.GapFill)
 	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Same(t, gapFillStart, arg.GapFillStart)
+	require.Same(t, gapFillEnd, arg.GapFillEnd)
 	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
 	arg.Release()
 }
@@ -845,7 +864,9 @@ func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
 	rightDedupJoin := rightdedupjoin.NewArgument()
 	rightDedupJoin.IsShuffle = true
 	rightDedupJoin.ShuffleIdx = -1
+	rightDedupJoin.InputKeysUnique = true
 	require.Equal(t, int32(2), dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).ShuffleIdx)
+	require.True(t, dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).InputKeysUnique)
 }
 
 func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing.T) {

@@ -584,10 +584,14 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			}
 		} else {
+			corrRelPos, corrColPos := relPos, colPos
+			if aggRelPos, aggColPos, ok := b.correlatedFullGroupByAggregateRef(relPos, colPos, col, typ); ok {
+				corrRelPos, corrColPos = aggRelPos, aggColPos
+			}
 			expr.Expr = &plan.Expr_Corr{
 				Corr: &plan.CorrColRef{
-					RelPos: relPos,
-					ColPos: colPos,
+					RelPos: corrRelPos,
+					ColPos: corrColPos,
 					Depth:  depth,
 				},
 			}
@@ -610,6 +614,12 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
+	if b.ctx.aggregateInputParent != nil && parent == b.ctx.aggregateInputParent {
+		if targetBinder, ok := parent.binder.(interface{ setAggregateInputCorrelation(bool) bool }); ok {
+			previousAggregateInputCorrelation := targetBinder.setAggregateInputCorrelation(true)
+			defer targetBinder.setAggregateInputCorrelation(previousAggregateInputCorrelation)
+		}
+	}
 	expr, err = parent.binder.BindColRef(astExpr, depth+1, isRoot)
 
 	if err == nil {
@@ -634,14 +644,51 @@ func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col st
 	return 0, false
 }
 
+func (b *baseBinder) correlatedFullGroupByAggregateRef(relPos, colPos int32, col string, typ *plan.Type) (int32, int32, bool) {
+	if b == nil || b.ctx == nil || b.builder == nil || typ == nil || !b.builder.mysqlFullGroupByCompat {
+		return 0, 0, false
+	}
+	if b.aggregateInputCorrelation {
+		return 0, 0, false
+	}
+	if !b.ctx.aggregateQueryForFullGroupBy() {
+		return 0, 0, false
+	}
+	if groupByContainsColumn(b.ctx, relPos, colPos) {
+		return 0, 0, false
+	}
+	binding := b.ctx.bindingByTag[relPos]
+	if binding == nil || !b.builder.mysqlFullGroupByAllowsColumn(b.ctx, binding, colPos) {
+		return 0, 0, false
+	}
+
+	source := &plan.Expr{
+		Typ: *typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+				Name:   col,
+			},
+		},
+	}
+	agg, err := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{source})
+	if err != nil {
+		return 0, 0, false
+	}
+	aggPos := int32(len(b.ctx.aggregates))
+	b.ctx.aggregates = append(b.ctx.aggregates, agg)
+	return b.ctx.aggregateTag, aggPos, true
+}
+
+func (b *baseBinder) setAggregateInputCorrelation(v bool) bool {
+	previous := b.aggregateInputCorrelation
+	b.aggregateInputCorrelation = v
+	return previous
+}
+
 func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
-	if corr == nil {
-		return false
-	}
-	ctx := b.ctx
-	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
-		ctx = ctx.parent
-	}
+	ctx := b.corrColRefTargetContext(corr)
 	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
 }
 
@@ -649,11 +696,65 @@ func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
 	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
 }
 
+func (b *baseBinder) corrColRefAllowedByCurrentQuery(corr *plan.CorrColRef) bool {
+	return b.corrColRefAllowedByQueryContext(b.ctx, corr)
+}
+
+func (b *baseBinder) corrColRefTargetsCurrentQueryInput(corr *plan.CorrColRef) bool {
+	if b == nil || b.ctx == nil || corr == nil {
+		return false
+	}
+	binding, ok := b.ctx.bindingByTag[corr.RelPos]
+	return ok && binding != nil
+}
+
+func (b *baseBinder) corrColRefTargetsAggregateInputParent(corr *plan.CorrColRef) bool {
+	if b == nil || b.ctx == nil || b.ctx.aggregateInputParent == nil || corr == nil {
+		return false
+	}
+	return b.corrColRefTargetContext(corr) == b.ctx.aggregateInputParent
+}
+
+func (b *baseBinder) corrColRefAllowedByTargetQuery(corr *plan.CorrColRef) bool {
+	return b.corrColRefAllowedByQueryContext(b.corrColRefTargetContext(corr), corr)
+}
+
+func (b *baseBinder) corrColRefAllowedByQueryContext(ctx *BindContext, corr *plan.CorrColRef) bool {
+	if ctx == nil || corr == nil {
+		return false
+	}
+	if ctx.aggregateTag > 0 && corr.RelPos == ctx.aggregateTag {
+		return true
+	}
+	binding, ok := ctx.bindingByTag[corr.RelPos]
+	if !ok || binding == nil {
+		return false
+	}
+	if !ctx.aggregateQueryForFullGroupBy() {
+		return true
+	}
+	return b.builder.mysqlFullGroupByAllowsColumn(ctx, binding, corr.ColPos)
+}
+
+func (b *baseBinder) corrColRefTargetContext(corr *plan.CorrColRef) *BindContext {
+	if corr == nil {
+		return nil
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx
+}
+
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	if b.ctx == nil {
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.subqueryInAggregateInput {
+		subCtx.aggregateInputParent = b.ctx
+	}
 	if b.numericSubqueryTarget != nil && !astExpr.Exists {
 		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
 	}
@@ -3543,12 +3644,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
-		sourceType := makeTypeByPlan2Expr(args[0])
-		targetType := types.T_datetime.ToType()
-		function.SetTargetScaleFromSource(&sourceType, &targetType)
-		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
-		if err != nil {
-			return nil, err
+		if types.T(args[0].Typ.Id) == types.T_timestamp {
+			if timeWindowIntervalUsesMicrosecond(args[1]) && args[0].Typ.Scale < 6 {
+				args[0].Typ.Scale = 6
+			}
+		} else {
+			sourceType := makeTypeByPlan2Expr(args[0])
+			targetType := types.T_datetime.ToType()
+			function.SetTargetScaleFromSource(&sourceType, &targetType)
+			if timeWindowIntervalUsesMicrosecond(args[1]) && targetType.Scale < 6 {
+				targetType.Scale = 6
+			}
+			args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
 		}
 		args, err = resetDateFunction(ctx, args[0], args[1])
 		if err != nil {
@@ -4405,6 +4515,19 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 			argsCastType[idx] = *returnType
 		}
 	}
+}
+
+func timeWindowIntervalUsesMicrosecond(expr *Expr) bool {
+	list := expr.GetList()
+	if list == nil || len(list.List) < 2 {
+		return false
+	}
+	lit := list.List[1].GetLit()
+	if lit == nil {
+		return false
+	}
+	unit, err := types.IntervalTypeOf(lit.GetSval())
+	return err == nil && unit == types.MicroSecond
 }
 
 func controlFlowValueIndexes(name string, argsLength int) []int {

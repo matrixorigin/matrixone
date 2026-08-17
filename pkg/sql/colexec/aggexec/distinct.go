@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -91,7 +90,10 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
-
+	d.maps = nil
+	d.itrs = nil
+	d.bs = nil
+	d.bs1 = nil
 }
 
 func (d *distinctHash) Size() int64 {
@@ -110,49 +112,127 @@ func (d *distinctHash) Size() int64 {
 	return size
 }
 
-func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error {
-	var cnt int64
+func (d *distinctHash) selectedCount(flags []uint8) (int64, error) {
+	if flags != nil && len(flags) > len(d.maps) {
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"distinct selection length %d does not match state count %d",
+			len(flags), len(d.maps))
+	}
 	if flags == nil {
-		cnt = int64(len(d.maps))
-	} else {
-		for _, f := range flags {
-			if f != 0 {
-				cnt += 1
-			}
+		return int64(len(d.maps)), nil
+	}
+	var count int64
+	for _, selected := range flags {
+		if selected > 1 {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"distinct selection flag must be zero or one")
+		}
+		if selected == 1 {
+			count++
 		}
 	}
+	return count, nil
+}
 
-	types.WriteInt64(buf, cnt)
+func (d *distinctHash) marshalSelectedMaps(
+	flags []uint8,
+	writer io.Writer,
+) error {
+	if _, err := d.selectedCount(flags); err != nil {
+		return err
+	}
 	for i := range d.maps {
-		if flags != nil && flags[i] != 0 {
-			if _, err := d.maps[i].WriteTo(buf); err != nil {
+		if flags == nil || i < len(flags) && flags[i] == 1 {
+			// Prefix the payload for independent validation, but stream it directly
+			// instead of materializing a data-scaled Go-heap copy.
+			payloadSize, err := d.maps[i].MarshalBinarySize()
+			if err != nil {
 				return err
+			}
+			if err = types.WriteUint64(writer, uint64(payloadSize)); err != nil {
+				return err
+			}
+			written, err := d.maps[i].WriteTo(writer)
+			if err != nil {
+				return err
+			}
+			if written != payloadSize {
+				return io.ErrShortWrite
 			}
 		}
 	}
 	return nil
 }
 
-func (d *distinctHash) unmarshalFromReader(buf io.Reader, mp *mpool.MPool) error {
-	var n uint64
-	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
+func (d *distinctHash) marshalToBuffers(flags []uint8, writer io.Writer) error {
+	cnt, err := d.selectedCount(flags)
+	if err != nil {
 		return err
 	}
 
-	d.maps = make([]*hashmap.StrHashMap, n)
-	d.itrs = make([]hashmap.Iterator, n)
+	if err := types.WriteInt64(writer, cnt); err != nil {
+		return err
+	}
+	return d.marshalSelectedMaps(flags, writer)
+}
+
+func (d *distinctHash) unmarshalFromReader(
+	buf io.Reader,
+	mp *mpool.MPool,
+) (retErr error) {
+	n, err := types.ReadUint64(buf)
+	if err != nil {
+		return err
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if n > uint64(maxInt/24) {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	// Every map starts with an eight-byte payload length. For complete-memory
+	// readers, reject impossible counts before a corrupt record can turn a few
+	// bytes into a data-scaled Go allocation.
+	if sized, ok := buf.(interface{ Len() int }); ok &&
+		n > uint64(sized.Len()/8) {
+		return io.ErrUnexpectedEOF
+	}
+	d.free()
+	defer func() {
+		if retErr != nil {
+			d.free()
+		}
+	}()
+	d.maps = make([]*hashmap.StrHashMap, int(n))
+	d.itrs = make([]hashmap.Iterator, int(n))
 	for i := uint64(0); i < n; i++ {
-		var l uint64
-		if _, err := buf.Read(types.EncodeUint64(&l)); err != nil {
+		l, err := types.ReadUint64(buf)
+		if err != nil {
 			return err
 		}
-		mapData := make([]byte, l)
-		if _, err := io.ReadFull(buf, mapData); err != nil {
-			return err
+		if l > uint64(^uint64(0)>>1) {
+			return mpool.ErrAllocationAllocatorLimit
 		}
+		if sized, ok := buf.(interface{ Len() int }); ok &&
+			l > uint64(sized.Len()) {
+			return io.ErrUnexpectedEOF
+		}
+		if limited, ok := buf.(*io.LimitedReader); ok && int64(l) > limited.N {
+			return io.ErrUnexpectedEOF
+		}
+		limited := &io.LimitedReader{R: buf, N: int64(l)}
 		d.maps[i] = &hashmap.StrHashMap{}
-		if err := d.maps[i].UnmarshalBinary(mapData, mp); err != nil {
+		_, err = d.maps[i].UnmarshalFrom(limited, mp)
+		if err != nil {
 			return err
+		}
+		if trailing, err := io.Copy(io.Discard, limited); err != nil || trailing != 0 {
+			if err != nil {
+				return err
+			}
+			return moerr.NewInternalErrorNoCtx("distinct hash payload has trailing bytes")
+		}
+		if limited.N != 0 {
+			return io.ErrUnexpectedEOF
 		}
 		d.itrs[i] = d.maps[i].NewIterator()
 	}

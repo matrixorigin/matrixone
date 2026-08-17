@@ -69,6 +69,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.directView = parent.directView
 		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
+		bc.captureViewStarExpansion = parent.captureViewStarExpansion
+		bc.expandedSelectLists = parent.expandedSelectLists
 	}
 
 	return bc

@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	hashBuildAllocationSiteExpressionData mpool.AllocationSite = iota + 98
-	hashBuildAllocationSiteExpressionArea
-	hashBuildAllocationSiteExpressionNulls
-	hashBuildAllocationSiteExpressionGrouping
+	executionResourceAllocationSiteExpressionData mpool.AllocationSite = iota + 98
+	executionResourceAllocationSiteExpressionArea
+	executionResourceAllocationSiteExpressionNulls
+	executionResourceAllocationSiteExpressionGrouping
 )
 
 // NewExpressionExecutors constructs expression trees used by HashBuild and
@@ -52,20 +52,20 @@ func newExpressionExecutorsWithCapacityClass(
 	capacityClass mpool.AllocationCapacityClass,
 ) ([]colexec.ExpressionExecutor, error) {
 	if len(exprs) == 0 {
-		return nil, process.ErrHashBuildBudgetInvalid
+		return nil, process.ErrExecutionResourceInvalid
 	}
 	for _, expr := range exprs {
 		if expr == nil {
-			return nil, process.ErrHashBuildBudgetInvalid
+			return nil, process.ErrExecutionResourceInvalid
 		}
 	}
 	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
-		HashBuildAllocationOwner,
-		hashBuildAllocationSiteExpressionData,
-		hashBuildAllocationSiteExpressionArea,
-		hashBuildAllocationSiteExpressionNulls,
-		hashBuildAllocationSiteExpressionGrouping,
+		mpool.AllocationOwnerHashBuild,
+		executionResourceAllocationSiteExpressionData,
+		executionResourceAllocationSiteExpressionArea,
+		executionResourceAllocationSiteExpressionNulls,
+		executionResourceAllocationSiteExpressionGrouping,
 		capacityClass,
 	)
 	if err != nil {

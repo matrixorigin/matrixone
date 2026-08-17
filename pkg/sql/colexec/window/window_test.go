@@ -1659,7 +1659,6 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 		bat.SetRowCount(3)
 		return bat
 	}
-
 	arg := &Window{
 		WinSpecList: []*plan.Expr{{
 			Expr: &plan.Expr_W{W: &plan.WindowSpec{
@@ -1769,6 +1768,66 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
+}
+
+func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	partitionVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, partitionVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(partitionVec, int32(1), false, mp))
+	orderVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, orderVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(orderVec, int32(10), false, mp))
+	input := batch.NewOffHeapWithSize(2)
+	input.SetVector(0, partitionVec)
+	input.SetVector(1, orderVec)
+	input.SetRowCount(1)
+
+	partitionExpr := newColExpr(0)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExpr(1),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	// Mirror child-first pipeline cleanup. The remaining account usage belongs
+	// to Window's materialized input and expression duplicates.
+	child.Free(proc, false, nil)
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestWindowOrderHonorsCancellation(t *testing.T) {
