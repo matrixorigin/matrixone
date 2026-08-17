@@ -56,8 +56,7 @@ type MemCache struct {
 	// which were released before FIFO insertion. Keeping these exact
 	// jemalloc-size-class buffers avoids a mallocx/dallocx round trip on the
 	// common read-buffer path without making physical capacity unaccounted.
-	idleCacheDataMu sync.Mutex
-	idleCacheData   sync.Map // map[int]*memoryCacheIdlePool, keyed by backing size
+	idleCacheData sync.Map // map[int]*memoryCacheIdlePool, keyed by backing size
 }
 
 const (
@@ -69,6 +68,7 @@ const (
 )
 
 type memoryCacheIdlePool struct {
+	mu   sync.Mutex
 	data chan *Bytes
 }
 
@@ -519,13 +519,14 @@ func (m *MemCache) recycleReservedCacheData(data *Bytes, backingSize int) bool {
 		return false
 	}
 
-	m.idleCacheDataMu.Lock()
-	defer m.idleCacheDataMu.Unlock()
+	pool := m.idlePool(backingSize)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 	if m.closed.Load() {
 		return false
 	}
 	select {
-	case m.idlePool(backingSize).data <- data:
+	case pool.data <- data:
 		return true
 	default:
 		return false
@@ -536,18 +537,17 @@ func (m *MemCache) recycleReservedCacheData(data *Bytes, backingSize int) bool {
 // They already count against reservedBytes, so this must run before FIFO
 // eviction under allocation pressure and at explicit reclamation boundaries.
 func (m *MemCache) releaseIdleCacheData() int {
-	m.idleCacheDataMu.Lock()
-	defer m.idleCacheDataMu.Unlock()
-
 	released := 0
 	m.idleCacheData.Range(func(_, value any) bool {
 		pool := value.(*memoryCacheIdlePool)
+		pool.mu.Lock()
 		for {
 			select {
 			case data := <-pool.data:
 				data.releaseAllocation()
 				released++
 			default:
+				pool.mu.Unlock()
 				return true
 			}
 		}
@@ -827,10 +827,23 @@ func (m *MemCache) DeletePaths(
 }
 
 func (m *MemCache) Evict(ctx context.Context, done chan int64) {
-	if m.releaseIdleCacheData() > 0 {
-		m.reclaimAllocator()
+	idleReleased := m.releaseIdleCacheData() > 0
+	if done == nil {
+		if idleReleased {
+			m.reclaimAllocator()
+		}
+		m.cache.Evict(ctx, nil)
+		return
 	}
-	m.cache.Evict(ctx, done)
+
+	// DataCache signals completion only after its FIFO post-evict callbacks
+	// release the cache-owned buffers. Purge the dedicated arena before
+	// forwarding that completion, so forced eviction actually returns RSS.
+	fifoDone := make(chan int64, 1)
+	m.cache.Evict(ctx, fifoDone)
+	target := <-fifoDone
+	m.reclaimAllocator()
+	done <- target
 }
 
 func (m *MemCache) EvictToTarget(ctx context.Context, target int64) int64 {

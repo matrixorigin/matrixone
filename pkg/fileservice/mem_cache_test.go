@@ -367,6 +367,30 @@ func TestMemCacheForcedEvictionReleasesIdlePendingAllocation(t *testing.T) {
 	require.Zero(t, cache.reservedBytes)
 }
 
+func TestMemCacheForcedEvictionReclaimsFIFOAllocation(t *testing.T) {
+	ctx := context.Background()
+	const request = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	defer cache.Close(ctx)
+
+	data := cache.AllocateCacheData(ctx, request)
+	requireDataCacheSet(t, cache.cache, ctx, fscache.CacheKey{Path: "cached", Sz: request}, data)
+	data.Release()
+	require.Equal(t, int64(cache.BackingSize(request)), cache.cache.Used())
+	GlobalMemoryCacheSizeHint.Store(1)
+	defer GlobalMemoryCacheSizeHint.Store(0)
+
+	tracking := &reclaimTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+
+	done := make(chan int64, 1)
+	cache.Evict(ctx, done)
+	<-done
+	require.Zero(t, cache.cache.Used())
+	require.Equal(t, int64(1), tracking.reclaims.Load())
+}
+
 func TestMemCacheCommitsReservationAfterFIFOUsageIsCharged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
