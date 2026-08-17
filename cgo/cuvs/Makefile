@@ -164,7 +164,14 @@ bench_hostview: obj/test/bench_hostview.o
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Projects the wiki_all 88M float16 index against a 20 GB card using the real
+# tuning from mo_vector_benchmark/cfg/templates/88M.json. Measures the train and
+# encode phases separately, because their allocations do not overlap.
+bench_wiki88: obj/test/bench_wiki88.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88
 	rm -rf obj
