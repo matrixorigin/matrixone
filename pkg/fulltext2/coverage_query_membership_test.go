@@ -26,6 +26,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// recordingMembershipFilter makes the loaded zero-copy probe observable without
+// relying on a probabilistic Bloom-filter hit as a byte-equivalence oracle.
+type recordingMembershipFilter struct {
+	probes [][]byte
+}
+
+func (f *recordingMembershipFilter) Test(data []byte) bool {
+	probe := make([]byte, len(data))
+	copy(probe, data)
+	f.probes = append(f.probes, probe)
+	return true
+}
+
+func (f *recordingMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int)) []uint8 {
+	return nil
+}
+
+func (f *recordingMembershipFilter) Valid() bool { return true }
+
+func (f *recordingMembershipFilter) Exact() bool { return true }
+
+func (f *recordingMembershipFilter) Free() {}
+
+func (f *recordingMembershipFilter) Share() docfilter.MembershipFilter { return f }
+
+func sourcePkBytes(v *vector.Vector, typ types.Type) []byte {
+	if typ.IsFixedLen() {
+		return v.GetData()[:typ.TypeSize()]
+	}
+	return v.GetBytesAt(0)
+}
+
 // TestContainsPkTypes exercises the fast per-PK-type encode branches of docFilterMembership.Contains
 // (int64 is covered elsewhere): the uint64 / int32 / uint32 arms must encode byte-identically to the
 // docfilter build so even pks pass and odd pks reject, and an out-of-range ord returns false.
@@ -188,6 +220,7 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 		{"json", types.T_json, []byte(`{"k":1}`)},
 		{"datalink", types.T_datalink, []byte("file://pk")},
 		{"uuid", types.T_uuid, u},
+		{"varchar-empty", types.T_varchar, []byte{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,6 +247,19 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 			require.True(t, allow.Contains(0))
 			require.False(t, allow.Contains(-1))
 			require.False(t, allow.Contains(1))
+
+			// The real docfilter remains the end-to-end membership check above. For
+			// non-integer PKs it is a Bloom filter, so a successful probe alone cannot
+			// prove that the zero-copy path passed the exact source bytes. Capture the
+			// production probe and compare it byte-for-byte with the source vector;
+			// UUID must receive raw 16-byte vector data, not canonical docmap text.
+			capture := &recordingMembershipFilter{}
+			captured := &docFilterMembership{seg: loaded, f: capture}
+			require.True(t, captured.Contains(0))
+			require.Len(t, capture.probes, 1)
+			expected := sourcePkBytes(vec, tc.typ.ToType())
+			require.Len(t, capture.probes[0], len(expected))
+			require.True(t, bytes.Equal(expected, capture.probes[0]))
 		})
 	}
 }
