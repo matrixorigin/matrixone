@@ -1,6 +1,6 @@
 -- @suit
 -- @case
--- @desc: regressions for #26853, #26839, and #26838
+-- @desc: regressions for #26854, #26853, #26839, and #26838
 -- @label:bvt
 
 drop database if exists alter_table_integrity_regression;
@@ -120,5 +120,29 @@ insert into self_restrict values (1,null), (2,1);
 truncate table self_restrict;
 select count(*) from self_restrict;
 insert into self_restrict values (3,null), (4,3);
+
+-- #26854: a column added by the same ALTER does not exist in the source
+-- table. Later RENAME, MODIFY, and CHANGE actions must preserve that absence
+-- instead of generating an INSERT ... SELECT that reads the new column name.
+create table add_then_rename (id int primary key);
+insert into add_then_rename values (1), (2);
+alter table add_then_rename
+    add column tmp int,
+    rename column tmp to added_col;
+select id, added_col from add_then_rename order by id;
+
+create table add_then_modify (id int primary key);
+insert into add_then_modify values (1), (2);
+alter table add_then_modify
+    add column tmp int,
+    modify column tmp bigint;
+select id, tmp from add_then_modify order by id;
+
+create table add_then_change (id int primary key);
+insert into add_then_change values (1), (2);
+alter table add_then_change
+    add column tmp int,
+    change column tmp added_col bigint;
+select id, added_col from add_then_change order by id;
 
 drop database alter_table_integrity_regression;
