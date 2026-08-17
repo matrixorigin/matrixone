@@ -432,7 +432,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
 	// runs above the join, so limiting the stream below it can under-fill the final result.
 	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, pushdownEnabled, exactPrefilter,
+		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
 		paginationLimit, paginationOffset)
 
 	// buildFullTextIndexScan
@@ -932,6 +932,7 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	scanNode *plan.Node,
 	wrappedMatchFilters []*plan.Expr,
 	fullTextFilters []*plan.Expr,
+	indexDefs []*plan.IndexDef,
 	prefilterPushdown bool,
 	exactPrefilter bool,
 	paginationLimit *plan.Expr,
@@ -941,9 +942,20 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
 		return nil
 	}
+	if len(scanNode.FilterList) == 0 {
+		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
+		return limit
+	}
 	if !shouldPushFulltextCandidateLimit(
 		len(fullTextFilters), len(scanNode.FilterList), prefilterPushdown, exactPrefilter,
-	) {
+	) || len(indexDefs) != 1 ||
+		!fulltext2ConjunctiveCandidateLimitEligible(fullTextFilters[0], indexDefs[0]) {
+		return nil
+	}
+	// The residual-filter path is admitted at plan time, so prepared or dynamic
+	// LIMIT values remain unbounded. The no-residual path above preserves main's
+	// existing dynamic-LIMIT behavior.
+	if _, literal := getLiteralUint64(paginationLimit); !literal {
 		return nil
 	}
 	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
