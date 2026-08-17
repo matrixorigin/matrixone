@@ -18,6 +18,7 @@ import (
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -313,6 +314,18 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 	if expr == nil {
 		return false, nil
 	}
+	// A user-variable reference is folded on the initiating CN before the
+	// scope is sent to a remote CN.  The remote process deliberately has no
+	// frontend session, so a numeric cast there cannot append its MySQL warning
+	// (1292) to SHOW WARNINGS.  Evaluate the numeric cast containing the folded
+	// variable here while the original session is still attached, solely to publish that
+	// diagnostic.  The expression is still folded and executed remotely below;
+	// this does not change its value or execution ownership.
+	if f := expr.GetF(); f != nil && isRemoteNumericCast(f, expr) && proc != nil && proc.GetSession() != nil {
+		if _, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch}); err == nil {
+			free()
+		}
+	}
 	if _, ok := expr.Expr.(*plan.Expr_V); ok {
 		vec, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 		if err != nil {
@@ -328,6 +341,16 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 		return true, nil
 	}
 	return foldVarExprsInValue(reflect.ValueOf(expr.Expr), nil, proc)
+}
+
+func isRemoteNumericCast(f *plan.Function, expr *plan.Expr) bool {
+	if f == nil || f.Func == nil || expr == nil {
+		return false
+	}
+	if f.Func.GetObjName() != "cast" {
+		return false
+	}
+	return types.T(expr.Typ.Id).ToType().IsNumeric()
 }
 
 func foldVarExprInSettableValue(v reflect.Value, proc *process.Process) (bool, error) {

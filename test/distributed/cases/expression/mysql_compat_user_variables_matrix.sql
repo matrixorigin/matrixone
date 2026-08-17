@@ -46,6 +46,26 @@ set @uv_matrix_prepared_text = '2abc';
 execute uv_matrix_text_ps;
 deallocate prepare uv_matrix_text_ps;
 
+-- Matrix D3: numeric coercion warnings must survive remote-scope folding.
+-- The value is folded on the initiating CN, while the numeric cast may run
+-- remotely; SHOW WARNINGS must still expose MySQL warning 1292 there.
+set @uv_matrix_warn = '12abc';
+select @uv_matrix_warn + 0;
+show warnings;
+set @uv_matrix_warn = '12';
+select @uv_matrix_warn + 0;
+show warnings;
+
+set @uv_matrix_prepared_warn = '1';
+prepare uv_matrix_warn_ps from 'select @uv_matrix_prepared_warn + 0';
+set @uv_matrix_prepared_warn = '1.5x';
+execute uv_matrix_warn_ps;
+show warnings;
+set @uv_matrix_prepared_warn = '2';
+execute uv_matrix_warn_ps;
+show warnings;
+deallocate prepare uv_matrix_warn_ps;
+
 -- Matrix E: independent numeric user variables and explicit casts.
 set @uv_matrix_a = 1, @uv_matrix_b = 2;
 select @uv_matrix_a + @uv_matrix_b;

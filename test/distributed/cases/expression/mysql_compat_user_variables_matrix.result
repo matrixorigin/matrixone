@@ -59,6 +59,33 @@ execute uv_matrix_text_ps;
 ➤ @uv_matrix_prepared_text + 0[-5,64,0]  𝄀
 2
 deallocate prepare uv_matrix_text_ps;
+set @uv_matrix_warn = '12abc';
+select @uv_matrix_warn + 0;
+➤ @uv_matrix_warn + 0[-5,64,0]  𝄀
+12
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
+set @uv_matrix_warn = '12';
+select @uv_matrix_warn + 0;
+➤ @uv_matrix_warn + 0[-5,64,0]  𝄀
+12
+show warnings;
+set @uv_matrix_prepared_warn = '1';
+prepare uv_matrix_warn_ps from 'select @uv_matrix_prepared_warn + 0';
+set @uv_matrix_prepared_warn = '1.5x';
+execute uv_matrix_warn_ps;
+➤ @uv_matrix_prepared_warn + 0[-5,64,0]  𝄀
+1.5
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1.5x'
+set @uv_matrix_prepared_warn = '2';
+execute uv_matrix_warn_ps;
+➤ @uv_matrix_prepared_warn + 0[-5,64,0]  𝄀
+2
+show warnings;
+deallocate prepare uv_matrix_warn_ps;
 set @uv_matrix_a = 1, @uv_matrix_b = 2;
 select @uv_matrix_a + @uv_matrix_b;
 ➤ @uv_matrix_a + @uv_matrix_b[-5,64,0]  𝄀

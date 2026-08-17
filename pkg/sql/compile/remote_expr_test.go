@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type remoteWarningSession struct {
+	warnings []struct {
+		code uint16
+		msg  string
+	}
+}
+
+func (*remoteWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*remoteWarningSession) AddTempTable(string, string, string)        {}
+func (*remoteWarningSession) RemoveTempTable(string, string)             {}
+func (*remoteWarningSession) RemoveTempTableByRealName(string)           {}
+func (*remoteWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *remoteWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.warnings = append(s.warnings, struct {
+		code uint16
+		msg  string
+	}{code: code, msg: msg})
+}
+
+func TestFoldVarExprRemoteNumericCastAppendsWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		if name == "s" && !system {
+			return "12abc", nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+	})
+
+	variable := makeTestVarExpr("s")
+	variable.GetV().System = false
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		variable,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+
+	folded, err := foldVarExprsInExprInPlace(cast, proc)
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
+	require.Contains(t, session.warnings[0].msg, "12abc")
+}
 
 func TestScopeContainsVarExpr(t *testing.T) {
 	scope := newScope(Normal)
