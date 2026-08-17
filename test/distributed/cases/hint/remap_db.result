@@ -152,8 +152,6 @@ set remap_rewrites = '{"remapdb":{"SourceCase27190":"dst_a","sourcecase27190":"d
 invalid input: remapdb source databases (.*) are equivalent under lower_case_table_names=1
 set remap_rewrites = '{"remapdb":{"ChainSrc27190":"MID27190","mid27190":"dst_chain27190"}}';
 invalid input: remapdb: database (.*) must not be both a source and a destination \(chaining is not allowed\)
-set remap_rewrites = '{"rewrites":{"DstRewriteMixed27190.t":"select 1","dstrewritemixed27190.T":"select 2"}}';
-invalid input: rewrite tables (.*) are equivalent under lower_case_table_names=1
 set enable_remap_hint = 0;
 drop database srcform27190;
 drop database dstform27190;

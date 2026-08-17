@@ -134,8 +134,6 @@ select * from dstb27190.t;
 set remap_rewrites = '{"remapdb":{"SourceCase27190":"dst_a","sourcecase27190":"dst_b"}}';
 -- @pattern
 set remap_rewrites = '{"remapdb":{"ChainSrc27190":"MID27190","mid27190":"dst_chain27190"}}';
--- @pattern
-set remap_rewrites = '{"rewrites":{"DstRewriteMixed27190.t":"select 1","dstrewritemixed27190.T":"select 2"}}';
 set enable_remap_hint = 0;
 drop database srcform27190;
 drop database dstform27190;

@@ -85,21 +85,23 @@ func normalizeRewriteRules(
 	}
 	normalized := make(map[string]string, len(rules))
 	originalKeys := make(map[string]string, len(rules))
-	for key, rule := range rules {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		rule := rules[key]
 		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
 		if err != nil {
 			return nil, err
 		}
-		comparisonKey, err := parsers.RewriteKeyComparison(ctx, key, lowerCaseTableNames)
-		if err != nil {
-			return nil, err
+		if previous, ok := originalKeys[canonicalKey]; ok {
+			if key != canonicalKey || previous == canonicalKey {
+				continue
+			}
 		}
-		if previous, ok := originalKeys[comparisonKey]; ok {
-			return nil, moerr.NewParseErrorf(ctx,
-				"rewrite tables %q and %q are equivalent under lower_case_table_names=%d",
-				previous, key, lowerCaseTableNames)
-		}
-		originalKeys[comparisonKey] = key
+		originalKeys[canonicalKey] = key
 		normalized[canonicalKey] = rule
 	}
 	return normalized, nil

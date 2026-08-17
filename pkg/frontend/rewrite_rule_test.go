@@ -817,10 +817,19 @@ func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
 		`{"remapdb":{"ChainSrc":"MID","mid":"dst"}}`, 1), "chaining is not allowed")
 	require.NoError(t, validateRemapRewrites(ctx,
 		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 0))
-	require.ErrorContains(t, validateRemapRewrites(ctx,
-		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1), "equivalent")
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1))
 	require.NoError(t, validateRemapRewrites(ctx,
 		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 0))
+
+	for range 200 {
+		normalized, err := normalizeRewriteRules(ctx, map[string]string{
+			"hint_test.users": "select 'Alice'",
+			"hint_test.USERS": "select 'Bob'",
+		}, 1)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"hint_test.users": "select 'Alice'"}, normalized)
+	}
 }
 
 func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -397,27 +398,16 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames int64) (string, string, string, error) {
 	db, table, ok := SplitRewriteKey(key)
 	if !ok {
-		return "", "", "", moerr.NewParseErrorf(ctx,
-			"rewrite table %q must be qualified as database.table", key)
+		if len(strings.Split(strings.TrimSpace(key), ".")) != 2 {
+			return "", "", "", moerr.NewParseError(ctx, "the mapping name needs to include database name")
+		}
+		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
 	}
 	if lowerCaseTableNames == 1 {
 		db = tree.NewCStr(db, lowerCaseTableNames).Compare()
 		table = tree.NewCStr(table, lowerCaseTableNames).Compare()
 	}
 	return db + "." + table, db, table, nil
-}
-
-// RewriteKeyComparison returns the identifier-equivalence key used only for
-// duplicate detection. In mode 2 this differs from the execution key because
-// spelling is preserved for lookup while comparisons remain case-insensitive.
-func RewriteKeyComparison(ctx context.Context, key string, lowerCaseTableNames int64) (string, error) {
-	db, table, ok := SplitRewriteKey(key)
-	if !ok {
-		return "", moerr.NewParseErrorf(ctx,
-			"rewrite table %q must be qualified as database.table", key)
-	}
-	return tree.NewCStr(db, lowerCaseTableNames).Compare() + "." +
-		tree.NewCStr(table, lowerCaseTableNames).Compare(), nil
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
@@ -460,7 +450,13 @@ func NormalizeAndValidateRemapDb(
 	}
 	normalized := make(map[string]string, len(remapDb))
 	sources := make(map[string]string, len(remapDb))
-	for src, dst := range remapDb {
+	sourceNames := make([]string, 0, len(remapDb))
+	for src := range remapDb {
+		sourceNames = append(sourceNames, src)
+	}
+	slices.Sort(sourceNames)
+	for _, src := range sourceNames {
+		dst := remapDb[src]
 		src = strings.TrimSpace(src)
 		dst = strings.TrimSpace(dst)
 		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
@@ -482,7 +478,13 @@ func NormalizeAndValidateRemapDb(
 		}
 		normalized[sourceKey] = target
 	}
-	for _, dst := range normalized {
+	normalizedSources := make([]string, 0, len(normalized))
+	for src := range normalized {
+		normalizedSources = append(normalizedSources, src)
+	}
+	slices.Sort(normalizedSources)
+	for _, src := range normalizedSources {
+		dst := normalized[src]
 		targetKey := tree.NewCStr(dst, lowerCaseTableNames).Compare()
 		if _, ok := sources[targetKey]; ok {
 			return nil, moerr.NewParseErrorf(ctx,
@@ -528,7 +530,13 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 	if len(rm.RawRewrites) > 0 {
 		rewrites = make(map[string][]string, len(rm.RawRewrites))
 		originalKeys := make(map[string]string, len(rm.RawRewrites))
-		for k, raw := range rm.RawRewrites {
+		keys := make([]string, 0, len(rm.RawRewrites))
+		for key := range rm.RawRewrites {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, k := range keys {
+			raw := rm.RawRewrites[k]
 			if strings.TrimSpace(k) == "" {
 				return nil, nil, moerr.NewParseError(ctx, "empty table and database")
 			}
@@ -548,16 +556,14 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 			if derr != nil {
 				return nil, nil, derr
 			}
-			comparisonKey, derr := RewriteKeyComparison(ctx, db+"."+table, lowerCaseTableNames)
-			if derr != nil {
-				return nil, nil, derr
+			if previous, exists := originalKeys[canonicalKey]; exists {
+				// Preserve the historical exact execution-key rule when equivalent
+				// mode-1 spellings coexist. Otherwise the sorted first key wins.
+				if k != canonicalKey || previous == canonicalKey {
+					continue
+				}
 			}
-			if previous, exists := originalKeys[comparisonKey]; exists {
-				return nil, nil, moerr.NewParseErrorf(ctx,
-					"rewrite tables %q and %q are equivalent under lower_case_table_names=%d",
-					previous, k, lowerCaseTableNames)
-			}
-			originalKeys[comparisonKey] = k
+			originalKeys[canonicalKey] = k
 			rewrites[canonicalKey] = sqls
 		}
 	}

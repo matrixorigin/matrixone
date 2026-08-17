@@ -758,9 +758,31 @@ func TestRewriteKeysUseIdentifierComparisonMode(t *testing.T) {
 		})
 	}
 
-	_, _, err := DecodeRewriteHintWithLowerCaseTableNames(ctx,
-		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1)
-	require.ErrorContains(t, err, "equivalent")
+	rewrites, _, err := DecodeRewriteHintWithLowerCaseTableNames(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.t":"select 2"}}`, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select 2"}, rewrites["mixeddb.t"])
+
+	rewrites, _, err = DecodeRewriteHintWithLowerCaseTableNames(ctx,
+		`{"rewrites":{"MixedDB.T":"select 1","MIXEDDB.t":"select 2"}}`, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select 2"}, rewrites["mixeddb.t"])
+
+	_, _, _, err = NormalizeRewriteKey(ctx, "t", 1)
+	require.EqualError(t, err, "SQL parser error: the mapping name needs to include database name")
+	_, _, _, err = NormalizeRewriteKey(ctx, "db.", 1)
+	require.EqualError(t, err, "SQL parser error: empty table or database")
+
+	var remapErr string
+	for range 200 {
+		_, err = NormalizeAndValidateRemapDb(ctx,
+			map[string]string{"SourceCase": "dst_a", "sourcecase": "dst_b"}, 1)
+		require.Error(t, err)
+		if remapErr == "" {
+			remapErr = err.Error()
+		}
+		require.Equal(t, remapErr, err.Error())
+	}
 }
 
 func TestRewriteBodyUsesIdentifierComparisonMode(t *testing.T) {
