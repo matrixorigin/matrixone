@@ -30,6 +30,12 @@ import (
 
 const maxMigrateUserDefinedVarsSize = 16 << 20
 
+func isMigrationSnapshotSizeLimitError(err error) bool {
+	return err != nil &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) &&
+		strings.Contains(err.Error(), "connection migration size limit")
+}
+
 func hasMigrationRuntimeSideEffect(name string) bool {
 	switch canonicalSystemVariableName(name) {
 	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":

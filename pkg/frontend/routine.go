@@ -600,16 +600,24 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
-			return err
+			// Keep the response usable for legacy replay when the typed snapshot
+			// exceeds its bounded wire-size budget.
+			if !isMigrationSnapshotSizeLimitError(err) {
+				return err
+			}
+		} else {
+			resp.UserDefinedVars = vars
+			resp.UserDefinedVarsExported = true
 		}
-		resp.UserDefinedVars = vars
-		resp.UserDefinedVarsExported = true
 		systemVars, err := ses.snapshotSessionSystemVars(operationCtx)
 		if err != nil {
-			return err
+			if !isMigrationSnapshotSizeLimitError(err) {
+				return err
+			}
+		} else {
+			resp.SystemVariables = systemVars
+			resp.SystemVariablesExported = true
 		}
-		resp.SystemVariables = systemVars
-		resp.SystemVariablesExported = true
 	}
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{

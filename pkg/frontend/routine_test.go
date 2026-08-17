@@ -516,6 +516,35 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", resp.UserDefinedVars[0].Sql)
 }
 
+func TestMigrateConnectionFromFallsBackToLegacyReplayWhenTypedSnapshotTooLarge(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
+	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	t.Cleanup(func() {
+		if hadVersion {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	require.NoError(t, ses.SetUserDefinedVar(
+		"large",
+		string(make([]byte, maxMigrateUserDefinedVarsSize)),
+		"set @large = repeat('a', 16777216)",
+	))
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.False(t, resp.UserDefinedVarsExported)
+	require.Empty(t, resp.UserDefinedVars)
+	require.True(t, resp.SystemVariablesExported)
+}
+
 func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
