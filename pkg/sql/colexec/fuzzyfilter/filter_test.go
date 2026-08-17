@@ -381,7 +381,7 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			typ := types.T_int32.ToType()
 			spec := newRuntimeFilterSpec(109, typ, typ)
 			arg, proc := newRuntimeFilterTest(t, spec, typ)
-			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -400,16 +400,16 @@ func TestFuzzyRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			} else {
 				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
-					int(remaining), account, 63, 255)
+					int(remaining), account, mpool.AllocationOwnerDML, 255)
 				require.NoError(t, err)
 			}
 
 			err = arg.handleRuntimeFilter(proc)
 			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
 			if test.closed {
-				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+				require.ErrorIs(t, err, process.ErrExecutionResourceClosed)
 				require.NotErrorIs(t, err,
-					process.ErrHashBuildBudgetAdmission)
+					process.ErrExecutionResourceAdmission)
 				require.False(t, arg.ctr.runtimeFilterDone)
 				require.Zero(t,
 					stats["FuzzyFilterRuntimeFilterBudgetFallbacks"])

@@ -261,6 +261,8 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FillType:        node.FillType,
 		FillVal:         DeepCopyExprList(node.FillVal),
 		GapFillMode:     node.GapFillMode,
+		GapFillStart:    DeepCopyExpr(node.GapFillStart),
+		GapFillEnd:      DeepCopyExpr(node.GapFillEnd),
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
@@ -291,6 +293,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RecursiveUnionDistinct: node.RecursiveUnionDistinct,
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
+		DedupInputKeysUnique:   node.DedupInputKeysUnique,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),

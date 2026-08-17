@@ -1925,7 +1925,7 @@ func TestIssue17655(t *testing.T) {
 				option)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNewTxnInCNRollingRestart))
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -1994,7 +1994,7 @@ func TestIssue3537(t *testing.T) {
 				}
 			}
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -2053,7 +2053,7 @@ func TestIssue3537_2(t *testing.T) {
 				}
 			}
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -2112,16 +2112,20 @@ func TestIssue3537_3(t *testing.T) {
 				}
 			}
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
 func TestIssue3288(t *testing.T) {
+	bindTimeout := time.Second
+	if testing.Short() {
+		bindTimeout = 200 * time.Millisecond
+	}
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1", "s2"},
-		time.Second*1,
+		bindTimeout,
 		func(alloc *lockTableAllocator, s []*service) {
 			l1 := s[0]
 			l2 := s[1]
@@ -2180,7 +2184,7 @@ func TestIssue3288(t *testing.T) {
 			_ = result
 
 		},
-		nil,
+		accelerateLockKeeperForFastBindTimeout,
 	)
 }
 
@@ -2255,7 +2259,7 @@ func TestIssue3538(t *testing.T) {
 				}
 			}
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -2433,7 +2437,7 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, l1.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -2510,7 +2514,7 @@ func TestCheckTxnTimeout(t *testing.T) {
 				return l2.activeTxnHolder.empty()
 			}, time.Second*10, time.Millisecond*10)
 		},
-		nil,
+		accelerateLockKeeperForShortTest,
 	)
 }
 
@@ -5380,9 +5384,35 @@ func TestLeakWaiterForErr(t *testing.T) {
 			ll, err := l1.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 			lt := ll.(*localLockTable)
+			afterRangeWait := make(chan struct{})
+			resumeRangeLock := make(chan struct{})
+			waitForRangeRetry := func() {
+				select {
+				case <-afterRangeWait:
+				case <-ctx.Done():
+					require.FailNow(t, "range lock did not reach the retry barrier")
+				}
+			}
+			resumeRangeRetry := func() {
+				select {
+				case resumeRangeLock <- struct{}{}:
+				case <-ctx.Done():
+					require.FailNow(t, "range lock retry barrier was not waiting")
+				}
+			}
 			lt.options.afterWait = func(c *lockContext) func() {
 				if c.opts.Granularity == pb.Granularity_Range {
-					time.Sleep(time.Second)
+					return func() {
+						select {
+						case afterRangeWait <- struct{}{}:
+						case <-ctx.Done():
+							return
+						}
+						select {
+						case <-resumeRangeLock:
+						case <-ctx.Done():
+						}
+					}
 				}
 				return func() {}
 			}
@@ -5415,21 +5445,26 @@ func TestLeakWaiterForErr(t *testing.T) {
 			lt.mu.Unlock()
 
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			waitForRangeRetry()
 
 			_, err = l1.Lock(ctx, tableID, row5, txn2, newTestRowExclusiveOptions())
 			require.NoError(t, err)
+			resumeRangeRetry()
 			require.NoError(t, WaitWaiters(l1, 0, tableID, row5[0], 1))
 			require.NoError(t, l1.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			waitForRangeRetry()
 
 			_, err = l1.Lock(ctx, tableID, row2, txn3, newTestRowExclusiveOptions())
 			require.NoError(t, err)
+			resumeRangeRetry()
 			require.NoError(t, WaitWaiters(l1, 0, tableID, row2[0], 1))
 			require.NoError(t, l1.Unlock(ctx, txn3, timestamp.Timestamp{}))
+			waitForRangeRetry()
+			resumeRangeRetry()
 
 			wg.Wait()
 			require.NoError(t, l1.Unlock(ctx, txn4, timestamp.Timestamp{}))
 
-			time.Sleep(500 * time.Millisecond)
 			require.NotEqual(t, int32(1), wt.refCount.Load())
 		},
 	)
@@ -6328,6 +6363,25 @@ func runLockServiceTestsWithLevel(
 			})
 		},
 	)
+}
+
+// accelerateLockKeeperForShortTest preserves the rolling-restart state
+// machine while avoiding production-scale heartbeat periods in the short CI
+// suite. The allocator timeout remains one second, so a healthy service still
+// refreshes its bind well inside the invalidation grace period.
+func accelerateLockKeeperForShortTest(cfg *Config) {
+	if testing.Short() {
+		cfg.KeepBindDuration.Duration = 200 * time.Millisecond
+	}
+}
+
+// TestIssue3288 uses a 200ms allocator timeout in the short suite. Keep live
+// service heartbeats comfortably inside that window so only the closed owner
+// becomes an invalid-bind candidate.
+func accelerateLockKeeperForFastBindTimeout(cfg *Config) {
+	if testing.Short() {
+		cfg.KeepBindDuration.Duration = 40 * time.Millisecond
+	}
 }
 
 func waitWaiters(

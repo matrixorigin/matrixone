@@ -1065,6 +1065,17 @@ message Node {
   // partition equality keys and the remaining entries are per-partition
   // ordering keys for bounded Top-N execution.
   int32 partition_by_count = 80;
+
+  // TIME_WINDOW only: optional half-open GAPFILL domain inferred from simple
+  // timestamp >= start and timestamp < finish predicates. Both expressions
+  // must be present before the executor extends the observed data domain.
+  Expr gap_fill_start = 81;
+  Expr gap_fill_end = 82;
+
+  // DEDUP only: the incoming key columns are proven unique by the insert
+  // planner, so the right-side operator only needs to look up target keys and
+  // must not retain incoming keys in its hashmap.
+  bool dedup_input_keys_unique = 83;
 }
 
 message SnapshotExtraInfo {

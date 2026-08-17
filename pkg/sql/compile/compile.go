@@ -795,7 +795,7 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 			return proc.GetCTEMemoryBudget().Reserve(proc.Ctx, size)
 		},
 		ReserveDisk: func(size uint64) (materialized.GrowingReservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
@@ -809,7 +809,7 @@ func newMaterializedSpillBudget(proc *process.Process) materialized.SpillBudget 
 			}, nil
 		},
 		ReserveFD: func(size uint64) (materialized.Reservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
@@ -5661,6 +5661,19 @@ func supportsRemoteTargetAwareUpdate(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion20
+}
+
+func supportsRemoteRightDedupInputKeysUnique(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion21
 }
 
 func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {

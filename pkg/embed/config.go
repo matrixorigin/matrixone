@@ -149,6 +149,7 @@ func newServiceConfig() ServiceConfig {
 			AutomaticUpgrade: true,
 			Frontend: config.FrontendParameters{
 				KeyEncryptionKey: "JlxRbXjFGnCsvbsFQSJFvhMhDLaAXq5y",
+				MongoDB:          *config.NewMongoDBParameters(),
 			},
 		},
 	}

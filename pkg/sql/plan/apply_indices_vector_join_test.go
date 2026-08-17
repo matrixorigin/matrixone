@@ -468,7 +468,7 @@ func TestApplyIndicesForSortUsingHnsw_JoinThroughKeepsProviderChild(t *testing.T
 	vecCtx := tc.builder.buildVectorSortContextThroughJoin(tc.projNode)
 	require.NotNil(t, vecCtx)
 
-	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex())
+	newNodeID, err := tc.builder.applyIndicesForSortUsingHnsw(tc.projNodeID, vecCtx, newVectorJoinHnswIndex(), nil)
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 

@@ -18,12 +18,24 @@ import (
 	"io"
 	"math"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLegacyIteratorFootprintExcludesTransactionalPlan(t *testing.T) {
+	sliceSize := unsafe.Sizeof([]byte(nil))
+	require.Equal(t,
+		unsafe.Sizeof((*IntHashMap)(nil))+6*sliceSize,
+		unsafe.Sizeof(intHashMapIterator{}))
+	require.Equal(t,
+		unsafe.Sizeof((*StrHashMap)(nil))+6*sliceSize+
+			unsafe.Sizeof([UnitLimit]int{}),
+		unsafe.Sizeof(strHashmapIterator{}))
+}
 
 func TestIntHashMapRejectsJoinNaN(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -86,6 +98,164 @@ func TestIntHashMapProbeGroupingDoesNotMatchRawKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []uint64{0}, values)
 	require.Equal(t, []int64{0}, zValues)
+}
+
+func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	existing := vector.NewVec(types.T_int32.ToType())
+	input := vector.NewVec(types.T_int32.ToType())
+	defer existing.Free(mp)
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendFixed(existing, int32(7), false, mp))
+	require.NoError(t, vector.AppendFixedList(
+		input, []int32{7, 8, 8, 9}, nil, mp))
+
+	iterator := hashMap.NewTransactionalIterator()
+	_, _, err = iterator.Insert(0, 1, []*vector.Vector{existing})
+	require.NoError(t, err)
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	previewValues := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, []uint64{1, 2, 2, 3}, previewValues)
+	require.Equal(t, []uint8{0, 1, 0, 1}, plan.Inserted())
+	require.Equal(t, uint64(2), plan.NewGroups())
+	require.Equal(t, uint64(1), hashMap.GroupCount())
+
+	values, _, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, previewValues, values)
+	require.Equal(t, uint64(3), hashMap.GroupCount())
+
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	require.Zero(t, plan.NewGroups())
+	plan.complete = false
+	_, _, err = iterator.CommitPreview(&plan)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input},
+		hashMap.GroupCount(), &plan)
+	require.NoError(t, err)
+	values, _, err = iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, previewValues, values)
+	require.Equal(t, uint64(3), hashMap.GroupCount())
+}
+
+func TestIntHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	input := vector.NewVec(types.T_int32.ToType())
+	defer input.Free(mp)
+	values := make([]int32, UnitLimit)
+	for i := range values {
+		values[i] = int32(i + 1)
+	}
+	require.NoError(t, vector.AppendFixedList(input, values, nil, mp))
+	iterator := hashMap.NewTransactionalIterator()
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, len(values), []*vector.Vector{input}, 0, &plan)
+	require.NoError(t, err)
+	preview := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, uint64(len(values)), plan.NewGroups())
+	expected := make([]uint64, len(values))
+	for i := range expected {
+		expected[i] = uint64(i + 1)
+	}
+	require.Equal(t, expected, append([]uint64(nil), preview...))
+	require.Zero(t, hashMap.GroupCount())
+
+	published, _, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, preview, published)
+	require.Equal(t, uint64(len(values)), hashMap.GroupCount())
+}
+
+func TestIntHashMapPreviewInsertRejectNaN(t *testing.T) {
+	mp := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	require.NoError(t, hashMap.SetRejectNaN())
+	defer func() {
+		hashMap.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	input := vector.NewVec(types.T_float64.ToType())
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendFixedList(input,
+		[]float64{math.NaN(), 1, math.NaN()}, nil, mp))
+
+	iterator := hashMap.NewTransactionalIterator()
+	var plan InsertPlan
+	err = iterator.PreviewInsert(
+		0, input.Length(), []*vector.Vector{input}, 0, &plan)
+	require.NoError(t, err)
+	preview := append([]uint64(nil), plan.Values()...)
+	require.Equal(t, []uint64{0, 1, 0}, append([]uint64(nil), preview...))
+	require.Equal(t, []uint8{0, 1, 0}, plan.Inserted())
+	require.Equal(t, uint64(1), plan.NewGroups())
+	published, zValues, err := iterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, preview, published)
+	require.Equal(t, []int64{1, 1, 1}, append([]int64(nil), zValues...))
+	require.Equal(t, uint64(1), hashMap.GroupCount())
+}
+
+func TestIntHashMapInsertPlanRejectsWrongOrInvalidatedIterator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	first, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	second, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	defer func() {
+		first.Free()
+		second.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendFixedList(input, []int64{7, 8}, nil, mp))
+	vecs := []*vector.Vector{input}
+	firstIterator := first.NewTransactionalIterator()
+	secondIterator := second.NewTransactionalIterator()
+	var plan InsertPlan
+	require.NoError(t, firstIterator.PreviewInsert(0, 2, vecs, 0, &plan))
+	_, _, err = secondIterator.CommitPreview(&plan)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Zero(t, first.GroupCount())
+	require.Zero(t, second.GroupCount())
+
+	_, _, err = firstIterator.Find(0, 2, vecs)
+	require.NoError(t, err)
+	_, _, err = firstIterator.CommitPreview(&plan)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Zero(t, first.GroupCount())
+
+	require.NoError(t, firstIterator.PreviewInsert(0, 2, vecs, 0, &plan))
+	_, _, err = firstIterator.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), first.GroupCount())
 }
 
 func TestIntHashMapPartialGroupingRowsDoNotMatchRawKeys(t *testing.T) {
