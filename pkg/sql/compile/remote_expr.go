@@ -321,7 +321,8 @@ func foldVarExprsInExprInPlace(expr *plan.Expr, proc *process.Process) (bool, er
 	// variable here while the original session is still attached, solely to publish that
 	// diagnostic.  The expression is still folded and executed remotely below;
 	// this does not change its value or execution ownership.
-	if f := expr.GetF(); f != nil && isRemoteNumericCast(f, expr) && proc != nil && proc.GetSession() != nil {
+	if f := expr.GetF(); f != nil && isRemoteNumericCast(f, expr) &&
+		remoteExprHasOnlyFoldableInputs(expr) && proc != nil && proc.GetSession() != nil {
 		if _, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch}); err == nil {
 			free()
 		}
@@ -351,6 +352,41 @@ func isRemoteNumericCast(f *plan.Function, expr *plan.Expr) bool {
 		return false
 	}
 	return types.T(expr.Typ.Id).ToType().IsNumeric()
+}
+
+// remoteExprHasOnlyFoldableInputs prevents the diagnostic-only evaluation from
+// trying to read columns or other row-dependent expressions from the empty
+// const-fold batch. The actual expression is still folded normally below.
+func remoteExprHasOnlyFoldableInputs(expr *plan.Expr) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec:
+		return true
+	case *plan.Expr_F:
+		if e.F == nil {
+			return true
+		}
+		for _, arg := range e.F.Args {
+			if !remoteExprHasOnlyFoldableInputs(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		if e.List == nil {
+			return true
+		}
+		for _, item := range e.List.List {
+			if !remoteExprHasOnlyFoldableInputs(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func foldVarExprInSettableValue(v reflect.Value, proc *process.Process) (bool, error) {
