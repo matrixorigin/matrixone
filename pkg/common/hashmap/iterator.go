@@ -247,10 +247,21 @@ func IteratorChangeOwner(itr Iterator, m HashMap) {
 }
 
 func changeStrIteratorOwner(it *strHashmapIterator, next *StrHashMap) {
-	if it.mp != nil && it.mp.iteratorAllocation != next.iteratorAllocation {
+	if !it.keyBufferCompatible(next) {
 		it.releaseScratch()
 	}
 	it.mp = next
+}
+
+func (itr *strHashmapIterator) keyBufferCompatible(next *StrHashMap) bool {
+	if itr == nil || cap(itr.keyBuffer) == 0 {
+		return true
+	}
+	if itr.keyBufferMP == nil {
+		return next != nil && next.iteratorAllocation == nil
+	}
+	return next != nil && next.mp == itr.keyBufferMP &&
+		next.iteratorAllocation == itr.keyBufferAllocation
 }
 
 // IteratorClearOwner detaches the iterator from its hashmap to allow the old
@@ -284,8 +295,9 @@ func (itr *transactionalIntIterator) invalidatePreview() {
 	}
 }
 
-// StrIteratorCapacity reports the total capacity of all key buffers maintained
-// by a string iterator. Used to decide if a cached iterator should be kept.
+// StrIteratorCapacity reports the retained bytes of all scratch backing arrays
+// maintained by a string iterator. Used to decide if a cached iterator should
+// be kept.
 func StrIteratorCapacity(itr Iterator) int {
 	var it *strHashmapIterator
 	switch typed := itr.(type) {
@@ -299,29 +311,76 @@ func StrIteratorCapacity(itr Iterator) int {
 	if it == nil {
 		return 0
 	}
-	return cap(it.keyBuffer)
+	capacity := cap(it.keyBuffer)
+	add := func(count int, size uintptr) {
+		if capacity == int(^uint(0)>>1) {
+			return
+		}
+		bytes := uint64(count) * uint64(size)
+		maxInt := uint64(^uint(0) >> 1)
+		if bytes > maxInt-uint64(capacity) {
+			capacity = int(maxInt)
+			return
+		}
+		capacity += int(bytes)
+	}
+	add(cap(it.keys), unsafe.Sizeof([]byte(nil)))
+	add(cap(it.values), unsafe.Sizeof(uint64(0)))
+	add(cap(it.keyLengths), unsafe.Sizeof(int(0)))
+	add(cap(it.zValues), unsafe.Sizeof(int64(0)))
+	add(cap(it.nonMatching), unsafe.Sizeof(bool(false)))
+	add(cap(it.strHashStates), unsafe.Sizeof([3]uint64{}))
+	return capacity
 }
 
 func (itr *strHashmapIterator) releaseScratch() {
 	if itr == nil {
 		return
 	}
-	if cap(itr.keyBuffer) > 0 && itr.mp != nil && itr.mp.mp != nil &&
-		itr.mp.iteratorAllocation != nil {
-		itr.mp.mp.Free(itr.keyBuffer)
+	if cap(itr.keyBuffer) > 0 && itr.keyBufferMP != nil {
+		itr.keyBufferMP.Free(itr.keyBuffer)
 	}
 	itr.keyBuffer = nil
-	clear(itr.keys)
+	itr.keyBufferMP = nil
+	itr.keyBufferAllocation = nil
+	itr.clearKeys()
 }
 
 func (itr *strHashmapIterator) releaseAccountedScratch() {
-	if itr == nil || cap(itr.keyBuffer) == 0 || itr.mp == nil ||
-		itr.mp.iteratorAllocation == nil {
+	if itr == nil || cap(itr.keyBuffer) == 0 || itr.keyBufferMP == nil {
 		return
 	}
-	itr.mp.mp.Free(itr.keyBuffer)
+	itr.keyBufferMP.Free(itr.keyBuffer)
 	itr.keyBuffer = nil
-	clear(itr.keys)
+	itr.keyBufferMP = nil
+	itr.keyBufferAllocation = nil
+	itr.clearKeys()
+}
+
+func (itr *strHashmapIterator) clearKeys() {
+	if itr != nil && cap(itr.keys) > 0 {
+		clear(itr.keys[:cap(itr.keys)])
+	}
+}
+
+func (itr *strHashmapIterator) ensureCapacity(count int) {
+	if count <= cap(itr.keys) &&
+		count <= cap(itr.values) &&
+		count <= cap(itr.keyLengths) &&
+		count <= cap(itr.zValues) &&
+		count <= cap(itr.strHashStates) {
+		itr.keys = itr.keys[:count]
+		itr.values = itr.values[:count]
+		itr.keyLengths = itr.keyLengths[:count]
+		itr.zValues = itr.zValues[:count]
+		itr.strHashStates = itr.strHashStates[:count]
+		return
+	}
+	itr.keys = make([][]byte, count)
+	itr.values = make([]uint64, count)
+	itr.keyLengths = make([]int, count)
+	itr.zValues = make([]int64, count)
+	itr.strHashStates = make([][3]uint64, count)
 }
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
@@ -330,6 +389,9 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 	}
 	if err := itr.prepareHashKeys(vecs, start, count); err != nil {
 		return nil, nil, err
+	}
+	if count == 0 {
+		return itr.values, itr.zValues, nil
 	}
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
@@ -583,11 +645,11 @@ func previewMissingStringStates(
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
 	if !itr.mp.rejectNaN {
-		keys := itr.keys
-		defer func() { keys[0] = keys[0][:0] }()
 		if err := itr.prepareHashKeys(vecs, row, 1); err != nil {
 			return false, err
 		}
+		keys := itr.keys
+		defer func() { keys[0] = keys[0][:0] }()
 		itr.encodeHashKeys(vecs, row, 1)
 		if err := itr.mp.hashMap.InsertStringBatch(
 			itr.strHashStates, keys[:1], itr.values[:1],
@@ -623,6 +685,9 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}
 	if err = itr.prepareHashKeys(vecs, start, count); err != nil {
 		return nil, nil, err
+	}
+	if count == 0 {
+		return itr.values, itr.zValues, nil
 	}
 	defer func() {
 		for i := 0; i < count; i++ {

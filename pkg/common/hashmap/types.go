@@ -219,11 +219,13 @@ type IntHashMap struct {
 }
 
 type strHashmapIterator struct {
-	mp         *StrHashMap
-	keys       [][]byte
-	values     []uint64
-	keyBuffer  []byte
-	keyLengths [UnitLimit]int
+	mp                  *StrHashMap
+	keys                [][]byte
+	values              []uint64
+	keyBuffer           []byte
+	keyBufferMP         *mpool.MPool
+	keyBufferAllocation *IteratorAllocation
+	keyLengths          []int
 	// zValues: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	zValues       []int64
 	nonMatching   []bool

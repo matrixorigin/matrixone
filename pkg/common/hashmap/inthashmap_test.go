@@ -32,8 +32,7 @@ func TestLegacyIteratorFootprintExcludesTransactionalPlan(t *testing.T) {
 		unsafe.Sizeof((*IntHashMap)(nil))+6*sliceSize,
 		unsafe.Sizeof(intHashMapIterator{}))
 	require.Equal(t,
-		unsafe.Sizeof((*StrHashMap)(nil))+6*sliceSize+
-			unsafe.Sizeof([UnitLimit]int{}),
+		3*unsafe.Sizeof((*StrHashMap)(nil))+7*sliceSize,
 		unsafe.Sizeof(strHashmapIterator{}))
 }
 

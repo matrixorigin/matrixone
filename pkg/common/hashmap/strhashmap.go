@@ -75,11 +75,7 @@ func NewStrHashMapWithAllocations(
 
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
-		mp:            m,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+		mp: m,
 	}
 }
 
@@ -111,6 +107,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	if err := validateIteratorVectors(vecs, start, count); err != nil {
 		return err
 	}
+	itr.ensureCapacity(count)
 	for i := 0; i < count; i++ {
 		itr.keyLengths[i] = 0
 	}
@@ -243,6 +240,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		total += itr.keyLengths[i]
 	}
 	if cap(itr.keyBuffer) < total {
+		itr.clearKeys()
 		if allocation := itr.mp.iteratorAllocation; allocation != nil {
 			var next []byte
 			var err error
@@ -266,8 +264,12 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				return err
 			}
 			itr.keyBuffer = next
+			itr.keyBufferMP = itr.mp.mp
+			itr.keyBufferAllocation = allocation
 		} else {
 			itr.keyBuffer = make([]byte, total)
+			itr.keyBufferMP = nil
+			itr.keyBufferAllocation = nil
 		}
 	}
 	itr.keyBuffer = itr.keyBuffer[:total]
