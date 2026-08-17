@@ -516,7 +516,7 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	require.Equal(t, "set @ts0 = (select updated_at from src limit 1)", resp.UserDefinedVars[0].Sql)
 }
 
-func TestMigrateConnectionFromFallsBackToLegacyReplayWhenTypedSnapshotTooLarge(t *testing.T) {
+func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
@@ -530,19 +530,25 @@ func TestMigrateConnectionFromFallsBackToLegacyReplayWhenTypedSnapshotTooLarge(t
 			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	require.NoError(t, ses.SetUserDefinedVar(
+	// Prepared SET assignments are applied by the frontend but are not
+	// guaranteed to be captured as replayable raw COM_QUERY statements by the
+	// proxy. An oversized typed snapshot must therefore fail closed.
+	require.NoError(t, ses.setUserDefinedVarWithKind(
 		"large",
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
-		"set @large = repeat('a', 16777216)",
+		"",
+		false,
+		vector.PrepareParamString,
 	))
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 	resp := &query.MigrateConnFromResponse{}
-	require.NoError(t, rt.migrateConnectionFrom(resp))
+	err := rt.migrateConnectionFrom(resp)
+	require.ErrorContains(t, err, "size limit")
 	require.False(t, resp.UserDefinedVarsExported)
 	require.Empty(t, resp.UserDefinedVars)
-	require.True(t, resp.SystemVariablesExported)
+	require.False(t, resp.SystemVariablesExported)
 }
 
 func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {

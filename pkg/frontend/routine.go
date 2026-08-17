@@ -600,11 +600,11 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
-			// Keep the response usable for legacy replay when the typed snapshot
-			// exceeds its bounded wire-size budget.
-			if !isMigrationSnapshotSizeLimitError(err) {
-				return err
-			}
+			// Legacy replay only observes raw COM_QUERY SET statements and
+			// cannot prove that prepared or otherwise unobserved assignments
+			// cover the current user-variable state. Fail closed instead of
+			// reporting a successful migration that silently drops variables.
+			return err
 		} else {
 			resp.UserDefinedVars = vars
 			resp.UserDefinedVarsExported = true
