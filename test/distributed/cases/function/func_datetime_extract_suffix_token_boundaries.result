@@ -29,6 +29,6 @@ SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') 
 + SUM(CASE WHEN COALESCE(concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)), 'NULL') <> expected THEN 1 ELSE 0 END) AS mismatches
 FROM time_extract_suffix_token;
 ➤ case_count[-5,64,0]  ¦  mismatches[3,38,0]  𝄀
-13  ¦  0
+18  ¦  0
 DROP TABLE time_extract_suffix_token;
 DROP DATABASE time_extract_suffix_token_db;

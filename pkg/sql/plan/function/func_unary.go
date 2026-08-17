@@ -4955,6 +4955,15 @@ func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 			return 0, 0, 0, false
 		}
 	}
+	// A colon-delimited three-field prefix can be both a clock and a short
+	// date.  Do not let the DATETIME parser claim it before the TIME scanner has
+	// seen the complete suffix: MySQL keeps short suffixes with the consumed
+	// clock, rejects an overlong numeric token, and otherwise falls back to the
+	// date prefix.  This is deliberately a candidate decision made before
+	// either parser returns a result, rather than two eager grammar owners.
+	if result, handled := mysqlAmbiguousColonDateTimeForExtract(str); handled {
+		return result.hour, result.minute, result.second, result.valid
+	}
 	if result := mysqlSeparatedDatetimeClockForExtract(str); result.matched {
 		return result.hour, result.minute, result.second, result.valid
 	}
@@ -4962,6 +4971,90 @@ func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 		return result.hour, result.minute, result.second, result.valid
 	}
 	return mysqlTimeStringToClockForExtract(str)
+}
+
+type mysqlAmbiguousDateTimeOwnership uint8
+
+const (
+	mysqlAmbiguousDateTimeDefer mysqlAmbiguousDateTimeOwnership = iota
+	mysqlAmbiguousDateTimeKeepTime
+	mysqlAmbiguousDateTimeKeepDate
+	mysqlAmbiguousDateTimeReject
+)
+
+// mysqlAmbiguousColonDateTimeForExtract resolves the only date spelling whose
+// separators are also the native TIME separators.  The date parser and TIME
+// parser still do the actual field conversion; this helper only chooses the
+// owner after inspecting the complete candidate and its suffix.
+func mysqlAmbiguousColonDateTimeForExtract(str string) (timeExtractParseResult, bool) {
+	space := mysqlFirstWhitespaceForExtract(str)
+	if space <= 0 {
+		return timeExtractParseResult{}, false
+	}
+	dateText := str[:space]
+	if !mysqlExactColonDateCandidateForExtract(dateText) {
+		return timeExtractParseResult{}, false
+	}
+	year, month, day, yearDigits, _, ok := mysqlSeparatedDatePartsForExtract(dateText)
+	// A two-digit year is the ambiguous DATE/TIME spelling. One-digit years
+	// retain the existing variable-width clock rules, while three/four-digit
+	// years are owned by the separated-DATETIME parser.
+	if !ok || yearDigits != 2 || !mysqlDatetimeDateForExtract(year, month, day) {
+		return timeExtractParseResult{}, false
+	}
+
+	suffix := str[space:]
+	ownership := mysqlAmbiguousDateTimeSuffixOwnershipForExtract(suffix)
+	switch ownership {
+	case mysqlAmbiguousDateTimeKeepTime:
+		hour, minute, second, ok := mysqlTimeStringToClockForExtract(str)
+		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}, true
+	case mysqlAmbiguousDateTimeKeepDate:
+		// The DATE-prefix coercion exposes no clock fields from the date itself.
+		return timeExtractParseResult{matched: true, valid: true}, true
+	case mysqlAmbiguousDateTimeReject:
+		return timeExtractParseResult{matched: true}, true
+	default:
+		return timeExtractParseResult{}, false
+	}
+}
+
+func mysqlExactColonDateCandidateForExtract(str string) bool {
+	if len(str) == 0 || strings.Count(str, ":") != 2 {
+		return false
+	}
+	for i := 0; i < len(str); i++ {
+		if (str[i] < '0' || str[i] > '9') && str[i] != ':' {
+			return false
+		}
+	}
+	return mysqlClockFieldsForExtractHasThreeFields(str)
+}
+
+func mysqlAmbiguousDateTimeSuffixOwnershipForExtract(suffix string) mysqlAmbiguousDateTimeOwnership {
+	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
+	if suffix == "" {
+		return mysqlAmbiguousDateTimeDefer
+	}
+	// A sign or a second clock separator belongs to the DATETIME candidate.
+	// The separated parser owns those forms once it has consumed the date.
+	if suffix[0] == '+' || suffix[0] == '-' || suffix[0] == ':' {
+		return mysqlAmbiguousDateTimeDefer
+	}
+	token := mysqlTimeSuffixTokenForExtract(suffix)
+	if !token.present {
+		return mysqlAmbiguousDateTimeDefer
+	}
+	if strings.Contains(token.token, ":") {
+		return mysqlAmbiguousDateTimeDefer
+	}
+	if token.valid && (token.byteLen <= 2 || (token.allDigits && token.trailingWhitespace)) {
+		return mysqlAmbiguousDateTimeKeepTime
+	}
+	if token.allDigits {
+		return mysqlAmbiguousDateTimeReject
+	}
+	return mysqlAmbiguousDateTimeKeepDate
 }
 
 func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
@@ -5309,14 +5402,11 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 				prefix = prefix[:clockEnd]
 			}
 		} else {
-			// A three-field invalid date-shaped prefix keeps its ownership
-			// decision until the suffix is visible. Numeric suffixes are the
-			// exceptional two-digit-colon TIME form; other invalid-date suffixes
-			// are rejected by MySQL instead of being silently truncated to TIME.
-			if mysqlRepeatedClockSeparatorBeforeTokenForExtract(prefix[:space], suffix) {
-				return 0, 0, 0, false
-			}
-			if mysqlInvalidDateClockSuffixForExtract(prefix[:space], suffix) {
+			// A date-shaped or repeated-separator prefix keeps its ownership
+			// decision until the complete suffix is visible. The candidate scanner
+			// below decides whether that suffix terminates the already consumed
+			// TIME fields or invalidates the whole candidate.
+			if mysqlTimePrefixSuffixRejectsForExtract(prefix[:space], suffix) {
 				return 0, 0, 0, false
 			}
 			// A clock prefix followed by whitespace keeps the fields consumed
@@ -5347,59 +5437,68 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	return hour, minute, second, true
 }
 
-func mysqlInvalidDateClockSuffixForExtract(clock, suffix string) bool {
-	year, month, day, yearDigits, _, ok := mysqlSeparatedDatePartsForExtract(clock)
-	if !ok || !mysqlClockFieldsForExtractHasThreeFields(clock) || mysqlDatetimeDateForExtract(year, month, day) {
-		return false
-	}
-	suffixToken := mysqlTimeSuffixTokenForExtract(suffix)
-	if !suffixToken.present {
-		return false
-	}
-	// The date-shaped prefix and the TIME-shaped prefix share the same
-	// numeric fields. MySQL's scanner can keep the TIME interpretation when
-	// the token after the whitespace fits in the bytes left by the date year.
-	// A trailing whitespace byte is consumed by that scanner as well, so it
-	// reduces the available token width by one. Long all-digit tokens are the
-	// one numeric form that the scanner consumes after a trailing whitespace.
-	maxTokenBytes := 4 - yearDigits
-	if suffixToken.trailingWhitespace {
-		maxTokenBytes--
-	}
-	if suffixToken.valid &&
-		((suffixToken.allDigits && suffixToken.trailingWhitespace) || suffixToken.byteLen <= maxTokenBytes) {
-		return false
-	}
-	return true
+type mysqlTimePrefixCandidate struct {
+	leadingDigits       int
+	dateFieldCandidate  bool
+	dateInvalid         bool
+	hasOmittedMinute    bool
+	hasRepeatedBoundary bool
+	hasOmittedSeconds   bool
 }
 
-func mysqlRepeatedClockSeparatorBeforeTokenForExtract(clock, suffix string) bool {
-	if len(clock) == 0 {
+// mysqlTimePrefixCandidateForExtract records the field boundary consumed by
+// the TIME scanner before any suffix is classified.  The same candidate is
+// then used for repeated separators and date-shaped prefixes; no branch can
+// reinterpret the numeric fields after a later token is seen.
+func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
+	candidate := mysqlTimePrefixCandidate{
+		leadingDigits:    mysqlLeadingDigitCountForExtract(clock),
+		hasOmittedMinute: mysqlClockHasOmittedMinuteForExtract(clock),
+	}
+	if candidate.hasOmittedMinute {
+		return candidate
+	}
+	colonCount := strings.Count(clock, ":")
+	candidate.hasOmittedSeconds = strings.HasSuffix(clock, ":") && colonCount == 2
+	candidate.hasRepeatedBoundary = strings.Contains(clock, "::") || (strings.HasSuffix(clock, ":") && colonCount >= 3)
+	if mysqlClockFieldsForExtractHasThreeFields(clock) {
+		candidate.dateFieldCandidate = true
+		year, month, day, _, _, ok := mysqlSeparatedDatePartsForExtract(clock)
+		candidate.dateInvalid = !ok || !mysqlDatetimeDateForExtract(year, month, day)
+	}
+	return candidate
+}
+
+func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
+	candidate := mysqlTimePrefixCandidateForExtract(clock)
+	token := mysqlTimeSuffixTokenForExtract(suffix)
+	if !token.present || candidate.hasOmittedMinute || candidate.hasOmittedSeconds {
 		return false
 	}
-	suffixToken := mysqlTimeSuffixTokenForExtract(suffix)
-	if !suffixToken.present {
+	if !candidate.hasRepeatedBoundary && !candidate.dateInvalid {
 		return false
 	}
-	// A repeated separator immediately after the first field means that the
-	// first field is the compact TIME value ("12::56"). The remaining bytes
-	// are outside the consumed candidate and must not invalidate it.
-	if mysqlClockHasOmittedMinuteForExtract(clock) {
-		return false
-	}
-	// A repeated separator after the minute, or a separator after seconds,
-	// leaves a smaller token boundary. Keep that boundary in terms of the
-	// leading field width instead of special-casing individual spellings.
 	if strings.HasSuffix(clock, "::") {
 		return true
 	}
-	if !strings.Contains(clock, "::") &&
-		(!strings.HasSuffix(clock, ":") || strings.Count(clock, ":") < 2) {
+	if !token.valid {
+		return true
+	}
+	// A numeric token followed by whitespace belongs to the numeric TIME
+	// scanner, even when it is wider than the unresolved date field.
+	if token.allDigits && token.trailingWhitespace {
 		return false
 	}
-	yearDigits := mysqlLeadingDigitCountForExtract(clock)
-	maxTokenBytes := 3 - yearDigits
-	return !suffixToken.valid || suffixToken.byteLen > maxTokenBytes
+	available := 0
+	if candidate.hasRepeatedBoundary {
+		available = 3 - candidate.leadingDigits
+	} else if candidate.dateFieldCandidate {
+		available = 4 - candidate.leadingDigits
+	}
+	if token.trailingWhitespace && available > 0 {
+		available--
+	}
+	return available < 0 || token.byteLen > available
 }
 
 type mysqlTimeSuffixToken struct {
@@ -5408,6 +5507,7 @@ type mysqlTimeSuffixToken struct {
 	allDigits          bool
 	trailingWhitespace bool
 	byteLen            int
+	token              string
 }
 
 // mysqlTimeSuffixTokenForExtract keeps the complete token after the first
@@ -5434,6 +5534,7 @@ func mysqlTimeSuffixTokenForExtract(suffix string) mysqlTimeSuffixToken {
 		valid:     true,
 		allDigits: true,
 		byteLen:   len(token),
+		token:     token,
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]

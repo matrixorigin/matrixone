@@ -11277,6 +11277,52 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
+	inputs := []string{
+		"01:01: abc", "1:1: abc", "12:34: 123",
+		"01:01:01 0", "01:01:01 abc",
+		// Adjacent controls keep the same candidate owner when only the token
+		// class changes, and preserve the date/clock distinction for a full
+		// clock suffix.
+		"01:01: 123 ", "01:01:01 78", "01:01:01 x", "01:01:01 123", "01:01:01 12:34:56",
+	}
+	nulls := []bool{false, false, false, false, false, false, false, false, true, false}
+
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour", fn: StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{1, 1, 12, 1, 0, 1, 1, 1, 0, 12}, nulls),
+				},
+				{
+					name: "minute", fn: StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{1, 1, 34, 1, 0, 1, 1, 1, 0, 34}, nulls),
+				},
+				{
+					name: "second", fn: StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 1, 0, 0, 1, 1, 0, 56}, nulls),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractOracleMatrix843(t *testing.T) {
 	cases := make([]string, 0, 843)
 	years := []string{"0", "1", "12", "123", "2024", "12345"}
