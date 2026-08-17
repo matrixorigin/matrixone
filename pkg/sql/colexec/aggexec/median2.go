@@ -969,13 +969,13 @@ func (exec *medianColumnExecSelf[T, R]) preflightBatchMerge(
 		next.accounted, offset, groups)
 }
 
-func (exec *medianColumnExecSelf[T, R]) SaveSpillIntermediateResult(
-	cnt int64, chunk int, flags []uint8, writer io.Writer,
+func (exec *medianColumnExecSelf[T, R]) SaveSpillIntermediateRows(
+	chunk int, rows []int32, writer io.Writer,
 ) error {
 	if exec.accounted == nil {
 		return moerr.NewNotSupportedNoCtx("median has no bounded spill state")
 	}
-	return exec.accounted.SaveSpillIntermediateResult(cnt, chunk, flags, writer)
+	return exec.accounted.SaveSpillIntermediateRows(chunk, rows, writer)
 }
 
 func (exec *medianColumnExecSelf[T, R]) UnmarshalSpillFromReader(

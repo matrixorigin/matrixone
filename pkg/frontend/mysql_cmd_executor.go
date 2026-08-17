@@ -4259,7 +4259,7 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	err = executeStmtWithTxn(ses, nil, execCtx)
+	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
 		return abortStagedReturning(execCtx, err)
 	}
