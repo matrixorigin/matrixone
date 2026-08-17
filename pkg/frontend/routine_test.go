@@ -645,7 +645,7 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndUnrep
 	require.False(t, resp.SystemVariablesReplayable)
 }
 
-func TestMigrateConnectionFromFallsBackWhenTypedSystemSnapshotTooLargeAndReplayable(t *testing.T) {
+func TestMigrateConnectionFromFailsClosedWhenTypedSystemSnapshotTooLargeAndReplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
@@ -661,17 +661,18 @@ func TestMigrateConnectionFromFallsBackWhenTypedSystemSnapshotTooLargeAndReplaya
 	})
 	require.NoError(t, ses.SetSessionSysVar(
 		context.Background(), "optimizer_hints", string(make([]byte, maxMigrateUserDefinedVarsSize))))
-	// Model the successful COM_QUERY proxy event after the session setter.
+	// Even a raw-replayable assignment must fail closed: the proxy's system-only
+	// projection cannot preserve mixed SET evaluation order after final user
+	// variables are installed on the target.
 	ses.markMigrationSystemVarReplayable("optimizer_hints", true)
 
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 	resp := &query.MigrateConnFromResponse{}
-	require.NoError(t, rt.migrateConnectionFrom(resp))
-	require.True(t, resp.UserDefinedVarsExported)
+	err := rt.migrateConnectionFrom(resp)
+	require.ErrorContains(t, err, "size limit")
+	require.False(t, resp.UserDefinedVarsExported)
 	require.False(t, resp.SystemVariablesExported)
-	require.Empty(t, resp.SystemVariables)
-	require.True(t, resp.SystemVariablesReplayable)
 }
 
 func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
@@ -694,9 +695,27 @@ func TestRawNextTransactionAssignmentIsReplayable(t *testing.T) {
 	sql := "set @@transaction_isolation = 'READ-COMMITTED'"
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.singleStatementQuery = true
 	require.NoError(t, doSetVar(
-		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), sql, false))
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
 	require.False(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestMultiStatementSetAssignmentIsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	sql := "set @large = repeat('a', 16777216)"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	// The frontend executes this statement as part of a multi-statement
+	// COM_QUERY. The proxy does not capture raw replay for that request.
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), sql, false))
+	require.True(t, ses.hasUnreplayableMigrationUserVars())
 }
 
 func TestMigrateConnectionFromV20KeepsLegacyUserVariableReplay(t *testing.T) {

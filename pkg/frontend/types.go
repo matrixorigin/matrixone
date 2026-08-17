@@ -913,6 +913,9 @@ type ExecCtx struct {
 	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -968,6 +971,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""

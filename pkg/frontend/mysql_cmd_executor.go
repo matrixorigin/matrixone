@@ -1002,7 +1002,7 @@ func doSetVar(
 		} else {
 			err = ses.setUserDefinedVarWithKindAndReplayability(
 				name, value, sql, userVarIsBin, userVarPrepareParamKind,
-				!preparedExpression && sql != "")
+				!preparedExpression && sql != "" && execCtx.singleStatementQuery)
 			if err != nil {
 				return err
 			}
@@ -1013,7 +1013,7 @@ func doSetVar(
 		if (!assign.System && !assign.SetNames) || assign.Global {
 			return
 		}
-		replayable := !preparedExpression && sql != ""
+		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
 			for _, name := range []string{
 				"character_set_client", "character_set_connection", "character_set_results",
@@ -1068,7 +1068,7 @@ func doSetVar(
 					return err
 				}
 				ses.markMigrationSystemVarReplayable(
-					migrationNextTxnIsolationKey, !preparedExpression && sql != "")
+					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
 				return nil
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
@@ -5049,6 +5049,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = !hasMoreStatements
+		execCtx.singleStatementQuery = singleStatement
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
 		execCtx.sqlOfStmt = currentSQLRecord

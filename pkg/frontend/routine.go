@@ -622,11 +622,11 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		var systemVarsExported bool
 		systemVars, err = ses.snapshotSessionSystemVars(operationCtx)
 		if err != nil {
-			// As above, a legacy system-variable replay is safe only when every
-			// changed session variable is represented by a captured raw SET.
-			if !isMigrationSnapshotSizeLimitError(err) || ses.hasUnreplayableMigrationSystemVars() {
-				return err
-			}
+			// A system-only raw replay can observe final user-variable values
+			// instead of the source evaluation order, especially for mixed SET
+			// assignments. Never fall back after an oversized typed system
+			// snapshot; fail closed rather than risk a semantic change.
+			return err
 		} else {
 			systemVarsExported = true
 		}
