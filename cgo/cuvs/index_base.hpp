@@ -1216,35 +1216,16 @@ public:
         return limit;
     }
 
+    // Thin wrapper over matrixone::rows_fitting_gpu_mem, which owns the 60%-of-free-VRAM
+    // rule shared with the index-build capacity bound. It throws rather than falling back
+    // to the requested count: this runs inside a submit_main task, so a device is current
+    // by construction and a cudaMemGetInfo failure means the context is already broken
+    // (sticky launch error, device reset). Returning requested_rows would send an
+    // unchecked upload into a dead context and surface the real fault later as an opaque
+    // allocation failure inside train().
     int64_t cap_train_rows_to_gpu_mem(int64_t requested_rows) const {
-        if (requested_rows < 1) requested_rows = 1;
-        size_t free_bytes = 0, total_bytes = 0;
-        cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
-        if (err != cudaSuccess) {
-            // Do NOT fall back to the requested count. This runs inside a
-            // submit_main task, so a device is current by construction and a
-            // failure means the context is already broken (sticky launch error,
-            // device reset). Returning requested_rows would send an unchecked
-            // upload into a dead context and surface the real fault later as an
-            // opaque allocation failure inside train().
-            throw std::runtime_error(
-                std::string("cap_train_rows_to_gpu_mem: cudaMemGetInfo failed: ") +
-                cudaGetErrorString(err));
-        }
-        size_t per_row = static_cast<size_t>(dimension) * sizeof(B);
-        if (per_row == 0) {
-            throw std::runtime_error("cap_train_rows_to_gpu_mem: index dimension is 0");
-        }
-        int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row);
-        if (max_rows < 1) max_rows = 1;
-        if (requested_rows > max_rows) {
-            std::cerr << "[quantizer] train sample capped " << requested_rows
-                      << " -> " << max_rows << " rows to fit 60% of "
-                      << (free_bytes >> 20) << " MB free GPU mem (dim="
-                      << dimension << ")" << std::endl;
-            return max_rows;
-        }
-        return requested_rows;
+        return matrixone::rows_fitting_gpu_mem(
+            requested_rows, static_cast<size_t>(dimension) * sizeof(B), "quantizer", nullptr);
     }
 
 

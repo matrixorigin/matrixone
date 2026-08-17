@@ -16,6 +16,7 @@
 
 #include "helper.h"
 #include <unordered_map>
+#include <stdexcept>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <fstream>
@@ -208,6 +209,31 @@ void cast_float_to_half_host(const float* __restrict__ src,
 #endif
 }
 
+int64_t rows_fitting_gpu_mem(int64_t requested_rows, size_t per_row_bytes,
+                             const char* who, size_t* out_free_bytes) {
+    if (requested_rows < 1) requested_rows = 1;
+    if (per_row_bytes == 0) {
+        throw std::runtime_error(std::string(who) + ": per-row size is 0");
+    }
+    size_t free_bytes = 0, total_bytes = 0;
+    cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string(who) + ": cudaMemGetInfo failed: " +
+                                 cudaGetErrorString(err));
+    }
+    if (out_free_bytes) *out_free_bytes = free_bytes;
+
+    int64_t max_rows = static_cast<int64_t>((free_bytes / 10 * 6) / per_row_bytes);
+    if (max_rows < 1) max_rows = 1;
+    if (requested_rows > max_rows) {
+        std::cerr << "[" << who << "] capped " << requested_rows << " -> " << max_rows
+                  << " rows to fit 60% of " << (free_bytes >> 20)
+                  << " MB free GPU mem (per_row=" << per_row_bytes << "B)" << std::endl;
+        return max_rows;
+    }
+    return requested_rows;
+}
+
 } // namespace matrixone
 
 extern "C" {
@@ -284,6 +310,28 @@ void gpu_convert_f32_to_f16(const float* src, void* dst, uint64_t total_elements
         matrixone::set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", e.what());
     } catch (...) {
         matrixone::set_errmsg(errmsg, "Error in gpu_convert_f32_to_f16", "unknown C++ exception");
+    }
+}
+
+int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
+                              int64_t* out_rows, uint64_t* out_free_bytes, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        // cudaMemGetInfo reads the CURRENT device; bind the requested one first.
+        RAFT_CUDA_TRY(cudaSetDevice(device_id));
+        size_t free_bytes = 0;
+        int64_t rows = matrixone::rows_fitting_gpu_mem(
+            std::numeric_limits<int64_t>::max(), static_cast<size_t>(per_row_bytes),
+            "index capacity", &free_bytes);
+        if (out_rows) *out_rows = rows;
+        if (out_free_bytes) *out_free_bytes = static_cast<uint64_t>(free_bytes);
+        return 0;
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_rows_fitting_free_mem", e.what());
+        return -1;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_rows_fitting_free_mem", "unknown C++ exception");
+        return -1;
     }
 }
 
