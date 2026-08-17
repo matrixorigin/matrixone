@@ -67,6 +67,47 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 	return result, nil
 }
 
+func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.MigrateSystemVariable, error) {
+	names := make([]string, 0, len(gSysVarsDefs))
+	seen := make(map[string]struct{}, len(gSysVarsDefs))
+	for name, def := range gSysVarsDefs {
+		if def.Scope == ScopeGlobal || !def.Dynamic {
+			continue
+		}
+		canonicalName := canonicalSystemVariableName(name)
+		if _, ok := seen[canonicalName]; ok {
+			continue
+		}
+		seen[canonicalName] = struct{}{}
+		names = append(names, canonicalName)
+	}
+	sort.Strings(names)
+
+	result := make([]*query.MigrateSystemVariable, 0, len(names))
+	for _, name := range names {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		value, err := ses.GetSessionSysVar(name)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := encodeUserDefinedVarValue(ctx, value, false)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot encode session system variable %q for connection migration: %v", name, err)
+		}
+		result = append(result, &query.MigrateSystemVariable{
+			Name:  name,
+			Value: encoded,
+		})
+	}
+	if (&query.MigrateConnToRequest{SystemVariables: result}).ProtoSize() > maxMigrateUserDefinedVarsSize {
+		return nil, moerr.NewInternalError(ctx, "session system variables exceed the connection migration size limit")
+	}
+	return result, nil
+}
+
 func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefinedVar) (map[string]*UserDefinedVar, error) {
 	if migrateUserDefinedVarsProtoSize(vars) > maxMigrateUserDefinedVarsSize {
 		return nil, moerr.NewInternalError(ctx, "user variables exceed the connection migration size limit")
@@ -96,6 +137,41 @@ func decodeUserDefinedVars(ctx context.Context, vars []*query.MigrateUserDefined
 			IsBin:            item.IsBin,
 			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
 		}
+	}
+	return result, nil
+}
+
+type migratedSystemVariable struct {
+	name  string
+	value any
+}
+
+func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVariable) ([]migratedSystemVariable, error) {
+	if (&query.MigrateConnToRequest{SystemVariables: vars}).ProtoSize() > maxMigrateUserDefinedVarsSize {
+		return nil, moerr.NewInternalError(ctx, "session system variables exceed the connection migration size limit")
+	}
+	seen := make(map[string]struct{}, len(vars))
+	result := make([]migratedSystemVariable, 0, len(vars))
+	for _, item := range vars {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		if item == nil || item.Name == "" {
+			return nil, moerr.NewInternalError(ctx, "invalid session system variable in connection migration")
+		}
+		name := canonicalSystemVariableName(item.Name)
+		if _, exists := seen[name]; exists {
+			return nil, moerr.NewInternalErrorf(ctx, "duplicate session system variable %q in connection migration", name)
+		}
+		seen[name] = struct{}{}
+		if _, ok := gSysVarsDefs[name]; !ok {
+			return nil, moerr.NewInternalErrorf(ctx, "unknown session system variable %q in connection migration", name)
+		}
+		value, err := decodeUserDefinedVarValue(ctx, item.Value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, migratedSystemVariable{name: name, value: value})
 	}
 	return result, nil
 }

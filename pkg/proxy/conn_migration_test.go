@@ -196,6 +196,42 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 	})
 }
 
+func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		migration := req.MigrateConnToRequest
+		if migration == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		assert.True(t, migration.UserDefinedVarsExported)
+		assert.True(t, migration.SystemVariablesExported)
+		assert.Len(t, migration.SystemVariables, 1)
+		assert.Equal(t, "sql_mode", migration.SystemVariables[0].Name)
+		assert.Empty(t, migration.SetVarStmts)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		c1, _ := net.Pipe()
+		sc := newMockServerConn(c1)
+		cc.migration.systemSetVarStmts = []string{"set sql_mode = @mode"}
+		info := &pb.MigrateConnFromResponse{
+			UserDefinedVarsExported:       true,
+			SystemVariablesExported:       true,
+			UserLevelLockReleaseSupported: true,
+			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
+				Name:  "mode",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "PIPES_AS_CONCAT"}}}},
+			}},
+			SystemVariables: []*pb.MigrateSystemVariable{{
+				Name:  "sql_mode",
+				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "ANSI_QUOTES"}}}},
+			}},
+		}
+		assert.NoError(t, cc.migrateConnTo(sc, info))
+	})
+}
+
 func TestMigrateConnToUsesTransferDeadline(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	transferDeadline := make(chan time.Time, 1)

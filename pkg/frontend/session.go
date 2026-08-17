@@ -2617,22 +2617,45 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
 		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
 	}
+	var userVars map[string]*UserDefinedVar
 	if req.UserDefinedVarsExported {
 		if currentProtocolVersion(ses.proc) < defines.MORPCVersion21 {
 			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 21")
 		}
-		vars, err := decodeUserDefinedVars(migrationCtx, req.UserDefinedVars)
+		var err error
+		userVars, err = decodeUserDefinedVars(migrationCtx, req.UserDefinedVars)
 		if err != nil {
 			return err
 		}
-		ses.installUserDefinedVars(vars)
 	}
-	for _, stmt := range req.SetVarStmts {
-		tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
-		err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
-		tempExecCtx.Close()
+	var systemVars []migratedSystemVariable
+	if req.SystemVariablesExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
+		}
+		var err error
+		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
 		if err != nil {
-			return moerr.AttachCause(migrationCtx, err)
+			return err
+		}
+	}
+	if req.UserDefinedVarsExported {
+		ses.installUserDefinedVars(userVars)
+	}
+	if req.SystemVariablesExported {
+		for _, variable := range systemVars {
+			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+		}
+	} else {
+		for _, stmt := range req.SetVarStmts {
+			tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+			err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+			tempExecCtx.Close()
+			if err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
 		}
 	}
 

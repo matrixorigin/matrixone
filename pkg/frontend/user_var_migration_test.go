@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
@@ -134,6 +135,122 @@ func TestDecodeUserDefinedVarsRejectsDuplicateAndOversize(t *testing.T) {
 	cancel()
 	_, err = ses.snapshotUserDefinedVars(canceled)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDecodeUserDefinedVarValueRejectsMalformedRepresentations(t *testing.T) {
+	wrongLiteral := &plan.Literal{Value: &plan.Literal_Sval{Sval: "wrong-literal-kind"}}
+	for _, typ := range []types.T{
+		types.T_bool,
+		types.T_int8,
+		types.T_int16,
+		types.T_int32,
+		types.T_int64,
+		types.T_uint8,
+		types.T_uint16,
+		types.T_uint32,
+		types.T_uint64,
+		types.T_float32,
+		types.T_float64,
+		types.T_enum,
+	} {
+		_, err := decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+			Typ:  plan.Type{Id: int32(typ)},
+			Expr: &plan.Expr_Lit{Lit: wrongLiteral},
+		})
+		require.ErrorContains(t, err, "invalid")
+	}
+	_, err := decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
+	})
+	require.ErrorContains(t, err, "invalid")
+
+	for _, typ := range []types.T{
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	} {
+		_, err := decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+			Typ:  plan.Type{Id: int32(typ), Width: 1},
+			Expr: &plan.Expr_Lit{Lit: wrongLiteral},
+		})
+		require.ErrorContains(t, err, "invalid vector")
+	}
+
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2, Data: make([]byte, 8)}},
+	})
+	require.ErrorContains(t, err, "cardinality")
+
+	for _, test := range []struct {
+		typ  types.T
+		size int
+	}{
+		{types.T_year, 2},
+		{types.T_decimal64, 8},
+		{types.T_decimal128, 16},
+		{types.T_decimal256, 32},
+	} {
+		value := &plan.Expr{
+			Typ:  plan.Type{Id: int32(test.typ)},
+			Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: make([]byte, test.size)}},
+		}
+		_, err := decodeUserDefinedVarValue(context.Background(), value)
+		require.NoError(t, err)
+
+		value.GetVec().Data = value.GetVec().Data[:test.size-1]
+		_, err = decodeUserDefinedVarValue(context.Background(), value)
+		require.ErrorContains(t, err, "fixed user variable length")
+	}
+
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: make([]byte, 8)}},
+	})
+	require.ErrorContains(t, err, "unsupported fixed user variable type")
+
+	_, err = decodeUserDefinedVarValue(context.Background(), nil)
+	require.ErrorContains(t, err, "invalid user variable value")
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{})
+	require.ErrorContains(t, err, "invalid user variable value")
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	})
+	require.NoError(t, err)
+}
+
+func TestSessionSystemVariableMigrationValidation(t *testing.T) {
+	ses := &Session{}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ses.snapshotSessionSystemVars(canceled)
+	require.ErrorIs(t, err, context.Canceled)
+
+	value := plan2.MakePlan2StringConstExprWithType("ANSI_QUOTES")
+	vars, err := decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{
+		Name:  "tx_isolation",
+		Value: value,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, "transaction_isolation", vars[0].name)
+	require.Equal(t, "ANSI_QUOTES", vars[0].value)
+
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{
+		{Name: "tx_isolation", Value: value},
+		{Name: "transaction_isolation", Value: value},
+	})
+	require.ErrorContains(t, err, "duplicate session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Name: "unknown", Value: value}})
+	require.ErrorContains(t, err, "unknown session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Value: value}})
+	require.ErrorContains(t, err, "invalid session system variable")
+	_, err = decodeSessionSystemVars(context.Background(), []*query.MigrateSystemVariable{{Name: "sql_mode", Value: &plan.Expr{}}})
+	require.ErrorContains(t, err, "invalid user variable value")
 }
 
 func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.T) {

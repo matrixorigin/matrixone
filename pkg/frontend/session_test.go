@@ -775,12 +775,19 @@ func TestSession_Migrate(t *testing.T) {
 		source.SetDatabaseName("d1")
 		source.SetLastAffectedRows(7)
 		require.NoError(t, source.SetUserDefinedVar("ts0", "2026-08-07 04:20:01.123456", "set @ts0 = (select updated_at from src limit 1)"))
-		require.NoError(t, source.SetUserDefinedVar("mode", "ONLY_FULL_GROUP_BY", "set @mode = 'ONLY_FULL_GROUP_BY'"))
+		// This models the source result of:
+		// SET @mode = 'ANSI_QUOTES';
+		// SET @@session.sql_mode = @mode, @mode = 'PIPES_AS_CONCAT';
+		// The target must keep the evaluated sql_mode rather than replaying the
+		// filtered system-variable statement against the final user-variable snapshot.
+		require.NoError(t, source.SetUserDefinedVar("mode", "PIPES_AS_CONCAT", "set @mode = 'PIPES_AS_CONCAT'"))
+		require.NoError(t, source.SetSessionSysVar(context.Background(), "sql_mode", "ANSI_QUOTES"))
 		routine := &Routine{mc: newMigrateController()}
 		routine.setSession(source)
 		exported := &query.MigrateConnFromResponse{}
 		require.NoError(t, routine.migrateConnectionFrom(exported))
 		require.True(t, exported.UserDefinedVarsExported)
+		require.True(t, exported.SystemVariablesExported)
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
@@ -791,12 +798,32 @@ func TestSession_Migrate(t *testing.T) {
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
+			SystemVariables:         exported.SystemVariables,
+			SystemVariablesExported: exported.SystemVariablesExported,
 		}))
 		restored, err := target.GetUserDefinedVar("ts0")
 		require.NoError(t, err)
 		require.Equal(t, "2026-08-07 04:20:01.123456", restored.Value)
+		restoredMode, err := target.GetUserDefinedVar("mode")
+		require.NoError(t, err)
+		require.Equal(t, "PIPES_AS_CONCAT", restoredMode.Value)
+		sqlMode, err := target.GetSessionSysVar("sql_mode")
+		require.NoError(t, err)
+		require.Equal(t, "ANSI_QUOTES", sqlMode)
 		require.Equal(t, "d1", target.GetDatabaseName())
 		require.Equal(t, int64(7), target.GetLastAffectedRows())
+
+		invalidTarget := genSession(ctrl, "d1", nil)
+		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
+			DB:                      "d1",
+			UserDefinedVarsExported: true,
+			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
+			SystemVariablesExported: true,
+			SystemVariables:         []*query.MigrateSystemVariable{{Name: "sql_mode", Value: &plan.Expr{}}},
+		})
+		require.ErrorContains(t, err, "invalid user variable value")
+		_, err = invalidTarget.GetUserDefinedVar("mode")
+		require.ErrorContains(t, err, "does not exist")
 	})
 
 	t.Run("typed user variables require protocol v21", func(t *testing.T) {

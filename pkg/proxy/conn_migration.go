@@ -122,8 +122,10 @@ func (c *clientConn) migrateConnToContext(
 		LastAffectedRows:        info.LastAffectedRows,
 		UserDefinedVars:         info.UserDefinedVars,
 		UserDefinedVarsExported: info.UserDefinedVarsExported,
+		SystemVariables:         info.SystemVariables,
+		SystemVariablesExported: info.SystemVariablesExported,
 	}
-	if info.UserDefinedVarsExported {
+	if info.UserDefinedVarsExported && !info.SystemVariablesExported {
 		req.MigrateConnToRequest.SetVarStmts = append([]string(nil), c.migration.systemSetVarStmts...)
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)

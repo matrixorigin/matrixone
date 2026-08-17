@@ -604,6 +604,12 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		}
 		resp.UserDefinedVars = vars
 		resp.UserDefinedVarsExported = true
+		systemVars, err := ses.snapshotSessionSystemVars(operationCtx)
+		if err != nil {
+			return err
+		}
+		resp.SystemVariables = systemVars
+		resp.SystemVariablesExported = true
 	}
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{

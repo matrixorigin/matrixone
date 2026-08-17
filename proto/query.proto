@@ -559,6 +559,8 @@ message MigrateConnFromResponse {
   bool UserLevelLockReleaseSupported = 5;
   repeated MigrateUserDefinedVar UserDefinedVars = 6;
   bool UserDefinedVarsExported = 7;
+  repeated MigrateSystemVariable SystemVariables = 8;
+  bool SystemVariablesExported = 9;
 }
 
 message MigrateConnToRequest {
@@ -570,6 +572,8 @@ message MigrateConnToRequest {
   repeated UserLevelLock UserLevelLocks = 6;
   repeated MigrateUserDefinedVar UserDefinedVars = 7;
   bool UserDefinedVarsExported = 8;
+  repeated MigrateSystemVariable SystemVariables = 9;
+  bool SystemVariablesExported = 10;
 }
 
 message MigrateUserDefinedVar {
@@ -753,4 +757,9 @@ message MongoDBClientRetireRequest {
 
 message MongoDBClientRetireResponse {
   bool Success = 1;
+}
+
+message MigrateSystemVariable {
+  string Name = 1;
+  plan.Expr Value = 2;
 }
