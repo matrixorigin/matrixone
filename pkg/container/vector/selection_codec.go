@@ -24,8 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func writeSelectedRowsInt32(w io.Writer, value int32) error {
-	var encoded [4]byte
+func writeSelectedRowsInt32(w io.Writer, value int32, encoded *[4]byte) error {
 	binary.LittleEndian.PutUint32(encoded[:], uint32(value))
 	return writeVectorMarshalBytes(w, encoded[:])
 }
@@ -96,7 +95,11 @@ func (v *Vector) marshalSelectedRowsTo(
 	if v == nil || w == nil || count < 0 || count > math.MaxInt32 {
 		return moerr.NewInvalidInputNoCtx("invalid selected vector rows")
 	}
-	if err := writeSelectedRowsInt32(w, int32(count)); err != nil {
+	// Reuse one framing word for the row count and every value length. Keeping
+	// it at this streaming scope avoids one tiny escaping allocation per row
+	// when the destination is an io.Writer interface.
+	var encodedInt32 [4]byte
+	if err := writeSelectedRowsInt32(w, int32(count), &encodedInt32); err != nil {
 		return err
 	}
 
@@ -198,7 +201,7 @@ func (v *Vector) marshalSelectedRowsTo(
 		if len(value) > math.MaxInt32 {
 			return moerr.NewInvalidInputNoCtx("selected vector value exceeds wire format")
 		}
-		if err := writeSelectedRowsInt32(w, int32(len(value))); err != nil {
+		if err := writeSelectedRowsInt32(w, int32(len(value)), &encodedInt32); err != nil {
 			return err
 		}
 		if err := writeVectorMarshalBytes(w, value); err != nil {

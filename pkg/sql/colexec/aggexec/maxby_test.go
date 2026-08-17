@@ -426,8 +426,8 @@ func TestMaxBySpillPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 	require.True(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(0))
 	require.False(t, source.state[0].vecs[0].GetBinaryStringMetadataAt(1))
 	var spill bytes.Buffer
-	require.NoError(t, source.SaveSpillIntermediateResult(
-		2, 0, []uint8{1, 1}, &spill))
+	require.NoError(t, source.SaveSpillIntermediateRows(
+		0, []int32{0, 1}, &spill))
 
 	restored := makeMaxByExec(mp, AggIdOfMaxBy, false, params).(*maxByExec)
 	require.NoError(t, restored.UnmarshalSpillFromReader(
