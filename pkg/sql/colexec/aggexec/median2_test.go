@@ -269,8 +269,8 @@ func TestAccountedMedianResidentAndSpillRoundTrip(t *testing.T) {
 
 			var encoded bytes.Buffer
 			codec := exec.(SpillStateCodec)
-			require.NoError(t, codec.SaveSpillIntermediateResult(
-				3, 0, []uint8{1, 1, 1}, &encoded))
+			require.NoError(t, codec.SaveSpillIntermediateRows(
+				0, []int32{0, 1, 2}, &encoded))
 
 			restored, err := MakeAgg(
 				mp, AggIdOfMedian, distinct, types.T_int64.ToType())
