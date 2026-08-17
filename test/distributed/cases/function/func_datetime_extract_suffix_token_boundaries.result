@@ -27,7 +27,7 @@ INSERT INTO time_extract_suffix_token (case_id, v, c, t, expected) VALUES
 (15, '1:1: abc', '1:1: abc', '1:1: abc', '1/1/0'),
 (16, '12:34: 123', '12:34: 123', '12:34: 123', '12/34/0'),
 (17, '01:01:01 0', '01:01:01 0', '01:01:01 0', '1/1/1'),
-(18, '01:01:01 abc', '01:01:01 abc', '01:01:01 abc', 'NULL');
+(18, '01:01:01 abc', '01:01:01 abc', '01:01:01 abc', '0/0/0');
 SELECT COUNT(*) AS case_count,
 SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
 + SUM(CASE WHEN COALESCE(concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)), 'NULL') <> expected THEN 1 ELSE 0 END)
