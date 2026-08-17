@@ -18,6 +18,23 @@ The exact named-dependency path constructs temporary BTree keys and scans retain
 
 The design goal is therefore correctness and measurable invalidation precision, not a predetermined throughput target. A production change is justified only if it removes material lookup cost without causing an unacceptable rebuild or cache-miss rate.
 
+## Measured Attribution Evidence
+
+The allocation cost is present in a real TPCC attribution window, not only in a local microbenchmark. The comparison uses M-profile run `31691323156` with 220,625 completed transactions and MAC-profile run `31998721900` with 225,236 completed transactions.
+
+In the M-profile window, `CatalogCache.HasNewerVersion` owned:
+
+- 17,060,022,442 allocation bytes, or approximately 77.3 KiB per completed transaction;
+- 52,996,163 allocation objects, or approximately 240 objects per completed transaction;
+- 1.98 seconds of flat CPU and 52.88 seconds of cumulative CPU, or approximately 8.97 microseconds flat and 239.7 microseconds cumulative CPU per transaction;
+- 312.41 seconds of cumulative mutex delay, or approximately 1.416 milliseconds per transaction.
+
+The complete, unfiltered MAC allocation-space and allocation-object profiles contain no matching `HasNewerVersion` owner. This shows that the experimental watermark fast path removed the original lookup's direct allocation owner and call tree in the measured workload. The owner represented about 3.10% of M allocation bytes and 1.21% of M allocation objects.
+
+The whole M-to-MAC stack reduced CPU per transaction by 2.64%, allocation bytes per transaction by 6.33%, and allocation objects per transaction by 2.95%. Those changes include P0-A and are directional stack evidence only. They are not an isolated C throughput result, and the formal no-profile A+C gain remains `+0.7026%`.
+
+No transaction P95/P99 claim is made for Catalog C. The observed commit-pipeline tail changes are confounded by P0-A, while steady-state TPCC contains too little DDL to quantify bucket-collision or unrelated-DDL rebuild tails. Those claims require the targeted invalidation workload described below rather than another full TPCC cohort.
+
 # Current Behavior and Consumers
 
 Catalog logtail application updates exact table/database BTree history. Table inserts and deletes also advance a fixed `accountID % 4096` high-watermark. The watermark is monotonic and bounded independently of tenant churn.
