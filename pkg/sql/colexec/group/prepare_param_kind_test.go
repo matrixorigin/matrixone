@@ -234,9 +234,13 @@ func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *te
 	}()
 
 	flags := []uint8{0, 1, 0, 1}
-	rowsA, err := newPrepareParamKindRowsSource(sourceA, flags)
+	flagsA, err := newPrepareParamKindRowsSource(sourceA, flags)
 	require.NoError(t, err)
-	rowsB, err := newPrepareParamKindRowsSource(sourceB, flags)
+	flagsB, err := newPrepareParamKindRowsSource(sourceB, flags)
+	require.NoError(t, err)
+	rowsA, err := newPrepareParamKindSelectedRowsSource(sourceA, []int32{1, 3})
+	require.NoError(t, err)
+	rowsB, err := newPrepareParamKindSelectedRowsSource(sourceB, []int32{1, 3})
 	require.NoError(t, err)
 	require.Equal(t, 2, rowsA.rowCount)
 	require.Equal(t, 2, rowsB.rowCount)
@@ -247,10 +251,15 @@ func TestPrepareParamKindTrailerV2StreamsSelectedRowsForMultipleAggregates(t *te
 	}
 	var states aggexec.PrepareParamKindStates
 	states.Reset(aggs)
+	var encodedFlags bytes.Buffer
+	require.NoError(t, writePrepareParamKindTrailer(
+		context.Background(), &encodedFlags, aggs, &states,
+		[]prepareParamKindRowsSource{flagsA, flagsB}))
 	var encoded bytes.Buffer
 	require.NoError(t, writePrepareParamKindTrailer(
 		context.Background(), &encoded, aggs, &states,
 		[]prepareParamKindRowsSource{rowsA, rowsB}))
+	require.Equal(t, encodedFlags.Bytes(), encoded.Bytes())
 	require.Equal(t, prepareParamKindTrailerRowsVersion, encoded.Bytes()[3])
 
 	targetA := &prepareParamKindTestAccessor{vecs: []*vector.Vector{destinationA}}

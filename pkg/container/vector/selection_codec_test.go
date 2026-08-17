@@ -63,6 +63,76 @@ func TestSelectedFlagsCodecResetsEachStreamingPass(t *testing.T) {
 	require.Zero(t, encoded.Len())
 }
 
+func TestSelectedRowsCodecMatchesFlagSelectionWire(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	defer func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	for _, value := range []string{"zero", "one", "two", "three", "four", "five", "six", "seven"} {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	source.SetNull(4)
+	source.GetGrouping().Add(1, 7)
+	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
+		PrepareParamNone, PrepareParamInteger, PrepareParamNone, PrepareParamNone,
+		PrepareParamDecimal, PrepareParamNone, PrepareParamNone, PrepareParamBoolean,
+	}, mp))
+	require.NoError(t, source.SetBinaryStringRowsWithMP(
+		[]bool{false, true, false, false, false, false, false, true}, mp))
+
+	flags := make([]uint8, source.Length())
+	rows := []int32{1, 4, 7}
+	for _, row := range rows {
+		flags[row] = 1
+	}
+	var fromFlags, fromRows bytes.Buffer
+	written, err := source.MarshalSelectedFlagsTo(&fromFlags, flags)
+	require.NoError(t, err)
+	require.Equal(t, len(rows), written)
+	require.NoError(t, source.MarshalSelectedRowsTo(&fromRows, rows))
+	require.Equal(t, fromFlags.Bytes(), fromRows.Bytes())
+}
+
+func BenchmarkSelectedRowsCodecAvoidsSparseFlagScans(b *testing.B) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	values := make([]int64, 8192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	require.NoError(b, AppendFixedList(source, values, nil, mp))
+	flags := make([]uint8, len(values))
+	rows := make([]int32, 0, 256)
+	for row := 0; row < len(values); row += len(values) / 256 {
+		flags[row] = 1
+		rows = append(rows, int32(row))
+	}
+	b.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(b, mp.CurrNB())
+	})
+
+	b.Run("flags", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_, err := source.MarshalSelectedFlagsTo(io.Discard, flags)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("rows", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := source.MarshalSelectedRowsTo(io.Discard, rows); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func TestSelectedRowsCodecPreservesMetadataAndVarlena(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType())

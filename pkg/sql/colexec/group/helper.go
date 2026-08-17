@@ -540,18 +540,27 @@ func (ctr *container) writeSpillRecord(
 		return 0, 0, moerr.NewInternalErrorNoCtx(
 			"group spill aggregate chunk out of range")
 	}
+	legacyFlags := ctr.allocationAccount == nil
+	if legacyFlags && len(bktFlags) != gb.RowCount() {
+		return 0, 0, moerr.NewInternalErrorNoCtx(
+			"group spill flags do not match group rows")
+	}
 	for _, row := range rows {
-		if row < 0 || int(row) >= len(bktFlags) {
+		if row < 0 || int(row) >= gb.RowCount() {
 			return 0, 0, moerr.NewInternalErrorNoCtx(
 				"group spill row out of range")
 		}
-		bktFlags[row] = 1
-	}
-	defer func() {
-		for _, row := range rows {
-			bktFlags[row] = 0
+		if legacyFlags {
+			bktFlags[row] = 1
 		}
-	}()
+	}
+	if legacyFlags {
+		defer func() {
+			for _, row := range rows {
+				bktFlags[row] = 0
+			}
+		}()
+	}
 
 	bkt := ctr.currentSpillBkt[bucket]
 	if bkt.file == nil {
@@ -581,7 +590,7 @@ func (ctr *container) writeSpillRecord(
 		return 0, 0, err
 	}
 	var fullFlags [][]uint8
-	if ctr.allocationAccount == nil {
+	if legacyFlags {
 		fullFlags = make([][]uint8, len(ctr.groupByBatches))
 		fullFlags[nthBatch] = bktFlags
 	}
@@ -597,14 +606,14 @@ func (ctr *container) writeSpillRecord(
 				return 0, 0, err
 			}
 		} else {
-			if err := ag.SaveSpillIntermediateResult(cnt, nthBatch, bktFlags, &record); err != nil {
+			if err := ag.SaveSpillIntermediateRows(nthBatch, rows, &record); err != nil {
 				return 0, 0, err
 			}
 		}
 		if i < len(ctr.aggExprs) && ctr.aggExprs[i].PreservesFirstArgPrepareParamKind() {
 			var err error
-			prepareParamKindSources[i], err = newPrepareParamKindRowsSource(
-				ag.PrepareParamKindVectorForChunk(nthBatch), bktFlags)
+			prepareParamKindSources[i], err = newPrepareParamKindSelectedRowsSource(
+				ag.PrepareParamKindVectorForChunk(nthBatch), rows)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -750,14 +759,18 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 		return 0, 0, moerr.NewInternalErrorNoCtx(
 			"group spill batch rows do not match hash groups")
 	}
-	// Allocate the two row-parallel borrowers once for the largest chunk. A
-	// later uneven chunk only reslices them, so growth never transiently needs
-	// both the previous and replacement allocation from the recovery floor.
-	ctr.spillFlagFlat, err = resizeDiscardableGroupScratch(
-		ctr, ctr.spillFlagFlat, maxBatchRows, GroupAllocationSiteSpillFlags)
-	if err != nil {
-		return 0, 0, err
+	// The stable, unaccounted compatibility codec still selects with flags.
+	// Accounted spill passes the partition rows directly and does not admit or
+	// scan a duplicate row-parallel selection.
+	if ctr.allocationAccount == nil {
+		ctr.spillFlagFlat, err = resizeDiscardableGroupScratch(
+			ctr, ctr.spillFlagFlat, maxBatchRows, GroupAllocationSiteSpillFlags)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
+	// Allocate the row borrower once for the largest chunk. A later uneven
+	// chunk only reslices it, avoiding overlapping replacement capacity.
 	ctr.spillBucketRows, err = resizeDiscardableGroupScratch(
 		ctr, ctr.spillBucketRows, maxBatchRows, GroupAllocationSiteSpillRows)
 	if err != nil {
@@ -777,8 +790,11 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 		batchHC := hashCodes[hcOffset : hcOffset+rc]
 		hcOffset += rc
 
-		bktFlags := ctr.spillFlagFlat[:rc]
-		clear(bktFlags)
+		var bktFlags []uint8
+		if ctr.allocationAccount == nil {
+			bktFlags = ctr.spillFlagFlat[:rc]
+			clear(bktFlags)
+		}
 
 		// Partition the batch in two linear passes. Only the counts/cursors are
 		// fixed-size; row ids occupy exactly O(rc) accounted recovery scratch.

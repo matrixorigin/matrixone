@@ -260,8 +260,8 @@ func TestAggExecSpillDecodeUsesExactSourceCapacity(t *testing.T) {
 	source := newExec()
 	require.NoError(t, source.GroupGrow(2))
 	var encoded bytes.Buffer
-	require.NoError(t, source.SaveSpillIntermediateResult(
-		2, 0, []uint8{1, 1}, &encoded))
+	require.NoError(t, source.SaveSpillIntermediateRows(
+		0, []int32{0, 1}, &encoded))
 	source.Free()
 
 	target := newExec()
@@ -298,13 +298,13 @@ func TestAggExecSpillDecodeReusesLargeSmallLargeCapacity(t *testing.T) {
 	encode := func(rows int) []byte {
 		source := newExec()
 		require.NoError(t, source.GroupGrow(rows))
-		flags := make([]uint8, rows)
-		for i := range flags {
-			flags[i] = 1
+		selected := make([]int32, rows)
+		for i := range selected {
+			selected[i] = int32(i)
 		}
 		var encoded bytes.Buffer
-		require.NoError(t, source.SaveSpillIntermediateResult(
-			int64(rows), 0, flags, &encoded))
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, selected, &encoded))
 		source.Free()
 		return encoded.Bytes()
 	}
@@ -340,9 +340,9 @@ func TestAggExecSpillRejectsSelectionBeyondStateRows(t *testing.T) {
 	require.NoError(t, exec.GroupGrow(1))
 
 	var encoded bytes.Buffer
-	err := exec.SaveSpillIntermediateResult(
-		1, 0, []uint8{1, 0}, &encoded)
-	require.ErrorContains(t, err, "selection length 2 exceeds state row count 1")
+	err := exec.SaveSpillIntermediateRows(
+		0, []int32{1}, &encoded)
+	require.ErrorContains(t, err, "spill row 1 exceeds state row count 1")
 
 	exec.Free()
 	require.Zero(t, mp.CurrNB())
