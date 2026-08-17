@@ -157,7 +157,14 @@ test_ivfpq_filter: obj/test/test_ivfpq_filter.o
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Measures what MO gives up by uploading the dataset itself instead of handing
+# cuVS a raft::host_matrix_view (which samples the trainset on the host and
+# streams the encode in batches). Standalone: cuVS / RAFT / RMM only.
+bench_hostview: obj/test/bench_hostview.o
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 clean:
 	@echo "Cleaning up..."
-	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+	rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview
 	rm -rf obj
