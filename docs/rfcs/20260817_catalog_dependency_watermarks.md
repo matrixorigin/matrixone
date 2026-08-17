@@ -24,7 +24,7 @@ The allocation cost is present in a real TPCC attribution window, not only in a 
 
 In the M-profile window, `CatalogCache.HasNewerVersion` owned:
 
-- 17,060,022,442 allocation bytes, or approximately 77.3 KiB per completed transaction;
+- 17,060,022,442 allocation bytes, or approximately 75.5 KiB per completed transaction;
 - 52,996,163 allocation objects, or approximately 240 objects per completed transaction;
 - 1.98 seconds of flat CPU and 52.88 seconds of cumulative CPU, or approximately 8.97 microseconds flat and 239.7 microseconds cumulative CPU per transaction;
 - 312.41 seconds of cumulative mutex delay, or approximately 1.416 milliseconds per transaction.
