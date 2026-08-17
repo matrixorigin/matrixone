@@ -83,6 +83,39 @@ func isTxnCommitResultUnknown(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
 }
 
+// requestContextErr reports cancellation of the request that owns the
+// statement.  A request can be cancelled when the client disconnects while
+// execution is still finishing.  In that case the statement may have
+// returned successfully, but committing it would make a cancelled DML
+// visible after the client has already received an error.
+func requestContextErr(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.reqCtx == nil {
+		return nil
+	}
+	err := execCtx.reqCtx.Err()
+	if err == nil {
+		return nil
+	}
+	// KILL QUERY (and KILL CONNECTION) deliberately cancel the request
+	// context while keeping the connection available for the former.  Their
+	// existing protocol contract is to finish a read-only query without
+	// turning it into a transaction error.  A client disconnect first marks
+	// the routine as closing in beginClose, so a cancelled DML remains fenced.
+	if errors.Is(err, context.Canceled) && isReadOnlyStatement(execCtx) {
+		if ses, ok := execCtx.ses.(*Session); ok {
+			if rt := ses.getRoutine(); rt != nil && !rt.closing.Load() {
+				return nil
+			}
+		}
+	}
+	return err
+}
+
+func isReadOnlyStatement(execCtx *ExecCtx) bool {
+	return execCtx != nil && execCtx.stmt != nil &&
+		execCtx.stmt.GetQueryType() == tree.QueryTypeDQL
+}
+
 // execution succeeds during the transaction. commit the transaction
 func commitTxnFunc(ses FeSession,
 	execCtx *ExecCtx) (retErr error) {
@@ -115,6 +148,12 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	}
 
 	if execCtx.txnOpt.byCommit {
+		if execErr == nil {
+			execErr = requestContextErr(execCtx)
+		}
+		if execErr != nil {
+			return rollbackTxnFunc(ses, execErr, execCtx)
+		}
 		//commit the txn by the COMMIT statement
 		err = ses.GetTxnHandler().Commit(execCtx)
 		if err != nil {
@@ -131,13 +170,17 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
-			err = commitTxnFunc(ses, execCtx)
-			if err == nil {
-				return err
+			if requestErr := requestContextErr(execCtx); requestErr != nil {
+				execErr = requestErr
+			} else {
+				err = commitTxnFunc(ses, execCtx)
+				if err == nil {
+					return err
+				}
+				// if commitTxnFunc failed, we will roll back the transaction.
+				// if commit panic, rollback below executed at the second time.
+				execErr = err
 			}
-			// if commitTxnFunc failed, we will roll back the transaction.
-			// if commit panic, rollback below executed at the second time.
-			execErr = err
 		}
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
@@ -706,8 +749,16 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 
 	storage := th.storage
+	commitCtx := th.txnCtx
+	// A terminal commit belongs to the statement request.  Preserve the
+	// transaction context only for the read-only KILL path, whose cancellation
+	// is intentionally non-terminal for the connection.
+	if execCtx != nil && execCtx.reqCtx != nil &&
+		(execCtx.reqCtx.Err() == nil || requestContextErr(execCtx) != nil) {
+		commitCtx = execCtx.reqCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		commitCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseCommitUnsafe,
 	)
