@@ -37,9 +37,14 @@ proxy.Close()
       └→ pipe.kickoff() exit        ← Q2: io.EOF guaranteed? → depends on connection.Close()
           └→ connection.Close()     ← Q2: Close guaranteed? → depends on morpc readLoop detection
               └→ morpc readLoop     ← Q2: Condition for detecting close?
-                  ├─ readTimeout > 0 → periodic return + detect → ✅
-                  └─ readTimeout = 0 → forever blocked on conn.Read → ❌ Bug
+                  ├─ readTimeout > 0 → periodic return + detect → bounded edge
+                  └─ readTimeout = 0 → pending: does another owner call Close/cancel,
+                                         and does that operation interrupt conn.Read?
 ```
+
+A zero read timeout is not proof of a hang. It becomes a Q2 violation only when
+the complete ownership graph has no independent close/cancel edge that reliably
+interrupts the blocked read.
 
 ---
 
@@ -62,7 +67,8 @@ Output: audit scope matrix
 
 ```
 For each Layer:
-  1. read_file ≤ 6 files (hard limit)
+  1. Read a coherent batch of files (about six is a useful progress cadence,
+     not an audit boundary); continue in further batches until the graph closes
   2. Execute Q1-Q3 on this layer, including ownership cardinality and hidden wait edges
   3. Record verdict + layer number where termination condition is satisfied
   4. If termination depends on a lower layer → mark drill-down target, do not conclude at this layer
@@ -78,8 +84,9 @@ For each Layer:
 2. Extract failed Q1/Q2/Q3 items
 3. Verify termination chain integrity (no break from entry to exit)
 4. Apply Bug Claim Verification Checklist (see Critical Rules) to each candidate
-5. Generate Issue templates for confirmed Bugs
-Output: final risk matrix + Bug list
+5. Generate issue-ready finding drafts for confirmed bugs; create external
+   issues only when the user explicitly authorizes that write
+Output: final risk matrix + confirmed finding list
 ```
 
 ---
@@ -103,7 +110,7 @@ Layer N: [Module Name] ([File Name])
 ```
 | # | Bug | Layer | Q | Severity | Issue |
 |---|-----|-------|---|----------|-------|
-| 1 | [description] | Layer X | Q2 | High | #12345 |
+| 1 | [description] | Layer X | Q2 | High | issue-ready draft or authorized issue |
 ```
 
 ### Termination Chain Verification (Phase 3 output)
@@ -122,8 +129,8 @@ Entry
 ### Core Rules
 
 1. **Anti-confirmation-bias**: prove "definitely leaks/hangs", not "looks like it might" — exhaust all bypass paths before ruling
-2. **Batch hard limit**: ≤ 6 read_file per batch, must output audit conclusion for that batch before continuing
-3. **Exit self-check**: before ending the turn confirm — ①conclusion in first paragraph ②audit table present ③Bug has Issue
+2. **Progress batching**: read coherent batches and report progress after roughly six files when the audit continues; never stop before the ownership/wait/growth graph closes
+3. **Exit self-check**: before ending the turn confirm — ①conclusion in first paragraph ②audit table present ③each confirmed bug has an issue-ready draft; create an Issue only with authorization
 4. **Drill-down discipline**: when termination condition is not satisfied, mark "pending drill-down", do not speculate at the current layer
 
 ### Bug Claim Verification Checklist (BEFORE filing ANY bug)
@@ -134,7 +141,7 @@ Entry
 |---|------|---------------------|--------------------------------------|
 | **G1** | **FULL-GRAPH** | Trace ownership to ALL terminal nodes and prove one effective cleanup owner on every path | Bug: found a destructor but missed a second concurrent owner, or stopped before the real terminal holder |
 | **G2** | **CAN-FAIL/BLOCK** | Open the alleged function and every wait-for dependency; confirm it can actually fail, panic, or block | Bug: called a path fail-fast without noticing its mutex owner was blocked in downstream I/O |
-| **G3** | **SYMMETRY** | For every growth claim (append/push/alloc), grep the variable name + `= nil` / `= make` / truncate; confirm NO reset point exists anywhere in the lifecycle | Bug: saw `spillIndex = append(...)`, missed `spillIndex = nil` in `cleanupSpill()` |
+| **G3** | **BOUND/RELEASE** | For every growth claim, trace retained live memory through scope/GC, `clear`/`delete`, truncation, eviction, backpressure, ownership transfer, generation replacement, and terminal cleanup; prove no reachable bound or release applies | Bug: saw `spillIndex = append(...)`, missed lifecycle cleanup or that ownership left the growing object |
 | **G4** | **LINE-REREAD** | Re-read every cited line number AFTER forming the bug hypothesis — do not trust memory from the initial read | Bug: asserted `ctr.state` doesn't become `SendSucceed` on failure; line 127 shows it's unconditional |
 | **G5** | **CALIBRATE-LAST** | Severity (Low/Medium/High) assigned ONLY after G1-G4 pass AND all bugs in the batch are confirmed. Never assign severity during discovery | Bug was Medium → turned out to be false positive (severity meaningless) |
 
@@ -180,19 +187,28 @@ For restart/retry/pooling, include generation edges: old callbacks and handles
 must terminate before reuse, and new state must remain unpublished until all
 admission gates are ready.
 
-### G3 Detail: Symmetry Check
+### G3 Detail: Retained-Live-Memory Check
 
 For any variable `V` that exhibits growth (`append`, `map[K]=V`, channel send, allocation):
 
-1. Find all assignments to `V` (grep `V\s*=`)
-2. Confirm one of these assigns nil / empty / zero
-3. Verify that assignment is ALWAYS reached before the variable goes out of scope
+1. Identify which object retains each appended/allocated value and for how long.
+2. Locate every applicable bound or release: lexical scope/GC reachability,
+   `clear`/`delete`, truncation, capacity/backpressure, eviction, ownership
+   transfer, generation replacement, and terminal cleanup.
+3. Verify at least one bound/release is always reached for every growth path, or
+   prove a finite external admission bound. A literal `= nil` is only one form.
 
-Common false positive: variable is reset in a function you haven't read yet (e.g., `Reset()`, `Free()`, `cleanup()`). Always search for these BEFORE filing a Q3 bug.
+Common false positive: only searching assignments misses cleanup through aliases,
+container deletion, scope exit, eviction, or a transferred owner. Trace retained
+reachability and the actual lifecycle before filing a Q3 bug.
 
 ---
 
-## Appendix A: Module Threat Model Reference
+## Appendix A: Module Lifecycle Hypotheses
+
+These rows are navigation hints, not proof. Revalidate every API signature,
+owner, timeout, and bound against the exact checked-out commit before using it in
+a finding; release branches may differ from current `main`.
 
 ### A.1 Proxy / Execution Dispatch Layer
 
@@ -210,7 +226,7 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 | `readLoop` goroutine | `conn.Read()` returns error / `readTimeout` triggers ctx check | `conn.Read(readOptions)` | **readTimeout > 0** → periodic return | backend pool | `maxConnections` |
 | `writeLoop` goroutine | `defer closeConn(false)` | `writeLoop` ctx | ctx.Done() | — | — |
 | backend connection | GC manager (idle check + inactive check) | — | — | idle backend | `maxIdleDuration` |
-| Future | `Get(ctx)` return / GC | `f.Get(ctx)` | ctx deadline | — | — |
+| Future | immediately after acquisition, install exactly-once `defer f.Close()` before the at-most-once `f.Get()` | `f.Get()` | send/context/response completion; deferred `Close()` covers every return/error path | — | — |
 
 ### A.3 Compile / Remote Execution Layer
 
@@ -218,7 +234,7 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 |-------------------|-----------------|------------|---------------|--------------|------------|
 | sender goroutines | `sender.close()` in `RemoteRun` defer | `sendPipeline` each send | caller ctx | — | — |
 | `messageSenderOnClient` goroutine | `<-receiver.connectionCtx.Done()` | stream.Get() | ctx / stream close | — | — |
-| stream sender | `Close(true)` → pool return + gauge dec | `waitingTheStopResponse()` | `30s timeout` | stream pool | `sync.Pool` |
+| stream sender | `Close(true)` → pool return + gauge dec | `waitingTheStopResponse()` | `30s timeout` | stream pool | unknown/admission-dependent; `sync.Pool` is not a capacity bound—revalidate current source |
 | `messageReceiverOnServer` goroutine | `<-receiver.connectionCtx.Done()` | `NotifyDispatch` | `connectionCtx.Done()` + `dispatchProc.Ctx.Done()` | — | — |
 | dispatch goroutines | `proc.Ctx.Done()` / channel close | channel send (non-blocking) | non-blocking select + default fallback | channel buffer | `ChannelBufferSize` |
 
@@ -226,7 +242,7 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 
 | Resource Creation | Destruction Path | Wait Point | Release Event | Accumulation | Bounded By |
 |-------------------|-----------------|------------|---------------|--------------|------------|
-| `Pipeline` scope | `defer p.Cleanup(s.Proc, err, isPrepare, err)` | merge (non-blocking) | — | batches | `bat.Clean(mp)` per-batch release |
+| `Pipeline` scope | `defer p.Cleanup(s.Proc, err != nil, isPrepare, err)` | merge (non-blocking) | — | batches | `bat.Clean(mp)` per-batch release |
 | pipelines in ants pool | pool full → `errSubmit` → `errC` | `Run()` waiting completion | `errC` / `errMergeC` / `scope.Run` completion | mpool alloc | pool cap |
 
 ### A.5 Txn / Transaction Layer
@@ -316,6 +332,6 @@ Common false positive: variable is reset in a function you haven't read yet (e.g
 | See one cleanup callback → assume exactly-once cleanup | Trace all public terminal calls, retry paths, and callbacks; prove exclusive ownership or destructor idempotence | G1 |
 | See reset/reopen under a lock → assume generation safety | Trace old callbacks/handles and publication order across restart or pool reuse | G1/G2 |
 | See resource transferred to next holder, close not found in current scope → report leak | Trace ownership to ALL terminal nodes — next holder may have Destroy()/FreeMemory() | G1 |
-| See append/push without bound in current scope → report OOM | Grep variable + `= nil` — cleanup function in sibling file may reset it | G3 |
+| See append/push without bound in current scope → report OOM | Trace retained reachability through scope/GC, delete/clear/truncate, eviction/backpressure, ownership transfer, and lifecycle cleanup | G3 |
 | See function call that "might" panic → report fd leak on panic path | Open function body — nil-check+assign or simple arithmetic cannot panic | G2 |
 | See `SendMessage` return error → assume upstream state machine doesn't clean up | Re-read the exact line where state is set — it may be unconditional | G4 |
