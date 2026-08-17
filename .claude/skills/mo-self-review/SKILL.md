@@ -170,8 +170,8 @@ diff touches:
 - **Q2 hung** — every explicit or implicit wait dependency has a guaranteed release; fail-fast/control paths must not queue behind the work they stop.
 - **Q3 OOM** — every accumulation has a bound / recycle.
 
-Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail, G3 symmetry,
-G4 line-reread, G5 calibrate-last) before keeping any finding.
+Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail/block,
+G3 bound/release, G4 line-reread, G5 calibrate-last) before keeping any finding.
 
 ---
 
