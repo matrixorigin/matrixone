@@ -201,6 +201,23 @@ func TestPingContext(t *testing.T) {
 	require.NoError(t, storage.Close())
 }
 
+func TestMySQLTaskStorageCloseIsTerminalAfterDriverError(t *testing.T) {
+	for _, closeErr := range []error{
+		errors.New("bad connection"),
+		errors.New("write: broken pipe"),
+	} {
+		t.Run(closeErr.Error(), func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			mock.ExpectClose().WillReturnError(closeErr)
+
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+			require.ErrorContains(t, storage.PingContext(context.Background()), "database is closed")
+			require.NoError(t, storage.Close())
+		})
+	}
+}
+
 func TestAsyncTaskInSqlMock(t *testing.T) {
 	storage, mock := newMockStorage(t)
 	mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
@@ -1896,6 +1913,29 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		d := base
 		d.ID = 1
 		d.TaskStatus = task.TaskStatus_Running
+
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keyMap[CDCTaskKey{
+				AccountId: uint64(catalog.System_Account),
+				TaskId:    d.Metadata.ID,
+			}] = struct{}{}
+			return 1, nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("pause while resume is being admitted", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_ResumeRequested
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))

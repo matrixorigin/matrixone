@@ -53,7 +53,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+			// A predicate with no column references is not safe below a global
+			// aggregate. If it evaluates to false, filtering the aggregate input
+			// still leaves the single global-aggregate output row alive. This can
+			// happen after set-operation columns are replaced by branch literals.
+			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
+				node.FilterList = append(node.FilterList, filter)
+			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
@@ -865,6 +871,14 @@ func (builder *QueryBuilder) pushdownVectorIndexTopToTableScan(nodeID int32) {
 		return
 	}
 
+	// The ORDER BY column indexes the child project's list, but the two can disagree:
+	// pruning a derived table's projection (`select count(*) from (<top-k>) t`) empties
+	// the list while the sort keeps its pre-pruning ColPos. This runs on the final plan,
+	// after applyIndices, and the entries-table gate that would reject such a shape is
+	// below — so check before dereferencing rather than panicking the CN.
+	if orderCol.ColPos < 0 || int(orderCol.ColPos) >= len(projNode.ProjectList) {
+		return
+	}
 	orderFunc := projNode.ProjectList[orderCol.ColPos]
 	if metric.DistFuncOpTypes[orderFunc.GetF().GetFunc().GetObjName()] == "" {
 		return

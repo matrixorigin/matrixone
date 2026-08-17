@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -605,7 +606,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_timestamp: {
 		types.T_int32, types.T_int64,
-		types.T_date, types.T_datetime,
+		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
@@ -779,6 +780,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_json: {
 		types.T_json,
 		types.T_char, types.T_varchar, types.T_text,
+		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -2156,6 +2158,9 @@ func timestampToOthers(proc *process.Process,
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return timestampToDatetime(proc.Ctx, source, rs, length, zone)
+	case types.T_time:
+		rs := vector.MustFunctionResult[types.Time](result)
+		return timestampToTime(source, rs, length, zone)
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return timestampToTimestamp(proc.Ctx, source, rs, length, toType.Scale)
@@ -2820,6 +2825,8 @@ func jsonToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList,
 			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+	case types.T_bool:
+		return jsonToBool(ctx, source, result, length)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
@@ -2828,7 +2835,7 @@ func jsonToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
 
-// jsonCastErr returns the standard error for invalid JSON to numeric cast.
+// jsonCastErr returns the standard error for an invalid JSON scalar cast.
 func jsonCastErr(ctx context.Context, toOid types.T) error {
 	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON -> %s]", toOid.String()))
 }
@@ -2890,6 +2897,86 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 		}
 	}
 	return nil
+}
+
+// jsonToBool implements JSON -> BOOL using the same scalar rules as the
+// existing numeric/string-to-bool casts.
+func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
+	result vector.FunctionResultWrapper, length int) error {
+	to := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := to.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		bj := types.DecodeJson(v)
+		var value bool
+		switch bj.Type {
+		case bytejson.TpCodeLiteral:
+			if len(bj.Data) == 0 {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+			switch bj.Data[0] {
+			case bytejson.LiteralNull:
+				if err := to.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			case bytejson.LiteralTrue:
+				value = true
+			case bytejson.LiteralFalse:
+				value = false
+			default:
+				return jsonCastErr(ctx, types.T_bool)
+			}
+		case bytejson.TpCodeInt64:
+			value = bj.GetInt64() != 0
+		case bytejson.TpCodeUint64:
+			value = bj.GetUint64() != 0
+		case bytejson.TpCodeFloat64:
+			value = bj.GetFloat64() != 0
+		case bytejson.TpCodeDecimal:
+			var valid bool
+			value, valid = jsonDecimalToBool(bj.GetString())
+			if !valid {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+		case bytejson.TpCodeString:
+			parsed, err := types.ParseBool(string(bj.GetString()))
+			if err != nil {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+			value = parsed
+		default:
+			return jsonCastErr(ctx, types.T_bool)
+		}
+
+		if err := to.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonDecimalToBool(text []byte) (value bool, valid bool) {
+	if len(text) == 0 ||
+		(text[0] != '-' && (text[0] < '0' || text[0] > '9')) ||
+		!json.Valid(text) {
+		return false, false
+	}
+	for _, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			break
+		}
+		if ch >= '1' && ch <= '9' {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
@@ -4102,6 +4189,32 @@ func datetimeToTime(
 		}
 	}
 	return nil
+}
+
+func timestampToTime(
+	from vector.FunctionParameterWrapper[types.Timestamp],
+	to *vector.FunctionResult[types.Time], length int, zone *time.Location) error {
+	var i uint64
+	l := uint64(length)
+	totype := to.GetType()
+	for i = 0; i < l; i++ {
+		v, null := from.GetValue(i)
+		if null {
+			to.AppendMustNull()
+		} else {
+			to.AppendMustValue(timestampToSessionClockTime(v, zone, totype.Scale))
+		}
+	}
+	return nil
+}
+
+func timestampToSessionClockTime(v types.Timestamp, zone *time.Location, scale int32) types.Time {
+	dt := v.ToDatetime(zone)
+	if dt == types.ZeroDatetime {
+		return 0
+	}
+	timeOfDay := int64(dt) - int64(dt.ToDate().ToDatetime())
+	return types.Time(timeOfDay).TruncateToScale(scale)
 }
 
 func dateToTimestamp(

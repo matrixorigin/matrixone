@@ -125,7 +125,7 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 	}, nil
 }
 
-func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
+func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -172,7 +172,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 			includeCols, len(scanNode.FilterList))
 	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
-		scanNode.FilterList, scanNode, includeCols, pkColName)
+		scanNode.FilterList, scanNode, includeCols, pkColName, false)
 	if err != nil {
 		return nodeID, err
 	}
@@ -235,9 +235,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	// scanned row.
 	{
 		scanTag := scanNode.BindingTags[0]
-		replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
-			cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
-			tableFuncTag, scoreColType)
+		if projNode != nil {
+			replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanTag,
+				cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
+				tableFuncTag, scoreColType)
+		}
 		if childNode != nil {
 			replaceDistFnExprsWithScoreCol(childNode.ProjectList, scanTag,
 				cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg,
@@ -338,23 +340,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		Offset:   resultOffset,
 	}, ctx)
 
-	projNode.Children[0] = sortByID
-
-	if childNode != nil {
-		sortIdx := orderExpr.GetCol().ColPos
-		projMap := make(map[[2]int32]*plan.Expr)
-		for i, proj := range childNode.ProjectList {
-			if i == int(sortIdx) {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
-			} else {
-				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
-			}
-		}
-
-		replaceColumnsForNode(projNode, projMap)
-	}
-
-	return nodeID, nil
+	// Anchored at the PROJECT above the Top-K, or at the Top-K sort itself when a
+	// consumer (outer ORDER BY, join) sits between it and any project.
+	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, nil)
+	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
 /*

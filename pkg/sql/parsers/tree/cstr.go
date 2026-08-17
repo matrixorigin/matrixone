@@ -16,6 +16,7 @@ package tree
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 type CStrParts [4]*CStr
@@ -33,8 +34,30 @@ func NewCStr(str string, lower int64) *CStr {
 		cs.c = cs.o
 		return cs
 	}
-	cs.c = strings.ToLower(cs.o)
+	cs.c = lowerIdentifier(cs.o)
 	return cs
+}
+
+// lowerIdentifier keeps bytes from single-byte client encodings intact. Go's
+// Unicode lowercasing replaces malformed UTF-8 with utf8.RuneError, which can
+// silently change a catalog key. Valid UTF-8 retains the existing Unicode
+// case-folding behavior; malformed input receives ASCII-only folding.
+func lowerIdentifier(value string) string {
+	if utf8.ValidString(value) {
+		return strings.ToLower(value)
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 'A' && value[i] <= 'Z' {
+			lower := []byte(value)
+			for j := i; j < len(lower); j++ {
+				if lower[j] >= 'A' && lower[j] <= 'Z' {
+					lower[j] += 'a' - 'A'
+				}
+			}
+			return string(lower)
+		}
+	}
+	return value
 }
 
 func (cs *CStr) Origin() string {

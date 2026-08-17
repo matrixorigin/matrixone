@@ -76,7 +76,8 @@ const defaultSaltReadTimeout = time.Millisecond * 200
 
 const charsetBinary = 0x3f
 const charsetVarchar = 0x21
-const charsetVarcharMaxBytesPerCharacter = 3
+const utf8MaxBytesPerCharacter = 3
+const utf8mb4MaxBytesPerCharacter = 4
 const boolColumnLength = 1
 
 func init() {
@@ -2097,6 +2098,10 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 	if mp.ses != nil {
 		mp.ses.appendErrorDiagnostic(errorCode, errorMessage)
 	}
+	return mp.sendErrPacketWithoutDiagnostic(errorCode, sqlState, errorMessage)
+}
+
+func (mp *MysqlProtocolImpl) sendErrPacketWithoutDiagnostic(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }

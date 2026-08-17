@@ -17,9 +17,12 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -28,6 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func newAutoIncrementAlterOptimizer() *MockOptimizer {
@@ -150,7 +156,7 @@ func TestExplicitVisibleColumnClausesRemainSupported(t *testing.T) {
 }
 
 func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	const sql = `ALTER TABLE metadata_only CHANGE v v INT NULL COMMENT 'metadata only';`
 	logicPlan, err := buildSingleStmt(
 		mock,
@@ -168,7 +174,7 @@ func TestSameNameChangeColumnUsesInplaceAlter(t *testing.T) {
 }
 
 func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	logicPlan, err := buildSingleStmt(
 		mock,
 		t,
@@ -179,7 +185,7 @@ func TestRenameChangeColumnStillUsesCopyAlter(t *testing.T) {
 }
 
 func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing.T) {
-	mock := newMetadataOnlyChangeColumnOptimizer()
+	mock := newMetadataOnlyChangeColumnOptimizer(t)
 	logicPlan, err := buildSingleStmt(
 		mock,
 		t,
@@ -196,7 +202,7 @@ func TestCaseOnlyChangeColumnUsesCopyAlterAndUpdatesForeignKeyCatalog(t *testing
 	require.Equal(t, getSqlForRenameColumn("tpch", "metadata_only", "v", "V"), alter.UpdateFkSqls)
 }
 
-func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
+func newMetadataOnlyChangeColumnOptimizer(t *testing.T) *MockOptimizer {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.objects["metadata_only"] = &ObjectRef{
 		SchemaName: "tpch",
@@ -242,6 +248,23 @@ func newMetadataOnlyChangeColumnOptimizer() *MockOptimizer {
 			TableExist:     true,
 		}},
 	}
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 987654", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_v"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+			return result.GetResult(), nil
+		}),
+	)
 	return mock
 }
 
@@ -413,6 +436,232 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		finalName string
+	}{
+		{
+			name:      "rename",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, RENAME COLUMN tmp TO added_col;`,
+			finalName: "added_col",
+		},
+		{
+			name:      "modify",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, MODIFY COLUMN tmp BIGINT;`,
+			finalName: "tmp",
+		},
+		{
+			name:      "change",
+			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, CHANGE COLUMN tmp added_col BIGINT;`,
+			finalName: "added_col",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, tc.finalName))
+		})
+	}
+
+	for _, sql := range []string{
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT`,
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=INPLACE`,
+		`ALTER TABLE t1 MODIFY COLUMN missing_col BIGINT, ALGORITHM=COPY`,
+	} {
+		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadFieldError), sql)
+	}
+}
+
+func TestAlterTableInplaceAllowsReplacingEarlierDroppedIndexName(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		existingUnique bool
+		addClause      string
+	}{
+		{name: "secondary with secondary", addClause: "ADD INDEX idx(b)"},
+		{name: "secondary with unique", addClause: "ADD UNIQUE INDEX idx(b)"},
+		{name: "unique with unique", existingUnique: true, addClause: "ADD UNIQUE INDEX idx(b)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+				IndexName:  "idx",
+				Parts:      []string{"a"},
+				Unique:     tc.existingUnique,
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			}}
+
+			logicPlan, err := buildSingleStmt(mock, t,
+				"ALTER TABLE t1 DROP INDEX idx, "+tc.addClause)
+			require.NoError(t, err)
+			require.Equal(t, plan.AlterTable_INPLACE,
+				logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+		})
+	}
+}
+
+func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+		IndexName:  "idx",
+		Parts:      []string{"a"},
+		IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+		TableExist: true,
+	}}
+
+	_, err := buildSingleStmt(mock, t,
+		"ALTER TABLE t1 ADD INDEX idx(b), DROP INDEX idx")
+	require.Error(t, err)
+}
+
+func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+			IndexName:  "idx",
+			Parts:      []string{"a"},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		}}
+		return mock
+	}
+
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD INDEX fresh_idx(b), DROP INDEX fresh_idx`,
+		`ALTER TABLE t1 DROP INDEX idx, ADD INDEX idx(b), DROP INDEX idx`,
+	} {
+		logicPlan, err := buildSingleStmt(newMock(), t, sql)
+		require.NoError(t, err, sql)
+		require.Equal(t, plan.AlterTable_INPLACE,
+			logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+	}
+
+	_, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 DROP INDEX idx, DROP INDEX idx`)
+	require.ErrorContains(t, err, "Can't DROP 'idx'")
+}
+
+func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
+		mock.ctxt.tables["t1"].Fkeys = []*plan.ForeignKeyDef{{
+			Name:       "fk_x",
+			Cols:       []uint64{1},
+			ForeignTbl: 0,
+		}}
+		return mock
+	}
+
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD CONSTRAINT fk_new FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY fk_new`,
+		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, ADD CONSTRAINT fk_x FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY fk_x`,
+	} {
+		logicPlan, err := buildSingleStmt(newMock(), t, sql)
+		require.NoError(t, err, sql)
+		require.Equal(t, plan.AlterTable_INPLACE,
+			logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+	}
+
+	_, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 DROP FOREIGN KEY fk_x, DROP FOREIGN KEY fk_x`)
+	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
+}
+
+func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
+	newMock := func(withUniqueIndex, withForeignKey bool) *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		tableDef := mock.ctxt.tables["t1"]
+		tableDef.TblId = 100
+		tableDef.Cols[1].Typ = tableDef.Cols[0].Typ
+		if withUniqueIndex {
+			tableDef.Indexes = []*plan.IndexDef{{
+				IndexName:  "idx_b",
+				Parts:      []string{"b"},
+				Unique:     true,
+				IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+				TableExist: true,
+			}}
+		}
+		if withForeignKey {
+			tableDef.Fkeys = []*plan.ForeignKeyDef{{
+				Name:                "fk_old",
+				Cols:                []uint64{tableDef.Cols[0].ColId},
+				ForeignTbl:          0,
+				ForeignCols:         []uint64{tableDef.Cols[1].ColId},
+				ReferencedIndexName: "idx_b",
+			}}
+			tableDef.RefChildTbls = []uint64{0}
+		}
+		return mock
+	}
+
+	failedMock := newMock(true, false)
+	_, err := buildSingleStmt(failedMock, t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
+		DROP INDEX idx_b`)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	require.Empty(t, failedMock.ctxt.tables["t1"].Fkeys)
+	require.Equal(t, "idx_b", failedMock.ctxt.tables["t1"].Indexes[0].IndexName)
+
+	logicPlan, err := buildSingleStmt(newMock(true, true), t, `ALTER TABLE t1
+		DROP FOREIGN KEY fk_old,
+		DROP INDEX idx_b`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+
+	logicPlan, err = buildSingleStmt(newMock(true, false), t, `ALTER TABLE t1
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b),
+		DROP FOREIGN KEY fk_new,
+		DROP INDEX idx_b`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 3)
+
+	logicPlan, err = buildSingleStmt(newMock(false, false), t, `ALTER TABLE t1
+		ADD UNIQUE KEY idx_b(b),
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b)`)
+	require.NoError(t, err)
+	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
+	require.Equal(t, "idx_b",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[1].GetAddFk().GetFkey().GetReferencedIndexName())
+
+	_, err = buildSingleStmt(newMock(true, false), t, `ALTER TABLE t1
+		DROP INDEX idx_b,
+		ADD CONSTRAINT fk_new FOREIGN KEY (a) REFERENCES t1(b)`)
+	require.ErrorContains(t, err, "failed to add the foreign key constraint")
+}
+
+func TestAlterTableInplaceUsesEvolvingIndexesForEngineConflicts(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.ResolveVariableFunc = func(name string, _, _ bool) (interface{}, error) {
+		if name == "experimental_fulltext2_index" {
+			return int64(1), nil
+		}
+		return nil, nil
+	}
+	mock.ctxt.tables["t1"].Cols[1].Typ.Id = int32(types.T_text)
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+		IndexName:  "ft",
+		Parts:      []string{"b"},
+		IndexAlgo:  catalog.MOIndexFullTextAlgo.ToString(),
+		TableExist: true,
+	}}
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		`ALTER TABLE t1 DROP INDEX ft, ADD FULLTEXT2 ft(b)`)
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_INPLACE,
+		logicPlan.GetDdl().GetAlterTable().AlgorithmType)
+}
+
 func TestAlterTableCopyDoesNotSkipDedupForSameNamePrimaryKeyReplacement(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// Match the type metadata produced by ADD COLUMN so the only difference is
@@ -468,6 +717,245 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAlterTableCopyPreservesInvisibleIndex(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["t1"]
+	tableDef.TblId = 272464
+	tableDef.Indexes = []*plan.IndexDef{
+		{
+			IndexName:      "idx_visible",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_index_idx_visible",
+			TableExist:     true,
+			// Legacy default-visible IndexDefs carry the false proto3 zero value.
+			Visible: false,
+		},
+		{
+			IndexName:      "idx_invisible",
+			Parts:          []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+			IndexTableName: "__mo_index_idx_invisible",
+			TableExist:     true,
+			Visible:        false,
+		},
+	}
+
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464",
+				sql,
+			)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(2)
+			require.NoError(t, executor.AppendStringRows(result, 0,
+				[]string{"idx_visible", "idx_invisible"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 0}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	logicPlan, err := buildSingleStmt(mock, t,
+		"ALTER TABLE t1 ADD COLUMN added_col INT")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Len(t, alter.CopyTableDef.Indexes, 2)
+	require.True(t, alter.CopyTableDef.Indexes[0].Visible)
+	require.False(t, alter.CopyTableDef.Indexes[1].Visible)
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `idx_visible` (`b`) INVISIBLE")
+	require.Contains(t, alter.CreateTmpTableSql, "KEY `idx_invisible` (`b`) INVISIBLE")
+}
+
+func TestReconcileIndexVisibilityPropagatesCatalogError(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	lookupErr := moerr.NewInternalErrorNoCtx("index visibility lookup failed")
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			return executor.Result{}, lookupErr
+		}),
+	)
+
+	err := reconcileIndexVisibility(&mock.ctxt, 272464, &TableDef{
+		Indexes: []*plan.IndexDef{{IndexName: "idx_a"}},
+	}, nil)
+	require.ErrorIs(t, err, lookupErr)
+}
+
+func TestReconcileIndexVisibilityRejectsMissingMetadata(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_present"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{
+		{IndexName: "idx_present", Visible: false},
+		{IndexName: "idx_missing"},
+	}}
+	err := reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil)
+	require.ErrorContains(t, err, "missing visibility metadata for index \"idx_missing\" on table 272464")
+	_, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.False(t, isSet, "incomplete metadata must not partially update the source definition")
+}
+
+func TestReconcileIndexVisibilityOverridesStaleMarker(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(string) (executor.Result, error) {
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_visibility"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{0}))
+			return result.GetResult(), nil
+		}),
+	)
+	tableDef := &TableDef{Indexes: []*plan.IndexDef{{IndexName: "idx_visibility"}}}
+	catalog.SetIndexVisibility(tableDef.Indexes[0], true)
+
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, 272464, tableDef, nil))
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.False(t, visible)
+}
+
+func TestBuildShowCreateTableReconcilesLegacyIndexVisibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272464", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_legacy_invisible"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{0}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	tableDef := DeepCopyTableDef(mock.ctxt.tables["t1"], true)
+	tableDef.TblId = 272464
+	tableDef.Indexes = []*plan.IndexDef{{
+		IndexName: "idx_legacy_invisible",
+		Parts:     []string{"b"},
+		Visible:   false,
+	}}
+	mock.ctxt.tables["t1"] = tableDef
+
+	got, err := buildSingleStmt(mock, t, "SHOW CREATE TABLE t1")
+	require.NoError(t, err)
+	var createSQL string
+	require.True(t, queryContainsExpr(got.GetQuery(), func(expr *plan.Expr) bool {
+		lit, ok := expr.GetLit().GetValue().(*plan.Literal_Sval)
+		if ok && strings.HasPrefix(lit.Sval, "CREATE TABLE") {
+			createSQL = lit.Sval
+			return true
+		}
+		return false
+	}))
+	require.Contains(t, createSQL, "KEY `idx_legacy_invisible` (`b`) INVISIBLE")
+	_, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.False(t, isSet)
+}
+
+func TestReconcileIndexVisibilityUsesFixedVisibleSystemDatabase(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &TableDef{
+		TblId:  272395,
+		DbName: catalog.MOTaskDB,
+		Indexes: []*plan.IndexDef{{
+			IndexName: "uk_task_name_account",
+			Visible:   false,
+		}},
+	}
+
+	require.NoError(t, reconcileIndexVisibility(&mock.ctxt, tableDef.TblId, tableDef, nil))
+	visible, isSet := catalog.GetIndexVisibility(tableDef.Indexes[0])
+	require.True(t, isSet)
+	require.True(t, visible)
+}
+
+func TestAlterTableCopyDropsEveryAdjacentIndexForDroppedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	const tableID = 272465
+	mock.ctxt.tables["t1"].TblId = tableID
+	mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{
+		{
+			IndexName:  "uk_b",
+			Parts:      []string{"b"},
+			Unique:     true,
+			TableExist: true,
+		},
+		{
+			IndexName:  "idx_b",
+			Parts:      []string{"b", catalog.CreateAlias("a")},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		},
+	}
+	proc := testutil.NewProc(t)
+	proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			require.Equal(t,
+				"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 272465", sql)
+			result := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+			)
+			result.NewBatchWithRowCount(2)
+			require.NoError(t, executor.AppendStringRows(result, 0, []string{"uk_b", "idx_b"}))
+			require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1, 1}))
+			return result.GetResult(), nil
+		}),
+	)
+
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 DROP COLUMN b")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Empty(t, alter.CopyTableDef.Indexes)
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `uk_b`")
+	require.NotContains(t, alter.CreateTmpTableSql, "KEY `idx_b`")
 }
 
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {

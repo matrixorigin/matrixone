@@ -64,6 +64,10 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
+	if capture != nil {
+		bindCtx.captureViewStarExpansion = true
+		bindCtx.expandedSelectLists = make(map[*tree.SelectClause]tree.SelectExprs)
+	}
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -602,9 +606,19 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		if stmt.IsPerform && selectHasExportParam(stmt) {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "PERFORM SELECT INTO OUTFILE")
 		}
-		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
+		if err != nil {
+			return nil, err
+		}
+		applySQLSelectLimit(stmt, queryPlan)
+		return queryPlan, nil
 	case *tree.ParenSelect:
-		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		queryPlan, err := bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+		if err != nil {
+			return nil, err
+		}
+		applySQLSelectLimit(stmt.Select, queryPlan)
+		return queryPlan, nil
 	case *tree.ExplainStmt:
 		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 	case *tree.ExplainAnalyze:
@@ -761,6 +775,36 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	}
 }
 
+// applySQLSelectLimit marks top-level SELECTs whose final result pipeline must
+// enforce the session row cap. The compiler materializes ordinary finite caps
+// only after optimization, avoiding changes to estimates and rewrites while
+// still making the cap visible to offload serialization.
+func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
+	query := queryPlan.GetQuery()
+	if query != nil {
+		query.ApplySqlSelectLimit = stmt != nil && !stmt.IsPerform &&
+			!selectHasExplicitTopLevelLimit(stmt)
+	}
+}
+
+// Parenthesized SELECTs are flattened by bindSelect. A LIMIT on any wrapper in
+// that chain is the top-level explicit LIMIT and takes precedence over the
+// session sql_select_limit value. Limits inside UNION arms and subqueries are
+// deliberately not considered top-level limits.
+func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
+	for stmt != nil {
+		if stmt.Limit != nil && stmt.Limit.Count != nil {
+			return true
+		}
+		paren, ok := stmt.Select.(*tree.ParenSelect)
+		if !ok {
+			return false
+		}
+		stmt = paren.Select
+	}
+	return false
+}
+
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
@@ -790,6 +834,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 
 			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+				if columns[idx].TblName == "" {
+					columns[idx].TblName = source.tableName
+				}
+				if columns[idx].DbName == "" {
+					columns[idx].DbName = source.dbName
+				}
+				columns[idx].OriginTblName = source.tableName
+				columns[idx].OriginName = source.columnName
 				columns[idx].Primary = source.primary
 				columns[idx].Unique = source.unique
 				columns[idx].NotNull = source.notNull
@@ -845,6 +897,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 }
 
 type resultColumnSource struct {
+	dbName       string
+	tableName    string
+	columnName   string
 	primary      bool
 	unique       bool
 	notNull      bool
@@ -1186,11 +1241,18 @@ func resultColumnSourceFromTableDef(tableDef *plan.TableDef, colPos int32) *resu
 			}
 		}
 	}
+	tableName := tableDef.OriginalName
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
 	return &resultColumnSource{
-		primary:  primary,
-		unique:   unique,
-		notNull:  primary || col.NotNull || col.Typ.NotNullable,
-		autoIncr: col.Typ.AutoIncr,
+		dbName:     tableDef.DbName,
+		tableName:  tableName,
+		columnName: col.GetOriginCaseName(),
+		primary:    primary,
+		unique:     unique,
+		notNull:    primary || col.NotNull || col.Typ.NotNullable,
+		autoIncr:   col.Typ.AutoIncr,
 	}
 }
 

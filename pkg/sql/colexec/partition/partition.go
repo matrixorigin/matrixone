@@ -64,6 +64,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	} else {
 		partition.OpAnalyzer.Reset()
 	}
+	if partition.Limit != nil {
+		return partition.prepareTopN(proc)
+	}
 
 	if len(partition.ctr.executors) > 0 {
 		return nil
@@ -85,6 +88,9 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 }
 
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
+	if partition.Limit != nil {
+		return partition.callTopN(proc)
+	}
 	analyzer := partition.OpAnalyzer
 
 	ctr := &partition.ctr

@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -44,7 +45,7 @@ const (
 	spillMaskBits   = 5 // log2(spillNumBuckets)
 	spillMaxPass    = 3
 	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
-	spillWrBufSize  = 64 * 1024   // 64 KiB write buffer per spill bucket
+	spillWrBufSize  = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
 )
 
 func hasInactiveGroupingColumn(flags []bool) bool {
@@ -67,6 +68,20 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")
+	if group.ctr.allocationAccount != nil {
+		if err = group.ctr.mp.BindAllocationAccount(
+			group.ctr.allocationAccount,
+		); err != nil {
+			return err
+		}
+		group.ctr.budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+		if err = group.ctr.installRecoveryCapacity(); err != nil {
+			return err
+		}
+	}
 	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 
 	// debug,
@@ -80,7 +95,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// Ordered aggregate setup consumes the effective spill threshold. Set it
 	// before preparing aggregate executors so the first execution behaves the
 	// same as a reused prepared operator.
-	group.ctr.setSpillMem(group.SpillMem, group.Aggs)
+	group.ctr.setSpillMem(group.SpillMem)
 	group.ctr.setGroupByHashKey(group.GroupByHashKey)
 	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
 		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
@@ -93,7 +108,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 
-	if err = group.PrepareProjection(proc); err != nil {
+	if err = group.PrepareProjectionWithAllocation(
+		proc, group.ctr.expressionAllocation); err != nil {
 		return err
 	}
 
@@ -115,8 +131,15 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if len(group.GroupByHashKey) > 0 {
 				exprIdx = int(group.GroupByHashKey[i])
 			}
+			group.ctr.keyNullable = group.ctr.keyNullable ||
+				!group.GroupBy[exprIdx].Typ.NotNullable
+		}
+		for i := 0; i < hashKeyCount; i++ {
+			exprIdx := i
+			if len(group.GroupByHashKey) > 0 {
+				exprIdx = int(group.GroupByHashKey[i])
+			}
 			expr := group.GroupBy[exprIdx]
-			group.ctr.keyNullable = group.ctr.keyNullable || (!expr.Typ.NotNullable)
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
 			}
@@ -132,16 +155,22 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			group.ctr.mtyp = HStr
 		}
 
+		group.ctr.groupingAware = false
 		for _, flag := range group.GroupingFlag {
 			if !flag {
 				group.ctr.mtyp = HStr
+				group.ctr.groupingAware = true
 				break
 			}
 		}
 
 		// create group by evaluate
 		group.ctr.groupByEvaluate.Free()
-		group.ctr.groupByEvaluate, err = colexec.MakeEvalVector(proc, group.GroupBy)
+		group.ctr.groupByEvaluate, err = colexec.MakeEvalVectorWithAllocation(
+			proc,
+			group.GroupBy,
+			group.ctr.expressionAllocation,
+		)
 		if err != nil {
 			return err
 		}
@@ -150,8 +179,17 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	if group.ctr.mtyp == H0 {
 		// no group by, only one group, always create the dummy group by batch.
 		if len(group.ctr.groupByBatches) == 0 {
-			group.ctr.groupByBatches = append(group.ctr.groupByBatches,
-				group.ctr.createNewGroupByBatch(group.ctr.groupByEvaluate.Vec, 1))
+			groupByBatch, err := group.ctr.createNewGroupByBatch(
+				group.ctr.groupByEvaluate.Vec,
+				1,
+			)
+			if err != nil {
+				return err
+			}
+			group.ctr.groupByBatches = append(
+				group.ctr.groupByBatches,
+				groupByBatch,
+			)
 			group.ctr.groupByBatches[0].SetRowCount(1)
 		}
 	}
@@ -175,7 +213,11 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		}
 		group.ctr.aggArgEvaluate = make([]colexec.ExprEvalVector, 0, len(group.Aggs))
 		for _, ag := range group.Aggs {
-			e, err := colexec.MakeEvalVector(proc, ag.GetArgExpressions())
+			e, err := colexec.MakeEvalVectorWithAllocation(
+				proc,
+				ag.GetArgExpressions(),
+				group.ctr.expressionAllocation,
+			)
 			if err != nil {
 				return err
 			}
@@ -189,7 +231,9 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			for _, ag := range group.ctr.aggList {
 				ag.Free()
 				if group.ctr.mtyp == H0 {
-					ag.GroupGrow(1)
+					if err := ag.GroupGrow(1); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -344,79 +388,137 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
-
 	var err error
-	// evaluate the group by and agg args, no matter what mtyp,
-	// we need to do this first.
-	if err = group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
-		return false, err
-	}
-	for i := range group.Aggs {
-		if i < len(group.ctr.aggArgEvaluate) && len(group.ctr.aggArgEvaluate[i].Vec) > 0 {
-			arg := group.ctr.aggArgEvaluate[i].Vec[0]
-			if arg.Length() > 0 && !arg.AllNull() {
-				group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
-			}
-		}
-	}
 
 	// without group by, there is only one group.
 	if group.ctr.mtyp == H0 {
+		if err = group.evaluateBuildInput(proc, bat); err != nil {
+			return false, err
+		}
 		// note that in prepare we already called GroupGrow(1) for each agg.
-		// just fill the result.
-		for i, ag := range group.ctr.aggList {
-			if err = ag.BulkFill(0, group.ctr.aggArgEvaluate[i].Vec); err != nil {
-				return false, err
+		var oneGroup [hashmap.UnitLimit]uint64
+		for i := range oneGroup {
+			oneGroup[i] = 1
+		}
+		for offset := 0; offset < bat.RowCount(); offset += hashmap.UnitLimit {
+			n := min(hashmap.UnitLimit, bat.RowCount()-offset)
+			groups := oneGroup[:n]
+			for i, agg := range group.ctr.aggList {
+				if err = agg.PreflightBatchFill(
+					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+					return false, err
+				}
+			}
+			for i, agg := range group.ctr.aggList {
+				if err = agg.BatchFill(
+					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+					return false, err
+				}
 			}
 		}
 		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 		return false, nil
 	} else {
-		if group.ctr.hr.IsEmpty() {
-			if err = group.ctr.buildHashTable(proc.Ctx, 0); err != nil {
-				return false, err
-			}
-		}
-		hashBytesBefore := group.ctr.hr.Hash.Size()
-		hashKeyVecs := group.ctr.hashKeyVectors(group.ctr.groupByEvaluate.Vec)
-
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
 		count := bat.RowCount()
+		evaluated := false
+		var hashBytesBefore int64
+		if !group.ctr.hr.IsEmpty() {
+			hashBytesBefore = group.ctr.hr.Hash.Size()
+		}
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
-			// we will put rows of mini batch,starting from [i: i+n) into the hash table.
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-
-			// insert the mini batch into the hash table.
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, hashKeyVecs)
-			if err != nil {
-				return false, err
-			}
-			// find out which rows are really inserted, which are grouped with existing.
-			insertList, _ := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
-
-			// append the mini batch to the group by batches, return the number of added
-			// groups.
-			more, err := group.ctr.appendGroupByBatch(group.ctr.groupByEvaluate.Vec, i, insertList)
-			if err != nil {
-				return false, err
-			}
-
-			// if more groups were added, grow the aggregators.
-			if more > 0 {
-				for _, agg := range group.ctr.aggList {
-					if err = agg.GroupGrow(more); err != nil {
-						return false, err
+			var preview groupInsertPreview
+			for {
+				err = nil
+				if !evaluated {
+					if err = group.evaluateBuildInput(proc, bat); err != nil {
+						if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
+							continue
+						} else {
+							return false, retryErr
+						}
+					}
+					evaluated = true
+				}
+				if group.ctr.hr.IsEmpty() {
+					err = group.ctr.buildHashTable(proc.Ctx, 0)
+					if err == nil {
+						hashBytesBefore = group.ctr.hr.Hash.Size()
 					}
 				}
-			}
-
-			// do the aggregation
-			for j, ag := range group.ctr.aggList {
-				err = ag.BatchFill(i, vals[:n], group.ctr.aggArgEvaluate[j].Vec)
+				if err == nil {
+					hashKeyVecs := group.ctr.hashKeyVectors(
+						group.ctr.groupByEvaluate.Vec)
+					err = group.ctr.hr.TxnItr.PreviewInsert(
+						i, n, hashKeyVecs,
+						group.ctr.hr.Hash.GroupCount(),
+						&group.ctr.hr.insertPlan)
+					if err == nil {
+						preview.values = group.ctr.hr.insertPlan.Values()
+						preview.inserted = group.ctr.hr.insertPlan.Inserted()
+						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					}
+					// Reserve only for the groups the immutable preview proved this
+					// unit will publish. Rejection is still before hash/key/aggregate
+					// mutation, so the resident prefix can be spilled and this same
+					// input offset retried without duplication.
+					if err == nil &&
+						!group.ctr.recoveryCapacityCovers(preview.newGroups) {
+						err = group.ctr.ensureRecoveryCapacity(
+							preview.newGroups,
+							group.OpAnalyzer,
+						)
+					}
+					if err == nil {
+						err = group.ctr.hr.Hash.PreAlloc(
+							group.ctr.hr.insertPlan.NewGroups())
+					}
+					if err == nil {
+						err = group.ctr.preflightBuildChunk(
+							group.ctr.groupByEvaluate.Vec, i, n,
+							preview.inserted, preview.newGroups)
+					}
+					if err == nil {
+						for j, agg := range group.ctr.aggList {
+							if err = agg.PreflightBatchFill(
+								i, preview.values,
+								group.ctr.aggArgEvaluate[j].Vec); err != nil {
+								break
+							}
+						}
+					}
+				}
 				if err != nil {
-					return false, err
+					group.ctr.cancelGroupByPreflights()
+				}
+				if err == nil {
+					vals, more, insertErr := group.ctr.commitGroupByChunk(
+						group.ctr.groupByEvaluate.Vec, i, n, preview)
+					if insertErr != nil {
+						return false, insertErr
+					}
+					if more > 0 {
+						for _, agg := range group.ctr.aggList {
+							if growErr := agg.GroupGrow(more); growErr != nil {
+								return false, growErr
+							}
+						}
+					}
+					for j, agg := range group.ctr.aggList {
+						if err = agg.BatchFill(
+							i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
+							return false, err
+						}
+					}
+					break
+				}
+				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
+					evaluated = false
+					continue
+				} else {
+					return false, retryErr
 				}
 			}
 		} // end of mini batch for loop
@@ -425,6 +527,54 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// check size
 		return group.ctr.needSpill(group.OpAnalyzer), nil
 	}
+}
+
+func (group *Group) evaluateBuildInput(
+	proc *process.Process,
+	bat *batch.Batch,
+) error {
+	if err := group.evaluateGroupByAndAggArgs(proc, bat); err != nil {
+		return err
+	}
+	for i := range group.Aggs {
+		if i >= len(group.ctr.aggArgEvaluate) ||
+			len(group.ctr.aggArgEvaluate[i].Vec) == 0 {
+			continue
+		}
+		arg := group.ctr.aggArgEvaluate[i].Vec[0]
+		if arg.Length() > 0 && !arg.AllNull() {
+			group.ctr.prepareParamKind.Observe(i, arg.GetPrepareParamKind())
+		}
+	}
+	return nil
+}
+
+func (group *Group) retryBuildBatchAfterCapacity(
+	proc *process.Process,
+	cause error,
+) (bool, error) {
+	if group == nil || group.ctr.allocationAccount == nil ||
+		!mpool.IsRetryableAllocationCapacity(cause) ||
+		group.ctr.mtyp == H0 || group.ctr.hr.IsEmpty() ||
+		group.ctr.hr.Hash.GroupCount() == 0 {
+		return false, cause
+	}
+	before := group.ctr.hr.Hash.GroupCount()
+	bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil)
+	if err != nil {
+		return false, err
+	}
+	if rows <= 0 || uint64(rows) < before {
+		return false, moerr.NewInternalErrorNoCtx(
+			"group capacity recovery made no measurable spill progress")
+	}
+	group.OpAnalyzer.Spill(bytes)
+	group.OpAnalyzer.SpillRows(rows)
+	group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func observeHashGrowth(stats *process.OperatorStats, prefix string, before, after int64) {
@@ -446,7 +596,11 @@ func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) e
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
-		preAllocated); err != nil {
+		ctr.groupingAware,
+		preAllocated,
+		ctr.hashAllocation,
+		ctr.hashIterator,
+	); err != nil {
 		return err
 	}
 
@@ -457,6 +611,134 @@ func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) e
 		}
 	}
 	return nil
+}
+
+func (ctr *container) preflightBuildChunk(
+	vs []*vector.Vector,
+	offset int,
+	rows int,
+	insertList []uint8,
+	more int,
+) error {
+	if offset < 0 || rows < 0 || len(insertList) < rows ||
+		more < 0 || more > rows {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if rows == 0 {
+		return nil
+	}
+	selected := 0
+	for _, flag := range insertList[:rows] {
+		selected += int(flag)
+	}
+	if selected != more {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if more == 0 {
+		return nil
+	}
+	if ctr.hr.Hash == nil {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	if len(ctr.groupByBatches) == 0 {
+		groupByBatch, err := ctr.createNewGroupByBatch(vs, aggBatchSize)
+		if err != nil {
+			return err
+		}
+		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
+	}
+	current := ctr.groupByBatches[len(ctr.groupByBatches)-1]
+	space := aggBatchSize - current.RowCount()
+	if more > space && ctr.groupByStandby == nil {
+		var err error
+		ctr.groupByStandby, err = ctr.createNewGroupByBatch(vs, aggBatchSize)
+		if err != nil {
+			return err
+		}
+	}
+	preAllocateVectors := func(
+		destinations []*vector.Vector,
+		targetRows int,
+		flags []uint8,
+	) error {
+		for i, destination := range destinations {
+			if i >= len(vs) || vs[i] == nil {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			if err := destination.PreExtendSelectedBatchValidated(
+				vs[i], offset, rows, flags, targetRows, ctr.mp,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	cancelPreflight := cancelSelectedBatchPreflights
+	var currentFlags, standbyFlags [hashmap.UnitLimit]uint8
+	currentRows, standbyRows := 0, 0
+	for row, flag := range insertList[:rows] {
+		if flag == 0 {
+			continue
+		}
+		if currentRows < space {
+			currentFlags[row] = 1
+			currentRows++
+		} else {
+			standbyFlags[row] = 1
+			standbyRows++
+		}
+	}
+	if currentRows > 0 {
+		if err := preAllocateVectors(
+			current.Vecs,
+			current.RowCount()+currentRows,
+			currentFlags[:rows],
+		); err != nil {
+			ctr.cancelGroupByPreflights()
+			return err
+		}
+	} else {
+		cancelPreflight(current.Vecs)
+	}
+	if standbyRows == 0 && ctr.groupByStandby != nil {
+		cancelPreflight(ctr.groupByStandby.Vecs)
+	}
+	if standbyRows > 0 {
+		if ctr.groupByStandby == nil {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if err := preAllocateVectors(
+			ctr.groupByStandby.Vecs,
+			standbyRows,
+			standbyFlags[:rows],
+		); err != nil {
+			ctr.cancelGroupByPreflights()
+			return err
+		}
+	}
+	for _, agg := range ctr.aggList {
+		if err := agg.PreAllocateGroups(more); err != nil {
+			ctr.cancelGroupByPreflights()
+			return err
+		}
+	}
+	return nil
+}
+
+func cancelSelectedBatchPreflights(vectors []*vector.Vector) {
+	for _, destination := range vectors {
+		destination.CancelSelectedBatchPreflight()
+	}
+}
+
+func (ctr *container) cancelGroupByPreflights() {
+	if len(ctr.groupByBatches) != 0 {
+		cancelSelectedBatchPreflights(
+			ctr.groupByBatches[len(ctr.groupByBatches)-1].Vecs)
+	}
+	if ctr.groupByStandby != nil {
+		cancelSelectedBatchPreflights(ctr.groupByStandby.Vecs)
+	}
 }
 
 func (ctr *container) boundedSpillReloadPreAlloc(bucketRows int64) uint64 {
@@ -521,7 +803,22 @@ func (ctr *container) initGroupKeyTypesFromBatch(vs []*vector.Vector) {
 	}
 }
 
-func (ctr *container) createNewGroupByBatch(vs []*vector.Vector, size int) *batch.Batch {
+func (ctr *container) createNewGroupByBatch(
+	vs []*vector.Vector,
+	size int,
+) (*batch.Batch, error) {
+	return ctr.createNewGroupByBatchWithAllocation(
+		vs,
+		size,
+		ctr.groupByAllocation,
+	)
+}
+
+func (ctr *container) createNewGroupByBatchWithAllocation(
+	vs []*vector.Vector,
+	size int,
+	allocation *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
 	// initialize the groupByTypes.   this is again very bad design.
 	// types should be resolved at plan time.
 	if len(ctr.groupByTypes) == 0 {
@@ -534,41 +831,60 @@ func (ctr *container) createNewGroupByBatch(vs []*vector.Vector, size int) *batc
 	for i, typ := range ctr.groupByTypes {
 		b.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 	}
-	b.PreExtend(ctr.mp, size)
+	if err := b.SetAllocationAccount(allocation); err != nil {
+		b.Clean(ctr.mp)
+		return nil, err
+	}
+	if err := b.PreExtend(ctr.mp, size); err != nil {
+		b.Clean(ctr.mp)
+		return nil, err
+	}
 	b.SetRowCount(0)
-	return b
+	return b, nil
 }
 
 func (ctr *container) appendGroupByBatch(
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8) (int, error) {
+	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
+	if toIncrease == 0 {
+		// A duplicate-only chunk must not create a fresh retained batch after
+		// the hash preview has committed no new groups.
+		return 0, nil
+	}
 
 	// first find the target batch.
 	if len(ctr.groupByBatches) == 0 ||
 		ctr.groupByBatches[len(ctr.groupByBatches)-1].RowCount() >= aggBatchSize {
-		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(vs, aggBatchSize))
+		groupByBatch := ctr.groupByStandby
+		ctr.groupByStandby = nil
+		if groupByBatch == nil {
+			var err error
+			groupByBatch, err = ctr.createNewGroupByBatch(vs, aggBatchSize)
+			if err != nil {
+				return 0, err
+			}
+		}
+		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
 	}
 	currBatch := ctr.groupByBatches[len(ctr.groupByBatches)-1]
 	spaceLeft := aggBatchSize - currBatch.RowCount()
 
-	toIncrease, kth := countNonZeroAndFindKth(insertList, spaceLeft)
-	if toIncrease == 0 {
-		// there is nothing in the insertList
-		return 0, nil
-	}
-
 	thisTime := insertList
 	addedRows := toIncrease
+	kth := -1
 	if toIncrease > spaceLeft {
+		_, kth = countNonZeroAndFindKth(insertList, spaceLeft)
 		thisTime = insertList[:kth+1]
 		addedRows = spaceLeft
 	}
 
 	// there is enough space in the current batch to insert thisTime.
 	for i, vec := range currBatch.Vecs {
-		err := vec.UnionBatch(vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
-		if err != nil {
+		if err := vec.UnionBatchPreflighted(
+			vs[i], int64(offset), len(thisTime), thisTime, ctr.mp,
+		); err != nil {
 			return 0, err
 		}
 	}
@@ -634,30 +950,74 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	// This is also a pretty bad design, we would really like to
 	// dump group state to a vector and put the vector into the batch.
 	// But well,
-	var buf bytes.Buffer
-	buf.Write(types.EncodeInt32(&group.ctr.mtyp))
-	buf.Write(types.EncodeBool(&group.ctr.keyNullable))
-	nAggs := int32(len(group.ctr.aggList))
-	buf.Write(types.EncodeInt32(&nAggs))
-	prepareParamKinds := make([][]vector.PrepareParamKind, len(group.ctr.aggList))
-	prepareParamKindSummaries := make([]prepareParamKindSummary, len(group.ctr.aggList))
-	for i, ag := range group.ctr.aggList {
-		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
+	var (
+		legacyBuffer bytes.Buffer
+		accounted    *mpool.AccountedBuffer
+		writer       io.Writer = &legacyBuffer
+	)
+	if group.ctr.allocationAccount != nil {
+		var err error
+		accounted, err = mpool.NewAccountedBuffer(
+			proc.Mp(),
+			group.ctr.allocationAccount,
+			mpool.AllocationOwnerGroup,
+			GroupAllocationSitePartialOutput,
+		)
+		if err != nil {
 			return vm.CancelResult, false, err
 		}
-		if accessor, ok := ag.(aggexec.PrepareParamKindStateAccessor); ok {
-			prepareParamKinds[i] = accessor.PrepareParamKindsForChunk(curr)
-			prepareParamKindSummaries[i].kind, prepareParamKindSummaries[i].seen =
-				accessor.PrepareParamKindSummaryForChunk(curr)
+		defer accounted.Free()
+		writer = accounted
+	}
+	if err := types.WriteInt32(writer, group.ctr.mtyp); err != nil {
+		return vm.CancelResult, false, err
+	}
+	if err := writeSpillBool(writer, group.ctr.keyNullable); err != nil {
+		return vm.CancelResult, false, err
+	}
+	nAggs := int32(len(group.ctr.aggList))
+	if err := types.WriteInt32(writer, nAggs); err != nil {
+		return vm.CancelResult, false, err
+	}
+	var prepareParamKindSources []prepareParamKindRowsSource
+	if group.ctr.prepareParamKindWireV1 {
+		prepareParamKindSources = make(
+			[]prepareParamKindRowsSource, len(group.ctr.aggList))
+	}
+	for i, ag := range group.ctr.aggList {
+		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
+			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"aggregate binary-string metadata requires MORPCVersion18")
+		}
+		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
+			return vm.CancelResult, false, err
+		}
+		if !group.ctr.prepareParamKindWireV1 ||
+			!group.Aggs[i].PreservesFirstArgPrepareParamKind() {
+			continue
+		}
+		var err error
+		prepareParamKindSources[i], err = newPrepareParamKindRowsSource(
+			ag.PrepareParamKindVectorForChunk(curr), nil)
+		if err != nil {
+			return vm.CancelResult, false, err
 		}
 	}
 	if group.ctr.prepareParamKindWireV1 {
-		if err := writePrepareParamKindTrailer(proc.Ctx, &buf, group.Aggs,
-			&group.ctr.prepareParamKind, prepareParamKinds, prepareParamKindSummaries); err != nil {
+		if err := writePrepareParamKindTrailer(proc.Ctx, writer, group.Aggs,
+			&group.ctr.prepareParamKind, prepareParamKindSources); err != nil {
 			return vm.CancelResult, false, err
 		}
 	}
-	batch.ExtraBuf = buf.Bytes()
+	if accounted != nil {
+		if err := batch.SetAccountedExtraBuffer(accounted); err != nil {
+			return vm.CancelResult, false, err
+		}
+	} else {
+		batch.DropExtraBuffer()
+		batch.ExtraBuf = legacyBuffer.Bytes()
+	}
 
 	res := vm.NewCallResult()
 	res.Batch = batch

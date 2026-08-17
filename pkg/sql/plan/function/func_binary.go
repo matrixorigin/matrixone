@@ -1716,7 +1716,10 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+			if err = rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 		// ZeroDatetime is a distinct MySQL zero-date sentinel, not the
 		// 0001-01-01 epoch. It is a valid time-window grouping key but cannot
@@ -1735,14 +1738,53 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return nil
 }
 
+func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	diff, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
+	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	num, err := getIntervalNum(diff, unit, proc)
+	if err != nil {
+		return err
+	}
+	t := num
+
+	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := ivec.GetValue(i)
+		if null {
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+		if v == types.ZeroTimestamp {
+			if err = rs.Append(types.ZeroTimestamp, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.Append(types.Timestamp(int64(v)-int64(v)%t), false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	var num int64
+	if diff <= 0 {
+		return num, moerr.NewInvalidInput(proc.Ctx, "time window interval must be greater than zero")
+	}
 	iTyp := types.IntervalType(unit)
 	err := types.JudgeIntervalNumOverflow(diff, iTyp)
 	if err != nil {
 		return num, err
 	}
 	switch iTyp {
+	case types.MicroSecond:
+		num = diff
 	case types.Second:
 		num = diff * types.MicroSecsPerSec
 	case types.Minute:
@@ -1752,43 +1794,27 @@ func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	case types.Day:
 		num = diff * types.SecsPerDay * types.MicroSecsPerSec
 	default:
-		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
-	}
-	return num, nil
-}
-
-func getSecondNum(diff, unit int64, proc *process.Process) (int64, error) {
-	var num int64
-	iTyp := types.IntervalType(unit)
-	err := types.JudgeIntervalNumOverflow(diff, iTyp)
-	if err != nil {
-		return num, err
-	}
-	switch iTyp {
-	case types.Second:
-		num = diff
-	case types.Minute:
-		num = diff * types.SecsPerMinute
-	case types.Hour:
-		num = diff * types.SecsPerHour
-	case types.Day:
-		num = diff * types.SecsPerDay
-	default:
-		return num, moerr.NewNotSupported(proc.Ctx, "now support SECOND, MINUTE, HOUR, DAY as the time unit")
+		return num, moerr.NewNotSupported(proc.Ctx, "now support MICROSECOND, SECOND, MINUTE, HOUR, DAY as the time unit")
 	}
 	return num, nil
 }
 
 func Divisor(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	diff1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]).GetValue(0)
+	if diff1 <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "time window interval must be greater than zero")
+	}
 	unit1, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1]).GetValue(0)
-	num1, err := getSecondNum(diff1, unit1, proc)
+	num1, err := getIntervalNum(diff1, unit1, proc)
 	if err != nil {
 		return err
 	}
 	diff2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
+	if diff2 <= 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "time window sliding value must be greater than zero")
+	}
 	unit2, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3]).GetValue(0)
-	num2, err := getSecondNum(diff2, unit2, proc)
+	num2, err := getIntervalNum(diff2, unit2, proc)
 	if err != nil {
 		return err
 	}

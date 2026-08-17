@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"bytes"
 	io "io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +35,18 @@ type i64Slice []int64
 
 func (s i64Slice) MarshalBinary() ([]byte, error) {
 	return types.EncodeSlice[int64](s), nil
+}
+
+func readI64Slice(reader io.Reader, state string) (i64Slice, error) {
+	size, encoded, err := types.ReadSizeBytes(reader)
+	if err != nil {
+		return nil, err
+	}
+	if size < 0 || len(encoded)%8 != 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"%s state is not an int64 slice", state)
+	}
+	return types.DecodeSlice[int64](encoded), nil
 }
 
 // special structure for a single column window function.
@@ -96,36 +107,61 @@ func (exec *percentRankExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *percentRankExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
-	return marshalRetAndGroupsToBuffer(cnt, flags, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *percentRankExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
+	return marshalRetAndGroupsToBuffer(cnt, flags, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *percentRankExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
-	return marshalChunkToBuffer(chunk, buf, &exec.ret.optSplitResult, exec.groups, nil)
+func (exec *percentRankExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
+	return marshalChunkToBuffer(chunk, writer, &exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *percentRankExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacementValue, err := makePercentRankExec(
+		mp, exec.singleAggInfo.aggID, exec.singleAggInfo.distinct)
+	if err != nil {
+		return err
+	}
+	replacement := replacementValue.(*percentRankExec)
+	if err = replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *percentRankExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"percent_rank group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "percent_rank group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *percentRankExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -222,40 +258,60 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *singleWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *singleWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *singleWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeRankDenseRankRowNumber(mp, exec.singleAggInfo).(*singleWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *singleWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"window group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "window group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *singleWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -466,45 +522,65 @@ func (exec *ntileWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *ntileWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *ntileWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *ntileWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeNtileWindowExec(mp, exec.singleAggInfo).(*ntileWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *ntileWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		exec.bucketCounts = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"ntile group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		exec.bucketCounts = make([]int64, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			data, err := readI64Slice(reader, "ntile group")
 			if err != nil {
 				return err
 			}
-			data := types.DecodeSlice[int64](bs)
 			if len(data) > 0 {
 				exec.bucketCounts[i] = data[len(data)-1]
 				exec.groups[i] = data[:len(data)-1]
 			}
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *ntileWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -632,40 +708,60 @@ func (exec *cumeDistWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *cumeDistWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return marshalRetAndGroupsToBuffer(
-		cnt, flags, buf,
+		cnt, flags, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
-func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *cumeDistWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return marshalChunkToBuffer(
-		chunk, buf,
+		chunk, writer,
 		&exec.ret.optSplitResult, exec.groups, nil)
 }
 
 func (exec *cumeDistWindowExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
-	err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
+	replacement := makeCumeDist(mp, exec.singleAggInfo).(*cumeDistWindowExec)
+	if err := replacement.unmarshalFromReader(reader, mp); err != nil {
+		replacement.Free()
+		return err
+	}
+	exec.Free()
+	*exec = *replacement
+	return nil
+}
+
+func (exec *cumeDistWindowExec) unmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	decodedGroups, err := unmarshalFromReaderNoGroup(reader, &exec.ret.optSplitResult)
 	if err != nil {
 		return err
 	}
 	exec.ret.setupT()
+	if decodedGroups == 0 {
+		exec.groups = nil
+		return nil
+	}
 
 	ngrp, err := types.ReadInt64(reader)
 	if err != nil {
 		return err
 	}
+	if ngrp != int64(decodedGroups) {
+		return moerr.NewInvalidInputNoCtxf(
+			"cume_dist group count %d does not match result rows %d",
+			ngrp, decodedGroups)
+	}
 	if ngrp != 0 {
 		exec.groups = make([]i64Slice, ngrp)
 		for i := range exec.groups {
-			_, bs, err := types.ReadSizeBytes(reader)
+			group, err := readI64Slice(reader, "cume_dist group")
 			if err != nil {
 				return err
 			}
-			exec.groups[i] = types.DecodeSlice[int64](bs)
+			exec.groups[i] = group
 		}
 	}
-	return nil
+	return readAggregateExtra(reader)
 }
 
 func (exec *cumeDistWindowExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -776,9 +872,10 @@ type valueWindowExec struct {
 
 // valueEntry stores a single value from the window frame
 type valueEntry struct {
-	isNull bool
-	data   []byte
-	kind   vector.PrepareParamKind
+	isNull       bool
+	binaryString bool
+	data         []byte
+	kind         vector.PrepareParamKind
 }
 
 func (exec *valueWindowExec) GroupGrow(more int) error {
@@ -813,6 +910,7 @@ func (exec *valueWindowExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	if !entry.isNull {
 		entry.kind = vec.GetPrepareParamKindAt(row)
+		entry.binaryString = vec.GetBinaryStringMetadataAt(row)
 		// Copy the value data
 		if vec.GetType().IsVarlen() {
 			bs := vec.GetBytesAt(row)
@@ -838,11 +936,11 @@ func (exec *valueWindowExec) GetOptResult() SplitResult {
 	return nil
 }
 
-func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error {
+func (exec *valueWindowExec) SaveIntermediateResult(cnt int64, flags [][]uint8, writer io.Writer) error {
 	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResult")
 }
 
-func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error {
+func (exec *valueWindowExec) SaveIntermediateResultOfChunk(chunk int, writer io.Writer) error {
 	return moerr.NewInternalErrorNoCtx("value window function does not support SaveIntermediateResultOfChunk")
 }
 
@@ -897,10 +995,10 @@ func (exec *valueWindowExec) Free() {
 func (exec *valueWindowExec) Size() int64 {
 	var size int64
 	// Sizes on 64-bit: slice header = 24, pointer = 8, int = 8
-	// valueEntry{isNull bool, data []byte} = 1 + 7(padding) + 24(slice) = 32
+	// valueEntry{two bools, data []byte, kind byte} occupies 40 bytes after alignment.
 	const sliceHeaderSize = 24
 	const ptrSize = 8
-	const entrySize = 32
+	const entrySize = 40
 	const intSize = 8
 
 	size += int64(cap(exec.frameValues)) * sliceHeaderSize
@@ -959,11 +1057,7 @@ func (exec *valueWindowExec) flushLag() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				row := result.Length()
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1016,11 +1110,7 @@ func (exec *valueWindowExec) flushLead() (_ []*vector.Vector, retErr error) {
 					return nil, err
 				}
 			} else {
-				row := result.Length()
-				if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-					return nil, err
-				}
-				if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+				if err := exec.appendValueEntry(result, entry); err != nil {
 					return nil, err
 				}
 			}
@@ -1055,11 +1145,7 @@ func (exec *valueWindowExec) flushFirstValue() (_ []*vector.Vector, retErr error
 				return nil, err
 			}
 		} else {
-			row := result.Length()
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-				return nil, err
-			}
-			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1093,11 +1179,7 @@ func (exec *valueWindowExec) flushLastValue() (_ []*vector.Vector, retErr error)
 				return nil, err
 			}
 		} else {
-			row := result.Length()
-			if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
-				return nil, err
-			}
-			if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+			if err := exec.appendValueEntry(result, entry); err != nil {
 				return nil, err
 			}
 		}
@@ -1111,6 +1193,17 @@ func (exec *valueWindowExec) flushNthValue() ([]*vector.Vector, error) {
 	// For now, we default to n=1 (same as FIRST_VALUE)
 	// TODO: properly handle the n parameter from the function arguments
 	return exec.flushFirstValue()
+}
+
+func (exec *valueWindowExec) appendValueEntry(result *vector.Vector, entry *valueEntry) error {
+	row := result.Length()
+	if err := appendValueToVector(result, entry.data, exec.retType, exec.mp); err != nil {
+		return err
+	}
+	if err := result.SetPrepareParamKindAtWithMP(row, entry.kind, exec.mp); err != nil {
+		return err
+	}
+	return result.SetIsBinaryStringAt(row, entry.binaryString, exec.mp)
 }
 
 // appendValueToVector appends a value to the result vector based on the type

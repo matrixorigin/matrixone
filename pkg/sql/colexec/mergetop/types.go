@@ -15,16 +15,31 @@
 package mergetop
 
 import (
+	"context"
+	"errors"
+	"math"
+	"slices"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ vm.Operator = new(MergeTop)
+
+var _ interface {
+	SetAllocationAccount(*mpool.AllocationAccount) error
+	ClearAllocationAccount(*mpool.AllocationAccount) error
+} = new(MergeTop)
 
 type container struct {
 	n     int // result vector number
@@ -38,6 +53,11 @@ type container struct {
 	bat *batch.Batch // bat stores the final result of merge-top
 
 	executorsForOrderList []colexec.ExpressionExecutor
+
+	allocationAccount    *mpool.AllocationAccount
+	retainedAllocation   *vector.AllocationAccountSelection
+	expressionAllocation *vector.AllocationAccountSelection
+	appendScratch        *mpool.AccountedBuffer
 }
 
 type MergeTop struct {
@@ -90,7 +110,7 @@ func (mergeTop *MergeTop) Release() {
 }
 
 func (mergeTop *MergeTop) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	mergeTop.ctr.reset()
+	mergeTop.ctr.reset(proc)
 }
 
 func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -101,32 +121,228 @@ func (mergeTop *MergeTop) ExecProjection(proc *process.Process, input *batch.Bat
 	return input, nil
 }
 
-func (ctr *container) reset() {
+func (mergeTop *MergeTop) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if mergeTop == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return mergeTop.ctr.setAllocationAccount(account)
+}
+
+func (mergeTop *MergeTop) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if mergeTop == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return mergeTop.ctr.clearAllocationAccount(account)
+}
+
+func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) error {
+	if ctr == nil || account == nil || account.Handle() == 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.allocationAccount != nil {
+		if ctr.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil ||
+		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	retained, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerTop,
+		topsites.MergeTopRetainedData,
+		topsites.MergeTopRetainedArea,
+		topsites.MergeTopRetainedNulls,
+		topsites.MergeTopRetainedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	expression, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerTop,
+		topsites.MergeTopExpressionData,
+		topsites.MergeTopExpressionArea,
+		topsites.MergeTopExpressionNulls,
+		topsites.MergeTopExpressionGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationAccount = account
+	ctr.retainedAllocation = retained
+	ctr.expressionAllocation = expression
+	return nil
+}
+
+func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) error {
+	if ctr == nil || ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil ||
+		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	ctr.allocationAccount = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	return nil
+}
+
+func (ctr *container) appendCheckpoints(
+	columns int,
+	proc *process.Process,
+) ([]vector.AppendCheckpoint, error) {
+	if ctr == nil || ctr.allocationAccount == nil || proc == nil || columns <= 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.appendScratch == nil {
+		var err error
+		ctr.appendScratch, err = mpool.NewAccountedBuffer(
+			proc.Mp(),
+			ctr.allocationAccount,
+			mpool.AllocationOwnerTop,
+			topsites.MergeTopAppendCheckpoints,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_, required, err := vector.AppendCheckpointScratch(nil, columns)
+	if err != nil {
+		return nil, err
+	}
+	if err = ctr.appendScratch.Resize(required); err != nil {
+		return nil, err
+	}
+	checkpoints, _, err := vector.AppendCheckpointScratch(
+		ctr.appendScratch.Bytes(), columns)
+	return checkpoints, err
+}
+
+func growMergeTopSelections(
+	values []int64,
+	required int,
+	proc *process.Process,
+	account *mpool.AllocationAccount,
+) ([]int64, error) {
+	if required < 0 || proc == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if required <= cap(values) {
+		return values[:required], nil
+	}
+	if account == nil {
+		values = slices.Grow(values, required-len(values))
+		return values[:required], nil
+	}
+	elementSize := uint64(unsafe.Sizeof(int64(0)))
+	if uint64(required) > uint64(math.MaxInt64)/elementSize {
+		return nil, mpool.ErrAllocationAllocatorLimit
+	}
+	oldBytes := int64(uint64(cap(values)) * elementSize)
+	requiredBytes := int64(uint64(required) * elementSize)
+	nextBytes, ok := mpool.GrowCapacity(oldBytes, requiredBytes)
+	if !ok || nextBytes < requiredBytes {
+		return nil, mpool.ErrAllocationAllocatorLimit
+	}
+	capacity := int((uint64(nextBytes) + elementSize - 1) / elementSize)
+	next, err := mpool.MakeSliceAccounted[int64](
+		capacity,
+		proc.Mp(),
+		account,
+		mpool.AllocationOwnerTop,
+		topsites.MergeTopSelections,
+	)
+	if err != nil {
+		return nil, err
+	}
+	copy(next, values)
+	if cap(values) != 0 {
+		mpool.FreeSlice(proc.Mp(), values)
+	}
+	return next[:required], nil
+}
+
+func mergeTopTerminalCapacityError(ctx context.Context, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, mpool.ErrAllocationAccountInvariant) ||
+		errors.Is(err, mpool.ErrAllocationAccountInvalid) ||
+		errors.Is(err, mpool.ErrAllocationAccountMismatch) ||
+		errors.Is(err, mpool.ErrAllocationAccountLive) ||
+		errors.Is(err, mpool.ErrAllocationAccountSealed) ||
+		errors.Is(err, process.ErrExecutionResourceClosed) ||
+		errors.Is(err, process.ErrExecutionResourceInvalid) ||
+		errors.Is(err, process.ErrExecutionMemoryCeilingMissing) {
+		return err
+	}
+	if mpool.AllocationFailureReasonOf(err) == mpool.AllocationFailureCapacity &&
+		!mpool.IsMPoolCapacityFailure(err) {
+		return moerr.NewResourceExhaustedf(
+			ctx,
+			"merge top memory capacity exceeded; reduce LIMIT or query concurrency, or increase processLimitationSize",
+		)
+	}
+	return err
+}
+
+func (ctr *container) reset(proc *process.Process) {
 	ctr.n = 0
+	if ctr.allocationAccount != nil && cap(ctr.sels) != 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.sels)
+	}
 	ctr.sels = nil
 	ctr.poses = nil
 	ctr.cmps = nil
 
 	ctr.limit = 0
 	if ctr.limitExecutor != nil {
-		ctr.limitExecutor.ResetForNextQuery()
+		ctr.limitExecutor.Free()
+		ctr.limitExecutor = nil
 	}
 
-	if ctr.bat != nil {
-		ctr.bat.CleanOnlyData()
-	}
-
-	for _, executor := range ctr.executorsForOrderList {
-		if executor != nil {
-			executor.ResetForNextQuery()
-		}
-	}
-}
-
-func (ctr *container) free(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
+	}
+	if ctr.appendScratch != nil {
+		ctr.appendScratch.Free()
+		ctr.appendScratch = nil
+	}
+
+	for i, executor := range ctr.executorsForOrderList {
+		if executor != nil {
+			executor.Free()
+			ctr.executorsForOrderList[i] = nil
+		}
+	}
+	ctr.executorsForOrderList = nil
+}
+
+func (ctr *container) free(proc *process.Process) {
+	if ctr.allocationAccount != nil && cap(ctr.sels) != 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.sels)
+	}
+	ctr.sels = nil
+	ctr.poses = nil
+	ctr.cmps = nil
+	ctr.limit = 0
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc.Mp())
+		ctr.bat = nil
+	}
+	if ctr.appendScratch != nil {
+		ctr.appendScratch.Free()
+		ctr.appendScratch = nil
 	}
 
 	for i := range ctr.executorsForOrderList {

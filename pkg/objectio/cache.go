@@ -284,12 +284,22 @@ func LoadObjectMetaByExtent(
 	return
 }
 
+func validateLocation(ctx context.Context, location *Location) error {
+	if location == nil || location.IsEmpty() {
+		return moerr.NewInvalidInput(ctx, "object location is empty")
+	}
+	return nil
+}
+
 func FastLoadBF(
 	ctx context.Context,
 	location Location,
 	isPrefetch bool,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	if err := validateLocation(ctx, &location); err != nil {
+		return nil, err
+	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(ctx, key)
@@ -310,6 +320,9 @@ func LoadBFWithMeta(
 	location Location,
 	fs fileservice.FileService,
 ) (BloomFilter, error) {
+	if err := validateLocation(ctx, &location); err != nil {
+		return nil, err
+	}
 	metric.FSReadReadMetaCounter.Add(1)
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(ctx, key)
@@ -384,6 +397,9 @@ func FastLoadObjectMeta(
 	prefetch bool,
 	fs fileservice.FileService,
 ) (ObjectMeta, error) {
+	if err := validateLocation(ctx, location); err != nil {
+		return nil, err
+	}
 	extent := location.Extent()
 	name := location.Name()
 	return LoadObjectMetaByExtent(ctx, &name, &extent, prefetch, fileservice.SkipFullFilePreloads, fs)
