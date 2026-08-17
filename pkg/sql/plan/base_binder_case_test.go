@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +49,14 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	require.Equal(t, int32(38), arg1.Typ.Width)
 	require.Equal(t, int32(7), arg1.Typ.Scale)
 	require.False(t, isCastExpr(funcExpr.Args[2]), "ELSE value already has the common decimal scale")
+}
+
+func TestBuildPreparedCaseConditionParameter(t *testing.T) {
+	ctx := context.Background()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select case when ? then v else -v end from (select 1 as v) t", 1)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(NewMockCompilerContext(true), stmt, true)
+	require.NoError(t, err)
 }
