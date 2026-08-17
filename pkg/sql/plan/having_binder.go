@@ -107,7 +107,17 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				return expr, nil
+			}
+			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+					b.corrColRefTargetsGroup(corr.Corr) ||
+					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				return expr, nil
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
@@ -140,7 +150,11 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr) {
+			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
+				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+				b.corrColRefTargetsGroup(corr.Corr) ||
+				b.corrColRefAllowedByTargetQuery(corr.Corr) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
@@ -679,6 +693,11 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	prevSubqueryInAggregateInput := b.subqueryInAggregateInput
+	b.subqueryInAggregateInput = b.insideAgg
+	defer func() {
+		b.subqueryInAggregateInput = prevSubqueryInAggregateInput
+	}()
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 
