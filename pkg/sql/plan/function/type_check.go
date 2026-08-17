@@ -609,6 +609,7 @@ func initFixed1() {
 		{types.T_bool, types.T_varbinary, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_blob, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_text, types.T_bool, types.T_bool},
+		{types.T_bool, types.T_json, types.T_bool, types.T_bool},
 		{types.T_int8, types.T_any, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_bool, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_int16, types.T_int16, types.T_int16},

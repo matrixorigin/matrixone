@@ -129,18 +129,22 @@ type SessionInfo struct {
 	ExplicitZeroTemporalCastReturnsNull bool
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
-	SqlMode        string
-	StorageEngine  engine.Engine
-	QueryId        []string
-	ResultColTypes []types.Type
-	SeqCurValues   map[uint64]string
-	SeqDeleteKeys  []uint64
-	SeqAddValues   map[uint64]string
-	SeqLastValue   []string
-	SqlHelper      sqlHelper
-	Buf            *buffer.Buffer
-	LogLevel       zapcore.Level
-	SessionId      uuid.UUID
+	SqlMode string
+	// ApplySQLSelectLimit distinguishes client statements from frontend
+	// background SQL, which may inherit a session-variable resolver but must not
+	// be affected by a client's row cap.
+	ApplySQLSelectLimit bool
+	StorageEngine       engine.Engine
+	QueryId             []string
+	ResultColTypes      []types.Type
+	SeqCurValues        map[uint64]string
+	SeqDeleteKeys       []uint64
+	SeqAddValues        map[uint64]string
+	SeqLastValue        []string
+	SqlHelper           sqlHelper
+	Buf                 *buffer.Buffer
+	LogLevel            zapcore.Level
+	SessionId           uuid.UUID
 }
 
 type Session interface {
@@ -379,8 +383,8 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
-	hashBuildBudgetMu                   sync.Mutex
-	hashBuildBudget                     *HashBuildBudgetGeneration
+	executionResourceBudgetMu           sync.Mutex
+	executionResourceBudget             *ExecutionResourceGeneration
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -490,12 +494,12 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.Base.hashBuildBudgetMu.Lock()
-	if proc.Base.hashBuildBudget != nil {
-		proc.Base.hashBuildBudget.Close()
-		proc.Base.hashBuildBudget = nil
+	proc.Base.executionResourceBudgetMu.Lock()
+	if proc.Base.executionResourceBudget != nil {
+		proc.Base.executionResourceBudget.Close()
+		proc.Base.executionResourceBudget = nil
 	}
-	proc.Base.hashBuildBudgetMu.Unlock()
+	proc.Base.executionResourceBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()

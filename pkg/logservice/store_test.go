@@ -1352,29 +1352,13 @@ func TestCheckHealth(t *testing.T) {
 				}
 			}
 
-			ticker := time.NewTicker(time.Millisecond * 100)
-			defer ticker.Stop()
-			timer := time.NewTimer(time.Second * 1)
-			defer timer.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					if err := store.checkHealth(1); err != nil {
-						t.Logf("check health failed: %v", err)
-					} else {
-						t.Log("check health successfully")
-						return
-					}
-
-				case <-timer.C:
-					if ok {
-						t.Fatal("check health timed out")
-					} else {
-						t.Log("check health timed out")
-					}
-					return
-				}
+			if !ok {
+				require.Error(t, store.checkHealth(1))
+				return
 			}
+			require.Eventually(t, func() bool {
+				return store.checkHealth(1) == nil
+			}, time.Second, 10*time.Millisecond)
 		}
 	}
 

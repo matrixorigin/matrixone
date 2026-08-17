@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -90,6 +89,10 @@ type RightDedupJoin struct {
 	JoinMapTag         int32
 
 	OnDuplicateAction plan.Node_OnDuplicateAction
+	// InputKeysUnique means the probe stream is proven unique on the dedup key.
+	// The operator then performs lookup-only conflict checks and never inserts
+	// probe keys into the target hashmap.
+	InputKeysUnique   bool
 	DedupColName      string
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type
@@ -117,7 +120,7 @@ func (rightDedupJoin *RightDedupJoin) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		rightDedupJoinAllocationSiteResultData,
 		rightDedupJoinAllocationSiteResultArea,
 		rightDedupJoinAllocationSiteResultNulls,

@@ -393,10 +393,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
 			for _, snapshot := range terminal.allocation {
-				localAllocationQuality |= localAllocation.AddGeneration(
-					snapshot.Peak,
-					snapshot.Used,
-					snapshot.State == mpool.AllocationAccountTerminalValid,
+				localAllocationQuality |= addAllocationAccountTerminal(
+					&localAllocation,
+					snapshot,
 				)
 			}
 			var localMemory resource.MemoryDomainSummary
@@ -1013,7 +1012,7 @@ func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memor
 		}
 	}
 	if effective == 0 {
-		return 0, process.ErrHashBuildCeilingMissing
+		return 0, process.ErrExecutionMemoryCeilingMissing
 	}
 	reserve := effective / 10
 	if reserve < 256*mpool.MB {

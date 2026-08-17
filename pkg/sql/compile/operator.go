@@ -681,6 +681,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.InputKeysUnique = t.InputKeysUnique
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
@@ -1557,6 +1558,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.OnDuplicateAction = node.OnDuplicateAction
+	arg.InputKeysUnique = node.DedupInputKeysUnique
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
@@ -1656,6 +1658,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	arg.GapFillStart = node.GapFillStart
+	arg.GapFillEnd = node.GapFillEnd
 	// A tumbling window normally uses the interval fast path (EndExpr != nil),
 	// which forwards only groups already produced by the child aggregate. That
 	// path cannot synthesize absent buckets. GAPFILL therefore uses the general

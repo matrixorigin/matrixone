@@ -991,7 +991,9 @@ insert into t1 (oref, grp) values(1, 1),(1, 1);
 create table t2 (oref int, a int);
 insert into t2 values(1, NULL),(2, NULL);
 select a, oref, a in (select count(*) from t1 group by grp having grp=t2.oref) Z from t2;
-SQL syntax error: column "t2.oref" must appear in the GROUP BY clause or be used in an aggregate function
+a	oref	Z
+NULL	1	NULL
+NULL	2	0
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 create table t1 (a int, b int, primary key (a));

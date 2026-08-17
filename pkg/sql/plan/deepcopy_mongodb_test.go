@@ -22,7 +22,9 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -31,6 +33,25 @@ import (
 
 func TestMongoDBTableSurfaceFailsClosedWithoutRuntimeConfig(t *testing.T) {
 	require.Error(t, ensureMongoDBTableSurfaceEnabled(context.Background()))
+}
+
+func TestMongoDBTableSurfaceDefaultsToAllAccounts(t *testing.T) {
+	var parameters config.MongoDBParameters
+	parameters.SetDefaultValues()
+	base := context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: parameters},
+	})
+	for _, accountID := range []uint32{catalog.System_Account, 7, 8} {
+		require.NoError(t, ensureMongoDBTableSurfaceEnabled(defines.AttachAccountId(base, accountID)))
+	}
+
+	parameters.Enable = false
+	disabled := context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: parameters},
+	})
+	for _, accountID := range []uint32{catalog.System_Account, 7} {
+		require.ErrorContains(t, ensureMongoDBTableSurfaceEnabled(defines.AttachAccountId(disabled, accountID)), "are disabled")
+	}
 }
 
 func TestMongoDBTableDefinitionRequiresTypedDiscriminator(t *testing.T) {

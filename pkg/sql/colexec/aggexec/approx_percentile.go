@@ -19,9 +19,10 @@ import (
 	"io"
 	"math"
 	"math/big"
-	"sort"
+	"slices"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,18 +57,24 @@ type quantileValue interface {
 // its input row count. Level headers are Go-managed, while every value buffer
 // is allocated from mp so group spill accounting sees the retained samples.
 type quantileSketch[T quantileValue] struct {
-	levels   [][]T
-	parity   []bool
-	count    uint64
-	min      T
-	max      T
-	hasValue bool
-	compare  func(T, T) int
-	mp       *mpool.MPool
+	levels     [][]T
+	parity     []bool
+	levelCnt   uint8
+	count      uint64
+	min        T
+	max        T
+	hasValue   bool
+	compare    func(T, T) int
+	mp         *mpool.MPool
+	allocation *AllocationAccount
 }
 
-func newQuantileSketch[T quantileValue](mp *mpool.MPool, compare func(T, T) int) *quantileSketch[T] {
-	return &quantileSketch[T]{compare: compare, mp: mp}
+func newQuantileSketch[T quantileValue](
+	mp *mpool.MPool,
+	compare func(T, T) int,
+	allocation *AllocationAccount,
+) *quantileSketch[T] {
+	return &quantileSketch[T]{compare: compare, mp: mp, allocation: allocation}
 }
 
 func (s *quantileSketch[T]) Add(value T) error {
@@ -108,12 +115,13 @@ func (s *quantileSketch[T]) Merge(other *quantileSketch[T]) error {
 			s.max = other.max
 		}
 	}
-	for level, values := range other.levels {
+	for level := 0; level < int(other.levelCnt); level++ {
+		values := other.levels[level]
 		s.ensureLevel(level)
 		if err := s.appendValues(level, values); err != nil {
 			return err
 		}
-		if level < len(other.parity) && other.parity[level] {
+		if other.parity[level] {
 			s.parity[level] = !s.parity[level]
 		}
 	}
@@ -125,9 +133,15 @@ func (s *quantileSketch[T]) Merge(other *quantileSketch[T]) error {
 }
 
 func (s *quantileSketch[T]) ensureLevel(level int) {
-	for len(s.levels) <= level {
-		s.levels = append(s.levels, nil)
-		s.parity = append(s.parity, false)
+	if level >= approxPercentileMaxLevels {
+		panic(mpool.ErrAllocationAccountInvariant)
+	}
+	if int(s.levelCnt) <= level {
+		for len(s.levels) <= level {
+			s.levels = append(s.levels, nil)
+			s.parity = append(s.parity, false)
+		}
+		s.levelCnt = uint8(level + 1)
 	}
 }
 
@@ -171,7 +185,7 @@ func (s *quantileSketch[T]) replaceLevel(level, length int, fill func([]T)) erro
 	for capacity < length {
 		capacity *= 2
 	}
-	values, err := mpool.MakeSlice[T](capacity, s.mp, true)
+	values, err := makeAccountedScratch[T](s.allocation, s.mp, capacity)
 	if err != nil {
 		return err
 	}
@@ -182,6 +196,144 @@ func (s *quantileSketch[T]) replaceLevel(level, length int, fill func([]T)) erro
 	return nil
 }
 
+// reserveLevel grows physical capacity without changing any logical sketch
+// value. A later work-unit capacity failure may leave this reusable capacity
+// behind, but never a partially applied percentile sample.
+func (s *quantileSketch[T]) reserveLevel(level, capacity int) error {
+	s.ensureLevel(level)
+	old := s.levels[level]
+	if capacity <= cap(old) {
+		return nil
+	}
+	values, err := makeAccountedScratch[T](s.allocation, s.mp, capacity)
+	if err != nil {
+		return err
+	}
+	values = values[:len(old)]
+	copy(values, old)
+	s.freeLevel(old)
+	s.levels[level] = values
+	return nil
+}
+
+func (s *quantileSketch[T]) preflightAdd(count int) error {
+	if count < 0 || uint64(count) > math.MaxUint64-s.count {
+		return moerr.NewInvalidInputNoCtx("approx_percentile: row count overflow")
+	}
+	var lengths, capacities [approxPercentileMaxLevels]int
+	levelCount := int(s.levelCnt)
+	for level := 0; level < levelCount; level++ {
+		lengths[level] = len(s.levels[level])
+		capacities[level] = cap(s.levels[level])
+	}
+	for range count {
+		lengths[0]++
+		if capacities[0] < lengths[0] {
+			capacities[0] = grownQuantileCapacity(capacities[0], lengths[0])
+		}
+		if levelCount == 0 {
+			levelCount = 1
+		}
+		for level := 0; level < levelCount && lengths[level] >= 2*approxPercentileSketchCapacity; level++ {
+			if level+1 >= approxPercentileMaxLevels {
+				return moerr.NewInvalidInputNoCtx("approx_percentile: sketch level overflow")
+			}
+			promoted := lengths[level] / 2
+			lengths[level] &= 1
+			if level+1 == levelCount {
+				levelCount++
+			}
+			lengths[level+1] += promoted
+			if capacities[level+1] < lengths[level+1] {
+				capacities[level+1] = grownQuantileCapacity(
+					capacities[level+1], lengths[level+1])
+			}
+		}
+	}
+	for level := 0; level < levelCount; level++ {
+		if err := s.reserveLevel(level, capacities[level]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type quantileCapacityPlan[T quantileValue] struct {
+	lengths    [approxPercentileMaxLevels]int
+	capacities [approxPercentileMaxLevels]int
+	levelCount int
+	count      uint64
+}
+
+func newQuantileCapacityPlan[T quantileValue](
+	sketch *quantileSketch[T],
+) quantileCapacityPlan[T] {
+	plan := quantileCapacityPlan[T]{
+		levelCount: int(sketch.levelCnt),
+		count:      sketch.count,
+	}
+	for level := 0; level < plan.levelCount; level++ {
+		plan.lengths[level] = len(sketch.levels[level])
+		plan.capacities[level] = cap(sketch.levels[level])
+	}
+	return plan
+}
+
+func (plan *quantileCapacityPlan[T]) merge(other *quantileSketch[T]) error {
+	if other == nil || other.count == 0 {
+		return nil
+	}
+	if math.MaxUint64-plan.count < other.count {
+		return moerr.NewInvalidInputNoCtx("approx_percentile: row count overflow")
+	}
+	plan.count += other.count
+	plan.levelCount = max(plan.levelCount, int(other.levelCnt))
+	for level := 0; level < plan.levelCount; level++ {
+		if level < len(other.levels) {
+			plan.lengths[level] += len(other.levels[level])
+		}
+		if plan.capacities[level] < plan.lengths[level] {
+			plan.capacities[level] = grownQuantileCapacity(
+				plan.capacities[level], plan.lengths[level])
+		}
+	}
+	for level := 0; level < plan.levelCount; level++ {
+		for plan.lengths[level] >= 2*approxPercentileSketchCapacity {
+			if level+1 >= approxPercentileMaxLevels {
+				return moerr.NewInvalidInputNoCtx("approx_percentile: sketch level overflow")
+			}
+			promoted := plan.lengths[level] / 2
+			plan.lengths[level] &= 1
+			if level+1 == plan.levelCount {
+				plan.levelCount++
+			}
+			plan.lengths[level+1] += promoted
+			if plan.capacities[level+1] < plan.lengths[level+1] {
+				plan.capacities[level+1] = grownQuantileCapacity(
+					plan.capacities[level+1], plan.lengths[level+1])
+			}
+		}
+	}
+	return nil
+}
+
+func (plan *quantileCapacityPlan[T]) reserve(sketch *quantileSketch[T]) error {
+	for level := 0; level < plan.levelCount; level++ {
+		if err := sketch.reserveLevel(level, plan.capacities[level]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func grownQuantileCapacity(current, required int) int {
+	capacity := max(1, current*2)
+	for capacity < required {
+		capacity *= 2
+	}
+	return capacity
+}
+
 func (s *quantileSketch[T]) freeLevel(values []T) {
 	if cap(values) > 0 {
 		mpool.FreeSlice(s.mp, values[:1])
@@ -189,15 +341,13 @@ func (s *quantileSketch[T]) freeLevel(values []T) {
 }
 
 func (s *quantileSketch[T]) compactFrom(start int) error {
-	for level := start; level < len(s.levels); level++ {
+	for level := start; level < int(s.levelCnt); level++ {
 		for len(s.levels[level]) >= 2*approxPercentileSketchCapacity {
 			if level+1 >= approxPercentileMaxLevels {
 				return moerr.NewInvalidInputNoCtx("approx_percentile: sketch level overflow")
 			}
 			values := s.levels[level]
-			sort.Slice(values, func(i, j int) bool {
-				return s.compare(values[i], values[j]) < 0
-			})
+			slices.SortFunc(values, s.compare)
 
 			pickSecond := s.parity[level]
 			startAt, endAt := 0, len(values)
@@ -261,38 +411,46 @@ func (s *quantileSketch[T]) valueAtRank(rank uint64, sorted []weightedQuantileVa
 	return sorted[len(sorted)-1].value
 }
 
-func (s *quantileSketch[T]) Quantile(p *big.Rat) (lo, hi T, frac *big.Rat, err error) {
+func (s *quantileSketch[T]) QuantileAtRanks(loRank, hiRank uint64) (
+	lo, hi T, err error,
+) {
 	if s.count == 0 {
-		return lo, hi, nil, moerr.NewInternalErrorNoCtx("approx_percentile: empty sketch")
+		return lo, hi, moerr.NewInternalErrorNoCtx("approx_percentile: empty sketch")
 	}
-	if p.Sign() == 0 {
-		return s.min, s.min, new(big.Rat), nil
+	if loRank > hiRank || hiRank >= s.count {
+		return lo, hi, moerr.NewInternalErrorNoCtx(
+			"approx_percentile: invalid quantile rank")
 	}
-	if p.Cmp(big.NewRat(1, 1)) == 0 {
-		return s.max, s.max, new(big.Rat), nil
+	if hiRank == 0 {
+		return s.min, s.min, nil
 	}
-	weighted, err := mpool.MakeSlice[weightedQuantileValue[T]](s.retained(), s.mp, true)
+	if loRank == s.count-1 {
+		return s.max, s.max, nil
+	}
+	weighted, err := makeAccountedScratch[weightedQuantileValue[T]](
+		s.allocation, s.mp, s.retained())
 	if err != nil {
-		return lo, hi, nil, err
+		return lo, hi, err
 	}
 	defer mpool.FreeSlice(s.mp, weighted)
 	weighted = weighted[:0]
-	for level, values := range s.levels {
+	for level := 0; level < int(s.levelCnt); level++ {
+		values := s.levels[level]
 		weight := uint64(1) << level
 		for _, value := range values {
 			weighted = append(weighted, weightedQuantileValue[T]{value: value, weight: weight})
 		}
 	}
-	sort.Slice(weighted, func(i, j int) bool {
-		return s.compare(weighted[i].value, weighted[j].value) < 0
+	slices.SortFunc(weighted, func(left, right weightedQuantileValue[T]) int {
+		return s.compare(left.value, right.value)
 	})
-	loRank, hiRank, frac := percentileRanks(s.count, p)
-	return s.valueAtRank(loRank, weighted), s.valueAtRank(hiRank, weighted), frac, nil
+	return s.valueAtRank(loRank, weighted), s.valueAtRank(hiRank, weighted), nil
 }
 
 func (s *quantileSketch[T]) retained() int {
 	n := 0
-	for _, values := range s.levels {
+	for level := 0; level < int(s.levelCnt); level++ {
+		values := s.levels[level]
 		n += len(values)
 	}
 	return n
@@ -302,62 +460,101 @@ func (s *quantileSketch[T]) Size() int64 {
 	var zero T
 	valueSize := len(types.EncodeFixed(zero))
 	capacity := 0
-	for _, values := range s.levels {
+	for level := 0; level < int(s.levelCnt); level++ {
+		values := s.levels[level]
 		capacity += cap(values)
 	}
-	return int64((capacity+2)*valueSize + cap(s.levels)*24 + cap(s.parity))
+	return int64((capacity + 2) * valueSize)
 }
 
 func (s *quantileSketch[T]) Free() {
-	for _, values := range s.levels {
+	for level := 0; level < int(s.levelCnt); level++ {
+		values := s.levels[level]
 		s.freeLevel(values)
+		s.levels[level] = nil
 	}
+	s.levelCnt = 0
 	s.levels = nil
 	s.parity = nil
 	s.count = 0
 	s.hasValue = false
 }
 
-func (s *quantileSketch[T]) MarshalBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteByte(approxPercentileSketchVersion)
-	if err := types.WriteUint64(&buf, s.count); err != nil {
-		return nil, err
+func (s *quantileSketch[T]) MarshaledSize() int {
+	var zero T
+	valueSize := len(types.EncodeFixed(zero))
+	size := 1 + 8 + 1 + 2
+	if s.hasValue {
+		size += 2 * valueSize
+	}
+	for level := 0; level < int(s.levelCnt); level++ {
+		size += 1 + 2 + len(s.levels[level])*valueSize
+	}
+	return size
+}
+
+func (s *quantileSketch[T]) MarshalTo(writer io.Writer) error {
+	if s == nil || writer == nil || int(s.levelCnt) > approxPercentileMaxLevels {
+		return moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch")
+	}
+	write := func(data []byte) error {
+		n, err := writer.Write(data)
+		if err == nil && n != len(data) {
+			return io.ErrShortWrite
+		}
+		return err
+	}
+	if err := write([]byte{approxPercentileSketchVersion}); err != nil {
+		return err
+	}
+	if err := types.WriteUint64(writer, s.count); err != nil {
+		return err
 	}
 	if s.hasValue {
-		buf.WriteByte(1)
-		if _, err := buf.Write(types.EncodeFixed(s.min)); err != nil {
-			return nil, err
+		if err := write([]byte{1}); err != nil {
+			return err
 		}
-		if _, err := buf.Write(types.EncodeFixed(s.max)); err != nil {
-			return nil, err
+		if err := write(types.EncodeFixed(s.min)); err != nil {
+			return err
 		}
-	} else {
-		buf.WriteByte(0)
-	}
-	if len(s.levels) > approxPercentileMaxLevels {
-		return nil, moerr.NewInternalErrorNoCtx("approx_percentile: too many sketch levels")
-	}
-	if err := types.WriteUint16(&buf, uint16(len(s.levels))); err != nil {
-		return nil, err
-	}
-	for level, values := range s.levels {
-		if s.parity[level] {
-			buf.WriteByte(1)
-		} else {
-			buf.WriteByte(0)
+		if err := write(types.EncodeFixed(s.max)); err != nil {
+			return err
 		}
+	} else if err := write([]byte{0}); err != nil {
+		return err
+	}
+	if err := types.WriteUint16(writer, uint16(s.levelCnt)); err != nil {
+		return err
+	}
+	for level := 0; level < int(s.levelCnt); level++ {
+		values := s.levels[level]
 		if len(values) >= 2*approxPercentileSketchCapacity {
-			return nil, moerr.NewInternalErrorNoCtx("approx_percentile: uncompacted sketch")
+			return moerr.NewInternalErrorNoCtx("approx_percentile: uncompacted sketch")
 		}
-		if err := types.WriteUint16(&buf, uint16(len(values))); err != nil {
-			return nil, err
+		parity := byte(0)
+		if s.parity[level] {
+			parity = 1
+		}
+		if err := write([]byte{parity}); err != nil {
+			return err
+		}
+		if err := types.WriteUint16(writer, uint16(len(values))); err != nil {
+			return err
 		}
 		for _, value := range values {
-			if _, err := buf.Write(types.EncodeFixed(value)); err != nil {
-				return nil, err
+			if err := write(types.EncodeFixed(value)); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (s *quantileSketch[T]) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	buf.Grow(s.MarshaledSize())
+	if err := s.MarshalTo(&buf); err != nil {
+		return nil, err
 	}
 	return buf.Bytes(), nil
 }
@@ -377,7 +574,7 @@ func (s *quantileSketch[T]) UnmarshalBinary(data []byte) error {
 }
 
 func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retErr error) {
-	restored := newQuantileSketch(s.mp, s.compare)
+	restored := newQuantileSketch(s.mp, s.compare, s.allocation)
 	defer func() {
 		if retErr != nil {
 			restored.Free()
@@ -405,7 +602,12 @@ func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retE
 	if err != nil || hasValue > 1 {
 		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch extrema flag")
 	}
-	encoded := make([]byte, valueSize)
+	var encodedStorage [types.Decimal128Size]byte
+	if valueSize > len(encodedStorage) {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"approx_percentile: unsupported encoded value size")
+	}
+	encoded := encodedStorage[:valueSize]
 	if hasValue == 1 {
 		if _, err := io.ReadFull(reader, encoded); err != nil {
 			return nil, err
@@ -424,8 +626,9 @@ func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retE
 	if levelCount > approxPercentileMaxLevels {
 		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level count")
 	}
-	restored.levels = make([][]T, int(levelCount))
-	restored.parity = make([]bool, int(levelCount))
+	if levelCount > 0 {
+		restored.ensureLevel(int(levelCount) - 1)
+	}
 	var represented uint64
 	for level := range int(levelCount) {
 		parity, err := readByte()
@@ -441,7 +644,7 @@ func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retE
 			return nil, moerr.NewInvalidInputNoCtx("approx_percentile: invalid sketch level size")
 		}
 		if length > 0 {
-			values, err := mpool.MakeSlice[T](int(length), restored.mp, true)
+			values, err := makeAccountedScratch[T](restored.allocation, restored.mp, int(length))
 			if err != nil {
 				return nil, err
 			}
@@ -479,22 +682,290 @@ func (s *quantileSketch[T]) UnmarshalFromReader(reader io.Reader) error {
 func (s *quantileSketch[T]) restore(restored *quantileSketch[T]) {
 	s.Free()
 	*s = *restored
+	restored.levelCnt = 0
 	restored.levels = nil
+	restored.parity = nil
 }
 
-func percentileRanks(count uint64, p *big.Rat) (lo, hi uint64, frac *big.Rat) {
-	if count <= 1 {
-		return 0, 0, new(big.Rat)
+type percentileFraction struct {
+	numerator   *big.Int
+	denominator *big.Int
+}
+
+func (fraction percentileFraction) sign() int {
+	if fraction.numerator == nil {
+		return 0
 	}
-	rank := new(big.Rat).Mul(p, new(big.Rat).SetInt(new(big.Int).SetUint64(count-1)))
-	loInt := new(big.Int).Quo(rank.Num(), rank.Denom())
-	lo = loInt.Uint64()
+	return fraction.numerator.Sign()
+}
+
+// percentileArithmeticScratch owns the fixed number of big-number work
+// buffers needed by percentile rank and interpolation arithmetic. One scratch
+// is reused for a complete executor Flush, so group cardinality cannot create
+// a proportional Go-heap allocation stream. The buffers grow only to the
+// immutable percentile precision plus the fixed 128-bit value/count domain.
+type percentileArithmeticScratch struct {
+	one       big.Int
+	ten       big.Int
+	pow2_127  big.Int
+	pow2_128  big.Int
+	rank      big.Int
+	quotient  big.Int
+	remainder big.Int
+
+	left       big.Int
+	right      big.Int
+	difference big.Int
+	numerator  big.Int
+	product    big.Int
+	result     big.Int
+	resultRem  big.Int
+	comparison big.Int
+	conversion big.Int
+	floatRem   big.Int
+}
+
+func (scratch *percentileArithmeticScratch) constants() {
+	scratch.one.SetUint64(1)
+	scratch.ten.SetUint64(10)
+	if scratch.pow2_128.Sign() == 0 {
+		scratch.pow2_127.Lsh(&scratch.one, 127)
+		scratch.pow2_128.Lsh(&scratch.one, 128)
+	}
+}
+
+func (scratch *percentileArithmeticScratch) ranks(
+	count uint64,
+	p *big.Rat,
+) (lo, hi uint64, fraction percentileFraction) {
+	fraction = percentileFraction{
+		numerator: &scratch.remainder, denominator: p.Denom(),
+	}
+	if count <= 1 {
+		scratch.remainder.SetUint64(0)
+		return 0, 0, fraction
+	}
+	scratch.rank.SetUint64(count - 1)
+	scratch.rank.Mul(&scratch.rank, p.Num())
+	scratch.quotient.QuoRem(&scratch.rank, p.Denom(), &scratch.remainder)
+	lo = scratch.quotient.Uint64()
 	hi = lo
 	if lo < count-1 {
 		hi++
 	}
-	rem := new(big.Int).Mod(new(big.Int).Set(rank.Num()), rank.Denom())
-	return lo, hi, new(big.Rat).SetFrac(rem, new(big.Int).Set(rank.Denom()))
+	return lo, hi, fraction
+}
+
+func (scratch *percentileArithmeticScratch) discreteRank(
+	count uint64,
+	p *big.Rat,
+) uint64 {
+	if count == 0 {
+		return 0
+	}
+	scratch.constants()
+	scratch.rank.SetUint64(count)
+	scratch.rank.Mul(&scratch.rank, p.Num())
+	scratch.quotient.QuoRem(&scratch.rank, p.Denom(), &scratch.remainder)
+	if scratch.remainder.Sign() != 0 {
+		scratch.quotient.Add(&scratch.quotient, &scratch.one)
+	}
+	if scratch.quotient.Sign() == 0 {
+		return 0
+	}
+	scratch.quotient.Sub(&scratch.quotient, &scratch.one)
+	return scratch.quotient.Uint64()
+}
+
+func (scratch *percentileArithmeticScratch) fractionFloat64(
+	fraction percentileFraction,
+) float64 {
+	if fraction.sign() == 0 {
+		return 0
+	}
+	return rationalToFloat64(
+		fraction.numerator, fraction.denominator,
+		&scratch.quotient, &scratch.comparison, &scratch.floatRem)
+}
+
+func numericIntegerToScratch[T numeric](dst *big.Int, value T) bool {
+	switch value := any(value).(type) {
+	case int8:
+		dst.SetInt64(int64(value))
+	case int16:
+		dst.SetInt64(int64(value))
+	case int32:
+		dst.SetInt64(int64(value))
+	case int64:
+		dst.SetInt64(value)
+	case uint8:
+		dst.SetUint64(uint64(value))
+	case uint16:
+		dst.SetUint64(uint64(value))
+	case uint32:
+		dst.SetUint64(uint64(value))
+	case uint64:
+		dst.SetUint64(value)
+	default:
+		return false
+	}
+	return true
+}
+
+func interpolateNumericWithScratch[T numeric](
+	scratch *percentileArithmeticScratch,
+	lo, hi T,
+	fraction percentileFraction,
+) float64 {
+	if !numericIntegerToScratch(&scratch.left, lo) {
+		return interpolateFloat64(
+			float64(lo), float64(hi), scratch.fractionFloat64(fraction))
+	}
+	if fraction.sign() == 0 {
+		return float64(lo)
+	}
+	numericIntegerToScratch(&scratch.right, hi)
+	scratch.numerator.Mul(&scratch.left, fraction.denominator)
+	scratch.difference.Sub(&scratch.right, &scratch.left)
+	scratch.product.Mul(&scratch.difference, fraction.numerator)
+	scratch.numerator.Add(&scratch.numerator, &scratch.product)
+	return rationalToFloat64(
+		&scratch.numerator, fraction.denominator,
+		&scratch.quotient, &scratch.comparison, &scratch.floatRem)
+}
+
+func rationalToFloat64(
+	numerator, denominator *big.Int,
+	quotient, scaledDenominator, remainder *big.Int,
+) float64 {
+	if numerator.Sign() == 0 {
+		return 0
+	}
+	sign := 1.0
+	if numerator.Sign() < 0 {
+		sign = -1
+	}
+	numeratorBits := numerator.BitLen()
+	denominatorBits := denominator.BitLen()
+	exponent := numeratorBits - denominatorBits
+	if exponent >= 0 {
+		scaledDenominator.Lsh(denominator, uint(exponent))
+		if numerator.CmpAbs(scaledDenominator) < 0 {
+			exponent--
+		}
+	} else {
+		quotient.Lsh(numerator, uint(-exponent))
+		if quotient.CmpAbs(denominator) < 0 {
+			exponent--
+		}
+	}
+	// Percentile arithmetic is bounded to roughly 256 bits and produces
+	// ordinary SQL numeric results, so this scale remains small. Round directly
+	// to a 53-bit binary64 significand. Keeping one extra bit here would make
+	// the subsequent uint64-to-float64 conversion round a second time and can
+	// move exact halfway cases by one ULP.
+	shift := 52 - exponent
+	if shift >= 0 {
+		quotient.Lsh(numerator, uint(shift))
+		scaledDenominator.Set(denominator)
+	} else {
+		quotient.Set(numerator)
+		scaledDenominator.Lsh(denominator, uint(-shift))
+	}
+	quotient.Abs(quotient)
+	quotient.QuoRem(quotient, scaledDenominator, remainder)
+	doubledRemainder := remainder.Lsh(remainder, 1)
+	comparison := doubledRemainder.Cmp(scaledDenominator)
+	if comparison > 0 || comparison == 0 && quotient.Bit(0) != 0 {
+		remainder.SetUint64(1)
+		quotient.Add(quotient, remainder)
+	}
+	if quotient.BitLen() > 53 {
+		quotient.Rsh(quotient, 1)
+		exponent++
+	}
+	return sign * math.Ldexp(float64(quotient.Uint64()), exponent-52)
+}
+
+func (scratch *percentileArithmeticScratch) decimal128ToInt(
+	dst *big.Int,
+	value types.Decimal128,
+) {
+	dst.SetUint64(value.B64_127)
+	dst.Lsh(dst, 64)
+	scratch.conversion.SetUint64(value.B0_63)
+	dst.Or(dst, &scratch.conversion)
+	if value.Sign() {
+		dst.Sub(dst, &scratch.pow2_128)
+	}
+}
+
+func (scratch *percentileArithmeticScratch) decimal128FromInt(
+	value *big.Int,
+) (types.Decimal128, error) {
+	scratch.comparison.Neg(&scratch.pow2_127)
+	if value.Cmp(&scratch.comparison) < 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx(
+			"approx_percentile: decimal interpolation overflow")
+	}
+	scratch.comparison.Sub(&scratch.pow2_127, &scratch.one)
+	if value.Cmp(&scratch.comparison) > 0 {
+		return types.Decimal128{}, moerr.NewInvalidInputNoCtx(
+			"approx_percentile: decimal interpolation overflow")
+	}
+	scratch.conversion.Set(value)
+	if scratch.conversion.Sign() < 0 {
+		scratch.conversion.Add(&scratch.conversion, &scratch.pow2_128)
+	}
+	low := scratch.conversion.Uint64()
+	scratch.conversion.Rsh(&scratch.conversion, 64)
+	return types.Decimal128{
+		B0_63: low, B64_127: scratch.conversion.Uint64(),
+	}, nil
+}
+
+// interpolateDecimal converts from the input scale to the declared result
+// scale. All arithmetic stays integral/rational, so values above 2^53 do not
+// pass through float64.
+func (scratch *percentileArithmeticScratch) interpolateDecimal(
+	lo, hi types.Decimal128,
+	fraction percentileFraction,
+	scaleDelta int32,
+) (types.Decimal128, error) {
+	if scaleDelta < 0 || scaleDelta > 1 {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtx(
+			"approx_percentile: invalid decimal result scale")
+	}
+	scratch.constants()
+	scratch.decimal128ToInt(&scratch.left, lo)
+	scratch.decimal128ToInt(&scratch.right, hi)
+	scratch.difference.Sub(&scratch.right, &scratch.left)
+	scratch.numerator.Mul(&scratch.left, fraction.denominator)
+	scratch.product.Mul(&scratch.difference, fraction.numerator)
+	scratch.numerator.Add(&scratch.numerator, &scratch.product)
+	if scaleDelta == 1 {
+		scratch.numerator.Mul(&scratch.numerator, &scratch.ten)
+	}
+	scratch.result.QuoRem(
+		&scratch.numerator, fraction.denominator, &scratch.resultRem)
+	scratch.comparison.Abs(&scratch.resultRem)
+	scratch.comparison.Lsh(&scratch.comparison, 1)
+	if scratch.comparison.Cmp(fraction.denominator) >= 0 {
+		if scratch.numerator.Sign() < 0 {
+			scratch.result.Sub(&scratch.result, &scratch.one)
+		} else {
+			scratch.result.Add(&scratch.result, &scratch.one)
+		}
+	}
+	return scratch.decimal128FromInt(&scratch.result)
+}
+
+func percentileRanks(count uint64, p *big.Rat) (lo, hi uint64, frac *big.Rat) {
+	var scratch percentileArithmeticScratch
+	lo, hi, fraction := scratch.ranks(count, p)
+	return lo, hi, new(big.Rat).SetFrac(
+		new(big.Int).Set(fraction.numerator),
+		new(big.Int).Set(fraction.denominator))
 }
 
 func parsePercentileConfig(partialResult any) (*big.Rat, float64, error) {
@@ -543,6 +1014,133 @@ type approxPercentileExecBase[T quantileValue] struct {
 	percentile      *big.Rat
 	percentileFloat float64
 	compare         func(T, T) int
+	arithmetic      percentileArithmeticScratch
+}
+
+func (exec *approxPercentileExecBase[T]) PreflightBatchFill(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	if exec.allocation == nil {
+		return nil
+	}
+	if err := validatePreflightVectors(vectors, offset, len(groups)); err != nil {
+		return err
+	}
+	var targetGroups [hashmap.UnitLimit]uint64
+	var counts [hashmap.UnitLimit]int
+	targetCount := 0
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		row := offset + i
+		if vectors[0].IsConst() {
+			row = 0
+		}
+		if vectors[0].IsNull(uint64(row)) {
+			continue
+		}
+		_, _, _, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		found := -1
+		for index := 0; index < targetCount; index++ {
+			if targetGroups[index] == group {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			found = targetCount
+			targetGroups[targetCount] = group
+			targetCount++
+		}
+		counts[found]++
+	}
+	for index := 0; index < targetCount; index++ {
+		sketch, err := exec.preflightSketch(targetGroups[index] - 1)
+		if err != nil {
+			return err
+		}
+		if err = sketch.preflightAdd(counts[index]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *approxPercentileExecBase[T]) preflightBatchMerge(
+	other *approxPercentileExecBase[T],
+	offset int,
+	groups []uint64,
+) error {
+	if exec.allocation == nil {
+		return nil
+	}
+	if other == nil || !exec.mergeCompatible(other) ||
+		len(groups) > hashmap.UnitLimit || offset < 0 ||
+		offset > other.GetNumGroups()-len(groups) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if exec.percentile != nil && other.percentile != nil &&
+		exec.percentile.Cmp(other.percentile) != 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"approx_percentile: cannot merge different percentile configurations")
+	}
+	type mergeNeed struct {
+		target *quantileSketch[T]
+		plan   quantileCapacityPlan[T]
+	}
+	var needs [hashmap.UnitLimit]mergeNeed
+	needCount := 0
+	for i, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		sx, sy := other.getXY(uint64(offset + i))
+		if sx >= len(other.state) || int(sy) >= len(other.state[sx].mobs) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		source, _ := other.state[sx].mobs[sy].(*quantileSketch[T])
+		if source == nil || source.count == 0 {
+			continue
+		}
+		_, _, _, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		found := -1
+		for index := 0; index < needCount; index++ {
+			x, y := exec.getXY(group - 1)
+			if exec.preflightStateAt(x) != nil &&
+				exec.preflightStateAt(x).mobs[y] == needs[index].target {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			target, sketchErr := exec.preflightSketch(group - 1)
+			if sketchErr != nil {
+				return sketchErr
+			}
+			found = needCount
+			needs[needCount].target = target
+			needs[needCount].plan = newQuantileCapacityPlan(target)
+			needCount++
+		}
+		if err = needs[found].plan.merge(source); err != nil {
+			return err
+		}
+	}
+	for index := 0; index < needCount; index++ {
+		if err := needs[index].plan.reserve(needs[index].target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newApproxPercentileExecBase[T quantileValue](mp *mpool.MPool, info singleAggInfo, compare func(T, T) int) approxPercentileExecBase[T] {
@@ -555,36 +1153,53 @@ func newApproxPercentileExecBase[T quantileValue](mp *mpool.MPool, info singleAg
 		retType:    info.retType,
 		emptyNull:  true,
 		saveArg:    false,
-		makeMarshalerUnmarshaler: func(mp *mpool.MPool) (MarshalerUnmarshaler, error) {
-			return newQuantileSketch(mp, compare), nil
+		makeMarshalerUnmarshaler: func(mp *mpool.MPool, allocation *AllocationAccount) (MarshalerUnmarshaler, error) {
+			return newQuantileSketch(mp, compare, allocation), nil
+		},
+		boundedOpaqueState: true,
+		stableEmptyOpaqueState: func(writer io.Writer) error {
+			empty := newQuantileSketch[T](nil, compare, nil)
+			if err := types.WriteInt32(writer, int32(empty.MarshaledSize())); err != nil {
+				return err
+			}
+			return empty.MarshalTo(writer)
 		},
 	}
 	return exec
 }
 
-func (exec *approxPercentileExecBase[T]) GroupGrow(more int) error {
-	start := exec.GetNumGroups()
-	if err := exec.aggExec.GroupGrow(more); err != nil {
-		return err
-	}
-	for group := start; group < start+more; group++ {
-		if _, err := exec.ensureSketch(uint64(group)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (exec *approxPercentileExecBase[T]) ensureSketch(group uint64) (*quantileSketch[T], error) {
 	x, y := exec.getXY(group)
 	if exec.state[x].mobs[y] == nil {
-		mob, err := exec.makeMarshalerUnmarshaler(exec.mp)
+		mob, err := exec.makeMarshalerUnmarshaler(exec.mp, exec.allocation)
 		if err != nil {
 			return nil, err
 		}
 		exec.state[x].mobs[y] = mob
 	}
 	return exec.state[x].mobs[y].(*quantileSketch[T]), nil
+}
+
+func (exec *approxPercentileExecBase[T]) preflightSketch(
+	group uint64,
+) (*quantileSketch[T], error) {
+	x, y := exec.getXY(group)
+	state := exec.preflightStateAt(x)
+	if state == nil || int(y) >= len(state.mobs) {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	if state.mobs[y] == nil {
+		mob, err := exec.makeMarshalerUnmarshaler(exec.mp, exec.allocation)
+		if err != nil {
+			return nil, err
+		}
+		state.mobs[y] = mob
+	}
+	sketch, ok := state.mobs[y].(*quantileSketch[T])
+	if !ok {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	return sketch, nil
 }
 
 func (exec *approxPercentileExecBase[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -657,6 +1272,9 @@ func (exec *approxPercentileExecBase[T]) BatchFill(offset int, groups []uint64, 
 }
 
 func (exec *approxPercentileExecBase[T]) merge(other *approxPercentileExecBase[T], groupIdx1, groupIdx2 int) error {
+	if !exec.mergeCompatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
 	if exec.percentile != nil && other.percentile != nil && exec.percentile.Cmp(other.percentile) != 0 {
 		return moerr.NewInvalidInputNoCtx("approx_percentile: cannot merge different percentile configurations")
 	}
@@ -671,7 +1289,21 @@ func (exec *approxPercentileExecBase[T]) merge(other *approxPercentileExecBase[T
 	return target.Merge(other.state[x2].mobs[y2].(*quantileSketch[T]))
 }
 
+func (exec *approxPercentileExecBase[T]) mergeCompatible(
+	other *approxPercentileExecBase[T],
+) bool {
+	return exec != nil && other != nil &&
+		exec.aggId == other.aggId &&
+		exec.isDistinct == other.isDistinct &&
+		len(exec.argTypes) == 1 && len(other.argTypes) == 1 &&
+		exec.argTypes[0].Eq(other.argTypes[0]) &&
+		exec.retType.Eq(other.retType)
+}
+
 func (exec *approxPercentileExecBase[T]) batchMerge(other *approxPercentileExecBase[T], offset int, groups []uint64) error {
+	if !exec.mergeCompatible(other) {
+		return mpool.ErrAllocationAccountMismatch
+	}
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -715,6 +1347,17 @@ type approxPercentileNumericExec[T numeric] struct {
 	approxPercentileExecBase[T]
 }
 
+func (exec *approxPercentileNumericExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*approxPercentileNumericExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return exec.preflightBatchMerge(
+		&other.approxPercentileExecBase, offset, groups)
+}
+
 func (exec *approxPercentileNumericExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.merge(&next.(*approxPercentileNumericExec[T]).approxPercentileExecBase, groupIdx1, groupIdx2)
 }
@@ -738,9 +1381,15 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 		}
 	}()
 	for x, state := range exec.state {
-		result := vector.NewOffHeapVecWithType(exec.retType)
+		result, err := exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
 		results[x] = result
 		if err := result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		if err := result.PreExtendNulls(int(state.length), exec.mp); err != nil {
 			return nil, err
 		}
 		result.SetLength(int(state.length))
@@ -750,11 +1399,15 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 				result.SetNull(uint64(y))
 				continue
 			}
-			lo, hi, frac, err := state.mobs[y].(*quantileSketch[T]).Quantile(exec.percentile)
+			loRank, hiRank, fraction := exec.arithmetic.ranks(
+				state.mobs[y].(*quantileSketch[T]).count, exec.percentile)
+			lo, hi, err := state.mobs[y].(*quantileSketch[T]).QuantileAtRanks(
+				loRank, hiRank)
 			if err != nil {
 				return nil, err
 			}
-			values[y] = interpolateNumeric(lo, hi, frac)
+			values[y] = interpolateNumericWithScratch(
+				&exec.arithmetic, lo, hi, fraction)
 		}
 	}
 	return results, nil
@@ -762,6 +1415,17 @@ func (exec *approxPercentileNumericExec[T]) Flush() (_ []*vector.Vector, retErr 
 
 type approxPercentileDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 	approxPercentileExecBase[T]
+}
+
+func (exec *approxPercentileDecimalExec[T]) PreflightBatchMerge(
+	next AggFuncExec, offset int, groups []uint64,
+) error {
+	other, ok := next.(*approxPercentileDecimalExec[T])
+	if !ok {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return exec.preflightBatchMerge(
+		&other.approxPercentileExecBase, offset, groups)
 }
 
 func (exec *approxPercentileDecimalExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
@@ -787,9 +1451,15 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 		}
 	}()
 	for x, state := range exec.state {
-		result := vector.NewOffHeapVecWithType(exec.retType)
+		result, err := exec.allocation.newVector(exec.retType)
+		if err != nil {
+			return nil, err
+		}
 		results[x] = result
 		if err := result.PreExtend(int(state.length), exec.mp); err != nil {
+			return nil, err
+		}
+		if err := result.PreExtendNulls(int(state.length), exec.mp); err != nil {
 			return nil, err
 		}
 		result.SetLength(int(state.length))
@@ -799,12 +1469,16 @@ func (exec *approxPercentileDecimalExec[T]) Flush() (_ []*vector.Vector, retErr 
 				result.SetNull(uint64(y))
 				continue
 			}
-			lo, hi, frac, err := state.mobs[y].(*quantileSketch[T]).Quantile(exec.percentile)
+			loRank, hiRank, fraction := exec.arithmetic.ranks(
+				state.mobs[y].(*quantileSketch[T]).count, exec.percentile)
+			lo, hi, err := state.mobs[y].(*quantileSketch[T]).QuantileAtRanks(
+				loRank, hiRank)
 			if err != nil {
 				return nil, err
 			}
-			values[y], err = interpolateDecimal(
-				toDecimal128(lo), toDecimal128(hi), frac, exec.retType.Scale-exec.argTypes[0].Scale,
+			values[y], err = exec.arithmetic.interpolateDecimal(
+				toDecimal128(lo), toDecimal128(hi), fraction,
+				exec.retType.Scale-exec.argTypes[0].Scale,
 			)
 			if err != nil {
 				return nil, err
@@ -825,57 +1499,14 @@ func toDecimal128[T types.Decimal64 | types.Decimal128](value T) types.Decimal12
 	}
 }
 
-func decimal128ToBigInt(value types.Decimal128) *big.Int {
-	result := new(big.Int).SetUint64(value.B64_127)
-	result.Lsh(result, 64)
-	result.Or(result, new(big.Int).SetUint64(value.B0_63))
-	if value.Sign() {
-		result.Sub(result, new(big.Int).Lsh(big.NewInt(1), 128))
-	}
-	return result
-}
-
-func decimal128FromBigInt(value *big.Int) (types.Decimal128, error) {
-	limit := new(big.Int).Lsh(big.NewInt(1), 127)
-	if value.Cmp(new(big.Int).Neg(new(big.Int).Set(limit))) < 0 || value.Cmp(new(big.Int).Sub(new(big.Int).Set(limit), big.NewInt(1))) > 0 {
-		return types.Decimal128{}, moerr.NewInvalidInputNoCtx("approx_percentile: decimal interpolation overflow")
-	}
-	unsigned := new(big.Int).Set(value)
-	if unsigned.Sign() < 0 {
-		unsigned.Add(unsigned, new(big.Int).Lsh(big.NewInt(1), 128))
-	}
-	lowMask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
-	low := new(big.Int).And(new(big.Int).Set(unsigned), lowMask).Uint64()
-	high := new(big.Int).Rsh(unsigned, 64).Uint64()
-	return types.Decimal128{B0_63: low, B64_127: high}, nil
-}
-
-// interpolateDecimal converts from the input scale to the declared result
-// scale. All arithmetic stays integral/rational, so values above 2^53 do not
-// pass through float64.
 func interpolateDecimal(lo, hi types.Decimal128, frac *big.Rat, scaleDelta int32) (types.Decimal128, error) {
-	if scaleDelta < 0 || scaleDelta > 1 {
-		return types.Decimal128{}, moerr.NewInternalErrorNoCtx("approx_percentile: invalid decimal result scale")
-	}
-	den := new(big.Int).Set(frac.Denom())
-	rem := new(big.Int).Set(frac.Num())
-	loInt := decimal128ToBigInt(lo)
-	diff := new(big.Int).Sub(decimal128ToBigInt(hi), loInt)
-	numerator := new(big.Int).Mul(loInt, den)
-	numerator.Add(numerator, new(big.Int).Mul(diff, rem))
-	if scaleDelta == 1 {
-		numerator.Mul(numerator, big.NewInt(10))
-	}
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(numerator, den, remainder)
-	if new(big.Int).Lsh(new(big.Int).Abs(remainder), 1).Cmp(den) >= 0 {
-		if numerator.Sign() < 0 {
-			quotient.Sub(quotient, big.NewInt(1))
-		} else {
-			quotient.Add(quotient, big.NewInt(1))
-		}
-	}
-	return decimal128FromBigInt(quotient)
+	var scratch percentileArithmeticScratch
+	return scratch.interpolateDecimal(
+		lo, hi,
+		percentileFraction{
+			numerator: frac.Num(), denominator: frac.Denom(),
+		},
+		scaleDelta)
 }
 
 func newApproxPercentileExec(mp *mpool.MPool, info singleAggInfo) (AggFuncExec, error) {
@@ -945,46 +1576,11 @@ func interpolateFloat64(lo, hi, fraction float64) float64 {
 	return lo + (hi-lo)*fraction
 }
 
-func numericIntegerToBigInt[T numeric](value T) (*big.Int, bool) {
-	switch value := any(value).(type) {
-	case int8:
-		return big.NewInt(int64(value)), true
-	case int16:
-		return big.NewInt(int64(value)), true
-	case int32:
-		return big.NewInt(int64(value)), true
-	case int64:
-		return big.NewInt(value), true
-	case uint8:
-		return new(big.Int).SetUint64(uint64(value)), true
-	case uint16:
-		return new(big.Int).SetUint64(uint64(value)), true
-	case uint32:
-		return new(big.Int).SetUint64(uint64(value)), true
-	case uint64:
-		return new(big.Int).SetUint64(value), true
-	default:
-		return nil, false
-	}
-}
-
 func interpolateNumeric[T numeric](lo, hi T, fraction *big.Rat) float64 {
-	loInt, integer := numericIntegerToBigInt(lo)
-	if !integer {
-		fractionFloat64, _ := fraction.Float64()
-		return interpolateFloat64(float64(lo), float64(hi), fractionFloat64)
-	}
-	if fraction.Sign() == 0 {
-		return float64(lo)
-	}
-
-	hiInt, _ := numericIntegerToBigInt(hi)
-	denominator := new(big.Int).Set(fraction.Denom())
-	numerator := new(big.Int).Mul(loInt, denominator)
-	difference := new(big.Int).Sub(hiInt, loInt)
-	numerator.Add(numerator, new(big.Int).Mul(difference, fraction.Num()))
-	result, _ := new(big.Rat).SetFrac(numerator, denominator).Float64()
-	return result
+	var scratch percentileArithmeticScratch
+	return interpolateNumericWithScratch(&scratch, lo, hi, percentileFraction{
+		numerator: fraction.Num(), denominator: fraction.Denom(),
+	})
 }
 
 func percentileNumericVals[T numeric](values []T, p float64) float64 {

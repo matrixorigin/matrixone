@@ -65,7 +65,7 @@ func newDedupTestSpillEngine(
 ) *spillutil.SpillEngine {
 	t.Helper()
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		var err error
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
@@ -77,7 +77,7 @@ func newDedupTestSpillEngine(
 	engine, err := spillutil.NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine

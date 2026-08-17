@@ -37,7 +37,7 @@ import (
 type spillTestHarness struct {
 	op         *HashBuild
 	proc       *process.Process
-	generation *process.HashBuildBudgetGeneration
+	generation *process.ExecutionResourceGeneration
 	registry   *mpool.AllocationAccountRegistry
 	account    *mpool.AllocationAccount
 	files      []*os.File
@@ -46,7 +46,7 @@ type spillTestHarness struct {
 func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	t.Helper()
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	budget := process.MustNewHashBuildBudget(limit, limit)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 256)

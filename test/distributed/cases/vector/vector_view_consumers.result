@@ -1,0 +1,146 @@
+set experimental_ivf_index = 1;
+drop database if exists vec_view_consumers;
+create database vec_view_consumers;
+use vec_view_consumers;
+create table t_ivf(id bigint primary key, v vecf32(4), tag int);
+insert into t_ivf values
+(1,'[1,1,1,1]',10),(2,'[3,3,3,3]',20),(3,'[5,5,5,5]',30),
+(4,'[50,50,50,50]',40),(5,'[52,52,52,52]',50),(6,'[54,54,54,54]',60);
+create index i_ivf using ivfflat on t_ivf(v) lists=2 op_type 'vector_l2_ops';
+create table meta(id bigint primary key, name varchar(20));
+insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
+create view knn as
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3;
+explain select id, d from knn;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select id, d from knn order by id;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+explain select id, d from knn order by d;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+select id, d from knn order by d;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+with force_knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select id, d from force_knn order by d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  4.0  𝄀
+3  ¦  8.0
+select id, d from knn order by d desc;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+3  ¦  8.0  𝄀
+2  ¦  4.0  𝄀
+1  ¦  0.0
+explain select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER  𝄀
+        Join Cond: (m.id = mo_ivf_alias_0.pkid)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on vec_view_consumers.meta  𝄀
+              Runtime Filter Probe: m.id  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+select knn.id, knn.d, m.name from knn join meta m on m.id = knn.id order by knn.d;
+➤ id[-5,64,0]  ¦  d[8,9,0]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
+with force_knn as (
+select id, l2_distance(v,'[1,1,1,1]') as d from t_ivf
+order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=force'
+) select force_knn.id, force_knn.d, m.name
+from force_knn join meta m on m.id = force_knn.id order by force_knn.d;
+➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,15,0]  𝄀
+1  ¦  0.0  ¦  a  𝄀
+2  ¦  4.0  ¦  b  𝄀
+3  ¦  8.0  ¦  c
+explain select count(*) as n from knn;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+select count(*) as n from knn;
+➤ n[-5,64,0]  𝄀
+3
+explain select id from knn where d > 0;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Filter  𝄀
+        Filter Cond: (mo_ivf_alias_0.score > 0)  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
+                    Limit: 3
+select id from knn where d > 0 order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3
+create view knn_ids as
+select id from t_ivf order by l2_distance(v,'[1,1,1,1]') limit 3;
+explain select id from knn_ids order by id;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: t_ivf.id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+              Limit: 3  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (t_ivf.id = mo_ivf_alias_0.pkid)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on vec_view_consumers.t_ivf  𝄀
+                          Runtime Filter Probe: t_ivf.id  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Limit: 3
+select id from knn_ids order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop database vec_view_consumers;
