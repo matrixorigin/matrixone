@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 var (
@@ -132,6 +133,7 @@ func startTNServiceCluster(
 		return false, moerr.NewBadConfig(context.Background(), "DN service config not set")
 	}
 
+	configs := make([]*Config, 0, len(files))
 	gcDisabled := true
 	for _, file := range files {
 		cfg := NewConfig()
@@ -140,7 +142,13 @@ func startTNServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return false, err
 		}
+		if err := validateLaunchServiceConfigType(cfg, file, metadata.ServiceType_TN); err != nil {
+			return false, err
+		}
 		gcDisabled = gcDisabled && cfg.getTNServiceConfig().GCCfg.DisableGC
+		configs = append(configs, cfg)
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return false, err
 		}
@@ -159,16 +167,22 @@ func startCNServiceCluster(
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "CN service config not set")
 	}
-	upstreams := []string{}
+	configs := make([]*Config, 0, len(files))
+	upstreams := make([]string, 0, len(files))
 
-	var cfg *Config
 	for _, file := range files {
-		cfg = NewConfig()
+		cfg := NewConfig()
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
+		if err := validateLaunchServiceConfigType(cfg, file, metadata.ServiceType_CN); err != nil {
+			return err
+		}
 		cfg.benchmarkTNNoGC = tnGCDisabled
+		configs = append(configs, cfg)
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
@@ -187,6 +201,21 @@ func startCNServiceCluster(
 	}
 	return nil
 }
+
+func validateLaunchServiceConfigType(cfg *Config, file string, expected metadata.ServiceType) error {
+	actual, err := cfg.getServiceType()
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return moerr.NewBadConfigf(
+			context.Background(),
+			"%s service config %q has service-type=%s, expected %s",
+			expected.String(), file, actual.String(), expected.String())
+	}
+	return nil
+}
+
 func shouldStartBuiltinCNProxy(upstreamCount int, proxyServiceEnabled bool, proxyOwns6001 ...bool) bool {
 	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
 	return upstreamCount > 1 && (!proxyServiceEnabled || !owns6001)
