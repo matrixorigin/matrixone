@@ -17,6 +17,7 @@ package parsers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -806,4 +807,39 @@ func TestRewriteBodyUsesIdentifierComparisonMode(t *testing.T) {
 		require.Len(t, chain, 1)
 		require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), test.origin)
 	}
+}
+
+func TestEquivalentRewriteValuesAreValidatedBeforeKeySelection(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name    string
+		loser   string
+		wantErr string
+	}{
+		{name: "non select", loser: "delete from shadow27190.t", wantErr: "only accept SELECT-like statements"},
+		{name: "empty", loser: "", wantErr: "statement"},
+		{name: "syntax error", loser: "select from", wantErr: "syntax error"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sql := fmt.Sprintf(`/*+ {"rewrites":{
+				"shadow27190.t":"select * from shadow27190.t where id=1",
+				"shadow27190.T":%q
+			}} */ select id from shadow27190.t`, test.loser)
+			stmts, err := Parse(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			err = AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, "", 1)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+
+	const valid = `/*+ {"rewrites":{
+		"shadow27190.t":"select * from shadow27190.t where id=1",
+		"shadow27190.T":"select * from shadow27190.t where id=2"
+	}} */ select id from shadow27190.t`
+	stmts, err := Parse(ctx, dialect.MYSQL, valid, 1)
+	require.NoError(t, err)
+	require.NoError(t, AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, valid, "", 1))
+	chain := stmts[0].(*tree.Select).RewriteOption.Rewrites["shadow27190.t"]
+	require.Len(t, chain, 1)
+	require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), "id = 1")
 }

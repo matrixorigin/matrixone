@@ -510,6 +510,15 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 	content string,
 	lowerCaseTableNames int64,
 ) (rewrites map[string][]string, remapDb map[string]string, err error) {
+	return decodeRewriteHintWithLowerCaseTableNames(ctx, content, lowerCaseTableNames, nil)
+}
+
+func decodeRewriteHintWithLowerCaseTableNames(
+	ctx context.Context,
+	content string,
+	lowerCaseTableNames int64,
+	validateRewriteChain func([]string) error,
+) (rewrites map[string][]string, remapDb map[string]string, err error) {
 	content = strings.TrimSpace(content)
 	if content == "" || content[0] != '{' {
 		return nil, nil, nil
@@ -551,6 +560,13 @@ func DecodeRewriteHintWithLowerCaseTableNames(
 			sqls, derr := decodeRewriteChain(ctx, raw)
 			if derr != nil {
 				return nil, nil, derr
+			}
+			// Validate every input value before equivalent keys are collapsed.
+			// Key selection controls execution precedence, not policy validity.
+			if validateRewriteChain != nil {
+				if derr = validateRewriteChain(sqls); derr != nil {
+					return nil, nil, derr
+				}
 			}
 			canonicalKey, _, _, derr := NormalizeRewriteKey(ctx, db+"."+table, lowerCaseTableNames)
 			if derr != nil {
@@ -618,7 +634,29 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 			continue
 		}
 
-		rawChains, remapDb, err := DecodeRewriteHintWithLowerCaseTableNames(ctx, hint, lowerCaseTableNames)
+		validateRewriteChain := func(sqls []string) error {
+			if len(sqls) == 0 {
+				return moerr.NewParseError(ctx, "statement")
+			}
+			for _, v := range sqls {
+				if v == "" {
+					return moerr.NewParseError(ctx, "statement")
+				}
+				st, parseErr := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
+				if parseErr != nil {
+					return moerr.NewParseError(ctx, parseErr.Error())
+				}
+				switch st.(type) {
+				case *tree.Select, *tree.ParenSelect:
+					// ok
+				default:
+					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+				}
+			}
+			return nil
+		}
+		rawChains, remapDb, err := decodeRewriteHintWithLowerCaseTableNames(
+			ctx, hint, lowerCaseTableNames, validateRewriteChain)
 		if err != nil {
 			return err
 		}
