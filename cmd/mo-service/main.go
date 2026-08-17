@@ -334,9 +334,9 @@ func startCNService(
 	})
 }
 
-func (cfg *Config) verifySiriusBenchmarkNoGC() error {
-	tnGCDisabled := cfg.benchmarkTNNoGC || cfg.getTNServiceConfig().GCCfg.DisableGC
-	return cnservice.VerifySiriusBenchmarkNoGC(&cfg.CN, tnGCDisabled)
+func (c *Config) verifySiriusBenchmarkNoGC() error {
+	tnGCDisabled := c.benchmarkTNNoGC || c.getTNServiceConfig().GCCfg.DisableGC
+	return cnservice.VerifySiriusBenchmarkNoGC(&c.CN, tnGCDisabled)
 }
 
 func startTNService(
