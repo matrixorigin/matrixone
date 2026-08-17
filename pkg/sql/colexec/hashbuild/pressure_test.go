@@ -31,13 +31,13 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 		reason MemoryPressureReason
 	}{
 		{nil, MemoryPressureNone},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission}, MemoryPressureInvalid},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentMemory}, MemoryPressureCapacity},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentSpillDisk}, MemoryPressureSpillDiskLimit},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorAdmission, Component: process.HashBuildBudgetComponentSpillFD}, MemoryPressureSpillFDLimit},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorClosed}, MemoryPressureSealed},
-		{&process.HashBuildBudgetError{Kind: process.HashBuildBudgetErrorInvalid}, MemoryPressureInvalid},
-		{fmt.Errorf("wrapped: %w", process.ErrHashBuildBudgetAdmission), MemoryPressureNone},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorAdmission}, MemoryPressureInvalid},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorAdmission, Component: process.ExecutionResourceComponentMemory}, MemoryPressureCapacity},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorAdmission, Component: process.ExecutionResourceComponentSpillDisk}, MemoryPressureSpillDiskLimit},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorAdmission, Component: process.ExecutionResourceComponentSpillFD}, MemoryPressureSpillFDLimit},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorClosed}, MemoryPressureSealed},
+		{&process.ExecutionResourceError{Kind: process.ExecutionResourceErrorInvalid}, MemoryPressureInvalid},
+		{fmt.Errorf("wrapped: %w", process.ErrExecutionResourceAdmission), MemoryPressureNone},
 		{mpool.ErrAllocationAccountCapacity, MemoryPressureCapacity},
 		{moerr.NewMPoolCapacityNoCtxf("test"), MemoryPressureCapacity},
 		{mpool.ErrAllocationMetadataSlots, MemoryPressureCapacity},
@@ -52,9 +52,9 @@ func TestMemoryPressureReasonSeparatesCapacityFromLifecycle(t *testing.T) {
 		require.Equal(t, test.reason == MemoryPressureCapacity, IsRetryableMemoryCapacity(test.err))
 	}
 
-	memoryAdmission := &process.HashBuildBudgetError{
-		Kind:      process.HashBuildBudgetErrorAdmission,
-		Component: process.HashBuildBudgetComponentMemory,
+	memoryAdmission := &process.ExecutionResourceError{
+		Kind:      process.ExecutionResourceErrorAdmission,
+		Component: process.ExecutionResourceComponentMemory,
 	}
 	for _, test := range []struct {
 		err    error

@@ -59,3 +59,30 @@ function install_go_ut_analysis() {
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
 }
+
+# list_embedded_cluster_test_packages prints every requested test package whose
+# race test binary transitively depends on pkg/embed. Keep this derived from the
+# Go test dependency graph: a hand-maintained directory list inevitably misses
+# new embedded-cluster owners and lets them compete with parallel race tests.
+function list_embedded_cluster_test_packages() {
+    if (( $# == 0 )); then
+        echo "Usage: list_embedded_cluster_test_packages PACKAGE [PACKAGE...]" >&2
+        return 2
+    fi
+
+    local embed_package
+    local discovered_packages
+    local template
+    local -a tags_args=()
+
+    if [[ -n "${TAGS:-}" ]]; then
+        tags_args=(-tags "${TAGS}")
+    fi
+    embed_package=$(go list ${GO_MODULE_MODE:-} "${tags_args[@]}" ./pkg/embed) || return $?
+
+    template='{{ if eq .ImportPath "'"${embed_package}"'" }}{{ .ImportPath }}{{ "\n" }}{{ end }}{{ $owner := .ForTest }}{{ range .Deps }}{{ if eq . "'"${embed_package}"'" }}{{ $owner }}{{ "\n" }}{{ end }}{{ end }}'
+    discovered_packages=$(go list ${GO_MODULE_MODE:-} -race -test \
+        "${tags_args[@]}" -f "${template}" "$@") || return $?
+
+    printf '%s\n' "${discovered_packages}" | sed '/^$/d' | LC_ALL=C sort -u
+}

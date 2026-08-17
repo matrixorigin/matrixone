@@ -334,9 +334,19 @@ message GeneratedCol {
 }
 
 message IndexOption {
+  // Visibility carries DDL visibility independently of the legacy
+  // IndexDef.visible proto3 bool. Existing constraints omitted that bool for
+  // default-visible indexes, so its false value is ambiguous during upgrades.
+  enum Visibility {
+    VISIBILITY_UNSPECIFIED = 0;
+    VISIBILITY_VISIBLE = 1;
+    VISIBILITY_INVISIBLE = 2;
+  }
+
   bool create_extra_table = 1;
   string parser_name = 2;
   int32 ngram_token_size = 3;
+  Visibility visibility = 4;
 }
 
 message PrimaryKeyDef {
@@ -675,6 +685,8 @@ message UpdateCtx {
   int32 insert_pk_col_idx = 11;
   bool count_delete_affect_rows = 12;
   bool ignore_affected_rows = 13;
+  bool dedup_by_target_row_id = 14;
+  int32 target_update_ctx_idx = 15;
 }
 
 message InsertCtx {
@@ -1053,6 +1065,17 @@ message Node {
   // partition equality keys and the remaining entries are per-partition
   // ordering keys for bounded Top-N execution.
   int32 partition_by_count = 80;
+
+  // TIME_WINDOW only: optional half-open GAPFILL domain inferred from simple
+  // timestamp >= start and timestamp < finish predicates. Both expressions
+  // must be present before the executor extends the observed data domain.
+  Expr gap_fill_start = 81;
+  Expr gap_fill_end = 82;
+
+  // DEDUP only: the incoming key columns are proven unique by the insert
+  // planner, so the right-side operator only needs to look up target keys and
+  // must not retain incoming keys in its hashmap.
+  bool dedup_input_keys_unique = 83;
 }
 
 message SnapshotExtraInfo {
@@ -1228,6 +1251,10 @@ message PreInsertCtx {
   Expr cluster_by_expr = 6;
   bool is_old_update = 7;
   bool is_new_update = 8;
+  bool has_target_selector = 9;
+  int32 target_row_number_col = 10;
+  int32 target_active_col = 11;
+  int32 target_row_id_col = 12;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1371,6 +1398,11 @@ message Query {
   // transaction outcome. It is a step-array index, not a node id.
   bool has_returning = 13;
   int32 returning_step = 14;
+
+  // Apply the session sql_select_limit to the final result pipeline. This is
+  // false when the SELECT has an explicit top-level LIMIT, which takes
+  // precedence according to MySQL semantics.
+  bool apply_sql_select_limit = 15;
 }
 
 message TransationControl {

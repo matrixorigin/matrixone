@@ -18,8 +18,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +42,27 @@ func TestDropColumnWithIndex(t *testing.T) {
 	require.Equal(t, "title", def.Indexes[0].Parts[0])
 }
 
+func TestDropColumnRemovesEveryAdjacentSingleColumnIndex(t *testing.T) {
+	def := TableDef{Indexes: []*IndexDef{
+		{IndexName: "uk_body", Unique: true, Parts: []string{"body"}},
+		{
+			IndexName: "idx_body",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{"body", catalog.CreateAlias("id")},
+		},
+		{
+			IndexName: "idx_body_title",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{"body", "title", catalog.CreateAlias("id")},
+		},
+	}}
+
+	require.NoError(t, handleDropColumnWithIndex(context.Background(), "body", &def))
+	require.Len(t, def.Indexes, 1)
+	require.Equal(t, "idx_body_title", def.Indexes[0].IndexName)
+	require.Equal(t, []string{"title", catalog.CreateAlias("id")}, def.Indexes[0].Parts)
+}
+
 func TestCheckGeometryKeyPartTypes(t *testing.T) {
 	typ := plan.Type{Id: int32(types.T_geometry)}
 
@@ -50,6 +73,41 @@ func TestCheckGeometryKeyPartTypes(t *testing.T) {
 	err = checkUniqueKeyPartType(context.Background(), typ, "g")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
+}
+
+func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		option  *tree.IndexOption
+		visible bool
+	}{
+		{
+			name:    "default is visible",
+			visible: true,
+		},
+		{
+			name: "explicit invisible is preserved",
+			option: &tree.IndexOption{
+				Visible: tree.VISIBLE_TYPE_INVISIBLE,
+			},
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			indexDef, err := checkAddColumWithUniqueKey(context.Background(), &TableDef{}, &tree.UniqueIndex{
+				Name:        "idx_a",
+				KeyParts:    []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("a")}},
+				IndexOption: tc.option,
+			})
+			require.NoError(t, err)
+			got, isSet := catalog.GetIndexVisibility(indexDef)
+			require.True(t, isSet)
+			require.Equal(t, tc.visible, got)
+			require.Equal(t, tc.visible, indexDef.Visible)
+		})
+	}
 }
 
 // TestCheckVectorPrimaryKeyPartTypes verifies ALTER ... ADD PRIMARY KEY rejects

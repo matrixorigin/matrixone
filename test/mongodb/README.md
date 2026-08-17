@@ -2,6 +2,12 @@
 
 Run package tests with `make test-mongodb-unit` and the complete local smoke with `make test-mongodb-e2e-local`. The E2E fixture is a single-node ReplicaSet using SCRAM-SHA-256, majority reads, a read-only source user, deterministic documents, a two-row cursor batch, and a random published port. Reports are written under `test/mongodb/reports/` and redacted before upload.
 
+## Security defaults
+
+The MongoDB SQL surface is enabled by default for the system account and every tenant. This does not grant network access: `allow-loopback` defaults to `false`, and both `allowed-host-suffixes` and `allowed-cidrs` default to empty. `CREATE MONGODB CONNECTION` therefore fails until the cluster operator supplies the appropriate hostname suffix or CIDR allowlist. The same policy is rechecked for every seed, SRV result, and ReplicaSet member before a driver socket is opened. Credentials and TLS material remain account-scoped `secret://` references.
+
+Kubernetes is not an egress security boundary by itself. `NetworkPolicy`, CNI policy, routing rules, and cloud firewalls are defense-in-depth controls and may restrict a CN Pod, but they do not replace the MatrixOne endpoint allowlists. Without those controls a Pod may be able to reach cluster, VPC, metadata, or public endpoints; MatrixOne allowlists are still required even when the deployment supplies network-level restrictions.
+
 ## Frozen MVP contracts
 
 - MongoDB 8.0.12 and official Go driver v2.8.0 are the PR baseline. The product implementation accepts normal ReplicaSet seeds and SRV subject to endpoint policy; TLS/SRV and minimum supported production versions remain release gates.
