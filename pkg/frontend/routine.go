@@ -597,7 +597,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
-	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion21 {
+	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
 			return err

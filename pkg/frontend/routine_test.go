@@ -489,7 +489,7 @@ func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 	serviceRuntime := moruntime.ServiceRuntime(ses.proc.GetService())
 	oldVersion, hadVersion := serviceRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
-	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
 	t.Cleanup(func() {
 		if hadVersion {
 			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)

@@ -2619,8 +2619,8 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	}
 	var userVars map[string]*UserDefinedVar
 	if req.UserDefinedVarsExported {
-		if currentProtocolVersion(ses.proc) < defines.MORPCVersion21 {
-			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 21")
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
 		}
 		var err error
 		userVars, err = decodeUserDefinedVars(migrationCtx, req.UserDefinedVars)

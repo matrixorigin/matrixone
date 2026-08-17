@@ -90,7 +90,7 @@ func (c *clientConn) migrateConnToContext(
 	}
 
 	// Old CNs do not export evaluated user variables. Preserve the legacy raw
-	// replay path until the cluster-wide protocol reaches v21.
+	// replay path until the cluster-wide protocol reaches v22.
 	if !info.UserDefinedVarsExported {
 		for _, stmt := range c.migration.setVarStmts {
 			if _, err := execStmtWithContext(parent, sc, internalStmt{

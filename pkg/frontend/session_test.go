@@ -826,7 +826,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.ErrorContains(t, err, "does not exist")
 	})
 
-	t.Run("typed user variables require protocol v21", func(t *testing.T) {
+	t.Run("typed user variables require protocol v22", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -858,7 +858,7 @@ func TestSession_Migrate(t *testing.T) {
 				Value: plan2.MakePlan2StringConstExprWithType("stable-value"),
 			}},
 		})
-		require.ErrorContains(t, err, "requires protocol version 21")
+		require.ErrorContains(t, err, "requires protocol version 22")
 		_, getErr := target.GetUserDefinedVar("ts0")
 		require.ErrorContains(t, getErr, "does not exist")
 	})
