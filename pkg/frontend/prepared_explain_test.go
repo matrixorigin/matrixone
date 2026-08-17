@@ -54,6 +54,54 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	require.NotNil(t, filled.GetQuery())
 }
 
+func TestUnwrapExecutableExplainStatement(t *testing.T) {
+	tests := []struct {
+		name string
+		wrap func(tree.Statement) tree.Statement
+	}{
+		{
+			name: "explain",
+			wrap: func(stmt tree.Statement) tree.Statement {
+				return tree.NewExplainStmt(stmt, "text")
+			},
+		},
+		{
+			name: "explain analyze",
+			wrap: func(stmt tree.Statement) tree.Statement {
+				return tree.NewExplainAnalyze(stmt, "text")
+			},
+		},
+		{
+			name: "explain phyplan",
+			wrap: func(stmt tree.Statement) tree.Statement {
+				return tree.NewExplainPhyPlan(stmt, "text")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := &tree.Select{}
+			wrapped := tc.wrap(inner)
+			require.Same(t, inner, unwrapExecutableExplainStatement(wrapped))
+			wrapped.Free()
+			inner.Free()
+		})
+	}
+
+	inner := &tree.Select{}
+	child := tree.NewExplainAnalyze(inner, "text")
+	nested := tree.NewExplainStmt(child, "text")
+	require.Same(t, inner, unwrapExecutableExplainStatement(nested))
+	nested.Free()
+	child.Free()
+	inner.Free()
+
+	plain := &tree.Select{}
+	require.Same(t, plain, unwrapExecutableExplainStatement(plain))
+	plain.Free()
+}
+
 func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 106, "explain select ?")
 	defer prepareStmt.Close()
