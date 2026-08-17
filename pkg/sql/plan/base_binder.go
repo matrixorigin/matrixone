@@ -5635,10 +5635,14 @@ func normalizeDecimalStringLiteralComparisonArgs(ctx context.Context, name strin
 			continue
 		}
 		if args[stringPos].GetLit() != nil {
+			decimalExpr.ExactDecimalParam = hasExactDecimalParamSource(args[stringPos])
 			args[stringPos] = decimalExpr
 			return nil
 		}
 		args[stringPos], err = appendCastBeforeExpr(ctx, args[stringPos], decimalExpr.Typ)
+		if err == nil && hasExactDecimalParamSource(args[stringPos]) {
+			args[stringPos].ExactDecimalParam = true
+		}
 		return err
 	}
 	return nil
@@ -5680,9 +5684,8 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	default:
 		return nil
 	}
-
 	for paramPos, peerPos := range []int{1, 0} {
-		if args[paramPos].ExactDecimalParam && types.T(args[peerPos].Typ.Id).IsDecimal() {
+		if hasExactDecimalParamSource(args[paramPos]) && types.T(args[peerPos].Typ.Id).IsDecimal() {
 			paramType := types.T(args[paramPos].Typ.Id)
 			if args[paramPos].GetF() != nil &&
 				(paramType == types.T_float32 || paramType == types.T_float64) {
@@ -5696,7 +5699,7 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 				}
 				return nil
 			}
-			normalized, err := preparedDecimalComparisonRepresentative(ctx, args[paramPos], args[peerPos].Typ)
+			normalized, err := preparedDecimalComparisonRepresentative(ctx, args[paramPos], args[peerPos])
 			if err != nil {
 				return err
 			}
@@ -5723,21 +5726,36 @@ func normalizeDecimalParamComparisonArgs(ctx context.Context, name string, args 
 	return nil
 }
 
+func hasExactDecimalParamSource(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.ExactDecimalParam {
+		return true
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
+		hasExactDecimalParamSource(fn.Args[0])
+}
+
 func preparedDecimalComparisonRepresentative(
-	ctx context.Context, expr *plan.Expr, peer plan.Type,
+	ctx context.Context, expr *plan.Expr, peer *plan.Expr,
 ) (*plan.Expr, error) {
 	value, ok := preparedDecimalLiteralString(expr)
 	if !ok {
 		return expr, nil
 	}
 	canonical, width, scale, ok := canonicalPreparedDecimalString(value)
-	if !ok || width <= 76 {
+	if !ok {
 		return expr, nil
 	}
 	sourceIntegral := max(width-scale, int32(0))
-	peerIntegral := max(peer.Width-peer.Scale, int32(0))
+	peerIntegral, peerScale := decimalComparisonPeerDomain(peer)
+	if max(sourceIntegral, peerIntegral)+scale <= 76 {
+		return expr, nil
+	}
 	capacityScale := int32(76) - max(sourceIntegral, peerIntegral)
-	if capacityScale <= peer.Scale || capacityScale <= 0 {
+	if capacityScale <= peerScale || capacityScale <= 0 {
 		return expr, nil
 	}
 	sign := ""
@@ -5755,9 +5773,9 @@ func preparedDecimalComparisonRepresentative(
 	retained, discarded := []byte(fraction[:capacityScale]), fraction[capacityScale:]
 	discardedNonZero := strings.IndexFunc(discarded, func(r rune) bool { return r != '0' }) >= 0
 	if discardedNonZero {
-		peerScale := min(peer.Scale, int32(len(retained)))
+		gridScale := min(peerScale, int32(len(retained)))
 		gridAligned := true
-		for _, digit := range retained[peerScale:] {
+		for _, digit := range retained[gridScale:] {
 			if digit != '0' {
 				gridAligned = false
 				break
@@ -5774,6 +5792,24 @@ func preparedDecimalComparisonRepresentative(
 	}
 	decimal.ExactDecimalParam = true
 	return decimal, nil
+}
+
+func decimalComparisonPeerDomain(expr *plan.Expr) (integral, scale int32) {
+	initialized := false
+	for expr != nil && types.T(expr.Typ.Id).IsDecimal() {
+		integral = max(integral, expr.Typ.Width-expr.Typ.Scale)
+		if !initialized || expr.Typ.Scale < scale {
+			scale = expr.Typ.Scale
+			initialized = true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+			!types.T(fn.Args[0].Typ.Id).IsDecimal() {
+			break
+		}
+		expr = fn.Args[0]
+	}
+	return integral, scale
 }
 
 func canonicalPreparedDecimalString(value string) (string, int32, int32, bool) {

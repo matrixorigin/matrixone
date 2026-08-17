@@ -373,8 +373,9 @@ func TestNativeDecimalPreparedParamBindingUsesStablePayloadCategory(t *testing.T
 	}{
 		{value: "123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "1E+35", wantMode: preparedNumericExact, wantWidth: 36},
-		{value: "1E-31", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
-		{value: "1E-40", wantMode: preparedNumericTextPrefix, wantWidth: 65, wantScale: 30},
+		{value: "1E-31", wantMode: preparedNumericExact, wantWidth: 31, wantScale: 31},
+		{value: "1E-38", wantMode: preparedNumericExact, wantWidth: 38, wantScale: 38},
+		{value: "1E-40", wantMode: preparedNumericExact, wantWidth: 40, wantScale: 40},
 		{value: "1E-77", wantMode: preparedNumericProtocolExact, wantWidth: 65, wantScale: 30},
 		{value: "  123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
 		{value: "\t123456789012345678901234567890123456", wantMode: preparedNumericExact, wantWidth: 36},
@@ -676,8 +677,9 @@ func TestInitExecuteStmtParamUsesNativeDecimalPayloadDomain(t *testing.T) {
 	}{
 		{value: "123456789012345678901234567890123456", wantType: types.T_decimal128, wantWidth: 38, wantScale: 2},
 		{value: "1E+35", wantType: types.T_decimal128, wantWidth: 38, wantScale: 2},
-		{value: "1E-31", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
-		{value: "1E-40", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
+		{value: "1E-31", wantType: types.T_decimal256, wantWidth: 39, wantScale: 31},
+		{value: "1E-38", wantType: types.T_decimal256, wantWidth: 46, wantScale: 38},
+		{value: "1E-40", wantType: types.T_decimal256, wantWidth: 48, wantScale: 40},
 		{value: "1E-77", wantType: types.T_decimal256, wantWidth: 65, wantScale: 30},
 		{value: "999999999999999999999999999999999999.1234567890", wantType: types.T_decimal256, wantWidth: 46, wantScale: 10},
 	}

@@ -235,7 +235,7 @@ PREPARE p_bit_kind FROM
 SET @value = 5, @p = '9007199254740992.0001';
 EXECUTE p_bit_kind USING @value,@p;
 SELECT HEX(b) FROM typed_param_target;
-➤ HEX(b)[12,49151,0]  𝄀
+➤ HEX(b)[12,65535,0]  𝄀
 5
 DEALLOCATE PREPARE p_bit_kind;
 PREPARE p_json_kind FROM 'SELECT JSON_ARRAY(?) FROM t WHERE d128=?';

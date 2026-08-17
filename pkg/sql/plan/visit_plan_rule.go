@@ -491,6 +491,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					comparisonNeedsReal = comparisonNeedsReal || preparedDecimalGroupNeedsReal(replacement)
 				}
 			}
+			if isDecimalComparisonOperator(exprImpl.F.Func.GetObjName()) && len(exprImpl.F.Args) == 2 {
+				for paramPos, peerPos := range []int{1, 0} {
+					if !hasExactDecimalParamSource(exprImpl.F.Args[paramPos]) ||
+						!types.T(exprImpl.F.Args[peerPos].Typ.Id).IsDecimal() {
+						continue
+					}
+					exprImpl.F.Args[paramPos], err = preparedDecimalComparisonRepresentative(
+						rule.ctx, exprImpl.F.Args[paramPos], exprImpl.F.Args[peerPos])
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
 		}
 		for i, arg := range exprImpl.F.Args {
 			if _, ok := arg.Expr.(*plan.Expr_P); ok && !rule.exactDecimalComparisonsOnly {

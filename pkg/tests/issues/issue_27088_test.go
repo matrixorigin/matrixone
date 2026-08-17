@@ -240,6 +240,20 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare, "1e-77"))
 		require.Empty(t, queryIssue27088IDs(t, ctx, exactCompare,
 			"12345678901234567890123456789012345.123456789012345678901234567890123456789012"))
+		for _, value := range []string{"1e-38", "1e-43"} {
+			for name, query := range map[string]string{
+				"column_less":   "select id from exact_compare where d < ? order by id",
+				"param_greater": "select id from exact_compare where ? > d order by id",
+				"between":       "select id from exact_compare where ? between d and cast(1 as decimal(65,30)) order by id",
+			} {
+				t.Run(value+"/"+name, func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx, query)
+					require.NoError(t, err)
+					defer stmt.Close()
+					require.Equal(t, []int{1}, queryIssue27088IDs(t, ctx, stmt, value), query)
+				})
+			}
+		}
 		wideCommon, err := conn.PrepareContext(ctx, "select coalesce(?, cast(2 as decimal(1,0)))")
 		require.NoError(t, err)
 		defer wideCommon.Close()

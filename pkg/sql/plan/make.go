@@ -146,10 +146,20 @@ func makePlan2ExactDecimalStringExprWithType(ctx context.Context, v string) (*pl
 	switch {
 	case width <= types.T_decimal64.ToType().Width:
 		oid = types.T_decimal64
-		_, _, err = types.Parse128(canonical)
+		_, parsedScale, parseErr := types.Parse128(canonical)
+		err = parseErr
+		if err == nil && parsedScale != scale {
+			oid = types.T_decimal256
+			_, _, err = types.Parse256(canonical)
+		}
 	case width <= types.T_decimal128.ToType().Width:
 		oid = types.T_decimal128
-		_, _, err = types.Parse128(canonical)
+		_, parsedScale, parseErr := types.Parse128(canonical)
+		err = parseErr
+		if err == nil && parsedScale != scale {
+			oid = types.T_decimal256
+			_, _, err = types.Parse256(canonical)
+		}
 	default:
 		oid = types.T_decimal256
 		_, _, err = types.Parse256(canonical)

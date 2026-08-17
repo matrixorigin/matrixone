@@ -774,6 +774,13 @@ func preparedParamBindingType(kind vector.PrepareParamKind, value []byte) types.
 }
 
 func preparedNativeDecimalBindingType(width, scale int32) types.Type {
+	if width <= 76 && scale > 30 {
+		binding := types.T_text.ToType()
+		binding.Charset = preparedNumericTextBindingCharset
+		binding.Size = preparedNumericExact
+		binding.Width, binding.Scale = max(width, 1), scale
+		return binding
+	}
 	if width > 76 && max(width-scale, 0) <= 35 {
 		return preparedProtocolExactBindingType()
 	}

@@ -135,6 +135,34 @@ func TestDecimalStringLiteralCastUsesExactDecimalType(t *testing.T) {
 	require.True(t, containsVarcharLiteralCast(expr), "the explicit VARCHAR cast must remain in the expression")
 }
 
+func TestPreparedDecimalComparisonRepresentativeAccountsForPeerIntegralDomain(t *testing.T) {
+	ctx := context.Background()
+	peer := types.New(types.T_decimal256, 65, 30)
+
+	for _, value := range []string{"1e-43", "-1e-43"} {
+		expr := makePlan2StringConstExprWithType(value)
+		expr.ExactDecimalParam = true
+		representative, err := preparedDecimalComparisonRepresentative(ctx, expr, &planpb.Expr{Typ: makePlan2Type(&peer)})
+		require.NoError(t, err)
+		require.NotSame(t, expr, representative)
+		require.Equal(t, int32(types.T_decimal256), representative.Typ.Id)
+		require.Equal(t, int32(41), representative.Typ.Scale)
+		require.True(t, representative.ExactDecimalParam)
+	}
+}
+
+func TestDecimalComparisonPeerDomainUsesOriginalCastDomain(t *testing.T) {
+	ctx := context.Background()
+	original := makePreparedDecimalComparisonColumn(types.New(types.T_decimal256, 65, 30))
+	outerType := types.New(types.T_decimal256, 76, 43)
+	outer, err := appendCastBeforeExpr(ctx, original, makePlan2Type(&outerType))
+	require.NoError(t, err)
+
+	integral, scale := decimalComparisonPeerDomain(outer)
+	require.Equal(t, int32(35), integral)
+	require.Equal(t, int32(30), scale)
+}
+
 func TestDecimalStringLiteralComparisonPreservesHigherScale(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal128, 20, 4)
@@ -196,6 +224,11 @@ func TestDecimalLiteralNaturalTypeUsesMathematicalValue(t *testing.T) {
 		{name: "leading zeros", value: "0001.20", oid: types.T_decimal64, width: 2, scale: 1},
 		{name: "fractional zero", value: "0.000", oid: types.T_decimal64, width: 1, scale: 0},
 		{name: "decimal128 boundary", value: "99999999999999999999999999999999999999", oid: types.T_decimal128, width: 38, scale: 0},
+		{name: "scale 37 stays decimal128", value: "1e-37", oid: types.T_decimal128, width: 37, scale: 37},
+		{name: "scale 38 promotes without rounding", value: "1e-38", oid: types.T_decimal256, width: 38, scale: 38},
+		{name: "scale 39 remains exact", value: "1e-39", oid: types.T_decimal256, width: 39, scale: 39},
+		{name: "scale 42 remains exact", value: "1e-42", oid: types.T_decimal256, width: 42, scale: 42},
+		{name: "scale 43 remains exact", value: "1e-43", oid: types.T_decimal256, width: 43, scale: 43},
 		{
 			name:  "decimal256 promotion",
 			value: "12345678.0000000000000000000000000000001",
