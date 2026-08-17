@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -34,7 +35,8 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("value"), false, mp))
+	longValue := bytes.Repeat([]byte("v"), types.VarlenaInlineSize+17)
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], longValue, false, mp))
 	bat.Vecs[2], _ = vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
 	bat.Vecs[3] = vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed(bat.Vecs[3], int64(0), true, mp))
@@ -47,11 +49,18 @@ func TestToPBBatchPreservesRepresentation(t *testing.T) {
 	require.Equal(t, bat.Attrs, pb.Attrs)
 	require.True(t, pb.Vecs[2].IsConst)
 	require.False(t, pb.Vecs[3].IsConst)
+	require.NotEmpty(t, bat.Vecs[1].GetArea())
+	require.Equal(t, bat.Vecs[1].GetArea(), pb.Vecs[1].Area)
 
 	bat.Attrs[0] = "changed"
 	require.Equal(t, "changed", pb.Attrs[0])
 	pb.Vecs[0].Data[0] = 1
 	require.Equal(t, byte(1), bat.Vecs[0].GetData()[0])
+	pb.Vecs[1].Area[0] = 'x'
+	require.Equal(t, byte('x'), bat.Vecs[1].GetArea()[0])
+	roundTrip, err := batch.ProtoBatchToBatch(pb)
+	require.NoError(t, err)
+	require.Equal(t, bat.Vecs[1].GetStringAt(0), roundTrip.Vecs[1].GetStringAt(0))
 }
 
 func TestToPBBatchKeepsNilVecsForEmptyBatch(t *testing.T) {
