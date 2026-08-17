@@ -268,7 +268,12 @@ func performLock(
 			continue
 		}
 		group := []int{idx}
-		if targetIdx == -1 && target.filter == nil && !target.lockTable && target.lockRows == nil {
+		// A shared target group would be upgraded to a full range lock. The
+		// lock service cannot merge that range when another transaction already
+		// holds a shared range, which is common for concurrent foreign-key
+		// validation. Keep shared targets as independent row locks instead.
+		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
+			target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
 				candidate := lockOp.targets[next]
 				if !mergeableLockTargets(target, candidate) {

@@ -2105,6 +2105,63 @@ func TestLockOpMergedTargetsUseDefaultVersionRangeChecker(t *testing.T) {
 	require.False(t, changed)
 }
 
+func TestLockOpSharedTargetsUseIndependentRows(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		tableID := uint64(1)
+		sharedOpts := lock.LockOptions{
+			Granularity: lock.Granularity_Range,
+			Mode:        lock.LockMode_Shared,
+			Policy:      lock.WaitPolicy_Wait,
+		}
+
+		// Leave a narrower shared range held by this transaction and another
+		// holder. Shared targets are intentionally processed independently, so
+		// they can join the existing shared range without asking lockservice to
+		// merge a multi-holder range.
+		parker := types.NewPacker()
+		defer parker.Close()
+		parker.EncodeInt32(0)
+		start := append([]byte(nil), parker.Bytes()...)
+		parker.Reset()
+		parker.EncodeInt32(100)
+		end := append([]byte(nil), parker.Bytes()...)
+		currentTxnID := proc.GetTxnOperator().Txn().ID
+		_, err := proc.GetLockService().Lock(
+			proc.Ctx, tableID, [][]byte{start, end}, currentTxnID, sharedOpts)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, proc.GetLockService().Unlock(
+				proc.Ctx, currentTxnID, timestamp.Timestamp{}))
+		}()
+		_, err = proc.GetLockService().Lock(
+			proc.Ctx, tableID, [][]byte{start, end}, []byte("other-shared-holder"), sharedOpts)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, proc.GetLockService().Unlock(
+				proc.Ctx, []byte("other-shared-holder"), timestamp.Timestamp{}))
+		}()
+
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		defer arg.Free(proc, false, nil)
+		arg.AddLockTargetWithMode(tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(tableID, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, bat, result.Batch)
+	})
+}
+
 func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		pkType := types.T_int32.ToType()
