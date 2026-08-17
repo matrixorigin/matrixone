@@ -19,6 +19,7 @@ package ivfpq
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -67,6 +68,11 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 
 	// Filter column metadata (INCLUDE columns) — see CagraBuild.filterColMetaJSON.
 	filterColMetaJSON string
+
+	// tmpDir holds this build's packed tars. Destroy removes the whole directory,
+	// so a failed per-file remove cannot strand a tar, and anything orphaned by a
+	// crash carries the owning pid in its name.
+	tmpDir string
 }
 
 func NewIvfpqBuild[B, Q cuvs.VectorType](
@@ -76,6 +82,14 @@ func NewIvfpqBuild[B, Q cuvs.VectorType](
 	nthread uint32,
 	devices []int,
 ) (*IvfpqBuild[B, Q], error) {
+	// One private directory per build. Tars land here instead of directly in
+	// $TMPDIR, so Destroy reclaims them with a single RemoveAll and a crash leaves
+	// files whose name identifies the owning process.
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("mo-ivfpq-%d-", os.Getpid()))
+	if err != nil {
+		return nil, err
+	}
+
 	return &IvfpqBuild[B, Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
@@ -85,6 +99,7 @@ func NewIvfpqBuild[B, Q cuvs.VectorType](
 		devices: devices,
 		bIsHalf: cuvs.GetQuantization[B]() == cuvs.F16,
 		qIsHalf: cuvs.GetQuantization[Q]() == cuvs.F16,
+		tmpDir:  tmpDir,
 	}, nil
 }
 
@@ -132,6 +147,7 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 				return nil, err
 			}
 		}
+		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
 	}
@@ -224,6 +240,14 @@ func (b *IvfpqBuild[B, Q]) Destroy() error {
 		}
 	}
 	b.indexes = nil
+	// Reclaim the whole build directory in one shot: a per-file remove that failed
+	// above cannot strand a tar, and the empty directory itself goes too.
+	if b.tmpDir != "" {
+		if err := os.RemoveAll(b.tmpDir); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		b.tmpDir = ""
+	}
 	return errs
 }
 

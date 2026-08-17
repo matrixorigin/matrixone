@@ -18,6 +18,7 @@ package ivfpq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -44,9 +45,13 @@ var runSql_streaming = sqlexec.RunStreamingSql
 
 // IvfpqModel wraps a GpuIvfPq index and handles load/save to secondary index tables.
 type IvfpqModel[B, Q cuvs.VectorType] struct {
-	Id          string
-	Index       *cuvs.GpuIvfPq[B, Q]
-	Path        string
+	Id     string
+	Index  *cuvs.GpuIvfPq[B, Q]
+	Path   string
+	TmpDir string
+	// TmpDir scopes this model's packed tar to its builder's private directory so
+	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
+	// which keeps any non-builder caller behaving exactly as before.
 	FileSize    int64
 	MaxCapacity uint64
 
@@ -203,17 +208,22 @@ func (idx *IvfpqModel[B, Q]) Build() error {
 }
 
 func (idx *IvfpqModel[B, Q]) Destroy() error {
+	// Release the GPU handle and the packed tar independently: the file does not
+	// depend on the handle, so returning early on a Destroy() error used to leak it
+	// for the lifetime of the process. Collect both outcomes instead.
+	var errs error
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
-			return err
+			errs = errors.Join(errs, err)
+		} else {
+			idx.Index = nil
 		}
-		idx.Index = nil
 	}
 	if len(idx.Path) > 0 {
 		os.Remove(idx.Path)
 		idx.Path = ""
 	}
-	return nil
+	return errs
 }
 
 func (idx *IvfpqModel[B, Q]) saveToFile() error {
@@ -239,7 +249,7 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 		return nil
 	}
 
-	tarFile, err := os.CreateTemp("", "ivfpq")
+	tarFile, err := os.CreateTemp(idx.TmpDir, "ivfpq")
 	if err != nil {
 		return err
 	}

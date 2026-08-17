@@ -19,6 +19,7 @@ package cagra
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -69,6 +70,11 @@ type CagraBuild[B, Q cuvs.VectorType] struct {
 	// and re-applied to every new sub-index allocated by getOrCreateCurrent, so
 	// each sub-index carries its own filter data buffer.
 	filterColMetaJSON string
+
+	// tmpDir holds this build's packed tars. Destroy removes the whole directory,
+	// so a failed per-file remove cannot strand a tar, and anything orphaned by a
+	// crash carries the owning pid in its name.
+	tmpDir string
 }
 
 // NewCagraBuild creates a new CagraBuild ready for AddRow calls.
@@ -79,6 +85,14 @@ func NewCagraBuild[B, Q cuvs.VectorType](
 	nthread uint32,
 	devices []int,
 ) (*CagraBuild[B, Q], error) {
+	// One private directory per build. Tars land here instead of directly in
+	// $TMPDIR, so Destroy reclaims them with a single RemoveAll and a crash leaves
+	// files whose name identifies the owning process.
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("mo-cagra-%d-", os.Getpid()))
+	if err != nil {
+		return nil, err
+	}
+
 	return &CagraBuild[B, Q]{
 		uid:     uid,
 		idxcfg:  idxcfg,
@@ -88,6 +102,7 @@ func NewCagraBuild[B, Q cuvs.VectorType](
 		devices: devices,
 		bIsHalf: cuvs.GetQuantization[B]() == cuvs.F16,
 		qIsHalf: cuvs.GetQuantization[Q]() == cuvs.F16,
+		tmpDir:  tmpDir,
 	}, nil
 }
 
@@ -138,6 +153,7 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 				return nil, err
 			}
 		}
+		m.TmpDir = b.tmpDir
 		b.current = m
 		b.count = 0
 	}
@@ -244,6 +260,14 @@ func (b *CagraBuild[B, Q]) Destroy() error {
 		}
 	}
 	b.indexes = nil
+	// Reclaim the whole build directory in one shot: a per-file remove that failed
+	// above cannot strand a tar, and the empty directory itself goes too.
+	if b.tmpDir != "" {
+		if err := os.RemoveAll(b.tmpDir); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		b.tmpDir = ""
+	}
 	return errs
 }
 

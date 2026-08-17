@@ -1,0 +1,61 @@
+SET experimental_ivfpq_index = 1;
+SET ivfpq_threads_build = 6;
+SET ivfpq_max_index_capacity = 64;
+SET kmeans_train_percent = 100;
+SET kmeans_max_iteration = 12;
+SET probe_limit = 16;
+drop database if exists ivfpq_rotation;
+create database ivfpq_rotation;
+use ivfpq_rotation;
+create table t (id bigint primary key, v vecf32(8));
+insert into t
+select result,
+cast(concat('[', result, ',', result, ',', result, ',', result, ',',
+result, ',', result, ',', result, ',', result, ']') as vecf32(8))
+from generate_series(1, 256) g;
+select count(*) as rows_loaded from t;
+➤ rows_loaded[-5,64,0]  𝄀
+256
+create index ix using ivfpq on t (v)
+op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8;
+set @mtbl = (select index_table_name from mo_catalog.mo_indexes
+where table_id=(select rel_id from mo_catalog.mo_tables
+where relname='t' and reldatabase='ivfpq_rotation')
+and name='ix' and algo_table_type='ivfpq_meta');
+set @q = concat('select count(*) as sub_indexes from `', @mtbl, '`');
+prepare s from @q;
+execute s;
+➤ sub_indexes[-5,64,0]  𝄀
+4
+deallocate prepare s;
+set @q = concat('select count(*) as persisted from `', @mtbl,
+'` where checksum <> '''' and filesize > 0');
+prepare s from @q;
+execute s;
+➤ persisted[-5,64,0]  𝄀
+4
+deallocate prepare s;
+select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
+➤ id[-5,64,0]  𝄀
+7
+select id from t order by l2_distance(v, '[80,80,80,80,80,80,80,80]') limit 1;
+➤ id[-5,64,0]  𝄀
+80
+select id from t order by l2_distance(v, '[150,150,150,150,150,150,150,150]') limit 1;
+➤ id[-5,64,0]  𝄀
+150
+select id from t order by l2_distance(v, '[233,233,233,233,233,233,233,233]') limit 1;
+➤ id[-5,64,0]  𝄀
+233
+select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 3;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop index ix on t;
+SET ivfpq_max_index_capacity = 2;
+create index ixbad using ivfpq on t (v)
+op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8;
+invalid input: ivfpq: max_index_capacity (2) must be >= 4; every sub-index would fall below the k-means minimum and the whole table would be written as a brute-force CDC tail
+SET ivfpq_max_index_capacity = 99999;
+drop database ivfpq_rotation;

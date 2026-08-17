@@ -18,6 +18,7 @@ package cagra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -47,9 +48,13 @@ var runSql_streaming = sqlexec.RunStreamingSql
 // The serialized form is a tar file produced by cuvs.Pack / cuvs.Unpack.
 // T must satisfy cuvs.VectorType (float32 | Float16 | int8 | uint8).
 type CagraModel[B, Q cuvs.VectorType] struct {
-	Id          string
-	Index       *cuvs.GpuCagra[B, Q]
-	Path        string // local tar file path; empty when index is in GPU memory only
+	Id     string
+	Index  *cuvs.GpuCagra[B, Q]
+	Path   string
+	TmpDir string
+	// TmpDir scopes this model's packed tar to its builder's private directory so
+	// the builder can reclaim every tar with one RemoveAll. Empty means $TMPDIR,
+	// which keeps any non-builder caller behaving exactly as before. // local tar file path; empty when index is in GPU memory only
 	FileSize    int64
 	MaxCapacity uint64
 
@@ -207,11 +212,16 @@ func (idx *CagraModel[B, Q]) Build() error {
 
 // Destroy frees GPU memory and removes the local tar file if present.
 func (idx *CagraModel[B, Q]) Destroy() error {
+	// Release the GPU handle and the packed tar independently: the file does not
+	// depend on the handle, so returning early on a Destroy() error used to leak it
+	// for the lifetime of the process. Collect both outcomes instead.
+	var errs error
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
-			return err
+			errs = errors.Join(errs, err)
+		} else {
+			idx.Index = nil
 		}
-		idx.Index = nil
 	}
 	if len(idx.Path) > 0 {
 		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
@@ -219,7 +229,7 @@ func (idx *CagraModel[B, Q]) Destroy() error {
 		}
 		idx.Path = ""
 	}
-	return nil
+	return errs
 }
 
 // saveToFile serializes the CAGRA index to a local tar file and updates idx.Path / idx.Checksum.
@@ -250,7 +260,7 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 		return nil
 	}
 
-	tarFile, err := os.CreateTemp("", "cagra")
+	tarFile, err := os.CreateTemp(idx.TmpDir, "cagra")
 	if err != nil {
 		return err
 	}

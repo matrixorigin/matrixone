@@ -16,6 +16,7 @@ package hnsw
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -122,29 +123,33 @@ func (idx *HnswModel[T]) initIndex(cfg vectorindex.IndexConfig) (err error) {
 
 // Destroy the struct
 func (idx *HnswModel[T]) Destroy() error {
+	// Release the index handle, the on-disk file and the buffer independently: they do
+	// not depend on each other, so returning early on the first error used to leak the
+	// remaining two for the lifetime of the process. Collect the outcomes instead.
+	var errs error
 	if idx.Index != nil {
-		err := idx.Index.Destroy()
-		if err != nil {
-			return err
+		if err := idx.Index.Destroy(); err != nil {
+			errs = errors.Join(errs, err)
+		} else {
+			idx.Index = nil
 		}
-		idx.Index = nil
 	}
 
 	if len(idx.Path) > 0 {
 		// remove the file
 		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
-			err := os.Remove(idx.Path)
-			if err != nil {
-				return err
+			if err := os.Remove(idx.Path); err != nil {
+				errs = errors.Join(errs, err)
 			}
 		}
+		idx.Path = ""
 	}
 
 	if idx.buffer != nil {
 		idx.buffer = nil
 	}
 
-	return nil
+	return errs
 }
 
 // Save the index to file
