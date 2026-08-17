@@ -98,6 +98,28 @@ func TestIssue27187JSONExtractBooleanComparison(t *testing.T) {
 		require.False(t, decimalZero)
 		require.True(t, decimalNonZero)
 
+		var jsonEqualBool, boolEqualJSON, jsonNotEqualBool, boolNotEqualJSON bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_object('enabled', true), '$.enabled') = true,
+			true = json_extract(json_object('enabled', true), '$.enabled'),
+			json_extract(json_object('enabled', true), '$.enabled') != false,
+			false != json_extract(json_object('enabled', true), '$.enabled')`).
+			Scan(&jsonEqualBool, &boolEqualJSON, &jsonNotEqualBool, &boolNotEqualJSON))
+		require.True(t, jsonEqualBool)
+		require.True(t, boolEqualJSON)
+		require.True(t, jsonNotEqualBool)
+		require.True(t, boolNotEqualJSON)
+
+		var largeExponent, smallExponent, exponentZero bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract('1e100', '$') = true,
+			json_extract('1e-300', '$') = true,
+			json_extract('0e-2147483647', '$') = true`).
+			Scan(&largeExponent, &smallExponent, &exponentZero))
+		require.True(t, largeExponent)
+		require.True(t, smallExponent)
+		require.False(t, exponentZero)
+
 		_, err = db.ExecContext(ctx,
 			`select json_extract(json_object('v', '"true"'), '$.v') = true`)
 		require.Error(t, err)

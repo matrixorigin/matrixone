@@ -3876,13 +3876,16 @@ func TestCastJsonToBool(t *testing.T) {
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20")),
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "-0.01")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e100")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1e-300")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0e-2147483647")),
 	}
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_json.ToType(), decimalEncoded, nil),
 		NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
 	}
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
-		[]bool{false, true, true}, []bool{false, false, false})
+		[]bool{false, true, true, true, true, false}, []bool{false, false, false, false, false, false})
 	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
 	succeed, info := fcTC.Run()
 	require.True(t, succeed, "decimal values: %s", info)

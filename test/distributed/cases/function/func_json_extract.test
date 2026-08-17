@@ -381,4 +381,6 @@ insert into json_bool_compare_test values
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
+select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
+select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 drop database test;

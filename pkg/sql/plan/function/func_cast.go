@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -2939,11 +2940,11 @@ func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[type
 		case bytejson.TpCodeFloat64:
 			value = bj.GetFloat64() != 0
 		case bytejson.TpCodeDecimal:
-			decimal, _, err := types.Parse256(string(bj.GetString()))
-			if err != nil {
+			var valid bool
+			value, valid = jsonDecimalToBool(bj.GetString())
+			if !valid {
 				return jsonCastErr(ctx, types.T_bool)
 			}
-			value = decimal != (types.Decimal256{})
 		case bytejson.TpCodeString:
 			parsed, err := types.ParseBool(string(bj.GetString()))
 			if err != nil {
@@ -2959,6 +2960,23 @@ func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[type
 		}
 	}
 	return nil
+}
+
+func jsonDecimalToBool(text []byte) (value bool, valid bool) {
+	if len(text) == 0 ||
+		(text[0] != '-' && (text[0] < '0' || text[0] > '9')) ||
+		!json.Valid(text) {
+		return false, false
+	}
+	for _, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			break
+		}
+		if ch >= '1' && ch <= '9' {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
