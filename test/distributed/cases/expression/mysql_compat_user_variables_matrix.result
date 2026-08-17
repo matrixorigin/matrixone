@@ -71,6 +71,7 @@ select @uv_matrix_warn + 0;
 ➤ @uv_matrix_warn + 0[-5,64,0]  𝄀
 12
 show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 set @uv_matrix_prepared_warn = '1';
 prepare uv_matrix_warn_ps from 'select @uv_matrix_prepared_warn + 0';
 set @uv_matrix_prepared_warn = '1.5x';
@@ -85,6 +86,7 @@ execute uv_matrix_warn_ps;
 ➤ @uv_matrix_prepared_warn + 0[-5,64,0]  𝄀
 2
 show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 deallocate prepare uv_matrix_warn_ps;
 set @uv_matrix_a = 1, @uv_matrix_b = 2;
 select @uv_matrix_a + @uv_matrix_b;
@@ -116,12 +118,12 @@ create table uv_matrix_src(id int primary key, v varchar(10));
 insert into uv_matrix_src values (1, 'one'), (2, 'two');
 set @uv_matrix_rows_warn = '12abc';
 select @uv_matrix_rows_warn + 0 from uv_matrix_src order by id;
-➤ @uv_matrix_rows_warn + 0[-5,64,0]  𝄀
-12
-12
+➤ @uv_matrix_rows_warn + 0[8,53,31]  𝄀
+12.0  𝄀
+12.0
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
-Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'  𝄀
 Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
 select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 1;
 ➤ @uv_matrix_rows_warn + 0[-5,64,0]  𝄀
@@ -130,7 +132,9 @@ show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '12abc'
 select @uv_matrix_rows_warn + 0 from uv_matrix_src where id = 99;
+➤ @uv_matrix_rows_warn + 0[8,53,31]
 show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 select id into @uv_matrix_pre_id from uv_matrix_src where id = 2;
 select @uv_matrix_pre_id;
 ➤ @uv_matrix_pre_id[4,32,0]  𝄀
