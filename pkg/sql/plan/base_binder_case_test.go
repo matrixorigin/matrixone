@@ -57,6 +57,101 @@ func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 		"select case when ? then v else -v end from (select 1 as v) t", 1)
 	require.NoError(t, err)
 
-	_, err = BuildPlan(NewMockCompilerContext(true), stmt, true)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
 	require.NoError(t, err)
+	require.NoError(t, NormalizePrepareParamRefs(ctx, queryPlan))
+
+	caseExpr := findPlanFunctionExpr(queryPlan, "case")
+	require.NotNil(t, caseExpr)
+	require.Len(t, caseExpr.GetF().Args, 3)
+	requirePreparedCaseCondition(t, caseExpr.GetF().Args[0], true)
+
+	for _, test := range []struct {
+		name    string
+		value   any
+		wantNil bool
+		want    string
+	}{
+		{name: "true", value: "1", want: "1"},
+		{name: "false", value: "0", want: "0"},
+		{name: "null", value: nil, wantNil: true},
+		{name: "binary true", value: ParamValue{Value: "1", IsBin: true}, want: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(ctx, queryPlan, []any{test.value})
+			require.NoError(t, err)
+			filledCase := findPlanFunctionExpr(filled, "case")
+			require.NotNil(t, filledCase)
+			requirePreparedCaseCondition(t, filledCase.GetF().Args[0], false)
+
+			conditionArg := filledCase.GetF().Args[0].GetF().Args[0]
+			if test.wantNil {
+				require.True(t, conditionArg.GetLit().GetIsnull())
+			} else {
+				require.Equal(t, test.want, conditionArg.GetLit().GetSval())
+				require.Equal(t, test.name == "binary true", conditionArg.GetLit().GetIsBin())
+			}
+		})
+	}
+}
+
+func requirePreparedCaseCondition(t *testing.T, condition *planpb.Expr, hasParam bool) {
+	t.Helper()
+	require.Equal(t, int32(types.T_bool), condition.Typ.Id)
+	cast := condition.GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.GetObjName())
+	require.NotEmpty(t, cast.Args)
+	if hasParam {
+		require.NotNil(t, cast.Args[0].GetP())
+		require.Equal(t, int32(0), cast.Args[0].GetP().Pos)
+	} else {
+		require.NotNil(t, cast.Args[0].GetLit())
+	}
+}
+
+func findPlanFunctionExpr(queryPlan *planpb.Plan, name string) *planpb.Expr {
+	var find func(*planpb.Expr) *planpb.Expr
+	find = func(expr *planpb.Expr) *planpb.Expr {
+		if expr == nil {
+			return nil
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func.GetObjName() == name {
+				return expr
+			}
+			for _, arg := range fn.Args {
+				if found := find(arg); found != nil {
+					return found
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, arg := range list.List {
+				if found := find(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+
+	if query := queryPlan.GetQuery(); query != nil {
+		for _, node := range query.Nodes {
+			for _, exprs := range [][]*planpb.Expr{
+				node.ProjectList,
+				node.FilterList,
+				node.OnList,
+				node.AggList,
+				node.GroupBy,
+			} {
+				for _, expr := range exprs {
+					if found := find(expr); found != nil {
+						return found
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
