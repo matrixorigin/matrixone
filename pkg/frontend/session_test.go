@@ -896,6 +896,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		targetRuntime := runtime.ServiceRuntime(target.service)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect)
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect))
 		oldRuntimeValues := make(map[string]interface{})
 		oldRuntimePresent := make(map[string]bool)
 		for _, name := range []string{
@@ -922,6 +926,8 @@ func TestSession_Migrate(t *testing.T) {
 				{Name: "runtime_filter_limit_in", Value: plan2.MakePlan2Int64ConstExprWithType(77)},
 				{Name: "runtime_filter_limit_bloom_filter", Value: plan2.MakePlan2Int64ConstExprWithType(88)},
 				{Name: "disable_agg_statement", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+				{Name: "clear_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+				{Name: "enable_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(false)},
 			},
 		})
 		require.NoError(t, err)
@@ -936,6 +942,14 @@ func TestSession_Migrate(t *testing.T) {
 			require.Equal(t, expected, value, name)
 		}
 		require.True(t, target.disableAgg)
+		clearPrivilegeCache, err := target.GetSessionSysVar("clear_privilege_cache")
+		require.NoError(t, err)
+		require.Equal(t, int8(1), clearPrivilegeCache)
+		enablePrivilegeCache, err := target.GetSessionSysVar("enable_privilege_cache")
+		require.NoError(t, err)
+		require.Equal(t, int8(0), enablePrivilegeCache)
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect))
 	})
 
 	t.Run("typed system variables preserve transaction flags and runtime scope", func(t *testing.T) {

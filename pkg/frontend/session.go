@@ -2738,6 +2738,20 @@ func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}
 	case "disable_agg_statement":
 		boolVal := InitSystemVariableBoolType("_")
 		ses.disableAgg = boolVal.IsTrue(value)
+	case "clear_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	case "enable_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if !boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
 	}
 }
 
