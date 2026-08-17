@@ -24,7 +24,9 @@ import (
 	moconfig "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -59,6 +61,9 @@ func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Cr
 			return nil
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s already exists", catalogName)
+	}
+	if err := validateIcebergCatalogURI(ctx, catalogType, uri); err != nil {
+		return err
 	}
 	authMode := firstIcebergOption(opts, "auth_mode")
 	if authMode == "" {
@@ -102,6 +107,11 @@ func handleAlterIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Alt
 	}
 	if len(opts) == 0 {
 		return moerr.NewInvalidInput(ctx, "ALTER ICEBERG CATALOG requires at least one option")
+	}
+	if uri, ok := opts["uri"]; ok {
+		if err := validateIcebergCatalogURI(ctx, opts["type"], uri); err != nil {
+			return err
+		}
 	}
 	setters := make([]string, 0, len(opts)+2)
 	for _, key := range []string{"type", "uri", "warehouse", "auth_mode", "token_secret_ref", "capabilities_json"} {
@@ -355,6 +365,18 @@ func validateIcebergSecretRef(ctx context.Context, value string) error {
 		return nil
 	}
 	return moerr.NewInvalidInput(ctx, "Iceberg token_secret must be a secret:// reference; inline secrets are not allowed")
+}
+
+func validateIcebergCatalogURI(ctx context.Context, catalogType, uri string) error {
+	switch strings.ToLower(strings.TrimSpace(catalogType)) {
+	case "", "rest", icebergcatalog.AdapterNativeREST:
+	default:
+		return nil
+	}
+	if err := icebergcatalog.ValidateRESTCatalogURI(uri, compile.IcebergAllowPlainHTTPFromEnv()); err != nil {
+		return icebergapi.ToMOErr(ctx, err)
+	}
+	return nil
 }
 
 func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uint32, catalogName string) (uint64, error) {

@@ -34,6 +34,20 @@ func TestIcebergCatalogSecretRefValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "secret://")
 }
 
+func TestIcebergCatalogURIValidation(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "")
+
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "https://catalog.example/rest"))
+	err := validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ICEBERG_CONFIG_INVALID")
+	require.Contains(t, err.Error(), "must use https unless plain HTTP is explicitly enabled")
+
+	t.Setenv("MO_ICEBERG_ALLOW_PLAIN_HTTP", "true")
+	require.NoError(t, validateIcebergCatalogURI(ctx, "rest", "http://catalog.example/rest"))
+}
+
 func TestIcebergParameterUnitForUninitializedService(t *testing.T) {
 	require.Nil(t, icebergParameterUnitForService("iceberg-uninitialized-service"))
 }
