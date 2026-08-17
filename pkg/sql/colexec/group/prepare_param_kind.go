@@ -62,6 +62,7 @@ func (s *prepareParamKindSummary) observe(kind vector.PrepareParamKind) {
 type prepareParamKindRowsSource struct {
 	vec      *vector.Vector
 	flags    []uint8
+	rows     []int32
 	rowCount int
 	summary  prepareParamKindSummary
 }
@@ -116,6 +117,38 @@ func newPrepareParamKindRowsSource(
 	return source, nil
 }
 
+func newPrepareParamKindSelectedRowsSource(
+	vec *vector.Vector,
+	rows []int32,
+) (prepareParamKindRowsSource, error) {
+	source := prepareParamKindRowsSource{vec: vec, rows: rows}
+	if vec == nil {
+		return source, nil
+	}
+	hasExactRows := len(vec.GetPrepareParamKinds()) != 0 || vec.HasBinaryStringRows()
+	for _, row := range rows {
+		if row < 0 || int(row) >= vec.Length() {
+			return source, moerr.NewInvalidInputNoCtxf(
+				"prepared parameter row %d exceeds vector rows %d",
+				row, vec.Length())
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		kind := vec.GetPrepareParamKindAt(int(row))
+		source.summary.observe(kind)
+		binaryString := vec.GetBinaryStringMetadataAt(int(row))
+		source.summary.binaryString = source.summary.binaryString || binaryString
+		if hasExactRows && (kind != vector.PrepareParamNone || binaryString) {
+			source.summary.rows = true
+		}
+	}
+	if source.summary.rows {
+		source.rowCount = len(rows)
+	}
+	return source, nil
+}
+
 func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVersion bool) error {
 	if source == nil || source.rowCount == 0 {
 		return nil
@@ -134,12 +167,10 @@ func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVers
 		buffered = 0
 		return err
 	}
-	for row := 0; row < source.vec.Length(); row++ {
-		if source.flags != nil && source.flags[row] == 0 {
-			continue
-		}
+	writeRow := func(row int) error {
 		kind := vector.PrepareParamNone
-		if !source.vec.IsNull(uint64(row)) {
+		nullValue := source.vec.IsNull(uint64(row))
+		if !nullValue {
 			kind = source.vec.GetPrepareParamKindAt(row)
 		}
 		if kind > vector.PrepareParamBoolean {
@@ -147,7 +178,7 @@ func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVers
 				"invalid aggregate prepared parameter row kind %d", kind)
 		}
 		encoded := byte(kind)
-		if binaryVersion && !source.vec.IsNull(uint64(row)) &&
+		if binaryVersion && !nullValue &&
 			source.vec.GetBinaryStringMetadataAt(row) {
 			encoded |= prepareParamKindTrailerRowsMarker
 		}
@@ -155,7 +186,22 @@ func (source *prepareParamKindRowsSource) writeRows(writer io.Writer, binaryVers
 		buffered++
 		written++
 		if buffered == len(buffer) {
-			if err := flush(); err != nil {
+			return flush()
+		}
+		return nil
+	}
+	if source.rows != nil {
+		for _, row := range source.rows {
+			if err := writeRow(int(row)); err != nil {
+				return err
+			}
+		}
+	} else {
+		for row := 0; row < source.vec.Length(); row++ {
+			if source.flags != nil && source.flags[row] == 0 {
+				continue
+			}
+			if err := writeRow(row); err != nil {
 				return err
 			}
 		}
