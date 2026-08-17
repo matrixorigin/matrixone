@@ -87,6 +87,10 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.Equal(t, ER_DIVISION_BY_ZERO, err.MySQLCode())
 
+	err = NewQueryTimeout(context.TODO())
+	require.Equal(t, ER_QUERY_TIMEOUT, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
@@ -194,6 +198,14 @@ func TestNoSuchTableWithFormattedMessage(t *testing.T) {
 	require.Equal(t, ErrNoSuchTable, err.ErrorCode())
 	require.Equal(t, ER_NO_SUCH_TABLE, err.MySQLCode())
 	require.Equal(t, `SQL parser error: table "missing" does not exist`, err.Error())
+}
+
+func TestBadFieldErrorWithFormattedMessage(t *testing.T) {
+	err := NewBadFieldErrorf(context.Background(), "invalid input: column %s does not exist", "metric")
+	require.Equal(t, ErrBadFieldError, err.ErrorCode())
+	require.Equal(t, ER_BAD_FIELD_ERROR, err.MySQLCode())
+	require.Equal(t, "42S22", err.SqlState())
+	require.Equal(t, "invalid input: column metric does not exist", err.Error())
 }
 
 func TestMPoolCapacityEncoding(t *testing.T) {
