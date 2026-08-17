@@ -690,7 +690,7 @@ func TestRawNextTransactionAssignmentIsReplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	sql := "set @@transaction_isolation = 'READ-COMMITTED'"
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
 	require.NoError(t, err)

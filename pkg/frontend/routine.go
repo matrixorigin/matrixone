@@ -603,6 +603,8 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		// prepared SET values). Keep that fact explicit for target negotiation.
 		resp.UserDefinedVarsReplayable = !ses.hasUnreplayableMigrationUserVars()
 		resp.SystemVariablesReplayable = !ses.hasUnreplayableMigrationSystemVars()
+		var userVars []*query.MigrateUserDefinedVar
+		var userVarsExported bool
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
 			// A bounded typed snapshot can fall back to the proxy's raw replay
@@ -613,10 +615,12 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 				return err
 			}
 		} else {
-			resp.UserDefinedVars = vars
-			resp.UserDefinedVarsExported = true
+			userVars = vars
+			userVarsExported = true
 		}
-		systemVars, err := ses.snapshotSessionSystemVars(operationCtx)
+		var systemVars []*query.MigrateSystemVariable
+		var systemVarsExported bool
+		systemVars, err = ses.snapshotSessionSystemVars(operationCtx)
 		if err != nil {
 			// As above, a legacy system-variable replay is safe only when every
 			// changed session variable is represented by a captured raw SET.
@@ -624,9 +628,12 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 				return err
 			}
 		} else {
-			resp.SystemVariables = systemVars
-			resp.SystemVariablesExported = true
+			systemVarsExported = true
 		}
+		resp.UserDefinedVars = userVars
+		resp.UserDefinedVarsExported = userVarsExported
+		resp.SystemVariables = systemVars
+		resp.SystemVariablesExported = systemVarsExported
 	}
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
