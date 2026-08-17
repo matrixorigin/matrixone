@@ -5212,6 +5212,18 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
+func wrapNativePrepareSQL(name, materializedSQL string) string {
+	trimmed := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	if strings.HasPrefix(trimmed, "/*+") || strings.HasPrefix(trimmed, "/*!+") {
+		if end := strings.Index(trimmed, "*/"); end >= 0 {
+			end += 2
+			return fmt.Sprintf("%s prepare %s from %s", trimmed[:end], quotePrepareStmtName(name),
+				strings.TrimSpace(trimmed[end:]))
+		}
+	}
+	return fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(name), materializedSQL)
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -5325,7 +5337,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
+		sql = wrapNativePrepareSQL(newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()

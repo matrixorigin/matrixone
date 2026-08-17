@@ -721,7 +721,11 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 			}
 			rewriteOption.Rewrites[key] = chain
 		}
-		switch s := stmt.(type) {
+		attachStmt := stmt
+		if prepare, ok := stmt.(*tree.PrepareStmt); ok && prepare.Stmt != nil {
+			attachStmt = prepare.Stmt
+		}
+		switch s := attachStmt.(type) {
 		case *tree.Select:
 			s.RewriteOption = rewriteOption
 		case *tree.ParenSelect:
