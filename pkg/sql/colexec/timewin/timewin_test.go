@@ -685,6 +685,43 @@ func TestTimestampIntervalBoundaryVectorPreservesZeroTimestamp(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampIntervalBoundaryVectorUsesCivilDayGrid(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.GetSessionInfo().TimeZone = zone
+	day := types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+	typ := plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	for _, tc := range []struct {
+		name  string
+		start string
+		end   string
+	}{
+		{name: "spring-forward", start: "2026-03-08 00:00:00", end: "2026-03-09 00:00:00"},
+		{name: "fall-back", start: "2026-11-01 00:00:00", end: "2026-11-02 00:00:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start, parseErr := types.ParseTimestamp(zone, tc.start, 6)
+			require.NoError(t, parseErr)
+			end, parseErr := types.ParseTimestamp(zone, tc.end, 6)
+			require.NoError(t, parseErr)
+			starts := vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+			require.NoError(t, vector.AppendFixed(starts, start, false, proc.Mp()))
+
+			ends, callErr := appendTimestampIntervalBoundaryVector(starts, day, true, typ, proc)
+			require.NoError(t, callErr)
+			require.Equal(t, []types.Timestamp{end}, vector.MustFixedColNoTypeCheck[types.Timestamp](ends))
+
+			starts.Free(proc.Mp())
+			ends.Free(proc.Mp())
+		})
+	}
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimestampIntervalBoundaryVectorRejectsOutOfDomainBoundaries(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)

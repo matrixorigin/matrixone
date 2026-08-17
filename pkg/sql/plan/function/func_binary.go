@@ -1805,6 +1805,23 @@ func NormalizeTimestampWindowStart(value types.Timestamp, interval int64, loc *t
 	return truncated
 }
 
+// AdvanceTimestampWindowBoundary advances a TIMESTAMP window boundary on the
+// same civil-time grid used by NormalizeTimestampWindowStart. A civil
+// boundary that falls inside a spring-forward gap is canonicalized to the
+// first valid instant after the gap.
+func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *time.Location) types.Timestamp {
+	if value == types.ZeroTimestamp {
+		return types.ZeroTimestamp
+	}
+	civil := value.ToDatetime(loc) + types.Datetime(interval)
+	boundary := civil.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip < civil {
+		boundary += types.Timestamp(civil - roundTrip)
+	}
+	return boundary
+}
+
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	var num int64
 	if diff <= 0 {

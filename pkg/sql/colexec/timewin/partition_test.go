@@ -847,6 +847,67 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name      string
+		start     string
+		end       string
+		secondDay string
+	}{
+		{name: "spring-forward", start: "2026-03-08 00:00:00", end: "2026-03-10 00:00:00", secondDay: "2026-03-09 00:00:00"},
+		{name: "fall-back", start: "2026-11-01 00:00:00", end: "2026-11-03 00:00:00", secondDay: "2026-11-02 00:00:00"},
+	} {
+		for _, gapFill := range []bool{false, true} {
+			t.Run(tc.name+"/"+map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
+				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				var arg *TimeWin
+				if gapFill {
+					arg = newBoundedPartArg(t, proc, tc.start, tc.end, false)
+				} else {
+					arg = newPartArg(t, proc, types.Datetime(types.SecsPerDay*types.MicroSecsPerSec), false)
+				}
+				arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+				arg.Interval = types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+				arg.Sliding = arg.Interval
+				proc.GetSessionInfo().TimeZone = zone
+
+				startTS, parseErr := types.ParseTimestamp(zone, tc.start, 6)
+				require.NoError(t, parseErr)
+				if gapFill {
+					arg.GapFillStart = timestampBound(t, zone, tc.start)
+					arg.GapFillEnd = timestampBound(t, zone, tc.end)
+				}
+				secondDay, parseErr := types.ParseDatetime(tc.secondDay, 6)
+				require.NoError(t, parseErr)
+
+				in := batch.New([]string{"ts", "val"})
+				in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+				require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+					types.Datetime(startTS),
+					types.Datetime(secondDay.ToTimestamp(zone)),
+				}, nil, proc.Mp()))
+				in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+				in.SetRowCount(2)
+
+				starts, sums := runTemporalBoundArg(t, arg, proc, in)
+				require.Equal(t, []types.Datetime{
+					mustDatetime(t, tc.start),
+					secondDay,
+				}, starts)
+				require.Equal(t, []int64{1, 2}, sums)
+
+				arg.Free(proc, false, nil)
+				in.Clean(proc.Mp())
+				proc.Free()
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
 func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
