@@ -87,6 +87,10 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.Equal(t, ER_DIVISION_BY_ZERO, err.MySQLCode())
 
+	err = NewQueryTimeout(context.TODO())
+	require.Equal(t, ER_QUERY_TIMEOUT, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 

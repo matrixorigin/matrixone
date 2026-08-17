@@ -4133,6 +4133,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, err
 		}
 	}
+	if err := normalizeLagLeadOffsetParam(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// get args(exprs) & types
 	argsLength := len(args)
@@ -5065,6 +5068,24 @@ func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args [
 func isDirectDynamicParam(expr *Expr) bool {
 	_, ok := expr.Expr.(*plan.Expr_P)
 	return ok
+}
+
+// A prepared LAG/LEAD offset has TEXT as its transport type, but the window
+// executor consumes integer vectors. Give a bare marker the same integer
+// computation type as an explicit CAST(? AS SIGNED), while leaving literals,
+// columns, and explicitly typed expressions on their existing binding path.
+func normalizeLagLeadOffsetParam(ctx context.Context, name string, args []*Expr) error {
+	if (name != "lag" && name != "lead") || len(args) < 2 || !isDirectDynamicParam(args[1]) {
+		return nil
+	}
+
+	int64Type := types.T_int64.ToType()
+	offset, err := appendCastBeforeExpr(ctx, args[1], makePlan2Type(&int64Type))
+	if err != nil {
+		return err
+	}
+	args[1] = offset
+	return nil
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
