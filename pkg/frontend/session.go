@@ -485,6 +485,30 @@ func (ses *Session) markMigrationSystemVarReplayable(name string, replayable boo
 	ses.migrationSystemVarReplayable[name] = replayable
 }
 
+func (ses *Session) getMigrationSystemVarReplayability(name string) (bool, bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	replayable, tracked := ses.migrationSystemVarReplayable[name]
+	return replayable, tracked
+}
+
+func (ses *Session) restoreMigrationSystemVarReplayability(
+	name string, replayable, tracked bool,
+) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !tracked {
+		delete(ses.migrationSystemVarReplayable, name)
+		return
+	}
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
 func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
