@@ -221,8 +221,8 @@ func (ctr *container) evalGapFillBounds(timeWin *TimeWin, proc *process.Process)
 	ctr.gapFillStart = ctr.windowStart(start, timeWin.Interval, proc)
 	ctr.gapFillEnd = finish
 	if ctr.gapFillStart < finish {
-		span := ctr.windowBoundaryDistance(ctr.gapFillStart, finish, proc)
-		ctr.gapFillRows = int64((span-1)/timeWin.Sliding) + 1
+		ctr.gapFillRows = ctr.windowBoundaryWindowCount(
+			ctr.gapFillStart, finish, timeWin.Sliding, proc)
 	}
 	if ctr.gapFillRows > maxGapFillRowsPerPartition {
 		return moerr.NewInvalidInputNoCtx("GAPFILL generated row limit exceeded for a partition")
@@ -663,18 +663,62 @@ func (ctr *container) advanceWindowBoundaryBy(value types.Datetime, count int64,
 	if ctr.tsOid != types.T_timestamp {
 		return value + types.Datetime(count)*delta
 	}
-	for i := int64(0); i < count; i++ {
-		value = ctr.advanceWindowBoundary(value, delta, proc)
-	}
-	return value
+	return types.Datetime(function.AdvanceTimestampWindowBoundaryBy(
+		types.Timestamp(value), count, int64(delta), proc.GetSessionInfo().TimeZone))
 }
 
-func (ctr *container) windowBoundaryDistance(start, end types.Datetime, proc *process.Process) types.Datetime {
-	if ctr.tsOid == types.T_timestamp {
-		loc := proc.GetSessionInfo().TimeZone
-		return types.Timestamp(end).ToDatetime(loc) - types.Timestamp(start).ToDatetime(loc)
+// windowBoundarySteps returns the number of sliding boundaries strictly before
+// end when advancing from start.  TIMESTAMP boundaries are a civil-time grid,
+// so subtracting their wall-clock values is insufficient at DST gaps/folds:
+// a fold contains two distinct instants with the same civil value, while a gap
+// removes a civil value.  The function package counts the actual boundary
+// sequence and uses a constant-time jump on fixed-offset spans.
+func (ctr *container) windowBoundarySteps(start, end types.Datetime, delta types.Datetime, proc *process.Process) int64 {
+	if end <= start || delta <= 0 {
+		return 0
 	}
-	return end - start
+	if ctr.tsOid == types.T_timestamp {
+		return function.TimestampWindowBoundarySteps(
+			types.Timestamp(start), types.Timestamp(end), int64(delta), proc.GetSessionInfo().TimeZone)
+	}
+	return int64((end - start) / delta)
+}
+
+// windowBoundaryWindowCount returns the number of window starts in the
+// half-open interval [start, end).  Bounded GAPFILL uses this ceiling count;
+// unlike windowBoundarySteps, it includes a partially covered final window.
+func (ctr *container) windowBoundaryWindowCount(start, end, delta types.Datetime, proc *process.Process) int64 {
+	if end <= start || delta <= 0 {
+		return 0
+	}
+	steps := ctr.windowBoundarySteps(start, end, delta, proc)
+	if ctr.tsOid != types.T_timestamp {
+		if (end-start)%delta != 0 {
+			steps++
+		}
+		return steps
+	}
+	rawSpan := int64(end) - int64(start)
+	civilStart := int64(types.Timestamp(start).ToDatetime(proc.GetSessionInfo().TimeZone))
+	civilEnd := int64(types.Timestamp(end).ToDatetime(proc.GetSessionInfo().TimeZone))
+	// A divisible raw span already represents the actual number of boundary
+	// instants, including both sides of a DST fold and the skipped instants of
+	// a gap.  A divisible civil span is the corresponding exact count for
+	// day-sized transitions whose raw span is 23/25 hours.
+	if rawSpan >= 0 && rawSpan%int64(delta) == 0 {
+		return steps
+	}
+	if civilEnd >= civilStart && (civilEnd-civilStart)%int64(delta) == 0 {
+		return steps
+	}
+	boundary := ctr.advanceWindowBoundaryBy(start, steps, delta, proc)
+	if boundary < end {
+		steps++
+	}
+	if steps == 0 {
+		steps = 1
+	}
+	return steps
 }
 
 func (ctr *container) nextWindow(t *TimeWin, proc *process.Process) error {
@@ -907,8 +951,8 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 		val := ctr.windowValue(ctr.curVecIdx, ctr.curRowIdx)
 		if ctr.withoutFill && !t.GapFill && t.Sliding > 0 {
 			if val >= ctr.right {
-				span := ctr.windowBoundaryDistance(ctr.right, val, proc)
-				skip := int64(span/t.Sliding) + 1
+				steps := ctr.windowBoundarySteps(ctr.right, val, t.Sliding, proc)
+				skip := steps + 1
 				ctr.left = ctr.advanceWindowBoundaryBy(ctr.left, skip, t.Sliding, proc)
 				ctr.right = ctr.advanceWindowBoundary(ctr.left, t.Interval, proc)
 				ctr.nextLeft = ctr.advanceWindowBoundary(ctr.left, t.Sliding, proc)
@@ -994,8 +1038,7 @@ func (ctr *container) closeBoundedGapFillTail(t *TimeWin, proc *process.Process)
 	if ctr.left >= ctr.gapFillEnd {
 		return true, nil
 	}
-	span := ctr.windowBoundaryDistance(ctr.left, ctr.gapFillEnd, proc)
-	remaining := int64((span-1)/t.Sliding) + 1
+	remaining := ctr.windowBoundaryWindowCount(ctr.left, ctr.gapFillEnd, t.Sliding, proc)
 	count := remaining
 	capacity := int64(maxTimeWindowRows - len(ctr.wStart))
 	if capacity < 1 {
@@ -1022,8 +1065,13 @@ func (ctr *container) closeBoundedGapFillTail(t *TimeWin, proc *process.Process)
 // When the output batch fills, it closes the current prefix and lets the normal
 // post-flush transition create the next group.
 func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetime, proc *process.Process) (bool, error) {
-	span := ctr.windowBoundaryDistance(ctr.left, target, proc)
-	steps := int64(span / t.Sliding)
+	steps := ctr.windowBoundarySteps(ctr.left, target, t.Sliding, proc)
+	if steps == 0 && target > ctr.left {
+		// The first civil boundary after a fold may have the same wall-clock
+		// value as the current one.  Treat it as one real window so the cursor
+		// and aggregate generation cannot stall on the same row.
+		steps = 1
+	}
 	if steps <= 0 {
 		return false, nil
 	}

@@ -1846,6 +1846,129 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 	return boundary
 }
 
+// AdvanceTimestampWindowBoundaryBy advances count points on the same
+// timezone-aware boundary sequence as AdvanceTimestampWindowBoundary.  A
+// direct instant candidate handles fixed-offset spans in O(1), while the
+// civil-time fallback preserves spring gaps and resolves a target that is not
+// represented by that instant candidate.  In particular, an instant candidate
+// that lands on the second occurrence of a folded civil boundary is retained.
+func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int64, loc *time.Location) types.Timestamp {
+	if count <= 0 || interval <= 0 || value == types.ZeroTimestamp {
+		return value
+	}
+	delta, ok := safeTimestampWindowProduct(count, interval)
+	if !ok {
+		return value
+	}
+	startCivil := int64(value.ToDatetime(loc))
+	targetCivil, ok := safeTimestampWindowSum(startCivil, delta)
+	if !ok {
+		return value
+	}
+	target := types.Datetime(targetCivil)
+	candidateRaw, ok := safeTimestampWindowSum(int64(value), delta)
+	if ok {
+		candidate := types.Timestamp(candidateRaw)
+		candidateCivil := int64(candidate.ToDatetime(loc))
+		civilDelta := candidateCivil - startCivil
+		grid := interval
+		if grid < 0 {
+			grid = -grid
+		}
+		// A DST gap/fold can make the civil distance differ from count*interval
+		// while the raw boundary sequence still advances by exactly interval.
+		// Relative grid alignment is therefore the decisive signal; do not cap
+		// the candidate at targetCivil, which would reject the first valid point
+		// after a spring gap.
+		if civilDelta >= 0 && grid > 0 && civilDelta%grid == 0 {
+			return candidate
+		}
+		if candidateCivil == targetCivil {
+			return candidate
+		}
+	}
+	return resolveTimestampWindowBoundary(target, loc)
+}
+
+// TimestampWindowBoundarySteps returns the number of boundary advances from
+// start to end.  Raw instant distance is exact for fixed-offset spans and for
+// hourly DST gaps/folds (including both occurrences of a fold).  Civil distance
+// is exact for day-sized transitions where the raw distance is 23/25 hours.
+// The bounded fallback verifies the small number of transition-adjacent cases
+// that are not divisible in either representation; it never scales with a
+// long sparse gap.
+func TimestampWindowBoundarySteps(start, end types.Timestamp, interval int64, loc *time.Location) int64 {
+	if end <= start || interval <= 0 || start == types.ZeroTimestamp {
+		return 0
+	}
+	rawSpan := int64(end) - int64(start)
+	if rawSpan >= 0 && rawSpan%interval == 0 {
+		return rawSpan / interval
+	}
+	civilStart := int64(start.ToDatetime(loc))
+	civilEnd := int64(end.ToDatetime(loc))
+	civilSpan := civilEnd - civilStart
+	if civilSpan >= 0 && civilSpan%interval == 0 {
+		return civilSpan / interval
+	}
+
+	// A reachable target normally matches one of the two exact quotients.  If
+	// a non-hour interval straddles a transition, verify nearby estimates rather
+	// than iterating through the potentially enormous sparse range.
+	candidates := []int64{rawSpan / interval, civilSpan / interval}
+	for _, estimate := range candidates {
+		if estimate < 1 {
+			estimate = 1
+		}
+		for offset := int64(-3); offset <= 3; offset++ {
+			steps := estimate + offset
+			if steps < 1 {
+				continue
+			}
+			if AdvanceTimestampWindowBoundaryBy(start, steps, interval, loc) == end {
+				return steps
+			}
+		}
+	}
+
+	// Preserve progress for a target immediately after a fold/gap even when a
+	// caller supplied a boundary vector whose representation is not divisible
+	// by the requested interval.
+	if end > start {
+		return 1
+	}
+	return 0
+}
+
+func resolveTimestampWindowBoundary(value types.Datetime, loc *time.Location) types.Timestamp {
+	boundary := value.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip < value {
+		boundary += types.Timestamp(value - roundTrip)
+	}
+	return boundary
+}
+
+func safeTimestampWindowProduct(left, right int64) (int64, bool) {
+	if left == 0 || right == 0 {
+		return 0, true
+	}
+	if left < 0 || right < 0 || left > math.MaxInt64/right {
+		return 0, false
+	}
+	return left * right, true
+}
+
+func safeTimestampWindowSum(left, right int64) (int64, bool) {
+	if right > 0 && left > math.MaxInt64-right {
+		return 0, false
+	}
+	if right < 0 && left < math.MinInt64-right {
+		return 0, false
+	}
+	return left + right, true
+}
+
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
 	var num int64
 	if diff <= 0 {

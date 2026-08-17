@@ -1047,6 +1047,77 @@ func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	parse := func(s string) types.Timestamp {
+		ts, err := types.ParseTimestamp(zone, s, 6)
+		require.NoError(t, err)
+		return ts
+	}
+	firstFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+	secondFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+
+	t.Run("observed-row-skip-keeps-both-fold-instants", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-11-01 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-11-01 03:00:00")),
+		}
+		flushed, err := ctr.advanceBoundedTumblingGap(arg, types.Datetime(parse("2026-11-01 02:00:00")), proc)
+		require.NoError(t, err)
+		require.False(t, flushed)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-11-01 00:00:00")),
+			types.Datetime(firstFold),
+			types.Datetime(secondFold),
+		}, ctr.wStart)
+		require.Equal(t, types.Datetime(parse("2026-11-01 02:00:00")), ctr.left)
+	})
+
+	t.Run("empty-spring-forward-domain-excludes-finish", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-03-08 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-03-08 04:00:00")),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-03-08 00:00:00")),
+			types.Datetime(parse("2026-03-08 01:00:00")),
+			types.Datetime(parse("2026-03-08 03:00:00")),
+		}, ctr.wStart)
+	})
+
+	t.Run("empty-fall-back-domain-keeps-both-fold-instants", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-11-01 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-11-01 03:00:00")),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-11-01 00:00:00")),
+			types.Datetime(firstFold),
+			types.Datetime(secondFold),
+			types.Datetime(parse("2026-11-01 02:00:00")),
+		}, ctr.wStart)
+	})
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newPartArg(t, proc, makeInterval(), false)

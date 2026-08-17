@@ -34,6 +34,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	hour := int64(types.SecsPerHour * types.MicroSecsPerSec)
+	day := int64(types.SecsPerDay * types.MicroSecsPerSec)
+	parse := func(s string) types.Timestamp {
+		ts, err := types.ParseTimestamp(zone, s, 6)
+		require.NoError(t, err)
+		return ts
+	}
+
+	t.Run("spring-forward-hourly-grid", func(t *testing.T) {
+		start := parse("2026-03-08 00:00:00")
+		end := parse("2026-03-08 04:00:00")
+		require.Equal(t, int64(3), TimestampWindowBoundarySteps(start, end, hour, zone))
+		require.Equal(t, end, AdvanceTimestampWindowBoundaryBy(start, 3, hour, zone))
+	})
+	t.Run("fall-back-hourly-grid", func(t *testing.T) {
+		start := parse("2026-11-01 00:00:00")
+		end := parse("2026-11-01 03:00:00")
+		require.Equal(t, int64(4), TimestampWindowBoundarySteps(start, end, hour, zone))
+	})
+	t.Run("fall-back-repeated-instant", func(t *testing.T) {
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(first, second, hour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(first, 1, hour, zone))
+	})
+	t.Run("civil-day-dst-grid", func(t *testing.T) {
+		springStart := parse("2026-03-08 00:00:00")
+		springEnd := parse("2026-03-09 00:00:00")
+		fallStart := parse("2026-11-01 00:00:00")
+		fallEnd := parse("2026-11-02 00:00:00")
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(springStart, springEnd, day, zone))
+		require.Equal(t, int64(1), TimestampWindowBoundarySteps(fallStart, fallEnd, day, zone))
+	})
+	t.Run("fixed-offset-sparse-jump", func(t *testing.T) {
+		fixed := time.FixedZone("UTC+8", 8*60*60)
+		start := types.UnixMicroToTimestamp(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro())
+		count := int64(24 * 60 * 60 * 1_000_000)
+		end := types.Timestamp(int64(start) + count)
+		require.Equal(t, count, TimestampWindowBoundarySteps(start, end, 1, fixed))
+		require.Equal(t, end, AdvanceTimestampWindowBoundaryBy(start, count, 1, fixed))
+	})
+}
+
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{

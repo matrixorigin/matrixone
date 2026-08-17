@@ -32,6 +32,13 @@ order by _wstart;
 
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_gap
+where event_ts >= '2026-03-08 00:00:00'
+  and event_ts < '2026-03-08 04:00:00'
+group by k interval(event_ts, 1, hour) gapfill(partition)
+order by _wstart, _wend;
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_gap
 group by k interval(event_ts, 2, hour) sliding(1, hour)
 order by _wstart;
 
@@ -77,6 +84,13 @@ set time_zone = 'America/New_York';
 
 select _wstart, _wend, sum(value) as value_sum
 from tw_dst_fall_gap
+group by k interval(event_ts, 1, hour) gapfill(partition)
+order by _wstart, _wend;
+
+select _wstart, _wend, sum(value) as value_sum
+from tw_dst_fall_gap
+where event_ts >= '2026-11-01 00:00:00'
+  and event_ts < '2026-11-01 03:00:00'
 group by k interval(event_ts, 1, hour) gapfill(partition)
 order by _wstart, _wend;
 
