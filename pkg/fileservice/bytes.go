@@ -180,9 +180,17 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 }
 
 func (b *bytesAllocator) allocateCacheBytes(size int, hints malloc.Hints) *Bytes {
-	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
+	bytes, err := b.tryAllocateCacheBytes(size, hints)
 	if err != nil {
 		panic(err)
+	}
+	return bytes
+}
+
+func (b *bytesAllocator) tryAllocateCacheBytes(size int, hints malloc.Hints) (*Bytes, error) {
+	slice, dec, err := b.allocator.Allocate(uint64(size), hints)
+	if err != nil {
+		return nil, err
 	}
 	bytes := &Bytes{
 		bytes:       slice,
@@ -191,7 +199,7 @@ func (b *bytesAllocator) allocateCacheBytes(size int, hints malloc.Hints) *Bytes
 		doNotReuse:  hints&malloc.DoNotReuse != 0,
 	}
 	bytes.refs.Store(1)
-	return bytes
+	return bytes, nil
 }
 
 func (b *bytesAllocator) AllocateCacheData(ctx context.Context, size int) fscache.Data {

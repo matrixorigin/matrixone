@@ -23,14 +23,12 @@ import (
 )
 
 func TestJemallocAllocator(t *testing.T) {
-	allocator, err := NewJemallocAllocator()
-	require.NoError(t, err)
+	allocator := newJemallocAllocatorForTest(t)
 	testAllocator(t, func() Allocator { return allocator })
 }
 
 func TestJemallocAllocatorReportsClassBackingAndArenaStats(t *testing.T) {
-	allocator, err := NewJemallocAllocator()
-	require.NoError(t, err)
+	allocator := newJemallocAllocatorForTest(t)
 
 	const request = 700 * 1024
 	backingSize, err := allocator.BackingSize(request)
@@ -59,8 +57,7 @@ func TestJemallocAllocatorReportsClassBackingAndArenaStats(t *testing.T) {
 }
 
 func TestJemallocAllocatorArenaStatsCoverMixedLiveSizeClasses(t *testing.T) {
-	allocator, err := NewJemallocAllocator()
-	require.NoError(t, err)
+	allocator := newJemallocAllocatorForTest(t)
 
 	before, err := allocator.Stats()
 	require.NoError(t, err)
@@ -90,16 +87,13 @@ func TestJemallocAllocatorArenaStatsCoverMixedLiveSizeClasses(t *testing.T) {
 }
 
 func TestJemallocAllocatorUsesIndependentArenas(t *testing.T) {
-	first, err := NewJemallocAllocator()
-	require.NoError(t, err)
-	second, err := NewJemallocAllocator()
-	require.NoError(t, err)
+	first := newJemallocAllocatorForTest(t)
+	second := newJemallocAllocatorForTest(t)
 	require.NotEqual(t, first.Arena(), second.Arena())
 }
 
 func TestJemallocAllocatorReclaimPurgesUnusedPages(t *testing.T) {
-	allocator, err := NewJemallocAllocator()
-	require.NoError(t, err)
+	allocator := newJemallocAllocatorForTest(t)
 
 	const allocationSize = 512 << 10
 	const allocationCount = 64
@@ -126,4 +120,32 @@ func TestJemallocAllocatorReclaimPurgesUnusedPages(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, after.Dirty)
 	require.LessOrEqual(t, after.Resident, before.Resident)
+}
+
+func TestJemallocAllocatorCloseWaitsForOutstandingAllocation(t *testing.T) {
+	before := liveJemallocArenas.Load()
+	allocator := newJemallocAllocatorForTest(t)
+
+	_, dec, err := allocator.Allocate(4<<10, NoHints)
+	require.NoError(t, err)
+	require.NoError(t, allocator.Close())
+	require.Equal(t, before+1, liveJemallocArenas.Load())
+
+	_, _, err = allocator.Allocate(4<<10, NoHints)
+	require.Error(t, err)
+
+	dec.Deallocate()
+	require.Equal(t, before, liveJemallocArenas.Load())
+}
+
+func TestJemallocAllocatorCloseStartCyclesKeepArenasBounded(t *testing.T) {
+	before := liveJemallocArenas.Load()
+	for range 8 {
+		allocator := newJemallocAllocatorForTest(t)
+		_, dec, err := allocator.Allocate(4<<10, NoHints)
+		require.NoError(t, err)
+		dec.Deallocate()
+		require.NoError(t, allocator.Close())
+		require.Equal(t, before, liveJemallocArenas.Load())
+	}
 }

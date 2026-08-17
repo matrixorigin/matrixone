@@ -423,7 +423,11 @@ func (m *MemCache) allocateCacheData(ctx context.Context, size int, hints malloc
 		return data
 	}
 	if reservation := m.reserveCacheData(ctx, backingSize); reservation != nil {
-		ret := m.allocator.allocateCacheBytes(size, hints)
+		ret, err := m.allocator.tryAllocateCacheBytes(size, hints)
+		if err != nil {
+			reservation.release()
+			panic(err)
+		}
 		ret.reservation = reservation
 		return ret
 	}
@@ -867,10 +871,15 @@ func (m *MemCache) EvictToCapacityPercent(ctx context.Context, percent int64) in
 }
 
 func (m *MemCache) Close(ctx context.Context) {
-	m.closed.Store(true)
-	m.Flush(ctx)
+	if m.closed.Swap(true) {
+		return
+	}
+	m.Flush(context.WithoutCancel(ctx))
 	allMemoryCaches.Delete(m)
 	m.refreshAllocatorMetrics(true)
+	if err := m.arenaAllocator.Close(); err != nil {
+		panic(err)
+	}
 }
 
 func (m *MemCache) reclaimAllocator() {

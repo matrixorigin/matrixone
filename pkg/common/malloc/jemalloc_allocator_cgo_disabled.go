@@ -45,3 +45,7 @@ func (*JemallocAllocator) Stats() (MemoryCacheStats, error) {
 func (*JemallocAllocator) Reclaim() error {
 	return moerr.NewNotSupportedNoCtx("memory cache jemalloc allocator requires cgo")
 }
+
+func (*JemallocAllocator) Close() error {
+	return moerr.NewNotSupportedNoCtx("memory cache jemalloc allocator requires cgo")
+}

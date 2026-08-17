@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -56,6 +57,95 @@ type CacheConfig struct {
 	MetricScope string `toml:"-" json:"-"`
 
 	enableDiskCacheForLocalFS bool // for testing only
+}
+
+// fileServiceCaches owns the cache resources constructed for one FileService.
+// Keeping creation and rollback here prevents LocalFS and S3FS from drifting on
+// failure handling as cache types gain native resources.
+type fileServiceCaches struct {
+	remote *RemoteCache
+	memory *MemCache
+	disk   *DiskCache
+}
+
+func newFileServiceCaches(
+	ctx context.Context,
+	config CacheConfig,
+	perfCounterSets []*perfcounter.CounterSet,
+	name string,
+	enableDiskCache bool,
+	allocator CacheDataAllocator,
+) (caches fileServiceCaches, err error) {
+	config.setDefaults()
+	defer func() {
+		if err != nil {
+			caches.close(context.WithoutCancel(ctx))
+		}
+	}()
+
+	if config.RemoteCacheEnabled {
+		if config.QueryClient == nil {
+			return fileServiceCaches{}, moerr.NewInternalError(ctx, "query client is nil")
+		}
+		caches.remote = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
+		caches.remote.setAllocator(allocator)
+		logutil.Info("fileservice: remote cache initialized", zap.Any("fs-name", name))
+	}
+
+	if config.MemoryCapacity != nil && *config.MemoryCapacity > DisableCacheCapacity {
+		caches.memory = newMemCacheWithMetricScope(
+			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
+			&config.CacheCallbacks,
+			perfCounterSets,
+			name,
+			config.MetricScope,
+		)
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", name),
+			zap.Any("capacity", config.MemoryCapacity),
+		)
+	}
+
+	if enableDiskCache && config.DiskCapacity != nil &&
+		*config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
+		var cacheDataAllocator CacheDataAllocator
+		if caches.memory != nil {
+			cacheDataAllocator = caches.memory
+		}
+		caches.disk, err = newDiskCacheWithMetricScope(
+			ctx,
+			*config.DiskPath,
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
+			perfCounterSets,
+			true,
+			cacheDataAllocator,
+			name,
+			config.MetricScope,
+		)
+		if err != nil {
+			return caches, err
+		}
+		if caches.memory != nil {
+			caches.disk.memoryCache = caches.memory.cache
+		}
+		logutil.Info("fileservice: disk cache initialized",
+			zap.Any("fs-name", name),
+			zap.Any("config", config),
+		)
+	}
+
+	return caches, nil
+}
+
+func (c *fileServiceCaches) close(ctx context.Context) {
+	if c.disk != nil {
+		c.disk.Close(ctx)
+		c.disk = nil
+	}
+	if c.memory != nil {
+		c.memory.Close(ctx)
+		c.memory = nil
+	}
 }
 
 // ServiceMetricScope identifies one service's FileService cache metrics.

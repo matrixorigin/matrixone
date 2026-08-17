@@ -39,7 +39,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -271,68 +270,20 @@ func (l *LocalFS) BackingSize(size int) int {
 }
 
 func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.setDefaults()
-
-	// remote
-	if config.RemoteCacheEnabled {
-		if config.QueryClient == nil {
-			return moerr.NewInternalError(ctx, "query client is nil")
-		}
-		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
-		l.remoteCache.setAllocator(l)
-		logutil.Info("fileservice: remote cache initialized",
-			zap.Any("fs-name", l.name),
-		)
+	caches, err := newFileServiceCaches(
+		ctx,
+		config,
+		l.perfCounterSets,
+		l.name,
+		config.enableDiskCacheForLocalFS,
+		l,
+	)
+	if err != nil {
+		return err
 	}
-
-	// memory
-	if config.MemoryCapacity != nil &&
-		*config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
-		l.memCache = newMemCacheWithMetricScope(
-			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-			&config.CacheCallbacks,
-			l.perfCounterSets,
-			l.name,
-			config.MetricScope,
-		)
-		logutil.Info("fileservice: memory cache initialized",
-			zap.Any("fs-name", l.name),
-			zap.Any("config", config),
-		)
-	}
-
-	// disk
-	if config.enableDiskCacheForLocalFS &&
-		config.DiskCapacity != nil &&
-		*config.DiskCapacity > DisableCacheCapacity &&
-		config.DiskPath != nil {
-		var err error
-		var cacheDataAllocator CacheDataAllocator
-		if l.memCache != nil {
-			cacheDataAllocator = l.memCache
-		}
-		l.diskCache, err = newDiskCacheWithMetricScope(
-			ctx,
-			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
-			l.perfCounterSets,
-			true,
-			cacheDataAllocator,
-			l.name,
-			config.MetricScope,
-		)
-		if err != nil {
-			return err
-		}
-		if l.memCache != nil {
-			l.diskCache.memoryCache = l.memCache.cache
-		}
-		logutil.Info("fileservice: disk cache initialized",
-			zap.Any("fs-name", l.name),
-			zap.Any("config", config),
-		)
-	}
-
+	l.remoteCache = caches.remote
+	l.memCache = caches.memory
+	l.diskCache = caches.disk
 	return nil
 }
 
@@ -1398,12 +1349,10 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close(ctx context.Context) {
-	if l.memCache != nil {
-		l.memCache.Close(ctx)
-	}
-	if l.diskCache != nil {
-		l.diskCache.Close(ctx)
-	}
+	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
+	caches.close(ctx)
+	l.memCache = nil
+	l.diskCache = nil
 	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
 

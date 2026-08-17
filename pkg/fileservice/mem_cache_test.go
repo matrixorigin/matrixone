@@ -49,6 +49,26 @@ func (a *reclaimTrackingAllocator) Reclaim() error {
 	return nil
 }
 
+type closeTrackingAllocator struct {
+	malloc.MemoryCacheAllocator
+	closes atomic.Int64
+}
+
+func (a *closeTrackingAllocator) Close() error {
+	a.closes.Add(1)
+	return a.MemoryCacheAllocator.Close()
+}
+
+type oomExactAllocator struct{}
+
+func (oomExactAllocator) Allocate(uint64, malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	return nil, nil, moerr.NewOOMNoCtx()
+}
+
+func (oomExactAllocator) BackingSize(size uint64) (uint64, error) {
+	return size, nil
+}
+
 type blockingCacheDataReservation struct {
 	cacheDataReservation
 	committed chan struct{}
@@ -254,6 +274,35 @@ func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
 	second.Release()
 	first.release()
 	require.Equal(t, int64(0), cache.reservedBytes)
+}
+
+func TestMemCacheAllocationFailureReleasesCapacityReservation(t *testing.T) {
+	ctx := context.Background()
+	const capacity = 4 << 10
+
+	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
+	defer cache.Close(ctx)
+	cache.allocator.allocator = oomExactAllocator{}
+
+	require.Panics(t, func() {
+		cache.AllocateCacheData(ctx, capacity)
+	})
+	require.Zero(t, cache.reservedBytes)
+
+	reservation := cache.reserveCacheData(ctx, capacity)
+	require.NotNil(t, reservation)
+	reservation.release()
+	require.Zero(t, cache.reservedBytes)
+}
+
+func TestMemCacheCloseRetiresDedicatedAllocator(t *testing.T) {
+	ctx := context.Background()
+	cache := NewMemCache(fscache.ConstCapacity(4<<10), nil, nil, "")
+	tracking := &closeTrackingAllocator{MemoryCacheAllocator: cache.arenaAllocator}
+	cache.arenaAllocator = tracking
+
+	cache.Close(ctx)
+	require.Equal(t, int64(1), tracking.closes.Load())
 }
 
 func TestMemCacheReusesSmallPendingAllocation(t *testing.T) {

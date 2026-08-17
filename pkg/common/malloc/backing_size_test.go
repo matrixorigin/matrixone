@@ -138,6 +138,9 @@ func newJemallocAllocatorForTest(t *testing.T) *JemallocAllocator {
 	t.Helper()
 	allocator, err := NewJemallocAllocator()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, allocator.Close())
+	})
 	return allocator
 }
 

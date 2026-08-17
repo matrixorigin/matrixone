@@ -2451,6 +2451,42 @@ func TestS3FSIOMerger(t *testing.T) {
 	require.Equal(t, int64(1), storage.readCount.Load())
 }
 
+func TestNewS3FSCacheInitializationFailureRollsBackMemoryCache(t *testing.T) {
+	ctx := context.Background()
+	cachePath := t.TempDir() + "/not-a-directory"
+	require.NoError(t, os.WriteFile(cachePath, nil, 0o644))
+	name := t.Name()
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:     name,
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			DiskCapacity:   ptrTo(toml.ByteSize(1 << 20)),
+			DiskPath:       &cachePath,
+		},
+		nil,
+		false,
+		false,
+	)
+	require.Nil(t, fs)
+	require.Error(t, err)
+
+	registered := false
+	allMemoryCaches.Range(func(_, value any) bool {
+		if value.(memoryCacheRegistration).name == name {
+			registered = true
+			return false
+		}
+		return true
+	})
+	require.False(t, registered)
+}
+
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {
 	ctx := context.Background()
 

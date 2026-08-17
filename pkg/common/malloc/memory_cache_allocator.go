@@ -39,6 +39,10 @@ type MemoryCacheAllocator interface {
 	// Reclaim purges unused native pages after an explicit cache memory
 	// reclamation boundary. It must not be called on ordinary release paths.
 	Reclaim() error
+	// Close retires this cache generation. Existing allocations stay valid until
+	// their deallocators run; implementations release their native resources when
+	// the final allocation is returned.
+	Close() error
 }
 
 // NewMemoryCacheAllocator creates the production allocator for one isolated

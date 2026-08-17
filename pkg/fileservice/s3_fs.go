@@ -275,67 +275,13 @@ func (s *S3FS) BackingSize(size int) int {
 }
 
 func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
-	config.setDefaults()
-
-	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
-	if config.RemoteCacheEnabled {
-		if config.QueryClient == nil {
-			return moerr.NewInternalError(ctx, "query client is nil")
-		}
-		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
-		s.remoteCache.setAllocator(s)
-		logutil.Info("fileservice: remote cache initialized",
-			zap.Any("fs-name", s.name),
-		)
+	caches, err := newFileServiceCaches(ctx, config, s.perfCounterSets, s.name, true, s)
+	if err != nil {
+		return err
 	}
-
-	// memory cache
-	if config.MemoryCapacity != nil &&
-		*config.MemoryCapacity > DisableCacheCapacity {
-		s.memCache = newMemCacheWithMetricScope(
-			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
-			&config.CacheCallbacks,
-			s.perfCounterSets,
-			s.name,
-			config.MetricScope,
-		)
-		logutil.Info("fileservice: memory cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("capacity", config.MemoryCapacity),
-		)
-	}
-
-	// disk cache
-	if config.DiskCapacity != nil &&
-		*config.DiskCapacity > DisableCacheCapacity &&
-		config.DiskPath != nil {
-		var err error
-		var cacheDataAllocator CacheDataAllocator
-		if s.memCache != nil {
-			cacheDataAllocator = s.memCache
-		}
-		s.diskCache, err = newDiskCacheWithMetricScope(
-			ctx,
-			*config.DiskPath,
-			fscache.ConstCapacity(int64(*config.DiskCapacity)),
-			s.perfCounterSets,
-			true,
-			cacheDataAllocator,
-			s.name,
-			config.MetricScope,
-		)
-		if err != nil {
-			return err
-		}
-		if s.memCache != nil {
-			s.diskCache.memoryCache = s.memCache.cache
-		}
-		logutil.Info("fileservice: disk cache initialized",
-			zap.Any("fs-name", s.name),
-			zap.Any("config", config),
-		)
-	}
-
+	s.remoteCache = caches.remote
+	s.memCache = caches.memory
+	s.diskCache = caches.disk
 	return nil
 }
 
@@ -1546,12 +1492,10 @@ func (*S3FS) ETLCompatible() {}
 var _ CachingFileService = new(S3FS)
 
 func (s *S3FS) Close(ctx context.Context) {
-	if s.memCache != nil {
-		s.memCache.Close(ctx)
-	}
-	if s.diskCache != nil {
-		s.diskCache.Close(ctx)
-	}
+	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
+	caches.close(ctx)
+	s.memCache = nil
+	s.diskCache = nil
 }
 
 func (s *S3FS) FlushCache(ctx context.Context) {
