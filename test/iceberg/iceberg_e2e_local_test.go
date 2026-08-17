@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"io"
@@ -384,6 +385,7 @@ func TestLocalE2ESetupExecutesExpectedStatements(t *testing.T) {
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
 		"CREATE EXTERNAL TABLE",
+		"CREATE EXTERNAL TABLE",
 	} {
 		mock.ExpectExec(pattern).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
@@ -418,6 +420,7 @@ func TestLocalE2ECatalogAndMappingCase(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"table"}).
 			AddRow("append_orders").
 			AddRow("partition_orders").
+			AddRow("year_partition_tiny").
 			AddRow("mor_accounts"))
 	mock.ExpectQuery("SHOW CREATE TABLE").
 		WillReturnRows(sqlmock.NewRows([]string{"table", "create"}).AddRow("append_orders", "CREATE EXTERNAL TABLE ..."))
@@ -534,6 +537,7 @@ func TestLocalE2ECatalogAndMappingCaseFailureBranches(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows([]string{"table"}).
 						AddRow("append_orders").
 						AddRow("partition_orders").
+						AddRow("year_partition_tiny").
 						AddRow("mor_accounts"))
 				mock.ExpectQuery("SHOW CREATE TABLE").WillReturnError(errors.New("show create failed"))
 			},
@@ -1067,6 +1071,40 @@ func TestLocalE2EPartitionFilterCase(t *testing.T) {
 	}
 }
 
+func TestLocalE2EYearPartitionDateCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 6))
+	for _, row := range [][]driver.Value{
+		{int64(6), int64(155)},
+		{int64(1), int64(20)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(2), int64(50)},
+		{int64(1), int64(5)},
+		{int64(1), int64(50)},
+		{int64(0), nil},
+	} {
+		mock.ExpectQuery("SELECT COUNT").
+			WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(row...))
+	}
+	mock.ExpectQuery("EXPLAIN SELECT").
+		WillReturnRows(sqlmock.NewRows([]string{"plan"}).AddRow("Iceberg: residual_filter=true"))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).yearPartitionDateCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("year partition date case failed: %+v", result)
+	}
+	if result.Details["range_repetitions"] != "3" {
+		t.Fatalf("range repetition detail missing: %+v", result.Details)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestLocalE2EMergeOnReadDeleteCase(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
@@ -1173,14 +1211,17 @@ func TestLocalE2ECaseFailurePaths(t *testing.T) {
 
 func TestLocalE2ETableSpecs(t *testing.T) {
 	specs := e2eTableSpecs("ns")
-	if len(specs) != 3 {
-		t.Fatalf("expected 3 specs, got %d", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("expected 4 specs, got %d", len(specs))
 	}
 	if specs[1].partitionSpec.Fields[0].Name != "region" {
 		t.Fatalf("partition spec did not preserve region identity: %+v", specs[1].partitionSpec.Fields)
 	}
-	if specs[2].schema.Fields[0].Name != "account_id" {
-		t.Fatalf("account schema mismatch: %+v", specs[2].schema.Fields)
+	if specs[2].partitionSpec.Fields[0].Transform != "year" || specs[2].partitionSpec.Fields[0].SourceID != 2 {
+		t.Fatalf("year partition spec mismatch: %+v", specs[2].partitionSpec.Fields)
+	}
+	if specs[3].schema.Fields[0].Name != "account_id" {
+		t.Fatalf("account schema mismatch: %+v", specs[3].schema.Fields)
 	}
 }
 
@@ -1217,7 +1258,7 @@ func TestLocalE2ESeedRESTTables(t *testing.T) {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/v1/main/namespaces/ci_ns/tables"):
 			data, _ := io.ReadAll(r.Body)
 			body := string(data)
-			for _, name := range []string{"append_orders", "partition_orders", "mor_accounts"} {
+			for _, name := range []string{"append_orders", "partition_orders", "year_partition_tiny", "mor_accounts"} {
 				if strings.Contains(body, `"name":"`+name+`"`) {
 					created = append(created, name)
 				}
@@ -1237,7 +1278,7 @@ func TestLocalE2ESeedRESTTables(t *testing.T) {
 	if err := seedRESTTables(context.Background(), cfg); err != nil {
 		t.Fatalf("seedRESTTables failed: %v", err)
 	}
-	if !sameLines(created, []string{"append_orders", "partition_orders", "mor_accounts"}) {
+	if !sameLines(created, []string{"append_orders", "partition_orders", "year_partition_tiny", "mor_accounts"}) {
 		t.Fatalf("unexpected created tables: %v", created)
 	}
 }
