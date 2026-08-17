@@ -2763,6 +2763,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			} else {
 				ses.applySessionSysVarSideEffects(variable.name, variable.value)
 			}
+			// The typed snapshot carries only the final value. Invalidate for
+			// both cache-control variables so a source toggle (0->1 or 1->0)
+			// cannot leave stale target entries after migration.
+			if variable.name == "clear_privilege_cache" || variable.name == "enable_privilege_cache" {
+				ses.InvalidatePrivilegeCache()
+			}
 		}
 	} else {
 		for _, stmt := range req.SetVarStmts {

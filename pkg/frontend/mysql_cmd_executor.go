@@ -1015,7 +1015,7 @@ func doSetVar(
 		return nil
 	}
 	markSystemReplayability := func(assign *tree.VarAssignmentExpr) {
-		if (!assign.System && !assign.SetNames) || assign.Global {
+		if !assign.System && !assign.SetNames {
 			return
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
@@ -1024,6 +1024,17 @@ func doSetVar(
 				"character_set_client", "character_set_connection", "character_set_results",
 			} {
 				ses.markMigrationSystemVarReplayable(name, replayable)
+			}
+			return
+		}
+		if assign.Global {
+			// Only global variables with a session-migration runtime side
+			// effect need replayability tracking. A prepared or multi-statement
+			// SET GLOBAL for these variables is not present in the proxy raw
+			// stream, so legacy targets must fail closed instead of silently
+			// losing the source runtime value.
+			if hasMigrationRuntimeSideEffect(assign.Name) {
+				ses.markMigrationSystemVarReplayable(assign.Name, replayable)
 			}
 			return
 		}

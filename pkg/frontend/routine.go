@@ -607,13 +607,14 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		var userVarsExported bool
 		vars, err := ses.snapshotUserDefinedVars(operationCtx)
 		if err != nil {
-			// A bounded typed snapshot can fall back to the proxy's raw replay
-			// stream only when every current user-variable assignment is known to
-			// have been captured there. Prepared assignments are not observable
-			// by that stream and must fail closed.
-			if !isMigrationSnapshotSizeLimitError(err) || ses.hasUnreplayableMigrationUserVars() {
+			// A v22 target must not re-evaluate raw SET expressions when the
+			// evaluated user-variable snapshot is omitted. Keep the overflow
+			// reason explicit so the proxy can fail closed for v22 while still
+			// allowing complete raw replay to legacy targets.
+			if !isMigrationSnapshotSizeLimitError(err) {
 				return err
 			}
+			resp.UserDefinedVarsSnapshotTooLarge = true
 		} else {
 			userVars = vars
 			userVarsExported = true

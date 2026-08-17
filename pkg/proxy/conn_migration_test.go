@@ -343,6 +343,25 @@ func TestQueryServiceMigrateToRejectsOversizedSystemSnapshotForV22Target(t *test
 	})
 }
 
+func TestQueryServiceMigrateToRejectsOversizedUserSnapshotForV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{
+			LastAffectedRows:                7,
+			UserDefinedVarsSnapshotTooLarge: true,
+			UserDefinedVarsReplayable:       true,
+			UserLevelLockReleaseSupported:   true,
+		}
+		err := cc.migrateConnTo(sc, info)
+		assert.ErrorContains(t, err, "typed user variables because the snapshot exceeds")
+		assert.Empty(t, sc.statements)
+	})
+}
+
 func TestQueryServiceMigrateToRejectsUnreplayableTypedStateForPreV22Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {

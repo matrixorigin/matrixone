@@ -957,6 +957,41 @@ func TestSession_Migrate(t *testing.T) {
 		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelDatabaseStar, "d1", "", PrivilegeTypeSelect))
 	})
 
+	t.Run("typed system variables invalidate privilege cache after toggle-back", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		runtime.ServiceRuntime(sid).SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+
+		target := genSession(ctrl, "d1", nil)
+		target.GetPrivilegeCache().add(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect)
+		require.True(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+
+		// The source can execute SET ...=0/1 (or 1/0), which invalidates its
+		// cache on the edge and then leaves the final value at the safe side.
+		// Typed migration carries only final values, so the target must
+		// invalidate when restoring either cache-control variable.
+		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			DB:                        "d1",
+			SystemVariablesExported:   true,
+			SystemVariablesReplayable: true,
+			SystemVariables: []*query.MigrateSystemVariable{
+				{Name: "clear_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(false)},
+				{Name: "enable_privilege_cache", Value: plan2.MakePlan2BoolConstExprWithType(true)},
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, target.GetPrivilegeCache().has(objectTypeTable, privilegeLevelStar, "d1", "t1", PrivilegeTypeSelect))
+	})
+
 	t.Run("typed system variables preserve transaction flags and runtime scope", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()

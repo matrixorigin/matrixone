@@ -83,7 +83,7 @@ func (c *clientConn) migrateConnToContext(
 	defer cancel()
 
 	typedMigration := info.UserDefinedVarsExported || info.SystemVariablesExported ||
-		info.SystemVariablesSnapshotTooLarge
+		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
 	if typedMigration {
@@ -100,8 +100,16 @@ func (c *clientConn) migrateConnToContext(
 			return moerr.NewInternalError(ctx,
 				"cannot migrate typed system variables because the snapshot exceeds the connection migration size limit")
 		}
+		if typedMigrationSupported && info.UserDefinedVarsSnapshotTooLarge {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate typed user variables because the snapshot exceeds the connection migration size limit")
+		}
 	}
 	if !typedMigrationSupported {
+		if info.UserDefinedVarsSnapshotTooLarge && !info.UserDefinedVarsReplayable {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate oversized user variables to a pre-v22 target without complete raw replay")
+		}
 		if info.UserDefinedVarsExported && !info.UserDefinedVarsReplayable {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate typed user variables to a pre-v22 target without complete raw replay")

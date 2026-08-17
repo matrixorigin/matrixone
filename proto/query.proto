@@ -569,6 +569,10 @@ message MigrateConnFromResponse {
   // the migration size limit. Pre-v22 targets may use complete raw replay;
   // v22 targets must fail closed rather than apply an unsafe projection.
   bool SystemVariablesSnapshotTooLarge = 12;
+  // Whether the typed user-variable snapshot was omitted because it exceeded
+  // the migration size limit. Pre-v22 targets may use complete raw replay;
+  // v22 targets must fail closed rather than re-evaluate raw SET expressions.
+  bool UserDefinedVarsSnapshotTooLarge = 13;
 }
 
 message MigrateConnToRequest {

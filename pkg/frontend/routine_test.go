@@ -574,14 +574,15 @@ func TestMigrateConnectionFromFailsClosedWhenTypedSnapshotTooLarge(t *testing.T)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 	resp := &query.MigrateConnFromResponse{}
-	err := rt.migrateConnectionFrom(resp)
-	require.ErrorContains(t, err, "size limit")
+	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.False(t, resp.UserDefinedVarsExported)
 	require.Empty(t, resp.UserDefinedVars)
-	require.False(t, resp.SystemVariablesExported)
+	require.True(t, resp.UserDefinedVarsSnapshotTooLarge)
+	require.False(t, resp.UserDefinedVarsReplayable)
+	require.True(t, resp.SystemVariablesExported)
 }
 
-func TestMigrateConnectionFromFallsBackWhenTypedUserSnapshotTooLargeAndReplayable(t *testing.T) {
+func TestMigrateConnectionFromMarksTypedUserSnapshotTooLargeForLegacyReplay(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
@@ -595,8 +596,9 @@ func TestMigrateConnectionFromFallsBackWhenTypedUserSnapshotTooLargeAndReplayabl
 			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	// A normal COM_QUERY SET is retained by the proxy, so the oversized typed
-	// snapshot can safely fall back to the legacy replay stream.
+	// A normal COM_QUERY SET is retained by the proxy, so a pre-v22 target can
+	// still use the legacy replay stream. A v22 target must reject this marker
+	// instead of re-evaluating the raw expression.
 	require.NoError(t, ses.setUserDefinedVarWithKindAndReplayability(
 		"large",
 		string(make([]byte, maxMigrateUserDefinedVarsSize)),
@@ -612,6 +614,7 @@ func TestMigrateConnectionFromFallsBackWhenTypedUserSnapshotTooLargeAndReplayabl
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.False(t, resp.UserDefinedVarsExported)
 	require.Empty(t, resp.UserDefinedVars)
+	require.True(t, resp.UserDefinedVarsSnapshotTooLarge)
 	require.True(t, resp.UserDefinedVarsReplayable)
 	require.True(t, resp.SystemVariablesExported)
 }
@@ -680,11 +683,65 @@ func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set optimizer_hints = prepared_hint", 1)
 	require.NoError(t, err)
 	require.NoError(t, doSetVar(
 		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestPreparedGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "optimizer_hints")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "optimizer_hints", "prepared_hint")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set global optimizer_hints = prepared_hint", 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
+func TestMultiStatementGlobalRuntimeAssignmentIsMarkedUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, "runtime_filter_limit_in")] =
+		newMrsForSystemVariableNameOfAccount([][]interface{}{})
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, "runtime_filter_limit_in", "42")] = nil
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+	previousExeSqlInBgSes := ExeSqlInBgSes
+	ExeSqlInBgSes = func(context.Context, BackgroundExec, string) ([]ExecResult, error) {
+		return nil, nil
+	}
+	t.Cleanup(func() { ExeSqlInBgSes = previousExeSqlInBgSes })
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set global runtime_filter_limit_in = 42", 1)
+	require.NoError(t, err)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	// The frontend executes this as part of a multi-statement COM_QUERY, so
+	// the proxy does not retain the raw SET for a legacy migration hop.
+	execCtx.singleStatementQuery = false
+	require.NoError(t, doSetVar(
+		ses, execCtx, stmt.(*tree.SetVar), "set global runtime_filter_limit_in = 42", false))
 	require.True(t, ses.hasUnreplayableMigrationSystemVars())
 }
 
