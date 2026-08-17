@@ -742,20 +742,21 @@ func TestNormalizeAndValidateRemapDb(t *testing.T) {
 func TestRewriteKeysUseIdentifierComparisonMode(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
-		name  string
-		lower int64
-		want  string
+		name          string
+		lower         int64
+		want          string
+		wantExecution string
 	}{
-		{name: "mode zero", lower: 0, want: "MixedDB.MixedTable"},
-		{name: "mode one", lower: 1, want: "mixeddb.mixedtable"},
-		{name: "mode two", lower: 2, want: "MixedDB.MixedTable"},
+		{name: "mode zero", lower: 0, want: "MixedDB.MixedTable", wantExecution: "MixedDB.MixedTable"},
+		{name: "mode one", lower: 1, want: "mixeddb.mixedtable", wantExecution: "mixeddb.mixedtable"},
+		{name: "mode two", lower: 2, want: "mixeddb.mixedtable", wantExecution: "MixedDB.MixedTable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			key, db, table, err := NormalizeRewriteKey(ctx, "MixedDB.MixedTable", test.lower)
 			require.NoError(t, err)
 			require.Equal(t, test.want, key)
-			require.Equal(t, strings.Split(test.want, ".")[0], db)
-			require.Equal(t, strings.Split(test.want, ".")[1], table)
+			require.Equal(t, strings.Split(test.wantExecution, ".")[0], db)
+			require.Equal(t, strings.Split(test.wantExecution, ".")[1], table)
 		})
 	}
 
@@ -796,7 +797,7 @@ func TestRewriteBodyUsesIdentifierComparisonMode(t *testing.T) {
 	}{
 		{lower: 0, key: "MixedDB.T", origin: "MixedDB.T"},
 		{lower: 1, key: "mixeddb.t", origin: "mixeddb.t"},
-		{lower: 2, key: "MixedDB.T", origin: "MixedDB.T"},
+		{lower: 2, key: "mixeddb.t", origin: "MixedDB.T"},
 	} {
 		stmts, err := Parse(ctx, dialect.MYSQL, sql, test.lower)
 		require.NoError(t, err)

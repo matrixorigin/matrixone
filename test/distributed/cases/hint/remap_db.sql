@@ -66,6 +66,8 @@ deallocate prepare mixed_case_mode_two_insert;
 select * from DstMix2_27190.T order by id;
 /*+ {"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=2"}} */
 select * from DstMix2_27190.T order by id;
+set remap_rewrites = '{"rewrites":{"DstMix2_27190.T":"select * from DstMix2_27190.T where id=3"}}';
+select * from dstmix2_27190.t order by id;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 set global lower_case_table_names = 0;

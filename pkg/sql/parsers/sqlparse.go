@@ -393,8 +393,9 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 }
 
 // NormalizeRewriteKey returns the database.table execution key used by the
-// planner under the active lower_case_table_names mode. Mode 1 lowercases
-// object names; modes 0 and 2 preserve their configured spelling.
+// planner under the active lower_case_table_names comparison mode. The returned
+// db/table retain execution spelling for mode 2, while the map key uses the
+// case-insensitive comparison identity shared by modes 1 and 2.
 func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames int64) (string, string, string, error) {
 	db, table, ok := SplitRewriteKey(key)
 	if !ok {
@@ -403,11 +404,13 @@ func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames in
 		}
 		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
 	}
+	compareDB := tree.NewCStr(db, lowerCaseTableNames).Compare()
+	compareTable := tree.NewCStr(table, lowerCaseTableNames).Compare()
 	if lowerCaseTableNames == 1 {
-		db = tree.NewCStr(db, lowerCaseTableNames).Compare()
-		table = tree.NewCStr(table, lowerCaseTableNames).Compare()
+		db = compareDB
+		table = compareTable
 	}
-	return db + "." + table, db, table, nil
+	return compareDB + "." + compareTable, db, table, nil
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a

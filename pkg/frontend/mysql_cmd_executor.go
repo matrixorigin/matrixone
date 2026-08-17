@@ -2111,8 +2111,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicy(
-			execCtx.reqCtx, execCtx.sqlOfStmt, sql, parserLowerCaseTableNames(ses))
+		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLMode(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses), parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}

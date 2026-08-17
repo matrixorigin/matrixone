@@ -10714,7 +10714,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if len(schema) == 0 {
 				schema = builder.compCtx.DefaultDatabase()
 			}
-			key := schema + "." + table
+			lower := builder.compCtx.GetLowerCaseTableNames()
+			key := tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that

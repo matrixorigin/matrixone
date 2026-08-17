@@ -251,7 +251,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 			return sql, nil
 		}
 		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules,
-			policy.sessionRemapDb, policy.lowerCaseTableNames)
+			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
 	}
 
 	for i, fragment := range fragments {
@@ -259,7 +259,7 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 			continue
 		}
 		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules,
-			policy.sessionRemapDb, policy.lowerCaseTableNames)
+			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
 		if err != nil {
 			return sql, err
 		}
@@ -282,6 +282,7 @@ func rewriteSingleSQL(
 	sessionRules map[string]string,
 	sessionRemapDb map[string]string,
 	lowerCaseTableNames int64,
+	sqlMode string,
 ) (string, error) {
 
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
@@ -314,6 +315,15 @@ func rewriteSingleSQL(
 	// remapdb (database-name substitution) is applied before the table rewrites
 	// and does not stack: a database maps to one target, so the inline hint
 	// overrides the session variable for the same source database.
+	if err = validateRawRewriteRules(ctx, cache, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateRawRewriteRules(ctx, sessionRules, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateRawRewriteRules(ctx, inlineRules, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
 	normalizedRoleRules, err := normalizeRewriteRules(ctx, cache, lowerCaseTableNames)
 	if err != nil {
 		return sql, err
@@ -375,6 +385,14 @@ func rewriteSQLFromMaterializedPolicy(
 	outerSQL, innerSQL string,
 	lowerCaseTableNamesArg ...int64,
 ) (string, error) {
+	return rewriteSQLFromMaterializedPolicyWithSQLMode(ctx, outerSQL, innerSQL, "", lowerCaseTableNamesArg...)
+}
+
+func rewriteSQLFromMaterializedPolicyWithSQLMode(
+	ctx context.Context,
+	outerSQL, innerSQL, sqlMode string,
+	lowerCaseTableNamesArg ...int64,
+) (string, error) {
 	lowerCaseTableNames := int64(0)
 	if len(lowerCaseTableNamesArg) > 0 {
 		lowerCaseTableNames = lowerCaseTableNamesArg[0]
@@ -400,6 +418,9 @@ func rewriteSQLFromMaterializedPolicy(
 
 	inlineRules, inlineRemapDb, err := extractInlineRewrites(ctx, innerSQL)
 	if err != nil {
+		return innerSQL, err
+	}
+	if err = validateRawRewriteRules(ctx, inlineRules, lowerCaseTableNames, sqlMode); err != nil {
 		return innerSQL, err
 	}
 	normalizedInlineRules, err := normalizeRewriteRules(ctx, inlineRules, lowerCaseTableNames)
@@ -428,6 +449,34 @@ func rewriteSQLFromMaterializedPolicy(
 		return innerSQL, err
 	}
 	return hint + " " + innerSQL, nil
+}
+
+func validateRawRewriteRules(ctx context.Context, rules map[string]string, lowerCaseTableNames int64, sqlMode string) error {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		value := rules[key]
+		if value == "" {
+			return moerr.NewParseError(ctx, "statement")
+		}
+		stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, value, lowerCaseTableNames, sqlMode)
+		if err != nil {
+			return moerr.NewParseError(ctx, err.Error())
+		}
+		valid := false
+		switch stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+			valid = true
+		}
+		stmt.Free()
+		if !valid {
+			return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+		}
+	}
+	return nil
 }
 
 // extractInlineRewrites returns the per-table rewrite rules and database-remap

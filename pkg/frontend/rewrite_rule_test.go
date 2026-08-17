@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -830,6 +831,35 @@ func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"hint_test.users": "select 'Alice'"}, normalized)
 	}
+}
+
+func TestRewriteSQLValidatesEquivalentLosersBeforeNormalization(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+
+	for _, invalid := range []string{"delete from shadow27190.t", "", "select from"} {
+		sql := fmt.Sprintf(`/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1","shadow27190.T":%q}} */ select id from shadow27190.t`, invalid)
+		_, err := rewriteSQL(ctx, ses, sql)
+		require.Error(t, err)
+	}
+
+	outer := `/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1","shadow27190.T":"delete from shadow27190.t"}} */ select id from shadow27190.t`
+	_, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner, 1)
+	require.ErrorContains(t, err, "only accept SELECT-like statements")
+}
+
+func TestRewritePolicyModeTwoUsesComparisonIdentity(t *testing.T) {
+	ctx := context.Background()
+	normalized, err := normalizeRewriteRules(ctx, map[string]string{
+		"CaseDB.T": "select * from CaseDB.T where id=1",
+	}, 2)
+	require.NoError(t, err)
+	require.Contains(t, normalized, "casedb.t")
 }
 
 func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
