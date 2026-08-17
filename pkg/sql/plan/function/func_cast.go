@@ -2938,12 +2938,14 @@ func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[type
 			value = bj.GetUint64() != 0
 		case bytejson.TpCodeFloat64:
 			value = bj.GetFloat64() != 0
-		case bytejson.TpCodeString:
-			s := bj.GetString()
-			if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-				s = s[1 : len(s)-1]
+		case bytejson.TpCodeDecimal:
+			decimal, _, err := types.Parse256(string(bj.GetString()))
+			if err != nil {
+				return jsonCastErr(ctx, types.T_bool)
 			}
-			parsed, err := types.ParseBool(string(s))
+			value = decimal != (types.Decimal256{})
+		case bytejson.TpCodeString:
+			parsed, err := types.ParseBool(string(bj.GetString()))
 			if err != nil {
 				return jsonCastErr(ctx, types.T_bool)
 			}

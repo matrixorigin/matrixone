@@ -380,4 +380,5 @@ insert into json_bool_compare_test values
     (4, '{"enabled":null}');
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
+select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 drop database test;

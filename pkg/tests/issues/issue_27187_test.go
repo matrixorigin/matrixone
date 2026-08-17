@@ -89,5 +89,17 @@ func TestIssue27187JSONExtractBooleanComparison(t *testing.T) {
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
 		require.NoError(t, rows.Close())
+
+		var decimalZero, decimalNonZero bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true,
+			json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true`).
+			Scan(&decimalZero, &decimalNonZero))
+		require.False(t, decimalZero)
+		require.True(t, decimalNonZero)
+
+		_, err = db.ExecContext(ctx,
+			`select json_extract(json_object('v', '"true"'), '$.v') = true`)
+		require.Error(t, err)
 	})
 }

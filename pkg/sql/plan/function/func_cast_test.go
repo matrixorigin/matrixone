@@ -3865,11 +3865,46 @@ func TestCastJsonToBool(t *testing.T) {
 		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
 	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
 		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
 	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
 		[]bool{false, false}, []bool{true, true}, false)
 	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
 	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
 	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+
+	decimalEncoded := []string{
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20")),
+		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "-0.01")),
+	}
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_json.ToType(), decimalEncoded, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{false, true, true}, []bool{false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	succeed, info := fcTC.Run()
+	require.True(t, succeed, "decimal values: %s", info)
+
+	for _, tc := range []struct {
+		name  string
+		value bytejson.ByteJson
+	}{
+		{name: "malformed_literal", value: bytejson.ByteJson{Type: bytejson.TpCodeLiteral}},
+		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
+				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
+			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+			succeed, info := fcTC.Run()
+			require.True(t, succeed, "%s: %s", tc.name, info)
+		})
+	}
 }
 
 func TestCastJsonToJson(t *testing.T) {
