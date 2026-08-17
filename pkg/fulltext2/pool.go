@@ -22,7 +22,7 @@ import (
 )
 
 // Per-query cursor block buffers are BlockSize-sized and short-lived: buildWandIters
-// makes one pair per term and newPhraseCursor one triple per slot, then they die when
+// makes one pair per term and newPhraseCursor one pair per slot, then they die when
 // the search returns. Under concurrent query load that churn outruns the GC, so the
 // buffers are recycled through sync.Pool instead of freshly allocated per query. Each
 // buffer is Get by exactly one (single-goroutine) search and Put back on return; the
@@ -59,12 +59,10 @@ func releaseWandIters(iters []*wandIter) {
 	}
 }
 
-// phraseBuf is a phraseCursor's decoded-block buffers: docIDs + per-doc positions + a
-// tf scratch (phrase ignores tf but fillBlock still writes it).
+// phraseBuf is a phraseCursor's decoded-block buffers: docIDs + per-doc positions.
 type phraseBuf struct {
 	docs []int64
 	pos  [][]int32
-	tfs  []uint8
 }
 
 var phraseBufPool = sync.Pool{
@@ -72,7 +70,6 @@ var phraseBufPool = sync.Pool{
 		return &phraseBuf{
 			docs: make([]int64, BlockSize),
 			pos:  make([][]int32, BlockSize),
-			tfs:  make([]uint8, BlockSize),
 		}
 	},
 }
@@ -91,7 +88,6 @@ func releasePhraseCursors(cursors []*phraseCursor) {
 		c.buf = nil
 		c.bDocs = nil
 		c.bPos = nil
-		c.tfbuf = nil
 	}
 }
 

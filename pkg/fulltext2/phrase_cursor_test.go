@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -86,5 +87,32 @@ func TestPhraseCursorMatchesFallback(t *testing.T) {
 				require.ElementsMatch(t, key(fb), key(cur), "query %q (ord:tf must match the oracle)", q)
 			}
 		})
+	}
+}
+
+func TestPhraseCursorDefersPositionsUntilRequested(t *testing.T) {
+	data, err := syntheticCorpus(t).Serialize()
+	require.NoError(t, err)
+	loaded, err := Deserialize("lazy-pos", bytes.NewReader(data))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = loaded.dict.Close() })
+
+	tp, ok := loaded.lookup("alpha")
+	require.True(t, ok)
+	c := newPhraseCursor(tp, 0)
+	defer releasePhraseCursors([]*phraseCursor{c})
+
+	require.Equal(t, -1, c.curDocBlk)
+	require.Equal(t, -1, c.curPosBlk)
+	first := c.doc()
+	require.NotEqual(t, int64(math.MaxInt64), first)
+	require.Equal(t, 0, c.curDocBlk)
+	require.Equal(t, -1, c.curPosBlk, "reading doc IDs must not decode positions")
+
+	c.skipTo(first + 1)
+	require.Equal(t, -1, c.curPosBlk, "skipTo must not decode positions")
+	if !c.atEnd() {
+		_ = c.positions()
+		require.Equal(t, c.idx/BlockSize, c.curPosBlk)
 	}
 }
