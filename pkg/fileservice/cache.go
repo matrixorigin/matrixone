@@ -58,6 +58,13 @@ type CacheConfig struct {
 	enableDiskCacheForLocalFS bool // for testing only
 }
 
+// ServiceMetricScope identifies one service's FileService cache metrics.
+// Launchers must use this helper so embedded and standalone nodes cannot
+// accidentally publish the same cache series from one process.
+func ServiceMetricScope(serviceType, nodeUUID string) string {
+	return serviceType + "/" + nodeUUID
+}
+
 type CacheCallbacks struct {
 	PostGet   []CacheCallbackFunc
 	PostSet   []CacheCallbackFunc
