@@ -29,8 +29,18 @@ import (
 )
 
 // CagraBuild manages bulk index construction across one or more CagraModel sub-indexes.
-// When the current sub-index reaches IndexCapacity, it is finalized (Build called) and a
-// new sub-index is created, mirroring the HnswBuild pattern.
+// When the current sub-index reaches IndexCapacity it is finalized (Build), packed to a
+// temp tar and released (saveToFile), and a new sub-index is created, mirroring the
+// HnswBuild pattern.
+//
+// Retiring a sub-index at rotation rather than at ToInsertSql is what makes IndexCapacity
+// bound the build. Build() already frees the sub-index's host dataset
+// (flattened_host_dataset, cleared at the end of cgo/cuvs/cagra.hpp build()), but the cuVS
+// index and its device-side build matrix (dataset_device_ptr_) live until destroy().
+// Holding every finished sub-index to the end of the scan therefore accumulated
+// capacity*dim*sizeof(Q) of DEVICE memory per sub-index, so a lower capacity bought
+// nothing. HnswBuild has always done it this way (hnsw/build.go getIndexForAdd +
+// SaveToFile).
 //
 // CagraBuild carries two element types: base/quantizer-source B (the decoded
 // source column type — f32 or f16) and storage Q (the cuVS sub-index storage
@@ -90,14 +100,26 @@ func (b *CagraBuild[B, Q]) createKey(n int) string {
 func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 	capacity := b.idxcfg.IndexCapacity
 
-	if b.current != nil && b.count >= capacity {
-		// Current index is full: build it and retire it.
+	// capacity == 0 means "no rotation" (one sub-index for the whole scan). Without this
+	// guard `b.count >= 0` holds on every AddRow, which would retire and pack a sub-index
+	// per row. Today the create TVF always resolves a positive capacity, so the guard is
+	// belt-and-braces against a second provenance for the value.
+	if b.current != nil && capacity > 0 && b.count >= capacity {
+		// Current index is full: build it, retire it, and release its GPU residency.
 		if err := b.current.Build(); err != nil {
 			return nil, err
 		}
-		b.indexes = append(b.indexes, b.current)
+		full := b.current
+		// Hand ownership to b.indexes BEFORE packing: if saveToFile fails, Destroy() must
+		// still be able to reach this model and free its GPU handle.
+		b.indexes = append(b.indexes, full)
 		b.current = nil
 		b.count = 0
+		// Pack to a temp tar and release the GPU/host residency now. ToSql() calls
+		// saveToFile again later, which is a no-op once Index == nil.
+		if err := full.saveToFile(); err != nil {
+			return nil, err
+		}
 	}
 
 	if b.current == nil {
