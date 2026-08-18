@@ -1127,7 +1127,7 @@ func preparedParamBindingTypesEqualAtDependencies(
 			rightType = right[i]
 		}
 		equal := preparedParamBindingCategoryEqual(leftType, rightType)
-		if resultDependent && !commonDependent {
+		if resultDependent {
 			equal = leftType.Eq(rightType)
 		}
 		if !equal {
