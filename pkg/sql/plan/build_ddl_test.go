@@ -4194,6 +4194,38 @@ func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	require.True(t, sqlmongodb.ColumnsToPlan(envelope.Columns)[0].MoType.NotNullable)
 }
 
+func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	for _, nullability := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "nullable"},
+		{name: "not_null", sql: "NOT NULL"},
+	} {
+		for _, conversion := range []string{sqlmongodb.ConversionStrict, sqlmongodb.ConversionTryNull} {
+			t.Run(nullability.name+"/"+conversion, func(t *testing.T) {
+				sql := fmt.Sprintf(`
+					CREATE EXTERNAL TABLE tpch.mongo_set (
+						v SET('a','b') %s MONGODB_PATH 'device_id'
+					) ENGINE=MONGODB WITH (
+						"connection"='source', "database"='telemetry', "collection"='samples',
+						"schema_mode"='explicit', "conversion_mode"='%s', "max_parallelism"='1'
+					)`, nullability.sql, conversion)
+
+				logicPlan, err := runOneStmt(mock, t, sql)
+				require.ErrorContains(t, err, "MongoDB mapping target type SET")
+				require.Nil(t, logicPlan, "failed CREATE must not retain a DDL plan or catalog mapping")
+			})
+		}
+	}
+}
+
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{

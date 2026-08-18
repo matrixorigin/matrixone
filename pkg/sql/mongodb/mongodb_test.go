@@ -291,6 +291,7 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
 		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
+		{name: "unsupported set type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseTableMappingSpec(ctx, tc.param, tc.defs, tc.table)
