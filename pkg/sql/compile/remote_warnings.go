@@ -28,12 +28,24 @@ type warningDiagnosticSink interface {
 	AppendWarningDiagnostic(code uint16, msg string)
 }
 
+// warningDiagnosticBatchSink carries the total number of diagnostics separately
+// from the bounded records retained for SHOW WARNINGS. Remote fragments may
+// produce one warning per input row, but only the engine's diagnostic capacity
+// needs to cross the wire.
+type warningDiagnosticBatchSink interface {
+	AppendWarningBatch(total uint64, codes []uint16, messages []string)
+}
+
+const remoteWarningRetentionLimit = 64
+
 // remoteWarningCollector gives a remote pipeline the small process.Session
 // surface it needs while collecting row-level warnings. It deliberately does
 // not expose a frontend session or variable state to the remote CN.
 type remoteWarningCollector struct {
-	mu       sync.Mutex
-	warnings []remoteWarningDiagnostic
+	mu           sync.Mutex
+	warningCount uint64
+	warnings     []remoteWarningDiagnostic
+	maxRetained  int
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -46,16 +58,33 @@ func (s *remoteWarningCollector) AppendWarningDiagnostic(code uint16, msg string
 	if s == nil {
 		return
 	}
+	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
+}
+
+func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
-	s.warnings = append(s.warnings, remoteWarningDiagnostic{Code: code, Message: msg})
+	s.warningCount += total
+	limit := s.maxRetained
+	if limit <= 0 {
+		limit = remoteWarningRetentionLimit
+	}
+	for i := 0; i < len(codes) && i < len(messages) && len(s.warnings) < limit; i++ {
+		s.warnings = append(s.warnings, remoteWarningDiagnostic{
+			Code:    codes[i],
+			Message: messages[i],
+		})
+	}
 	s.mu.Unlock()
 }
 
-func (s *remoteWarningCollector) SnapshotWarnings() []remoteWarningDiagnostic {
+func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiagnostic) {
 	if s == nil {
-		return nil
+		return 0, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]remoteWarningDiagnostic(nil), s.warnings...)
+	return s.warningCount, append([]remoteWarningDiagnostic(nil), s.warnings...)
 }

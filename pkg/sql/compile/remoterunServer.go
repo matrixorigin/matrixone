@@ -387,7 +387,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
 				}
 				if runCompile.proc.GetSession() == receiver.warningSession {
-					receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
+					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
 				}
 				runCompile.clear()
 				return nil
@@ -785,6 +785,7 @@ type messageReceiverOnServer struct {
 	resourcePendingAllocationGroups   []remoteAllocationGroupPending
 	resourceCompletedAllocationGroups []string
 	warningSession                    *remoteWarningCollector
+	warningCount                      uint64
 	warningDiagnostics                []remoteWarningDiagnostic
 }
 
@@ -1173,6 +1174,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
 		Allocation:                receiver.resourceAllocation,

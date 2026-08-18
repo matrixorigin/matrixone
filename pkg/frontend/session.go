@@ -958,10 +958,11 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes  []uint16
-	msgs   []string
-	levels []string
-	maxCnt int
+	codes         []uint16
+	msgs          []string
+	levels        []string
+	maxCnt        int
+	totalWarnings uint64
 }
 
 func (e *errInfo) push(code uint16, msg string) {
@@ -969,7 +970,14 @@ func (e *errInfo) push(code uint16, msg string) {
 }
 
 func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
-	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+	if !strings.EqualFold(level, "Error") {
+		e.totalWarnings++
+	}
+	e.pushStored(code, msg, level)
+}
+
+func (e *errInfo) pushStored(code uint16, msg, level string) {
+	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
 		e.levels = e.levels[1:]
@@ -979,18 +987,27 @@ func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 	e.levels = append(e.levels, level)
 }
 
+func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
+	e.totalWarnings += total
+	for i := 0; i < len(codes) && i < len(msgs); i++ {
+		e.pushStored(codes[i], msgs[i], "Warning")
+	}
+}
+
 func (e *errInfo) reset() {
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
+	e.totalWarnings = 0
 }
 
 func (e *errInfo) snapshot() errInfo {
 	return errInfo{
-		codes:  append([]uint16(nil), e.codes...),
-		msgs:   append([]string(nil), e.msgs...),
-		levels: append([]string(nil), e.levels...),
-		maxCnt: e.maxCnt,
+		codes:         append([]uint16(nil), e.codes...),
+		msgs:          append([]string(nil), e.msgs...),
+		levels:        append([]string(nil), e.levels...),
+		maxCnt:        e.maxCnt,
+		totalWarnings: e.totalWarnings,
 	}
 }
 
@@ -999,6 +1016,12 @@ func (e errInfo) length() int {
 }
 
 func (e errInfo) warningCount() uint16 {
+	if e.totalWarnings > 0 {
+		if e.totalWarnings >= uint64(^uint16(0)) {
+			return ^uint16(0)
+		}
+		return uint16(e.totalWarnings)
+	}
 	count := 0
 	for i := range e.codes {
 		level := "Error"
@@ -1551,6 +1574,16 @@ func (ses *Session) appendWarningDiagnostic(code uint16, msg string) {
 // warning storage.
 func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
 	ses.appendWarningDiagnostic(code, msg)
+}
+
+// AppendWarningBatch merges the total warning count from a remote fragment
+// while retaining only the bounded records needed by SHOW WARNINGS.
+func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningBatch(total, codes, messages)
+	}
 }
 
 func (ses *Session) diagnosticsSnapshot() errInfo {

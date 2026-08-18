@@ -919,8 +919,18 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
 	if sender.warningSink != nil {
-		for _, warning := range envelope.WarningDiagnostics {
-			sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
+		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
+			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+			messages := make([]string, 0, len(envelope.WarningDiagnostics))
+			for _, warning := range envelope.WarningDiagnostics {
+				codes = append(codes, warning.Code)
+				messages = append(messages, warning.Message)
+			}
+			sink.AppendWarningBatch(envelope.WarningCount, codes, messages)
+		} else {
+			for _, warning := range envelope.WarningDiagnostics {
+				sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
+			}
 		}
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {

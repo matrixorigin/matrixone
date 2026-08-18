@@ -248,6 +248,20 @@ func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
 	require.Equal(t, uint16(1), resp.warnings)
 }
 
+func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: 3}}
+	ses.AppendWarningBatch(
+		100,
+		[]uint16{1, 2, 3, 4},
+		[]string{"one", "two", "three", "four"},
+	)
+
+	info := ses.diagnosticsSnapshot()
+	require.Len(t, info.codes, 3)
+	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, uint16(100), info.warningCount())
+}
+
 func TestHandleSetTransaction(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

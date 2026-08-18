@@ -45,6 +45,7 @@ type remoteWarningSession struct {
 		code uint16
 		msg  string
 	}
+	totalWarnings uint64
 }
 
 func (*remoteWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
@@ -53,10 +54,20 @@ func (*remoteWarningSession) RemoveTempTable(string, string)             {}
 func (*remoteWarningSession) RemoveTempTableByRealName(string)           {}
 func (*remoteWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
 func (s *remoteWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.totalWarnings++
 	s.warnings = append(s.warnings, struct {
 		code uint16
 		msg  string
 	}{code: code, msg: msg})
+}
+func (s *remoteWarningSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	s.totalWarnings += total
+	for i := 0; i < len(codes) && i < len(messages); i++ {
+		s.warnings = append(s.warnings, struct {
+			code uint16
+			msg  string
+		}{code: codes[i], msg: messages[i]})
+	}
 }
 
 func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
@@ -195,6 +206,7 @@ func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
 	session := &remoteWarningSession{}
 	sender := &messageSenderOnClient{warningSink: session}
 	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 2,
 		WarningDiagnostics: []remoteWarningDiagnostic{
 			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "first"},
 			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "second"},
@@ -203,8 +215,39 @@ func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sender.dealRemoteTerminal(data))
 	require.Len(t, session.warnings, 2)
+	require.Equal(t, uint64(2), session.totalWarnings)
 	require.Equal(t, "first", session.warnings[0].msg)
 	require.Equal(t, "second", session.warnings[1].msg)
+}
+
+func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
+	collector := &remoteWarningCollector{maxRetained: 3}
+	for i := 0; i < 1000; i++ {
+		collector.AppendWarningDiagnostic(1292, "truncated")
+	}
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(1000), total)
+	require.Len(t, retained, 3)
+
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount:       total,
+		WarningDiagnostics: retained,
+	})
+	require.NoError(t, err)
+	require.Less(t, len(data), 1024)
+}
+
+func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
+	collector := &remoteWarningCollector{maxRetained: 2}
+	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})
+	collector.AppendWarningBatch(50, []uint16{4}, []string{"d"})
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(150), total)
+	require.Len(t, retained, 2)
+	require.Equal(t, uint16(1), retained[0].Code)
+	require.Equal(t, uint16(2), retained[1].Code)
 }
 
 func TestScopeContainsVarExpr(t *testing.T) {
