@@ -78,7 +78,7 @@ func (c *Compile) CompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan,
 	if !readOnly || priorWrites {
 		return nil, substrait.NotEligible(substrait.EligibilityTransaction, "transaction is not an admissible read-only snapshot")
 	}
-	if leases == nil || !leases.DurableReady() || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
+	if leases == nil || (!leases.DurableReady() && !leases.BenchmarkReady()) || accountID == 0 || len(queryID) == 0 || ttl <= 0 || ttl > substrait.MaxLeaseTTL {
 		return nil, moerr.NewInternalError(ctx, "substrait: invalid Sirius admission configuration")
 	}
 	relations := make(map[uint64]engine.Relation, len(candidate.Reads()))
