@@ -691,6 +691,31 @@ func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
 	require.True(t, ses.hasUnreplayableMigrationSystemVars())
 }
 
+func TestCapturedSystemAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	preparedSQL := "set session sql_mode = 'ANSI_QUOTES'"
+	preparedStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, preparedSQL, 1)
+	require.NoError(t, err)
+	require.NoError(t, doSetVar(
+		ses, newTestExecCtx(ctx, ctrl), preparedStmt.(*tree.SetVar), "", true))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+	rawSQL := "set session sql_mode = @@sql_mode"
+	rawStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rawSQL, 1)
+	require.NoError(t, err)
+	rawExecCtx := newTestExecCtx(ctx, ctrl)
+	rawExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, rawExecCtx, rawStmt.(*tree.SetVar), rawSQL, false))
+	// A later captured assignment cannot prove that an earlier prepared
+	// assignment was replayable; retain the conservative migration marker.
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+}
+
 func TestCapturedUserAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

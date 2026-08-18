@@ -940,6 +940,33 @@ func doSetVar(
 		userVarIsBin            bool
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
+	type systemVarReplayabilitySnapshot struct {
+		replayable bool
+		tracked    bool
+	}
+	previousSystemReplayability := make(map[string]systemVarReplayabilitySnapshot)
+	captureSystemReplayability := func(name string) {
+		name = canonicalSystemVariableName(name)
+		if _, captured := previousSystemReplayability[name]; captured {
+			return
+		}
+		replayable, tracked := ses.getMigrationSystemVarReplayability(name)
+		previousSystemReplayability[name] = systemVarReplayabilitySnapshot{
+			replayable: replayable,
+			tracked:    tracked,
+		}
+	}
+	for _, assign := range sv.Assignments {
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				captureSystemReplayability(name)
+			}
+		} else if assign.System {
+			captureSystemReplayability(assign.Name)
+		}
+	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
@@ -1015,6 +1042,17 @@ func doSetVar(
 		return nil
 	}
 	markSystemReplayability := func(assign *tree.VarAssignmentExpr) {
+		mark := func(name string, replayable bool) {
+			name = canonicalSystemVariableName(name)
+			if replayable {
+				if previous, captured := previousSystemReplayability[name]; captured && previous.tracked && !previous.replayable {
+					// A later captured assignment cannot prove that an earlier
+					// prepared assignment was replayable.
+					replayable = false
+				}
+			}
+			ses.markMigrationSystemVarReplayable(name, replayable)
+		}
 		if !assign.System && !assign.SetNames {
 			return
 		}
@@ -1023,7 +1061,7 @@ func doSetVar(
 			for _, name := range []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			} {
-				ses.markMigrationSystemVarReplayable(name, replayable)
+				mark(name, replayable)
 			}
 			return
 		}
@@ -1041,11 +1079,11 @@ func doSetVar(
 			// stream, so legacy targets must fail closed instead of silently
 			// losing the source runtime value.
 			if hasMigrationRuntimeSideEffect(assign.Name) {
-				ses.markMigrationSystemVarReplayable(assign.Name, replayable)
+				mark(assign.Name, replayable)
 			}
 			return
 		}
-		ses.markMigrationSystemVarReplayable(assign.Name, replayable)
+		mark(assign.Name, replayable)
 	}
 
 	applyAssignment := func(item evaluatedAssignment) error {
