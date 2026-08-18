@@ -750,10 +750,12 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 
 	storage := th.storage
 	commitCtx := th.txnCtx
-	// A terminal commit belongs to the statement request.  Preserve the
-	// transaction context only for the read-only KILL path, whose cancellation
-	// is intentionally non-terminal for the connection.
-	if execCtx != nil && execCtx.reqCtx != nil &&
+	// A terminal commit for a DML statement belongs to the statement request,
+	// so a client disconnect can still abort it before it becomes visible.  A
+	// read-only statement must retain the transaction context for its whole
+	// finalization: KILL QUERY cancels reqCtx by design, and that cancellation
+	// may race with Commit after the initial requestContextErr check.
+	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyStatement(execCtx) &&
 		(execCtx.reqCtx.Err() == nil || requestContextErr(execCtx) != nil) {
 		commitCtx = execCtx.reqCtx
 	}
