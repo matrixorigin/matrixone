@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,6 +102,10 @@ func runWithDSN(ctx context.Context, db *sql.DB, dsn, host string, r *report) er
 		}
 	}
 	r.Cases = append(r.Cases, "secret-backed-ddl")
+	if err := verifyShowMongoDBConnections(ctx, db); err != nil {
+		return err
+	}
+	r.Cases = append(r.Cases, "show-connections-admin-metadata-redaction")
 	if err := verifyShowCreate(ctx, db); err != nil {
 		return err
 	}
@@ -309,6 +314,9 @@ func verifyAuthorizationBoundary(ctx context.Context, adminDB *sql.DB, dsn strin
 	if err := userDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect non-admin MatrixOne session: %w", err)
 	}
+	if err := expectStatementRejected(ctx, userDB, "show mongodb connections", "do not have privilege"); err != nil {
+		return fmt.Errorf("non-admin SHOW MONGODB CONNECTIONS boundary: %w", err)
+	}
 
 	if _, err := userDB.ExecContext(ctx,
 		"create external table mongodb_ci.denied_mongodb(value bigint) engine=mongodb with ('connection'='mongodb_ci','database'='mongodb_source','collection'='events','schema_mode'='explicit','conversion_mode'='strict','max_parallelism'='1')"); err == nil {
@@ -398,6 +406,56 @@ func verifyShowCreate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+func verifyShowMongoDBConnections(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "show mongodb connections")
+	if err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS: %w", err)
+	}
+	defer rows.Close()
+	expectedColumns := []string{
+		"name", "discovery_mode", "auth_mechanism", "tls_mode",
+		"read_preference", "read_concern", "version", "disabled",
+	}
+	columns, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS columns: %w", err)
+	}
+	if !reflect.DeepEqual(columns, expectedColumns) {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS exposed unexpected columns: %v", columns)
+	}
+
+	found := false
+	for rows.Next() {
+		var actual [8]string
+		dest := make([]any, len(actual))
+		for i := range actual {
+			dest[i] = &actual[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS scan: %w", err)
+		}
+		if actual[0] != "mongodb_ci" {
+			continue
+		}
+		found = true
+		expected := [8]string{"mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", actual[6], "0"}
+		if actual != expected {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS metadata mismatch: expected %v, got %v", expected, actual)
+		}
+		version, err := strconv.ParseUint(actual[6], 10, 64)
+		if err != nil || version == 0 {
+			return fmt.Errorf("SHOW MONGODB CONNECTIONS returned invalid version %q", actual[6])
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS rows: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("SHOW MONGODB CONNECTIONS omitted mongodb_ci")
+	}
+	return nil
+}
+
 func expectScalar(ctx context.Context, db *sql.DB, query, expected string) error {
 	var actual string
 	if err := db.QueryRowContext(ctx, query).Scan(&actual); err != nil {
@@ -416,6 +474,18 @@ func expectQueryFailure(ctx context.Context, db *sql.DB, query, contains string)
 		return fmt.Errorf("query %s unexpectedly succeeded", redact(query))
 	}
 	if contains != "" && !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(contains)) {
+		return fmt.Errorf("query %s failed without %q: %w", redact(query), contains, err)
+	}
+	return nil
+}
+
+func expectStatementRejected(ctx context.Context, db *sql.DB, query, contains string) error {
+	rows, err := db.QueryContext(ctx, query)
+	if err == nil {
+		_ = rows.Close()
+		return fmt.Errorf("query %s unexpectedly succeeded", redact(query))
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(contains)) {
 		return fmt.Errorf("query %s failed without %q: %w", redact(query), contains, err)
 	}
 	return nil

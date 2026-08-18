@@ -63,6 +63,12 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	for range 6 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
+		"name", "discovery_mode", "auth_mechanism", "tls_mode",
+		"read_preference", "read_concern", "version", "disabled",
+	}).
+		AddRow("existing", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0).
+		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
 	expectMongoDBE2EScalar(mock, "5")
@@ -112,6 +118,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, run(t.Context(), db, "127.0.0.1:27017", &result))
 	require.Equal(t, []string{
 		"secret-backed-ddl",
+		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
 		"scan-projection-pushdown-null-conversion",
 		"low-precision-temporal-residual",
@@ -214,6 +221,12 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectQueryFailure(t.Context(), db, "wrong-error", "disabled"), "without")
 		mock.ExpectQuery("expected-error").WillReturnError(errors.New("connection disabled"))
 		require.NoError(t, expectQueryFailure(t.Context(), db, "expected-error", "DISABLED"))
+		mock.ExpectQuery("unexpected-statement-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "unexpected-statement-success", "privilege"), "unexpectedly succeeded")
+		mock.ExpectQuery("wrong-statement-error").WillReturnError(errors.New("network offline"))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "wrong-statement-error", "privilege"), "without")
+		mock.ExpectQuery("denied-statement").WillReturnError(errors.New("do not have privilege to execute the statement"))
+		require.NoError(t, expectStatementRejected(t.Context(), db, "denied-statement", "PRIVILEGE"))
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 

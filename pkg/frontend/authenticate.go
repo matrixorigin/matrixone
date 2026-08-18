@@ -6568,7 +6568,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables,
+		*tree.ShowMongoDBConnections:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
