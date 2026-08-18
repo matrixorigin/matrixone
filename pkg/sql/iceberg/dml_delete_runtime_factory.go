@@ -554,6 +554,13 @@ func (f DMLDeleteRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.C
 	if !cfg.Enable || !cfg.Write.EnableWrite || !cfg.Write.EnableDML || !cfg.Write.EnableDelete {
 		return api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg DML is disabled by configuration", nil))
 	}
+	if strings.TrimSpace(req.WriteMode) != model.WriteModeMergeOnRead {
+		return api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg non-append write requires merge_on_read write mode", map[string]string{
+			"operation":  req.Operation,
+			"table":      req.Table,
+			"write_mode": req.WriteMode,
+		}))
+	}
 	if strings.TrimSpace(req.CatalogName) == "" || strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.Table) == "" {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML requires catalog, namespace, and table", nil))
 	}
