@@ -76,7 +76,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
-	if opType != metric.DistFuncOpTypes[origFuncName] {
+	// An index serves this distance function when its op_type is metric-equivalent to the
+	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
+	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
+	if !metric.OpTypeServesDistFunc(opType, origFuncName) {
 		return nil, nil
 	}
 

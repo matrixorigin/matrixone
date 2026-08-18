@@ -18,7 +18,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -780,6 +783,92 @@ func TestCosineSimilarity(t *testing.T) {
 
 		})
 	}
+}
+
+func TestL1Distance(t *testing.T) {
+	type args struct {
+		argLeftF32  []float32
+		argRightF32 []float32
+
+		argLeftF64  []float64
+		argRightF64 []float64
+	}
+	type testCase struct {
+		name string
+		args args
+		want float64
+	}
+	tests := []testCase{
+		{
+			// |1-10| + |2-20| + |3-30| = 9 + 18 + 27 = 54, exact in both widths.
+			name: "Test1 - float32",
+			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{10, 20, 30}},
+			want: 54,
+		},
+		{
+			name: "Test2 - float64",
+			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{10, 20, 30}},
+			want: 54,
+		},
+		{
+			// Absolute value, not the signed sum: 2 + 4 + 6, never -12.
+			name: "Test3 - negatives float32",
+			args: args{argLeftF32: []float32{-1, -2, -3}, argRightF32: []float32{1, 2, 3}},
+			want: 12,
+		},
+		{
+			name: "Test4 - identical vectors float64",
+			args: args{argLeftF64: []float64{1.5, -2.5, 0}, argRightF64: []float64{1.5, -2.5, 0}},
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			if tt.args.argLeftF32 != nil {
+				if gotRes, _ := L1Distance[float32](tt.args.argLeftF32, tt.args.argRightF32); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L1Distance() = %v, want %v", gotRes, tt.want)
+				}
+			}
+			if tt.args.argLeftF64 != nil {
+				if gotRes, _ := L1Distance[float64](tt.args.argLeftF64, tt.args.argRightF64); !assertx.InEpsilonF64(tt.want, gotRes) {
+					t.Errorf("L1Distance() = %v, want %v", gotRes, tt.want)
+				}
+			}
+
+		})
+	}
+}
+
+// TestL1DistanceDimensionMismatch: the length check is the whole reason this wrapper
+// exists. Without it the caller gets the kernel's bare internal error — whose text also
+// differs between the SIMD and scalar builds — instead of the invalid-input error
+// l2_distance and cosine_distance return, which names both dimensions.
+func TestL1DistanceDimensionMismatch(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		run  func() (float64, error)
+	}{
+		{"float32", func() (float64, error) { return L1Distance[float32]([]float32{1, 2, 3}, []float32{1, 2}) }},
+		{"float64", func() (float64, error) { return L1Distance[float64]([]float64{1, 2}, []float64{1, 2, 3}) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.run()
+			require.Error(t, err)
+			require.Equal(t, float64(0), got)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput),
+				"want the invalid-input class l2_distance uses, got %v", err)
+			require.Contains(t, err.Error(), "vector ops between different dimensions")
+		})
+	}
+
+	// Same class and message as the L2 sibling on the same inputs — the point of routing
+	// l1_distance through moarray rather than calling the kernel directly.
+	_, l1err := L1Distance[float32]([]float32{1, 2, 3}, []float32{1, 2})
+	_, l2err := L2Distance[float32]([]float32{1, 2, 3}, []float32{1, 2})
+	require.Error(t, l1err)
+	require.Error(t, l2err)
+	require.Equal(t, l2err.Error(), l1err.Error())
 }
 
 func TestL2Distance(t *testing.T) {

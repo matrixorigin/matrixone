@@ -8721,6 +8721,144 @@ func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
 	}
 }
 
+// L1 Distance — sum|a-b|, exact for these inputs in both float widths:
+// |1-10|+|2-20|+|3-30| = 54 and |4-40|+|5-50|+|6-60| = 135.
+func initL1DistanceArrayTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test L1Distance float32 array",
+			typ:  types.T_array_float32,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{54, 135},
+				[]bool{false, false}),
+		},
+		{
+			info: "test L1Distance float64 array",
+			typ:  types.T_array_float64,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{54, 135},
+				[]bool{false, false}),
+		},
+	}
+}
+
+func TestL1DistanceArray(t *testing.T) {
+	testCases := initL1DistanceArrayTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		var fcTC FunctionTestCase
+		switch tc.typ {
+		case types.T_array_float32:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float32])
+		case types.T_array_float64:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
+		}
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// TestL1DistanceArrayConstQuery covers the BATCHED path: batchArrayDistanceSync only
+// engages when exactly one operand is constant, which is the shape of every real
+// `ORDER BY l1_distance(v, '[...]')` query. The two-column case above always falls back
+// to the per-row kernel, so without this the Metric_L1Distance pairwise branch — where a
+// wrong metric constant would live — has no coverage.
+func TestL1DistanceArrayConstQuery(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "test L1Distance float32 array against a constant query vector",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float32.ToType(),
+				[][]float32{{10, 20, 30}}, []bool{false}),
+		},
+		// Both rows measured against the SAME constant [10,20,30]:
+		// |1-10|+|2-20|+|3-30| = 54 and |4-10|+|5-20|+|6-30| = 45.
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{54, 45}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float32])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
+// TestL1DistanceArrayConstQueryF64Precision: whether the query vector is constant decides
+// whether the batched path runs, so it must not decide the VALUE. 16777217 is the first
+// integer float32 cannot hold; a result rounded through float32 answers 16777216. On a
+// vecf64 column that silently collapses distinct distances and can reorder an ORDER BY.
+func TestL1DistanceArrayConstQueryF64Precision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const beyondF32 = 16777217.0
+	tc := tcTemp{
+		info: "l1_distance(vecf64 column, const) must keep float64 precision",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float64.ToType(),
+				[][]float64{{0}, {1}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float64.ToType(),
+				[][]float64{{beyondF32}}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{beyondF32, beyondF32 - 1}, []bool{false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
+// TestL1DistanceArrayConstQueryDimMismatch: a dimension mismatch must raise the documented
+// ErrInvalidInput naming both dimensions, not the metric kernel's ErrInternal, regardless
+// of which operand is constant.
+func TestL1DistanceArrayConstQueryDimMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Called directly rather than through the harness: the harness reports only THAT an
+	// expected error occurred, and the whole point here is WHICH error.
+	mp := proc.Mp()
+	col := makeColArrayVec[float64](t, mp, types.T_array_float64.ToType(), [][]float64{{1, 2, 3}})
+	cst := makeConstArrayVec64(t, mp, []float64{1, 2}, 1)
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp)
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	err := L1DistanceArray[float64]([]*vector.Vector{col, cst}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid input", "must be the scalar error, not ErrInternal")
+	require.Contains(t, err.Error(), "(3, 2)", "the error must name both dimensions")
+}
+
+// TestL1DistanceArrayConstQueryMaskedRow: the batched path evaluates every row and lets any
+// row's error escape. A row the expression framework masked off must not be evaluated --
+// otherwise a bad dimension in a branch SQL never selected fails the whole query.
+func TestL1DistanceArrayConstQueryMaskedRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "l1_distance must skip a masked row carrying a bad dimension",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2, 3}, {4, 5}}, []bool{false, false}),
+			NewFunctionTestConstInput(types.T_array_float32.ToType(),
+				[][]float32{{1, 2}}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{0, 6}, []bool{true, false}),
+	}
+	// Row 0 holds the mismatched dimension and is masked off; only row 1 is evaluated:
+	// |4-1|+|5-2| = 6.
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect,
+		L1DistanceArray[float32]).WithSelectList(selectList)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+}
+
 // L2 Distance
 func initL2DistanceArrayTestCase() []tcTemp {
 	return []tcTemp{
