@@ -278,6 +278,8 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			{"select (select nextval('volatile_seq')) in (?, ?)", []any{"0", "2"}, false},
 			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) in (lo + 2, hi + 1) from volatile_bounds", []any{"0"}, false},
 			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) not in (lo + 2, hi + 1) from volatile_bounds", []any{"0"}, true},
+			{"select (nextval('volatile_seq'), 1) in ((?, ?), (?, ?))", []any{"0", "1", "2", "1"}, false},
+			{"select (nextval('volatile_seq'), 1) not in ((?, ?), (?, ?))", []any{"0", "1", "2", "1"}, true},
 		} {
 			mustExec(t, ctx, conn, "drop sequence if exists volatile_seq")
 			mustExec(t, ctx, conn, "create sequence volatile_seq increment 1 start with 1 no cycle")
@@ -291,6 +293,20 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select currval('volatile_seq')").Scan(&current))
 			require.Equal(t, int64(1), current, test.query)
 		}
+
+		mustExec(t, ctx, conn, "create sequence tuple_seq_a increment 1 start with 1 no cycle")
+		mustExec(t, ctx, conn, "create sequence tuple_seq_b increment 1 start with 10 no cycle")
+		query := "select (nextval('tuple_seq_a'), nextval('tuple_seq_b')) in ((?, ?), (?, ?))"
+		stmt, err := conn.PrepareContext(ctx, query)
+		require.NoError(t, err)
+		var matched bool
+		require.NoError(t, stmt.QueryRowContext(ctx, "1", "1", "0", "0").Scan(&matched))
+		require.NoError(t, stmt.Close())
+		require.False(t, matched)
+		var currentA, currentB int64
+		require.NoError(t, conn.QueryRowContext(ctx, "select currval('tuple_seq_a'), currval('tuple_seq_b')").Scan(&currentA, &currentB))
+		require.Equal(t, int64(1), currentA)
+		require.Equal(t, int64(10), currentB)
 	})
 }
 

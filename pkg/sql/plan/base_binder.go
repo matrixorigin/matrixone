@@ -2971,6 +2971,7 @@ func mysqlSpecialTypeNumericLiteral(expr tree.Expr) bool {
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
 	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
+	leftMemoIDs := make([]int32, len(leftTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -2986,6 +2987,14 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
+			}
+			if eqFunc := eqExpr.GetF(); eqFunc != nil && len(eqFunc.Args) == 2 &&
+				containsVolatileFunction(eqFunc.Args[0]) && b.ctx != nil {
+				if leftMemoIDs[i] == 0 {
+					b.ctx.volatileExprMemoID--
+					leftMemoIDs[i] = b.ctx.volatileExprMemoID
+				}
+				eqFunc.Args[0].AuxId = leftMemoIDs[i]
 			}
 			equalities = append(equalities, eqExpr)
 		}
@@ -3359,8 +3368,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
 	if (name == "in" || name == "not_in") && len(args) == 2 &&
 		containsVolatileFunction(args[0]) && b.ctx != nil {
-		b.ctx.volatileExprMemoID--
-		args[0].AuxId = b.ctx.volatileExprMemoID
+		b.markVolatileInLeft(args[0])
 	}
 	//promote interval expr rewrite here
 	if name == "interval" {
@@ -3436,6 +3444,20 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
+	if list := left.GetList(); list != nil {
+		for _, elem := range list.List {
+			if containsVolatileFunction(elem) {
+				b.ctx.volatileExprMemoID--
+				elem.AuxId = b.ctx.volatileExprMemoID
+			}
+		}
+		return
+	}
+	b.ctx.volatileExprMemoID--
+	left.AuxId = b.ctx.volatileExprMemoID
 }
 
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
