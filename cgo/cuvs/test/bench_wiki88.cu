@@ -154,8 +154,15 @@ int main(int argc, char** argv)
     g_conservative = (argc > 2 && std::string(argv[2]) == "conservative");
     std::printf("conservative_memory_allocation = %s\n\n", g_conservative ? "true" : "false");
 
+    // The ladder runs to the full 88M. The argument is a CEILING, not a target:
+    // sizes above it are skipped, so `./bench_wiki88 8000000` reproduces the
+    // original four points and `./bench_wiki88 88000000` measures the real thing
+    // instead of extrapolating to it. Host cost is 1536 B/row at dim 768 in f16,
+    // so 88M needs ~135 GB and 32M ~49 GB; each size frees its buffer before the
+    // next, so the peak is the largest single size, not their sum.
     std::vector<int64_t> sizes;
-    for (int64_t n : {1000000L, 2500000L, 5000000L, 8000000L}) {
+    for (int64_t n : {1000000L, 2500000L, 5000000L, 8000000L,
+                      16000000L, 32000000L, 64000000L, 88000000L}) {
         if (n <= max_rows) sizes.push_back(n);
     }
 

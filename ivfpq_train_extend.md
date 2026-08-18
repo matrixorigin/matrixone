@@ -135,7 +135,7 @@ list pointers 24 KB.
 
 ```
 make -C cgo/cuvs bench_wiki88
-./bench_wiki88 40000000            # or as high as host RAM allows
+./bench_wiki88 88000000            # ceiling, not target: runs 1M..88M
 ```
 
 It already reports the train and encode phases separately at the real tuning, so the
