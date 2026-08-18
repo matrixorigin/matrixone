@@ -1115,7 +1115,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			childRelPos := int32(1)
 			var childScanTag int32
 			var childBindingTags []int32
-			if delCtx.skipTargetDelete {
+			if delCtx.skipTargetDelete || delCtx.sourceTag != 0 {
 				childScanTag = builder.genNewBindTag()
 				childBindingTags = []int32{childScanTag}
 				childRelPos = childScanTag
@@ -1494,6 +1494,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.isFkRecursionCall = true
 					upPlanCtx.updatePkCol = false
 					upPlanCtx.preserveUpdateSourceProjection = true
+					upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(updateMap))
+					for columnName := range updateMap {
+						upPlanCtx.fkSetNullColumns[columnName] = struct{}{}
+					}
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
@@ -1877,18 +1881,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								return moerr.NewInternalErrorf(
 									builder.GetContext(), "self-referencing SET NULL rowid is unavailable")
 							}
-							childRowID := &Expr{Typ: childTableDef.Cols[childRowIdPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: childRelPos, ColPos: int32(childRowIdPos), Name: catalog.Row_ID,
-							}}}
-							parentRowID := &Expr{Typ: parentActionProjection[len(fk.Cols)].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: parentActionTag, ColPos: int32(len(fk.Cols)), Name: catalog.Row_ID,
-							}}}
-							notOwnedByReplace, bindErr := BindFuncExprImplByPlanExpr(
-								builder.GetContext(), "!=", []*Expr{childRowID, parentRowID})
-							if bindErr != nil {
-								return bindErr
-							}
-							joinConds = append(joinConds, notOwnedByReplace)
 						}
 						// plan : sink_scan -> join[f1 inner join c1 on f1.id = c1.fid, get c1.* & null] -> project -> sink   then + updatePlans
 						rightId := builder.appendNode(&plan.Node{
@@ -1918,6 +1910,18 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								return []int32{childScanTag}
 							}(),
 						}, bindCtx)
+						if fkSelfReferCond && delCtx.skipTargetDelete {
+							rootTag := delCtx.sourceTag
+							if rootTag == 0 {
+								rootTag = builder.genNewBindTag()
+							}
+							lastNodeId, err = appendExcludeSelfReferCascadeRoots(
+								builder, bindCtx, lastNodeId, childScanTag, int32(childRowIdPos),
+								delCtx.sourceStep, rootTag, int32(delCtx.rowIdPos))
+							if err != nil {
+								return err
+							}
+						}
 						lastNodeId, err = appendExcludeCascadeOwnedRows(lastNodeId, childScanTag)
 						if err != nil {
 							return err
@@ -6208,6 +6212,17 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 				}
 			}
 		}
+		if skipIndexInsert {
+			delNodeInfo := makeDeleteNodeInfo(builder.compCtx, uniqueObjRef, uniqueTableDef, uniqueDeleteIdx, false, uniqueTblPkPos, uniqueTblPkTyp, delCtx.lockTable)
+			delNodeInfo.preserveProjection = delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
+			lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, isUk, isSK, false)
+			putDeleteNodeInfo(delNodeInfo)
+			if err != nil {
+				return err
+			}
+			builder.appendStep(lastNodeId)
+			return nil
+		}
 		// do it like simple update
 		preserveIndexProjection := delCtx.isFkRecursionCall || delCtx.preserveUpdateSourceProjection
 		var indexSourceTag int32
@@ -6224,7 +6239,6 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 		newSourceStep := builder.appendStep(lastNodeId)
 		// delete uk plan
 		{
-			//sink_scan -> lock -> delete
 			if indexSourceTag != 0 {
 				lastNodeId = builder.appendTaggedSinkScan(bindCtx, newSourceStep, indexSourceTag)
 			} else {
@@ -6239,10 +6253,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			}
 			builder.appendStep(lastNodeId)
 		}
-		// A UNIQUE key containing an unconditional SET NULL column has no
-		// replacement hidden-index row. Avoid creating an empty insert fanout,
-		// which otherwise leaves a sink producer without a physical consumer.
-		if !skipIndexInsert {
+		// update uk plan
+		{
 			if indexSourceTag != 0 {
 				lastNodeId = builder.appendTaggedSinkScan(bindCtx, newSourceStep, indexSourceTag)
 			} else {

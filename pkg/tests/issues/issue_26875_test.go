@@ -183,3 +183,190 @@ func TestIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T) {
 		}
 	})
 }
+
+func TestIssue26875MultiRowSelfSetNullExcludesReplaceOwnedRows(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		conn := openIssue26875Conn(t, ctx, c, 0)
+		defer conn.Close()
+		dbName := createIssue26875Database(t, ctx, conn)
+		defer dropIssue26875Database(t, conn, dbName)
+
+		cases := []struct {
+			name string
+			run  func(*testing.T, context.Context, *sql.Conn, string)
+		}{
+			{name: "literal forward", run: func(t *testing.T, ctx context.Context, conn *sql.Conn, table string) {
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"replace into %s values(1,null,11,'p-new'),(2,null,22,'c1-new')", table))
+			}},
+			{name: "literal reverse", run: func(t *testing.T, ctx context.Context, conn *sql.Conn, table string) {
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"replace into %s values(2,null,22,'c1-new'),(1,null,11,'p-new')", table))
+			}},
+			{name: "prepared", run: func(t *testing.T, ctx context.Context, conn *sql.Conn, table string) {
+				stmt, err := conn.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?,?,?,?),(?,?,?,?)", table))
+				require.NoError(t, err)
+				defer stmt.Close()
+				_, err = stmt.ExecContext(ctx, 1, nil, 11, "p-new", 2, nil, 22, "c1-new")
+				require.NoError(t, err)
+			}},
+			{name: "select", run: func(t *testing.T, ctx context.Context, conn *sql.Conn, table string) {
+				source := table + "_src"
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"create table %s(seq int primary key, id int, pid int, marker int, v varchar(20))", source))
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"insert into %s values(1,1,null,11,'p-new'),(2,2,null,22,'c1-new')", source))
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"replace into %s select id,pid,marker,v from %s order by seq", table, source))
+			}},
+		}
+
+		for i, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				table := fmt.Sprintf("self_setnull_owned_%d", i)
+				mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+					id int primary key, pid int, marker int, v varchar(20),
+					key sk_pid(pid), unique key uk_marker(marker),
+					foreign key(pid) references %s(id) on delete set null)`, table, table))
+				mustExec(t, ctx, conn, fmt.Sprintf(`insert into %s values
+					(1,null,1,'p'),(2,1,2,'c1'),(3,2,3,'c2'),
+					(4,1,4,'c3'),(9,null,9,'keep')`, table))
+
+				tc.run(t, ctx, conn, table)
+
+				var rows, distinctIDs int
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*), count(distinct id) from %s", table)).Scan(&rows, &distinctIDs))
+				require.Equal(t, 5, rows)
+				require.Equal(t, rows, distinctIDs)
+				var nullChildren int
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s where id in (2,3,4) and pid is null", table)).Scan(&nullChildren))
+				require.Equal(t, 3, nullChildren)
+			})
+		}
+	})
+}
+
+func TestIssue26875MultipleUniqueSetNullActionsTerminate(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		conn := openIssue26875Conn(t, ctx, c, 0)
+		defer conn.Close()
+		dbName := createIssue26875Database(t, ctx, conn)
+		defer dropIssue26875Database(t, conn, dbName)
+
+		mustExec(t, ctx, conn, "create table multi_unique_p(id int primary key)")
+		mustExec(t, ctx, conn, `create table multi_unique_c(
+			id int primary key, p1 int, p2 int,
+			unique key uk_p1(p1), unique key uk_p2(p2),
+			foreign key(p1) references multi_unique_p(id) on delete set null,
+			foreign key(p2) references multi_unique_p(id) on delete set null)`)
+		mustExec(t, ctx, conn, "insert into multi_unique_p values(1),(2),(9)")
+		mustExec(t, ctx, conn, "insert into multi_unique_c values(10,1,1),(20,2,2),(90,9,9)")
+
+		execCtx, execCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer execCancel()
+		_, err := conn.ExecContext(execCtx, "replace into multi_unique_p values(1)")
+		require.NoError(t, err)
+
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_c where id=10 and p1 is null and p2 is null").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_c force index(uk_p1) where p1=9").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_c force index(uk_p2) where p2=9").Scan(&count))
+		require.Equal(t, 1, count)
+	})
+}
+
+func TestIssue26875MultilevelCascadeRemapClosure(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		conn := openIssue26875Conn(t, ctx, c, 0)
+		defer conn.Close()
+		dbName := createIssue26875Database(t, ctx, conn)
+		defer dropIssue26875Database(t, conn, dbName)
+
+		for i, indexDDL := range []string{
+			"",
+			", key sk_fk(%s)",
+			", unique key uk_fk(%s)",
+			", key sk_fk(%s), unique key uk_fk2(%s, id)",
+		} {
+			t.Run(fmt.Sprintf("index shape %d", i), func(t *testing.T) {
+				p := fmt.Sprintf("cascade_l3_p_%d", i)
+				m := fmt.Sprintf("cascade_l3_m_%d", i)
+				g := fmt.Sprintf("cascade_l3_g_%d", i)
+				mIndex := indexDDL
+				gIndex := indexDDL
+				if i > 0 && i < 3 {
+					mIndex = fmt.Sprintf(indexDDL, "pid")
+					gIndex = fmt.Sprintf(indexDDL, "mid")
+				} else if i == 3 {
+					mIndex = fmt.Sprintf(indexDDL, "pid", "pid")
+					gIndex = fmt.Sprintf(indexDDL, "mid", "mid")
+				}
+				mustExec(t, ctx, conn, fmt.Sprintf("create table %s(id int primary key)", p))
+				mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+					id int primary key, pid int%s,
+					foreign key(pid) references %s(id) on delete cascade)`, m, mIndex, p))
+				mustExec(t, ctx, conn, fmt.Sprintf(`create table %s(
+					id int primary key, mid int%s,
+					foreign key(mid) references %s(id) on delete cascade)`, g, gIndex, m))
+				mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(1),(2)", p))
+				mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(10,1),(20,2)", m))
+				mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(100,10),(200,20)", g))
+
+				mustExec(t, ctx, conn, fmt.Sprintf("replace into %s values(1)", p))
+
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s where id in (10,100)", m)).Scan(&count))
+				require.Zero(t, count)
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s where id=100", g)).Scan(&count))
+				require.Zero(t, count)
+				require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+					"select count(*) from %s where id=200 and mid=20", g)).Scan(&count))
+				require.Equal(t, 1, count)
+			})
+		}
+	})
+}
+
+func openIssue26875Conn(t *testing.T, ctx context.Context, c embed.Cluster, cnIndex int) *sql.Conn {
+	t.Helper()
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+	db, err := sql.Open("mysql", fmt.Sprintf(
+		"dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	return conn
+}
+
+func createIssue26875Database(t *testing.T, ctx context.Context, conn *sql.Conn) string {
+	t.Helper()
+	dbName := testutils.GetDatabaseName(t)
+	mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
+	mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+	return dbName
+}
+
+func dropIssue26875Database(t *testing.T, conn *sql.Conn, dbName string) {
+	t.Helper()
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cleanupCancel()
+	mustExec(t, cleanupCtx, conn, "use mo_catalog")
+	mustExec(t, cleanupCtx, conn, fmt.Sprintf("drop database if exists `%s`", dbName))
+}
