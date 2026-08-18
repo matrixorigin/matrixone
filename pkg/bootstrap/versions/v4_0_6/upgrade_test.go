@@ -38,8 +38,14 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 12)
-	require.Len(t, clusterUpgEntries, 1)
+	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
+	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
+	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
+	for _, entry := range clusterUpgEntries[1:] {
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
+	}
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
@@ -94,7 +100,8 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
 	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
-	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
+	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop view if exists information_schema.key_column_usage")
+	require.NotContains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table")
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
