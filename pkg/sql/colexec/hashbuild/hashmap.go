@@ -217,8 +217,17 @@ func (hb *HashmapBuilder) Prepare(
 
 	if hb.IsDedup {
 		hb.delColIdx = delColIdx
-		hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
-		hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		// The marker index is optional, while zero is both a valid column index
+		// and the Go zero value for operators built outside the compiler. A real
+		// column-zero marker carries its keep list; zero without one means absent.
+		if dedupDeleteMarkerColIdx > 0 ||
+			(dedupDeleteMarkerColIdx == 0 && len(dedupDeleteKeepColIdxList) > 0) {
+			hb.dedupDeleteMarkerColIdx = dedupDeleteMarkerColIdx
+			hb.dedupDeleteKeepColIdxList = dedupDeleteKeepColIdxList
+		} else {
+			hb.dedupDeleteMarkerColIdx = -1
+			hb.dedupDeleteKeepColIdxList = nil
+		}
 	} else {
 		hb.delColIdx = -1
 		hb.dedupDeleteMarkerColIdx = -1

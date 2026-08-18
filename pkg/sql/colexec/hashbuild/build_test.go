@@ -878,6 +878,22 @@ func TestDedupBatchRewriteRecollectsOptionalKeysWithoutUnsafeReplay(
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestDedupDeleteMarkerZeroValueIsAbsentWithoutKeepColumns(t *testing.T) {
+	typ := types.T_int32.ToType()
+	tc := newTestCase(
+		t,
+		[]bool{false},
+		[]types.Type{typ},
+		[]*plan.Expr{newExpr(0, typ)},
+	)
+	tc.arg.IsDedup = true
+	tc.arg.OnDuplicateAction = plan.Node_IGNORE
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.Equal(t, int32(-1), tc.arg.ctr.hashmapBuilder.dedupDeleteMarkerColIdx)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+}
+
 func TestDedupDeleteOnlyRowsPreserveAuxBudgetThroughRuntimeFilter(
 	t *testing.T,
 ) {

@@ -3174,8 +3174,13 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		}
 		releaseProject[oldKeyPos] = releaseOldKey
 		releaseProject[newKeyPos] = nullUpdateProjectionExpr(newKey.Typ)
+		equal, buildErr := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "<=>", []*plan.Expr{releaseOldKey, releaseCurrentKey})
+		if buildErr != nil {
+			return 0, nil, buildErr
+		}
 		changed, buildErr := BindFuncExprImplByPlanExpr(
-			builder.GetContext(), "!=", []*plan.Expr{releaseOldKey, releaseCurrentKey})
+			builder.GetContext(), "not", []*plan.Expr{equal})
 		if buildErr != nil {
 			return 0, nil, buildErr
 		}
@@ -3264,8 +3269,27 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			NodeType: plan.Node_FILTER, Children: []int32{lastNodeID}, FilterList: []*plan.Expr{candidatePresent},
 			ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
 		}, bindCtx)
-		selectNode = projectNode
-		selectNodeTag = projectTag
+		// Every UNIQUE check appends private old/new/marker columns. Trim them
+		// before the next index so its release projection has no inherited holes.
+		trimProject := make([]*plan.Expr, baseWidth)
+		for pos := range trimProject {
+			trimProject[pos] = &plan.Expr{
+				Typ: projectNode.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: projectTag, ColPos: int32(pos),
+				}},
+			}
+		}
+		trimTag := builder.genNewBindTag()
+		trimNode := &plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			ProjectList: trimProject,
+			BindingTags: []int32{trimTag},
+		}
+		lastNodeID = builder.appendNode(trimNode, bindCtx)
+		selectNode = trimNode
+		selectNodeTag = trimTag
 	}
 
 	if !checkedUnique || len(selectNode.ProjectList) == 0 {
@@ -3387,19 +3411,15 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		branchScanTag := builder.genNewBindTag()
 		builder.qry.Nodes[branchScanID].BindingTags = []int32{branchScanTag}
 		rowIDPos := oldColName2Idx[sourceAlias+"."+catalog.Row_ID]
-		rowIDExpr := &plan.Expr{
-			Typ: selectNode.ProjectList[rowIDPos].Typ,
+		// A source alias contributes only the tuple accepted by its greedy
+		// candidate stage. Filtering merely on Rowid lets row_number select a
+		// different one-to-many tuple whose assignment marker is absent.
+		activePos := targetBranchActivePos[sourceIdx]
+		activeExpr := &plan.Expr{
+			Typ: selectNode.ProjectList[activePos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: branchScanTag, ColPos: rowIDPos,
+				RelPos: branchScanTag, ColPos: activePos,
 			}},
-		}
-		// Preserve every writable physical row. The branch-local row_number below
-		// chooses one complete source tuple per Rowid; filtering by the earlier
-		// alias selector here would hide sibling Rowids from later greedy stages.
-		activeExpr, err := BindFuncExprImplByPlanExpr(
-			builder.GetContext(), "isnotnull", []*plan.Expr{rowIDExpr})
-		if err != nil {
-			return 0, nil, err
 		}
 		branchScanID = builder.appendNode(&plan.Node{
 			NodeType:   plan.Node_FILTER,

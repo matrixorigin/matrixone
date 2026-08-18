@@ -177,6 +177,49 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		require.Equal(t, []int64{4, 4}, queryInts("select u,v from released_composite_t where id=2", 2))
 		assertAffected(result, 2)
 
+		exec("create table fanout_t (id int primary key, y int, x int)")
+		exec("insert into fanout_t values (1,1,0),(2,2,0),(3,3,0)")
+		result = exec("update ignore fanout_t b join fanout_t a on b.id in (2,3) and a.id=1 set b.y=b.y+10,b.x=10,a.x=100")
+		assertAffected(result, 3)
+		require.Equal(t, []int64{1, 1, 100}, queryInts("select id,y,x from fanout_t where id=1", 3))
+		require.Equal(t, []int64{2, 12, 10}, queryInts("select id,y,x from fanout_t where id=2", 3))
+		require.Equal(t, []int64{3, 13, 10}, queryInts("select id,y,x from fanout_t where id=3", 3))
+
+		exec("create table released_null_t (id int primary key, u int unique, x int)")
+		exec("insert into released_null_t values (1,1,0),(2,2,0),(3,3,0)")
+		result = exec("update ignore released_null_t b join released_null_t a on b.id=2 and a.id=1 set b.u=?,a.u=?", nil, 2)
+		assertAffected(result, 2)
+		require.Equal(t, []int64{1, 2}, queryInts("select id,coalesce(u,-1) from released_null_t where id=1", 2))
+		require.Equal(t, []int64{2, -1}, queryInts("select id,coalesce(u,-1) from released_null_t where id=2", 2))
+
+		exec("create table released_null_composite_t (id int primary key, u int, v int, unique key uk_uv(u,v))")
+		exec("insert into released_null_composite_t values (1,1,1),(2,2,2),(3,3,3)")
+		result = exec("update ignore released_null_composite_t b join released_null_composite_t a on b.id=2 and a.id=1 set b.u=null,a.u=2,a.v=2")
+		assertAffected(result, 2)
+		require.Equal(t, []int64{1, 2, 2}, queryInts("select id,coalesce(u,-1),v from released_null_composite_t where id=1", 3))
+		require.Equal(t, []int64{2, -1, 2}, queryInts("select id,coalesce(u,-1),v from released_null_composite_t where id=2", 3))
+
+		prepared, prepareErr := conn.PrepareContext(ctx,
+			"update ignore released_null_t b join released_null_t a on b.id=2 and a.id=1 set b.u=?,a.u=?")
+		require.NoError(t, prepareErr)
+		defer prepared.Close()
+		for range 2 {
+			exec("truncate table released_null_t")
+			exec("insert into released_null_t values (1,1,0),(2,2,0),(3,3,0)")
+			result, execErr := prepared.ExecContext(ctx, nil, 2)
+			require.NoError(t, execErr)
+			assertAffected(result, 2)
+			require.Equal(t, []int64{1, 2}, queryInts("select id,coalesce(u,-1) from released_null_t where id=1", 2))
+			require.Equal(t, []int64{2, -1}, queryInts("select id,coalesce(u,-1) from released_null_t where id=2", 2))
+		}
+
+		exec("create table two_unique_t (id int primary key, u int unique, v int unique, x int)")
+		exec("insert into two_unique_t values (1,1,11,0),(2,2,12,0),(3,3,13,0)")
+		result = exec("update ignore two_unique_t b join two_unique_t a on b.id=2 and a.id=1 set b.u=?,b.v=?,a.u=?,a.v=?", 4, 14, 2, 12)
+		assertAffected(result, 2)
+		require.Equal(t, []int64{1, 2, 12}, queryInts("select id,u,v from two_unique_t where id=1", 3))
+		require.Equal(t, []int64{2, 4, 14}, queryInts("select id,u,v from two_unique_t where id=2", 3))
+
 		exec("create table legacy_fk_t (id int primary key, k int unique, parent_k int, x int, foreign key(parent_k) references legacy_fk_t(k) on update cascade)")
 		exec("insert into legacy_fk_t values (1,10,null,0),(2,20,10,0)")
 		_, execErr := conn.ExecContext(ctx,
