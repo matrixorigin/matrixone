@@ -452,7 +452,7 @@ func TestStaticFloatINPreservesNonNumericComparisonErrors(t *testing.T) {
 	}
 }
 
-func TestPreparedRangeWithRowBoundExpandsToComparisons(t *testing.T) {
+func TestPreparedRangeWithRowBoundKeepsNativeBetween(t *testing.T) {
 	decimalType := types.New(types.T_decimal128, 20, 4)
 	constant := makeDecimal128ConstExpr("2.0000", 20, 4)
 	column := &planpb.Expr{
@@ -462,9 +462,7 @@ func TestPreparedRangeWithRowBoundExpandsToComparisons(t *testing.T) {
 	expr, err := bindPreparedRangeOperands(context.Background(), false,
 		[]*Expr{constant, column, DeepCopyExpr(constant)})
 	require.NoError(t, err)
-	require.Equal(t, "and", expr.GetF().GetFunc().GetObjName())
-	require.Equal(t, ">=", expr.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
-	require.Equal(t, "<=", expr.GetF().GetArgs()[1].GetF().GetFunc().GetObjName())
+	require.Equal(t, "between", expr.GetF().GetFunc().GetObjName())
 
 	expr, err = bindPreparedRangeOperands(context.Background(), false,
 		[]*Expr{constant, DeepCopyExpr(constant), DeepCopyExpr(constant)})

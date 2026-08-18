@@ -1173,21 +1173,7 @@ func normalizePreparedDecimalRange(ctx context.Context, operands []*plan.Expr) (
 }
 
 func bindPreparedRangeOperands(ctx context.Context, not bool, operands []*plan.Expr) (*plan.Expr, error) {
-	var between *plan.Expr
-	var err error
-	if isFoldableDecimalComparisonConstant(operands[1]) && isFoldableDecimalComparisonConstant(operands[2]) {
-		between, err = BindFuncExprImplByPlanExpr(ctx, "between", operands)
-	} else {
-		lower, bindErr := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(operands[0]), operands[1]})
-		if bindErr != nil {
-			return nil, bindErr
-		}
-		upper, bindErr := BindFuncExprImplByPlanExpr(ctx, "<=", []*plan.Expr{operands[0], operands[2]})
-		if bindErr != nil {
-			return nil, bindErr
-		}
-		between, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{lower, upper})
-	}
+	between, err := BindFuncExprImplByPlanExpr(ctx, "between", operands)
 	if err != nil {
 		return nil, err
 	}
@@ -4522,6 +4508,13 @@ func bindFuncExprImplByPlanExpr(
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
 			leftIsPreparedParam := containsDynamicParam(args[0]) || args[0].ExactDecimalParam
+			preserveVolatileLeft := containsVolatileFunction(args[0])
+			for _, item := range rightList.List {
+				if !isRuntimeConstExpr(item) {
+					preserveVolatileLeft = false
+					break
+				}
+			}
 			// MySQL chooses the left runtime numeric parameter's REAL domain for
 			// the complete IN predicate when a runtime string peer is present. Do
 			// this before list packing so the vector and expanded comparisons share
@@ -4592,6 +4585,14 @@ func bindFuncExprImplByPlanExpr(
 				// Prepared TEXT parameters derive their exact DECIMAL domain from
 				// the execution value. Do not pack them into the peer-typed IN
 				// vector, which would truncate scale before that value is known.
+				if preserveVolatileLeft && !partitionIn {
+					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					if err != nil {
+						return nil, err
+					}
+					inExprList = append(inExprList, inExpr)
+					continue
+				}
 				if !partitionIn && (leftIsPreparedParam || containsDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
 					orExprList = append(orExprList, rightVal)
 					continue

@@ -234,6 +234,17 @@ func opBetweenBool(
 	_ *process.Process,
 	length int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, func(left, right bool) int {
+			if left == right {
+				return 0
+			}
+			if !left {
+				return -1
+			}
+			return 1
+		})
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -316,6 +327,17 @@ func opBetweenFixed[T constraints.Integer | constraints.Float](
 	_ *process.Process,
 	length int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, func(left, right T) int {
+			if left < right {
+				return -1
+			}
+			if left > right {
+				return 1
+			}
+			return 0
+		})
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -384,6 +406,9 @@ func opBetweenFixedWithFn[T types.FixedSizeTExceptStrType](
 	length int,
 	compareFunc func(v1, v2 T) int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenFixedRows(parameters, result, length, compareFunc)
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -453,6 +478,9 @@ func opBetweenBytesWithFunc(
 	_ *FunctionSelectList,
 	compareFunc func(v1, v2 []byte) int,
 ) error {
+	if hasBetweenRowBounds(parameters) {
+		return opBetweenBytesRows(parameters, result, length, compareFunc)
+	}
 	if parameters[1].IsConstNull() || parameters[2].IsConstNull() {
 		nulls.AddRange(result.GetResultVector().GetNulls(), 0, uint64(length))
 		return nil
@@ -511,6 +539,81 @@ func opBetweenBytesWithFunc(
 		}
 	}
 
+	return nil
+}
+
+func hasBetweenRowBounds(parameters []*vector.Vector) bool {
+	return (!parameters[1].IsConst() && parameters[1].Length() > 1) ||
+		(!parameters[2].IsConst() && parameters[2].Length() > 1)
+}
+
+func opBetweenFixedRows[T types.FixedSizeTExceptStrType](
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	compareFunc func(v1, v2 T) int,
+) error {
+	valueParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
+	lowerParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[1])
+	upperParam := vector.GenerateFunctionFixedTypeParameter[T](parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+	for i := uint64(0); i < uint64(length); i++ {
+		valueIndex, lowerIndex, upperIndex := i, i, i
+		if parameters[0].Length() == 1 {
+			valueIndex = 0
+		}
+		if parameters[1].Length() == 1 {
+			lowerIndex = 0
+		}
+		if parameters[2].Length() == 1 {
+			upperIndex = 0
+		}
+		value, valueNull := valueParam.GetValue(valueIndex)
+		lower, lowerNull := lowerParam.GetValue(lowerIndex)
+		upper, upperNull := upperParam.GetValue(upperIndex)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = compareFunc(value, lower) >= 0 && compareFunc(value, upper) <= 0
+	}
+	return nil
+}
+
+func opBetweenBytesRows(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	compareFunc func(v1, v2 []byte) int,
+) error {
+	valueParam := vector.GenerateFunctionStrParameter(parameters[0])
+	lowerParam := vector.GenerateFunctionStrParameter(parameters[1])
+	upperParam := vector.GenerateFunctionStrParameter(parameters[2])
+	resultVector := result.GetResultVector()
+	values := vector.MustFixedColNoTypeCheck[bool](resultVector)
+	resultNulls := resultVector.GetNulls()
+	for i := uint64(0); i < uint64(length); i++ {
+		valueIndex, lowerIndex, upperIndex := i, i, i
+		if parameters[0].Length() == 1 {
+			valueIndex = 0
+		}
+		if parameters[1].Length() == 1 {
+			lowerIndex = 0
+		}
+		if parameters[2].Length() == 1 {
+			upperIndex = 0
+		}
+		value, valueNull := valueParam.GetStrValue(valueIndex)
+		lower, lowerNull := lowerParam.GetStrValue(lowerIndex)
+		upper, upperNull := upperParam.GetStrValue(upperIndex)
+		if valueNull || lowerNull || upperNull {
+			resultNulls.Add(i)
+			continue
+		}
+		values[i] = compareFunc(value, lower) >= 0 && compareFunc(value, upper) <= 0
+	}
 	return nil
 }
 

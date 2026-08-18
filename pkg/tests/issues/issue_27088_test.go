@@ -263,6 +263,30 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.NoError(t, row.Scan(&wideValue))
 		require.Equal(t,
 			"123456789012345678901234567890123456.123456789012345678901234567890", wideValue)
+
+		mustExec(t, ctx, conn, "create table volatile_bounds(lo decimal(20,0), hi decimal(20,0))")
+		mustExec(t, ctx, conn, "insert into volatile_bounds values (1,1)")
+		for _, test := range []struct {
+			query string
+			args  []any
+		}{
+			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) between lo and hi from volatile_bounds", []any{"0"}},
+			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) not between hi + 1 and hi + 1 from volatile_bounds", []any{"0"}},
+			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) in (?, ?) from volatile_bounds", []any{"0", "1", "2"}},
+			{"select (? + cast(nextval('volatile_seq') as decimal(20,0))) not in (?, ?) from volatile_bounds", []any{"0", "2", "3"}},
+		} {
+			mustExec(t, ctx, conn, "drop sequence if exists volatile_seq")
+			mustExec(t, ctx, conn, "create sequence volatile_seq increment 1 start with 1 no cycle")
+			stmt, err := conn.PrepareContext(ctx, test.query)
+			require.NoError(t, err)
+			var matched bool
+			require.NoError(t, stmt.QueryRowContext(ctx, test.args...).Scan(&matched), test.query)
+			require.NoError(t, stmt.Close())
+			require.True(t, matched, test.query)
+			var current int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select currval('volatile_seq')").Scan(&current))
+			require.Equal(t, int64(1), current, test.query)
+		}
 	})
 }
 

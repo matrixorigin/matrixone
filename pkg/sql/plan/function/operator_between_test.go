@@ -241,6 +241,25 @@ func TestOpBetweenFixedNullBound(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestOpBetweenFixedRowBounds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	int64Type := types.T_int64.ToType()
+
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(int64Type, []int64{1, 2, 3, 4}, nil),
+			NewFunctionTestInput(int64Type, []int64{1, 1, 4, 4}, []bool{false, false, true, false}),
+			NewFunctionTestInput(int64Type, []int64{1, 2, 5, 3}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false,
+			[]bool{true, true, false, false}, []bool{false, false, true, false}),
+		betweenImpl,
+	)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestInRangeBool(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	boolType := types.T_bool.ToType()
