@@ -154,7 +154,7 @@ func (s *sizedTestData) Slice(int) fscache.Data { return s }
 func TestDataCacheSetUsesCapacityWithoutExposingBytes(t *testing.T) {
 	cache := NewDataCache(fscache.ConstCapacity(1024), nil, nil, nil)
 	data := new(sizedTestData)
-	err := cache.Set(context.Background(), fscache.CacheKey{Path: "foo", Sz: 3}, data)
+	_, err := cache.Set(context.Background(), fscache.CacheKey{Path: "foo", Sz: 3}, data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestDataCacheCallbacksReceiveCapturedLogicalSize(t *testing.T) {
 		},
 	)
 	key := fscache.CacheKey{Path: "foo", Sz: 3}
-	if err := cache.Set(context.Background(), key, testBytes(make([]byte, 3, 8))); err != nil {
+	if _, err := cache.Set(context.Background(), key, testBytes(make([]byte, 3, 8))); err != nil {
 		t.Fatal(err)
 	}
 	cache.DeletePaths(context.Background(), []string{"foo"})

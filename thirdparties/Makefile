@@ -43,6 +43,10 @@ CROARING_DIR=CRoaring-4.7.0
 CROARING_TAR=$(CROARING_DIR).tar.gz
 CROARING_TMP=_croaring_build
 CROARING_CFLAGS=-O3 -fPIC -std=c11
+JEMALLOC_DIR=_jemalloc_build
+JEMALLOC_TAR=jemalloc-5.3.1.tar.bz2
+JEMALLOC_SHA256=3826bc80232f22ed5c4662f3034f799ca316e819103bdc7bb99018a421706f92
+JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-jemalloc-prefix=mo_je_ --with-private-namespace=mo_je_
 
 # Prebuilt onnxruntime shared library (CPU-only) from the MatrixOne thirdparty
 # mirror. GPU (linux_x64_gpu_cuda12) is intentionally not fetched here.
@@ -84,7 +88,7 @@ else ifeq ($(UNAME_S)_$(UNAME_M),linux_arm64)
   ONNX_SHA256=115ecb838e703d390262b8b4d07d5248e6693c67658d4c98c48f94905ab27af4
 endif
 
-all: init usearch xxhash croaring onnxruntime
+all: init usearch xxhash croaring jemalloc onnxruntime
 
 init:
 	mkdir -p install
@@ -170,6 +174,26 @@ endif
 
 croaring: install/lib/libroaring.a
 
+jemalloc: install/lib/libjemalloc.a
+
+# jemalloc is statically linked into mo-service and all public symbols are
+# prefixed with mo_je_. This keeps Memory Cache's allocator independent from
+# libc malloc and the C/C++ dependencies already linked into MatrixOne.
+install/lib/libjemalloc.a:
+	@actual="$$(shasum -a 256 $(JEMALLOC_TAR) | awk '{print $$1}')"; \
+	if [ "$$actual" != "$(JEMALLOC_SHA256)" ]; then \
+		echo "jemalloc tarball checksum mismatch: $$actual" >&2; \
+		exit 1; \
+	fi
+	rm -rf $(JEMALLOC_DIR)
+	mkdir -p $(JEMALLOC_DIR)
+	tar xjf $(JEMALLOC_TAR) -C $(JEMALLOC_DIR) --strip-components=1
+	(cd $(JEMALLOC_DIR) && CC="$(CC)" CFLAGS="$(CFLAGS) -fPIC" ./configure $(JEMALLOC_CONFIGURE_FLAGS))
+	$(MAKE) -C $(JEMALLOC_DIR) build_lib
+	cp $(JEMALLOC_DIR)/lib/libjemalloc.a install/lib/libjemalloc.a
+	cp $(JEMALLOC_DIR)/include/jemalloc/jemalloc.h install/include/jemalloc.h
+	rm -rf $(JEMALLOC_DIR)
+
 # Build CRoaring as a static lib from its single-file amalgamation, and install
 # the amalgamated header. Used by the cgo doc_id filter (roaring64 bitset).
 install/lib/libroaring.a:
@@ -199,6 +223,6 @@ test-download:
 	$(PWD)/download_test
 
 clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP)
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring onnxruntime test-download
+.PHONY: usearch stringzilla fp16 simsimd init croaring jemalloc onnxruntime test-download
