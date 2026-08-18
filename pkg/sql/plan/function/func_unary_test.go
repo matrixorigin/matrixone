@@ -11277,6 +11277,50 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
+	inputs := []string{
+		"01:01:01:: +",
+		"2024-12-20 +",
+		"2024-12-20 -",
+		"2024-12-20 :1",
+		"1:01:01: +1",
+		"1:01:01: +1 ",
+	}
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(typ.ToType(), inputs, nil)
+			for _, tc := range []struct {
+				name   string
+				fn     fEvalFn
+				expect FunctionTestResult
+			}{
+				{
+					name: "hour", fn: StringToHour,
+					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+						[]uint32{0, 0, 0, 1, 1, 1}, nil),
+				},
+				{
+					name: "minute", fn: StringToMinute,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 0, 1, 1}, nil),
+				},
+				{
+					name: "second", fn: StringToSecond,
+					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+						[]uint8{0, 0, 0, 0, 1, 1}, nil),
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+					success, info := ftc.Run()
+					require.True(t, success, info)
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
 	inputs := []string{
 		"01:01: abc", "1:1: abc", "12:34: 123",

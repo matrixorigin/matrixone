@@ -5092,7 +5092,9 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	// Keep consuming that punctuation as part of the same date candidate;
 	// otherwise the length-gated DATETIME attempt is lost and the TIME scanner
 	// rejects the already-consumed clock prefix.
+	postDayPunctuationCount := 0
 	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) {
+		postDayPunctuationCount++
 		pos++
 	}
 	if pos >= len(str) || !mysqlWhitespaceForExtract(str[pos]) {
@@ -5110,11 +5112,24 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 		pos++
 	}
 	clockStart := pos
+	// A punctuation separator may precede the first clock field. Keep signs
+	// for the dedicated sign consumer below, but consume the other punctuation
+	// as part of this DATETIME candidate (for example, "2024-12-20 :1").
+	for pos < len(str) && mysqlDatetimePunctuationForExtract(str[pos]) &&
+		str[pos] != '+' && str[pos] != '-' {
+		pos++
+	}
 	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
 	// A bare sign after the date is not a valid DATETIME clock. Let the TIME
 	// scanner own the original candidate instead (the boundary is observable
 	// for inputs such as "1:01:01: +").
 	if pos > clockStart && (pos == len(str) || str[pos] < '0' || str[pos] > '9') {
+		// A sign terminating a complete date candidate is a zero-time DATETIME
+		// suffix unless the candidate's single post-day separator identifies the
+		// ambiguous TIME spelling (for example, "1:01:01: +").
+		if postDayPunctuationCount != 1 && mysqlTrimLeftWhitespaceForExtract(str[pos:]) == "" {
+			return timeExtractParseResult{matched: true, valid: true}
+		}
 		return timeExtractParseResult{}
 	}
 	hour, hourDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
@@ -5467,6 +5482,13 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		}
 		return len(clock)+len(suffix) > 12
 	}
+	// A signed numeric token after a repeated separator is still part of the
+	// already consumed TIME prefix when only trailing whitespace follows it.
+	// Keep the prefix boundary instead of treating that whitespace as a new
+	// DATETIME candidate (for example, "1:01:01: +1 ").
+	if candidate.repeatedAfterSeconds && mysqlSignedNumericTimeSuffixForExtract(token) {
+		return false
+	}
 	if !candidate.hasRepeatedBoundary && !candidate.dateInvalid {
 		return false
 	}
@@ -5492,6 +5514,16 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		return false
 	}
 	return len(clock)+len(suffix) >= 12
+}
+
+func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
+	if !token.present || !token.trailingWhitespace || len(token.token) < 2 {
+		return false
+	}
+	if token.token[0] != '+' && token.token[0] != '-' {
+		return false
+	}
+	return asciiDigits(token.token[1:])
 }
 
 type mysqlTimeSuffixToken struct {

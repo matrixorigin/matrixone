@@ -1,0 +1,26 @@
+DROP DATABASE IF EXISTS time_extract_separator_boundary_db;
+CREATE DATABASE time_extract_separator_boundary_db;
+USE time_extract_separator_boundary_db;
+CREATE TABLE time_extract_separator_boundary (
+  case_id INT PRIMARY KEY,
+  v VARCHAR(64),
+  c CHAR(64),
+  t TEXT,
+  expected VARCHAR(16)
+);
+INSERT INTO time_extract_separator_boundary (case_id, v, c, t, expected) VALUES
+(1, '01:01:01:: +', '01:01:01:: +', '01:01:01:: +', '0/0/0'),
+(2, '2024-12-20 +', '2024-12-20 +', '2024-12-20 +', '0/0/0'),
+(3, '2024-12-20 -', '2024-12-20 -', '2024-12-20 -', '0/0/0'),
+(4, '2024-12-20 :1', '2024-12-20 :1', '2024-12-20 :1', '1/0/0'),
+(5, '1:01:01: +1', '1:01:01: +1', '1:01:01: +1', '1/1/1'),
+(6, '1:01:01: +1 ', '1:01:01: +1 ', '1:01:01: +1 ', '1/1/1');
+SELECT COUNT(*) AS case_count,
+       SUM(CASE WHEN COALESCE(concat(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
+       + SUM(CASE WHEN COALESCE(concat(HOUR(c), '/', MINUTE(c), '/', SECOND(c)), 'NULL') <> expected THEN 1 ELSE 0 END)
+       + SUM(CASE WHEN COALESCE(concat(HOUR(t), '/', MINUTE(t), '/', SECOND(t)), 'NULL') <> expected THEN 1 ELSE 0 END) AS mismatches
+FROM time_extract_separator_boundary;
+➤ case_count[-5,64,0]  ¦  mismatches[3,38,0]  𝄀
+6  ¦  0
+DROP TABLE time_extract_separator_boundary;
+DROP DATABASE time_extract_separator_boundary_db;
