@@ -205,7 +205,12 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	// the source; only name resolution is redirected. Qualified references are
 	// remapped separately at the AST level by applyRemapDb.
 	if execCtx != nil && len(execCtx.remapDb) > 0 {
-		if dst, ok := execCtx.remapDb[db]; ok {
+		lowerCaseTableNames := int64(1)
+		if execCtx.ses != nil {
+			lowerCaseTableNames = parserLowerCaseTableNames(execCtx.ses)
+		}
+		databaseKey := tree.NewCStr(db, lowerCaseTableNames).Compare()
+		if dst, ok := execCtx.remapDb[databaseKey]; ok {
 			return dst
 		}
 	}
