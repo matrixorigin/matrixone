@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +83,7 @@ func TestBatchArrayDistanceSync_L2Sq(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -106,7 +107,7 @@ func TestBatchArrayDistanceSync_L2(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance, nil)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2Distance, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -131,7 +132,7 @@ func TestBatchArrayDistanceSync_InnerProduct(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct, nil)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_InnerProduct, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -156,7 +157,7 @@ func TestBatchArrayDistanceSync_CosineDistance(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance, nil)
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_CosineDistance, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -181,7 +182,7 @@ func TestBatchArrayDistanceSync_QueryAsSecondArg(t *testing.T) {
 
 	// Note: const is ivecs[1], column is ivecs[0]
 	dist, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{colVec, constVec}, N, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{colVec, constVec}, N, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, N, len(dist))
@@ -190,26 +191,121 @@ func TestBatchArrayDistanceSync_QueryAsSecondArg(t *testing.T) {
 	}
 }
 
-// TestBatchArrayDistanceSync_Float64 verifies that the float64 type uses the CPU pairwise path.
-func TestBatchArrayDistanceSync_Float64(t *testing.T) {
+// TestBatchArrayDistanceSync_Float64Declines: the batch path materializes []float32, so a
+// float64 element type would have its result rounded through float32 -- ResolveDistanceFn
+// wraps the float64 kernel in a cast, unlike float32 where it returns the kernel itself.
+// Constness must not change the value SQL returns, so float64 must decline and let the
+// per-row kernel answer at full precision. cuVS pairwise takes float32/float16 only, so
+// this gives up no GPU work.
+func TestBatchArrayDistanceSync_Float64Declines(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
 	query := []float64{1, 0, 0}
 	rows := [][]float64{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}}
 	N := len(rows)
-	want := []float32{0, 2, 2, 1}
 
 	constVec := makeConstArrayVec64(t, mp, query, N)
 	colVec := makeColArrayVec[float64](t, mp, types.T_array_float64.ToType(), rows)
 
-	dist, ok, err := batchArrayDistanceSync[float64](
-		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil)
+	_, ok, err := batchArrayDistanceSync[float64](
+		[]*vector.Vector{constVec, colVec}, N, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, N, len(dist))
-	for i, w := range want {
-		require.True(t, approxEqF32(dist[i], w), "row %d: got %v want %v", i, dist[i], w)
+	require.False(t, ok, "float64 must fall through to the per-row kernel")
+}
+
+// TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar is the value this protects:
+// 16777217 is the first integer float32 cannot represent, so a result rounded through
+// float32 answers 16777216. Distances that collapse this way can reorder an ORDER BY.
+func TestBatchArrayDistanceSync_Float64PrecisionMatchesScalar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const beyondF32 = 16777217.0
+	for _, tc := range []struct {
+		name string
+		m    metric.MetricType
+		want float64
+	}{
+		{"l1", metric.Metric_L1Distance, beyondF32},
+		{"l2", metric.Metric_L2Distance, beyondF32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constVec := makeConstArrayVec64(t, mp, []float64{beyondF32}, 1)
+			colVec := makeColArrayVec[float64](t, mp, types.T_array_float64.ToType(), [][]float64{{0}})
+
+			_, ok, err := batchArrayDistanceSync[float64](
+				[]*vector.Vector{constVec, colVec}, 1, tc.m, nil, nil)
+			require.NoError(t, err)
+			require.False(t, ok)
+
+			// What the per-row path then computes -- the exact value, not 16777216.
+			var got float64
+			switch tc.m {
+			case metric.Metric_L1Distance:
+				got, err = moarray.L1Distance[float64]([]float64{0}, []float64{beyondF32})
+			default:
+				got, err = moarray.L2Distance[float64]([]float64{0}, []float64{beyondF32})
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+			require.NotEqual(t, float64(float32(tc.want)), got, "float32 rounding must be observable here")
+		})
+	}
+}
+
+// TestBatchArrayDistanceSync_DimMismatchDeclines: the metric kernels report a dimension
+// mismatch as ErrInternal, but the SQL contract for vector ops of differing dimensions is
+// the per-row path's ErrInvalidInput naming both dimensions. Constness must not change the
+// error either, so a mismatched row hands the whole batch back.
+func TestBatchArrayDistanceSync_DimMismatchDeclines(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	constVec := makeConstArrayVec[float32](t, mp, []float32{1, 2}, 2)
+	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(),
+		[][]float32{{1, 2}, {1, 2, 3}}) // second row has the wrong dimension
+
+	_, ok, err := batchArrayDistanceSync[float32](
+		[]*vector.Vector{constVec, colVec}, 2, metric.Metric_L1Distance, nil, nil)
+	require.NoError(t, err, "the batch path must not raise the kernel's internal error")
+	require.False(t, ok)
+
+	// The per-row path then produces the documented error.
+	_, scalarErr := moarray.L1Distance[float32]([]float32{1, 2, 3}, []float32{1, 2})
+	require.Error(t, scalarErr)
+	require.Contains(t, scalarErr.Error(), "invalid input")
+	require.Contains(t, scalarErr.Error(), "(3, 2)")
+}
+
+// TestBatchArrayDistanceSync_SelectListDeclines: the batch path evaluates every row and
+// lets any row's error escape. When the expression framework has masked rows off, a masked
+// row holding a bad dimension must be skipped rather than reported, so the batch path must
+// stand down whenever it cannot evaluate everything.
+func TestBatchArrayDistanceSync_SelectListDeclines(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	constVec := makeConstArrayVec[float32](t, mp, []float32{1, 2}, 2)
+	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(),
+		[][]float32{{3, 4}, {5, 6}})
+
+	for _, tc := range []struct {
+		name string
+		sl   *FunctionSelectList
+		want bool
+	}{
+		{"nil evaluates all", nil, true},
+		{"no nulls evaluates all", &FunctionSelectList{}, true},
+		{"partially masked", &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}, false},
+		{"all masked", &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false, false}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok, err := batchArrayDistanceSync[float32](
+				[]*vector.Vector{constVec, colVec}, 2, metric.Metric_L1Distance, nil, tc.sl)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, ok)
+		})
 	}
 }
 
@@ -225,7 +321,7 @@ func TestBatchArrayDistanceSync_BothConst(t *testing.T) {
 	require.NoError(t, err)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{v0, v1}, 4, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{v0, v1}, 4, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "both-const should return ok=false")
 }
@@ -240,7 +336,7 @@ func TestBatchArrayDistanceSync_BothCol(t *testing.T) {
 	v1 := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{v0, v1}, 2, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{v0, v1}, 2, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "col-vs-col should return ok=false")
 }
@@ -255,7 +351,7 @@ func TestBatchArrayDistanceSync_NullConst(t *testing.T) {
 	colVec := makeColArrayVec[float32](t, mp, types.T_array_float32.ToType(), rows)
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, 4, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{constVec, colVec}, 4, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "null const should return ok=false")
 }
@@ -275,7 +371,7 @@ func TestBatchArrayDistanceSync_NullInColumn(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(colVec, types.ArrayToBytes[float32]([]float32{0, 1, 0}), false, mp))
 
 	_, ok, err := batchArrayDistanceSync[float32](
-		[]*vector.Vector{constVec, colVec}, 3, metric.Metric_L2sqDistance, nil)
+		[]*vector.Vector{constVec, colVec}, 3, metric.Metric_L2sqDistance, nil, nil)
 	require.NoError(t, err)
 	require.False(t, ok, "column with nulls should return ok=false")
 }

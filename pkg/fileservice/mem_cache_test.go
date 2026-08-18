@@ -1311,6 +1311,7 @@ func TestMemoryCachePressureAdmissionSkipsWritesAboveTarget(t *testing.T) {
 			CachedData: staticTestData([]byte{5}),
 		}},
 	}
+	defer vec.Release()
 	assert.NoError(t, cache.Update(ctx, vec, false))
 	assert.Equal(t, 5*unit, cache.cache.Used())
 
