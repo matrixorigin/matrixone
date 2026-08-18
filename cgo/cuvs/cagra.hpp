@@ -134,6 +134,28 @@ namespace matrixone {
 //     after all device jobs complete.
 //   - dataset_device_ptr_ / replicated_datasets_ are reset after extend.
 //
+// WHY CAGRA'S DATASET OWNERSHIP DIFFERS FROM IVF-PQ'S
+// ---------------------------------------------------
+// Both now pass a raft::host_matrix_view to build() instead of uploading, but for
+// different reasons and with different results.
+//
+// IVF-PQ encodes into PQ codes and never refers to the input again, so nothing owns
+// a dataset afterwards. CAGRA searches by walking the graph and reading the actual
+// vectors, so a dataset must live on the device for the index's whole life. What
+// changes is WHO owns it:
+//   - device view (before): update_dataset stores only a REFERENCE when rows are
+//     16-byte aligned (cagra.hpp:524-527), so the index pointed at our
+//     rmm::device_uvector and we had to keep it alive in dataset_device_ptr_ /
+//     replicated_datasets_.
+//   - host view (now): update_dataset "creates a copy of the dataset on the device"
+//     and "the index manages the lifetime of this copy" (cagra.hpp:556-558), so
+//     there is nothing for us to retain.
+// Steady-state device memory is the same either way. The win is during the build:
+// cuVS attaches the dataset LAST, after the graph is optimized (cagra_build.cuh:2264
+// then :2289), so with a host view the raw vectors are not resident while the
+// optimize step -- the device peak -- is running. Peak goes from
+// dataset + optimize to max(optimize, dataset + graph).
+//
 // MERGE
 // -----
 // cuVS provides `cuvs::neighbors::cagra::merge()` which merges multiple CAGRA
@@ -523,15 +545,8 @@ public:
 
         if (this->dist_mode == DistributionMode_REPLICATED) {
             auto res = handle.get_raft_resources();
-            // Pool-bypass training matrix — see matrixone::raw_device_mr() in cuvs_worker.hpp.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(this->count) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
 
             // Serialize concurrent builds on the same physical device (see
             // device_build_mutex). No-op across distinct real GPUs.
@@ -539,15 +554,15 @@ public:
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                 local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
+            require_dataset_attached(*local_idx, this->count, "REPLICATED");
 
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_rank()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -573,16 +588,11 @@ public:
             //               << this->host_ids[start_row+2] << std::endl;
             // }
 
-            // Pool-bypass training shard — see REPLICATED branch.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(num_rows) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)num_rows, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device,
-                       raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data() + (start_row * this->dimension), num_rows, this->dimension));
-            raft::resource::sync_stream(*res);
+            // This rank's slice of the shared host buffer; ranks read disjoint ranges
+            // of one immutable buffer, so no copy and no coordination.
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data() + (start_row * this->dimension),
+                (int64_t)num_rows, (int64_t)this->dimension);
 
             // Serialize concurrent builds on the same physical device (see
             // device_build_mutex). No-op across distinct real GPUs.
@@ -590,46 +600,59 @@ public:
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                 local_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
+            require_dataset_attached(*local_idx, num_rows, "SHARDED");
 
             handle.set_index_ptr(static_cast<const cagra_index*>(local_idx.get()));
 
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->replicated_indices_[handle.get_rank()] = std::shared_ptr<cagra_index>(std::move(local_idx));
-                this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
             }
             handle.sync();
         } else {
             // Do all GPU work outside the lock — holding shared_mutex across GPU calls
             // would block concurrent readers for the entire build duration.
             auto res = handle.get_raft_resources();
-            // Pool-bypass training matrix — see REPLICATED branch.
-            auto dataset_storage = std::make_shared<rmm::device_uvector<T>>(
-                static_cast<size_t>(this->count) * this->dimension,
-                raft::resource::get_cuda_stream(*res),
-                matrixone::raw_device_mr());
-            auto dataset_device = raft::make_device_matrix_view<T, int64_t>(
-                dataset_storage->data(), (int64_t)this->count, (int64_t)this->dimension);
-            raft::copy(*res, dataset_device, raft::make_host_matrix_view<const T, int64_t>(this->flattened_host_dataset.data(), this->count, this->dimension));
-            raft::resource::sync_stream(*res);
+            auto dataset_host = raft::make_host_matrix_view<const T, int64_t>(
+                this->flattened_host_dataset.data(), (int64_t)this->count, (int64_t)this->dimension);
 
             std::unique_ptr<cagra_index> new_idx;
             {
                 std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
                 new_idx = std::make_unique<cagra_index>(cuvs::neighbors::cagra::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                    *res, index_params, dataset_host));
             }
+            require_dataset_attached(*new_idx, this->count, "SINGLE_GPU");
             handle.sync();
 
             // Assign results under lock
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 index_ = std::move(new_idx);
-                this->dataset_device_ptr_ = std::move(dataset_storage);
             }
         }
+    }
+
+    // cuVS attaches the dataset LAST, after the graph is optimized, and if that
+    // allocation fails it does NOT propagate: it catches std::bad_alloc, logs
+    // "Only the graph will be added to the index", and returns a valid index object
+    // with no vectors (cagra_build.cuh:2291-2297). Such an index cannot answer a
+    // single query, and size() hides the problem -- it falls back to the graph's row
+    // count when the dataset is empty (cagra.hpp:341-346). dataset().extent(0) is the
+    // only honest signal, so check it rather than discover this at search time.
+    static void require_dataset_attached(const cagra_index& idx, uint64_t expect_rows,
+                                         const char* mode) {
+        const int64_t got = idx.dataset().extent(0);
+        if (got == static_cast<int64_t>(expect_rows)) return;
+        throw std::runtime_error(
+            std::string("[CAGRA build ") + mode + "] cuVS did not attach the dataset to the "
+            "index (expected " + std::to_string(expect_rows) + " rows, got " +
+            std::to_string(got) + "). CAGRA searches by reading the vectors, so this index "
+            "would have a graph but nothing to search. It means the device ran out of memory "
+            "attaching the dataset: lower cagra_max_index_capacity, or use a narrower storage "
+            "type (QUANTIZATION).");
     }
 
     void extend_internal(raft_handle_wrapper_t& handle, const T* additional_data, uint64_t num_vectors) {
