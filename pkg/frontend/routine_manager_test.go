@@ -945,7 +945,7 @@ func receiveLegacyMigrationActionResult(t *testing.T, result <-chan error) error
 	}
 }
 
-func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T) {
+func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.T) {
 	const connID = uint32(1009)
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)
@@ -958,6 +958,7 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 	rm, err := NewRoutineManager(context.Background(), "")
 	require.NoError(t, err)
 	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
 
 	oldSession.respr = NewMysqlResp(protocol)
 	oldSession.setRoutineManager(rm)
@@ -1010,8 +1011,21 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 
 	oldProc := oldSession.GetProc()
 	oldTxnHandler := oldSession.GetTxnHandler()
-	err = routine.resetSession("", &query.ResetSessionResponse{})
-	require.ErrorContains(t, err, "cannot reset session as routine is closed or busy")
+	resetCtx, cancelReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReset()
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- rm.ResetSessionWithContext(
+			resetCtx,
+			&query.ResetSessionRequest{ConnID: connID},
+			&query.ResetSessionResponse{},
+		)
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	require.Same(t, oldSession, routine.getSession())
 	require.Same(t, oldProc, oldSession.GetProc())
 	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
@@ -1030,7 +1044,12 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 		t.Fatal("request handler did not finish after response release")
 	}
 
-	require.NoError(t, routine.resetSession("", &query.ResetSessionResponse{}))
+	select {
+	case err := <-resetResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not finish after request release")
+	}
 	newSession := routine.getSession()
 	require.NotSame(t, oldSession, newSession)
 	require.Nil(t, oldSession.GetProc())
@@ -1038,6 +1057,19 @@ func TestRoutineManagerResetSessionRejectsRequestAfterResponseWrite(t *testing.T
 	registered = rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1)
 	require.Same(t, newSession, registered[0])
+	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
+	secondResetCtx, cancelSecondReset := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecondReset()
+	require.NoError(t, rm.ResetSessionWithContext(
+		secondResetCtx,
+		&query.ResetSessionRequest{ConnID: connID},
+		&query.ResetSessionResponse{},
+	))
+	secondSession := routine.getSession()
+	require.NotSame(t, newSession, secondSession)
+	registered = rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, secondSession, registered[0])
 	require.NoError(t, rm.Handler(conn, []byte{byte(COM_PING)}))
 }
 

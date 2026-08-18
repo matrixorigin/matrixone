@@ -362,6 +362,55 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 	routine.mc.endOperation()
 }
 
+func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	rm.setBaseService(&testMOServerBaseService{id: ""})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	t.Cleanup(func() {
+		if current := routine.getSession(); current != nil {
+			rm.sessionManager.RemoveSession(current)
+			current.Close()
+		}
+		routine.cancelRoutineFunc()
+		rm.cancelCtx()
+	})
+
+	oldProc := oldSession.GetProc()
+	oldTxnHandler := oldSession.GetTxnHandler()
+	require.True(t, routine.mc.tryBeginRequest())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resetResult := make(chan error, 1)
+	go func() {
+		resetResult <- routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{})
+	}()
+	select {
+	case err := <-resetResult:
+		t.Fatalf("reset returned before the request was canceled: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-resetResult:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("reset did not honor cancellation while waiting for request")
+	}
+	require.Same(t, oldSession, routine.getSession())
+	require.Same(t, oldProc, oldSession.GetProc())
+	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
+	routine.mc.endRequest()
+}
+
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)

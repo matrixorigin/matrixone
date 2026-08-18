@@ -664,7 +664,9 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 }
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
-	return rt.resetSessionWithContext(rt.getCancelRoutineCtx(), baseServiceID, resp)
+	return rt.resetSessionWithAdmission(
+		rt.getCancelRoutineCtx(), baseServiceID, resp, false,
+	)
 }
 
 func (rt *Routine) resetSessionWithContext(
@@ -672,7 +674,23 @@ func (rt *Routine) resetSessionWithContext(
 	baseServiceID string,
 	resp *query.ResetSessionResponse,
 ) error {
+	return rt.resetSessionWithAdmission(ctx, baseServiceID, resp, true)
+}
+
+func (rt *Routine) resetSessionWithAdmission(
+	ctx context.Context,
+	baseServiceID string,
+	resp *query.ResetSessionResponse,
+	waitForRequest bool,
+) error {
 	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
+	if !ok && waitForRequest {
+		// ResetSession is sent after Proxy has sealed the client generation, so
+		// waiting here lets an already-running request finish before the old
+		// session is replaced. The QueryService caller supplies the bounded
+		// context; the no-context helper above intentionally remains fail-fast.
+		operationCtx, ok = rt.mc.beginOperationWithContext(ctx)
+	}
 	if !ok {
 		if ctx != nil {
 			if cause := context.Cause(ctx); cause != nil {
