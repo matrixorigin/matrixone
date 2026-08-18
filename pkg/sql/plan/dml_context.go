@@ -23,10 +23,12 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	objRefs         []*plan.ObjectRef
+	tableDefs       []*plan.TableDef
+	aliases         []string
+	isClusterTable  []bool
+	targetDBName    string
+	targetTableName string
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	// updateTargetOrder records writable targets in the table-list binding order.

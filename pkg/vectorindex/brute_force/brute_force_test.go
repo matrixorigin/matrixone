@@ -250,6 +250,55 @@ func TestNewUsearchBruteForceIndexFlattened(t *testing.T) {
 	require.Equal(t, 2, len(dists))
 }
 
+// TestUsearchBruteForceDistanceConvention pins the usearch->MO rebase on the brute-force
+// side so it cannot drift from the HNSW index path, which applies the same transform at
+// hnsw/search.go. usearch's IP metric is 1 - a·b while MO's inner_product is -a·b, and an
+// index built for Metric_L2Distance must come back sqrt-ed even though usearch computed
+// the squared form. The metric the index was CONSTRUCTED with decides both — no runtime
+// config needed, which is why every case below passes an empty RuntimeConfig.
+func TestUsearchBruteForceDistanceConvention(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	query := [][]float32{{1, 2, 3}}
+	const dim, elemsz = uint(3), uint(4)
+	rt := vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}
+
+	// inner_product: a·a = 14, so MO's convention is -14 (usearch hands back 1-14 = -13).
+	ipIdx, err := NewUsearchBruteForceIndex[float32]([][]float32{{1, 2, 3}}, dim, metric.Metric_InnerProduct, elemsz)
+	require.NoError(t, err)
+	_, dists, err := ipIdx.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	require.Len(t, dists, 1)
+	require.InDelta(t, -14.0, dists[0], 1e-5, "inner product must use MO's -a·b, not usearch's 1-a·b")
+
+	// Metric_L2Distance: ||[1,2,3]-[4,6,3]|| = sqrt(9+16+0) = 5. usearch only computes
+	// the squared form, so the index's own metric is what says to take the root.
+	l2Idx, err := NewUsearchBruteForceIndex[float32]([][]float32{{4, 6, 3}}, dim, metric.Metric_L2Distance, elemsz)
+	require.NoError(t, err)
+	_, l2dists, err := l2Idx.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	require.Len(t, l2dists, 1)
+	require.InDelta(t, 5.0, l2dists[0], 1e-5, "an index built for Metric_L2Distance must be sqrt-ed")
+
+	// Metric_L2sqDistance over the same vectors keeps the squared value. This is the pair
+	// MetricTypeToUsearchMetric collapses (both -> usearch.L2sq), so it is exactly the
+	// distinction that would be lost without MoMetric.
+	sqIdx, err := NewUsearchBruteForceIndex[float32]([][]float32{{4, 6, 3}}, dim, metric.Metric_L2sqDistance, elemsz)
+	require.NoError(t, err)
+	_, sqdists, err := sqIdx.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	require.InDelta(t, 25.0, sqdists[0], 1e-5, "an index built for Metric_L2sqDistance must stay squared")
+
+	// The flattened constructor shares the same Search, so it must agree.
+	flatIdx, err := NewUsearchBruteForceIndexFlattened[float32]([]float32{4, 6, 3}, 1, dim, metric.Metric_L2Distance, elemsz)
+	require.NoError(t, err)
+	_, flatDists, err := flatIdx.Search(sqlproc, query, rt)
+	require.NoError(t, err)
+	require.InDelta(t, 5.0, flatDists[0], 1e-5)
+}
+
 func TestNewBruteForceIndexHelpers(t *testing.T) {
 	dataset := [][]float32{{1, 2, 3}, {3, 4, 5}}
 	dimension := uint(3)
