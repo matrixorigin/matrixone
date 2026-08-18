@@ -151,8 +151,8 @@ func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
 
 	expr := &FunctionExpressionExecutor{}
 	expr.resetFlowControlPrepareParamKind()
-	expr.observeFlowControlPrepareParamKind(binary, []bool{true, false})
-	expr.observeFlowControlPrepareParamKind(text, []bool{false, true})
+	expr.observeFlowControlPrepareParamKind(binary, nil, []bool{true, false})
+	expr.observeFlowControlPrepareParamKind(text, nil, []bool{false, true})
 	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 2, proc.Mp()))
 	require.True(t, result.GetBinaryStringMetadataAt(0))
 	require.False(t, result.GetBinaryStringMetadataAt(1))
@@ -169,9 +169,73 @@ func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
 
 	expr := &FunctionExpressionExecutor{}
 	expr.resetFlowControlPrepareParamKind()
-	expr.observeFlowControlPrepareParamKind(text, []bool{true})
+	expr.observeFlowControlPrepareParamKind(text, nil, []bool{true})
 	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
 	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+}
+
+func TestFlowControlUsesSourceDomainBeforeImplicitCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name       string
+		sourceType types.Type
+		castType   types.Type
+		want       types.RuntimeStringDomain
+	}{
+		{name: "text under binary result", sourceType: types.T_varchar.ToType(), castType: types.T_varbinary.ToType(), want: types.RuntimeStringText},
+		{name: "binary under text result", sourceType: types.T_varbinary.ToType(), castType: types.T_varchar.ToType(), want: types.RuntimeStringBinary},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := vector.NewVec(tt.sourceType)
+			casted := vector.NewVec(tt.castType)
+			result := vector.NewVec(tt.castType)
+			defer source.Free(proc.Mp())
+			defer casted.Free(proc.Mp())
+			defer result.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte("selected"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(casted, []byte("selected"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(result, []byte("selected"), false, proc.Mp()))
+
+			castExecutor := &FunctionExpressionExecutor{
+				functionInformationForEval: functionInformationForEval{
+					fid:        function.CAST,
+					overloadID: function.EncodeOverloadID(function.CAST, 0),
+				},
+				parameterResults:  []*vector.Vector{source},
+				parameterExecutor: []ExpressionExecutor{nil},
+			}
+			expr := &FunctionExpressionExecutor{}
+			expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
+			require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+			require.Equal(t, tt.want, result.GetRuntimeStringDomainAt(0))
+		})
+	}
+}
+
+func TestFlowControlKeepsExplicitCastAsSemanticBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := vector.NewVec(types.T_varchar.ToType())
+	casted := vector.NewVec(types.T_varbinary.ToType())
+	result := vector.NewVec(types.T_varbinary.ToType())
+	defer source.Free(proc.Mp())
+	defer casted.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	for _, vec := range []*vector.Vector{source, casted, result} {
+		require.NoError(t, vector.AppendBytes(vec, []byte("selected"), false, proc.Mp()))
+	}
+	castExecutor := &FunctionExpressionExecutor{
+		functionInformationForEval: functionInformationForEval{
+			fid:        function.CAST,
+			overloadID: function.EncodeOverloadID(function.CAST, 1),
+		},
+		parameterResults:  []*vector.Vector{source},
+		parameterExecutor: []ExpressionExecutor{nil},
+	}
+	expr := &FunctionExpressionExecutor{}
+	expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+	require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
 }
 
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {

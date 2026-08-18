@@ -70,6 +70,23 @@ type prepareParamKindRowsSource struct {
 	summary  prepareParamKindSummary
 }
 
+type prepareParamKindRowState struct {
+	kind   vector.PrepareParamKind
+	domain types.RuntimeStringDomain
+	seen   bool
+	mixed  bool
+}
+
+func (s *prepareParamKindRowState) observe(
+	kind vector.PrepareParamKind, domain types.RuntimeStringDomain,
+) {
+	if !s.seen {
+		s.kind, s.domain, s.seen = kind, domain, true
+		return
+	}
+	s.mixed = s.mixed || s.kind != kind || s.domain != domain
+}
+
 func newPrepareParamKindRowsSource(
 	vec *vector.Vector,
 	flags []uint8,
@@ -92,6 +109,7 @@ func newPrepareParamKindRowsSource(
 		return source, nil
 	}
 	selectedRows := 0
+	var rowState prepareParamKindRowState
 	for row := 0; row < vec.Length(); row++ {
 		if flags != nil {
 			if flags[row] == 0 {
@@ -109,13 +127,12 @@ func newPrepareParamKindRowsSource(
 		kind := vec.GetPrepareParamKindAt(row)
 		source.summary.observe(kind)
 		domain := vec.GetRuntimeStringDomainAt(row)
+		rowState.observe(kind, domain)
 		binaryString := domain == types.RuntimeStringBinary
 		source.summary.binaryString = source.summary.binaryString || binaryString
 		source.summary.textString = source.summary.textString || domain == types.RuntimeStringText
-		if hasExactRows && (kind != vector.PrepareParamNone || domain != types.RuntimeStringInherit) {
-			source.summary.rows = true
-		}
 	}
+	source.summary.rows = hasExactRows && rowState.mixed
 	if source.summary.rows {
 		source.rowCount = selectedRows
 	}
@@ -131,6 +148,7 @@ func newPrepareParamKindSelectedRowsSource(
 		return source, nil
 	}
 	hasExactRows := len(vec.GetPrepareParamKinds()) != 0 || vec.HasBinaryStringRows()
+	var rowState prepareParamKindRowState
 	for _, row := range rows {
 		if row < 0 || int(row) >= vec.Length() {
 			return source, moerr.NewInvalidInputNoCtxf(
@@ -143,13 +161,12 @@ func newPrepareParamKindSelectedRowsSource(
 		kind := vec.GetPrepareParamKindAt(int(row))
 		source.summary.observe(kind)
 		domain := vec.GetRuntimeStringDomainAt(int(row))
+		rowState.observe(kind, domain)
 		binaryString := domain == types.RuntimeStringBinary
 		source.summary.binaryString = source.summary.binaryString || binaryString
 		source.summary.textString = source.summary.textString || domain == types.RuntimeStringText
-		if hasExactRows && (kind != vector.PrepareParamNone || domain != types.RuntimeStringInherit) {
-			source.summary.rows = true
-		}
 	}
+	source.summary.rows = hasExactRows && rowState.mixed
 	if source.summary.rows {
 		source.rowCount = len(rows)
 	}

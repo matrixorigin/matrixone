@@ -91,6 +91,28 @@ func TestRuntimeStringDomainPublicSettersRejectUnknownAndKeepUniformFastPath(t *
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestRuntimeStringDomainsRejectMixedConstantVectorAtomically(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytes(types.T_varbinary.ToType(), []byte("x"), 2, mp)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.ErrorContains(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringText, types.RuntimeStringBinary,
+	}, mp), "constant vector requires one uniform runtime string domain")
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(1))
+
+	require.NoError(t, vec.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+		types.RuntimeStringText, types.RuntimeStringText,
+	}, mp))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(1))
+}
+
 func TestAppendCheckpointRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())

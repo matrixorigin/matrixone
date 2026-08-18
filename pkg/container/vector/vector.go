@@ -2290,6 +2290,20 @@ func (v *Vector) SetRuntimeStringDomainsWithMP(
 		}
 		needsRows = needsRows || domain == types.RuntimeStringText
 	}
+	if v.IsConst() {
+		if needsRows && seen {
+			for row, domain := range domains {
+				if !v.IsNull(uint64(row)) && domain != first {
+					return moerr.NewInvalidInputNoCtx(
+						"constant vector requires one uniform runtime string domain")
+				}
+			}
+		}
+		if !seen {
+			first = types.RuntimeStringInherit
+		}
+		return v.SetRuntimeStringDomainWithMP(first, mp)
+	}
 	if needsRows {
 		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
 			return err

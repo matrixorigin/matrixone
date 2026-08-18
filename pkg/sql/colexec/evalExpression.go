@@ -368,7 +368,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
-	flowControlStaticText    []bool
+	flowControlStaticDomains []types.StringDomain
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -803,7 +803,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], trueBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
 		if err != nil {
@@ -815,7 +815,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], falseBranch)
+		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
 	expr.parameterResults[2], err = expr.iffNullResult(1, rowCount)
@@ -840,22 +840,23 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
-	if expr.flowControlStaticText != nil {
-		expr.flowControlStaticText = expr.flowControlStaticText[:0]
+	if expr.flowControlStaticDomains != nil {
+		expr.flowControlStaticDomains = expr.flowControlStaticDomains[:0]
 	}
 }
 
-func (expr *FunctionExpressionExecutor) ensureFlowControlStaticTextRows(rows int) {
-	if rows <= len(expr.flowControlStaticText) {
+func (expr *FunctionExpressionExecutor) ensureFlowControlStaticDomainRows(rows int) {
+	if rows <= len(expr.flowControlStaticDomains) {
 		return
 	}
-	old := len(expr.flowControlStaticText)
-	if rows <= cap(expr.flowControlStaticText) {
-		expr.flowControlStaticText = expr.flowControlStaticText[:rows]
-		clear(expr.flowControlStaticText[old:])
+	old := len(expr.flowControlStaticDomains)
+	if rows <= cap(expr.flowControlStaticDomains) {
+		expr.flowControlStaticDomains = expr.flowControlStaticDomains[:rows]
+		clear(expr.flowControlStaticDomains[old:])
 		return
 	}
-	expr.flowControlStaticText = append(expr.flowControlStaticText, make([]bool, rows-old)...)
+	expr.flowControlStaticDomains = append(
+		expr.flowControlStaticDomains, make([]types.StringDomain, rows-old)...)
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -890,8 +891,10 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlBinaryStringRows(rows i
 // observe non-NULL values from inactive rows.
 func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	value *vector.Vector,
+	executor ExpressionExecutor,
 	selection []bool,
 ) {
+	value = flowControlSelectedValueSource(value, executor)
 	if value == nil || value.Length() == 0 {
 		return
 	}
@@ -899,10 +902,12 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
 			domain := value.GetRuntimeStringDomainAt(row)
-			if domain == types.RuntimeStringInherit &&
-				types.StaticStringDomain(*value.GetType()) == types.StringDomainText {
-				expr.ensureFlowControlStaticTextRows(len(selection))
-				expr.flowControlStaticText[row] = true
+			if domain == types.RuntimeStringInherit {
+				staticDomain := types.StaticStringDomain(*value.GetType())
+				if staticDomain != types.StringDomainNone {
+					expr.ensureFlowControlStaticDomainRows(len(selection))
+					expr.flowControlStaticDomains[row] = staticDomain
+				}
 			}
 			if domain != types.RuntimeStringInherit || len(expr.flowControlStringDomains) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
@@ -926,6 +931,25 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	}
 }
 
+// flowControlSelectedValueSource unwraps only binder-inserted casts. Explicit
+// CAST uses overload 1 and remains a semantic boundary. An implicit cast has
+// already evaluated its source, so this does not execute an expression twice.
+func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExecutor) *vector.Vector {
+	for {
+		fn, ok := executor.(*FunctionExpressionExecutor)
+		if !ok || fn.fid != function.CAST || len(fn.parameterResults) == 0 ||
+			len(fn.parameterExecutor) == 0 || fn.parameterResults[0] == nil {
+			return value
+		}
+		_, overload := function.DecodeOverloadID(fn.overloadID)
+		if overload != 0 {
+			return value
+		}
+		value = fn.parameterResults[0]
+		executor = fn.parameterExecutor[0]
+	}
+}
+
 func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	result *vector.Vector,
 	rows int,
@@ -934,25 +958,20 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
-	if len(expr.flowControlStringDomains) != 0 {
+	if len(expr.flowControlStringDomains) != 0 || len(expr.flowControlStaticDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
-		if types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary {
-			for row := 0; row < rows && row < len(expr.flowControlStaticText); row++ {
-				if expr.flowControlStaticText[row] &&
-					expr.flowControlStringDomains[row] == types.RuntimeStringInherit {
-					expr.flowControlStringDomains[row] = types.RuntimeStringText
-				}
+		resultDomain := types.StaticStringDomain(*result.GetType())
+		for row := 0; row < rows && row < len(expr.flowControlStaticDomains); row++ {
+			if expr.flowControlStringDomains[row] != types.RuntimeStringInherit {
+				continue
 			}
-		}
-		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
-			return err
-		}
-	} else if len(expr.flowControlStaticText) != 0 &&
-		types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary {
-		expr.ensureFlowControlBinaryStringRows(rows)
-		for row := 0; row < rows && row < len(expr.flowControlStaticText); row++ {
-			if expr.flowControlStaticText[row] {
+			switch {
+			case expr.flowControlStaticDomains[row] == types.StringDomainText &&
+				resultDomain == types.StringDomainBinary:
 				expr.flowControlStringDomains[row] = types.RuntimeStringText
+			case expr.flowControlStaticDomains[row] == types.StringDomainBinary &&
+				resultDomain == types.StringDomainText:
+				expr.flowControlStringDomains[row] = types.RuntimeStringBinary
 			}
 		}
 		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
@@ -1036,9 +1055,11 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
-			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i+1], selectedBranch)
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[i+1], expr.parameterExecutor[i+1], selectedBranch)
 		} else {
-			expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
+			expr.observeFlowControlPrepareParamKind(
+				expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		}
 	}
 	return err
@@ -1066,7 +1087,8 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		if err != nil {
 			return err
 		}
-		expr.observeFlowControlPrepareParamKind(expr.parameterResults[i], remaining)
+		expr.observeFlowControlPrepareParamKind(
+			expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
 				remaining[row] = false
