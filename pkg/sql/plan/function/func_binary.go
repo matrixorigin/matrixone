@@ -1844,10 +1844,6 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 			boundary = resolve(civil)
 		}
 	}
-	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
-		return foldBoundary
-	}
-
 	// A repeated civil hour contains two distinct aligned instants.  Resolving
 	// the target wall clock through time.Location chooses one occurrence and can
 	// jump over the other one.  Prefer the instant-step candidate when it is an
@@ -1873,6 +1869,9 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 				return candidate
 			}
 		}
+	}
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		return foldBoundary
 	}
 	return boundary
 }
@@ -1906,15 +1905,6 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 	}
 	target := types.Datetime(targetCivil)
 	boundary := resolveTimestampWindowBoundary(target, loc)
-	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
-		if steps, ok := timestampWindowFoldStepCount(value, foldBoundary, interval, loc); ok && steps <= count {
-			remaining := count - steps
-			if remaining == 0 {
-				return foldBoundary
-			}
-			return AdvanceTimestampWindowBoundaryBy(foldBoundary, remaining, interval, loc)
-		}
-	}
 	candidateRaw, ok := safeTimestampWindowSum(int64(value), delta)
 	if ok && !gapAdjusted {
 		candidate := types.Timestamp(candidateRaw)
@@ -1935,6 +1925,15 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 		}
 		if candidateCivil == targetCivil {
 			return candidate
+		}
+	}
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		if steps, ok := timestampWindowFoldStepCount(value, foldBoundary, interval, loc); ok && steps <= count {
+			remaining := count - steps
+			if remaining == 0 {
+				return foldBoundary
+			}
+			return AdvanceTimestampWindowBoundaryBy(foldBoundary, remaining, interval, loc)
 		}
 	}
 	return boundary

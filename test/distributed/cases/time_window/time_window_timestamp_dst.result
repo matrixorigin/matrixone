@@ -131,5 +131,29 @@ order by _wstart;
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  value_sum[3,38,0]  𝄀
 2026-11-01 00:00:00  ¦  2026-11-02 00:00:00  ¦  1  𝄀
 2026-11-02 00:00:00  ¦  2026-11-03 00:00:00  ¦  2
+set time_zone = '+00:00';
+create table tw_lord_howe_fold(event_ts timestamp(6), value int);
+insert into tw_lord_howe_fold values
+  ('2026-04-04 14:30:00', 1),
+  ('2026-04-04 14:35:00', 2);
+set time_zone = 'Australia/Lord_Howe';
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, count(value) as n
+from tw_lord_howe_fold
+interval(event_ts, 5, minute)
+order by ws, we;
+➤ ws[3,38,6]  ¦  we[3,38,6]  ¦  n[-5,64,0]  𝄀
+1775313000.000000  ¦  1775313300.000000  ¦  1  𝄀
+1775313300.000000  ¦  1775313600.000000  ¦  1
+create table tw_lord_howe_fold_gap(k int, event_ts timestamp(6), value int);
+insert into tw_lord_howe_fold_gap values
+  (1, '2026-04-04 14:30:00', 1),
+  (1, '2026-04-04 14:35:00', 2);
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, sum(value) as value_sum
+from tw_lord_howe_fold_gap
+group by k interval(event_ts, 5, minute) gapfill(partition)
+order by ws, we;
+➤ ws[3,38,6]  ¦  we[3,38,6]  ¦  value_sum[3,38,0]  𝄀
+1775313000.000000  ¦  1775313300.000000  ¦  1  𝄀
+1775313300.000000  ¦  1775313600.000000  ¦  2
 set time_zone = @old_time_zone_time_window_timestamp_dst;
 drop database time_window_timestamp_dst;

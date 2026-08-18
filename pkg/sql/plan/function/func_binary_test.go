@@ -191,6 +191,38 @@ func TestTimestampWindowBoundaryGuardsAndArithmetic(t *testing.T) {
 	})
 }
 
+func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
+	zone, err := time.LoadLocation("Australia/Lord_Howe")
+	require.NoError(t, err)
+	first := types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 30, 0, 0, time.UTC).UnixMicro())
+
+	for _, tc := range []struct {
+		name     string
+		interval int64
+		next     types.Timestamp
+		bulk     types.Timestamp
+	}{
+		{
+			name:     "five-minute-grid",
+			interval: 5 * types.SecsPerMinute * types.MicroSecsPerSec,
+			next:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 35, 0, 0, time.UTC).UnixMicro()),
+			bulk:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 40, 0, 0, time.UTC).UnixMicro()),
+		},
+		{
+			name:     "fifteen-minute-grid",
+			interval: 15 * types.SecsPerMinute * types.MicroSecsPerSec,
+			next:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 14, 45, 0, 0, time.UTC).UnixMicro()),
+			bulk:     types.UnixMicroToTimestamp(time.Date(2026, 4, 4, 15, 0, 0, 0, time.UTC).UnixMicro()),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.next, AdvanceTimestampWindowBoundary(first, tc.interval, zone))
+			require.Equal(t, tc.next, AdvanceTimestampWindowBoundaryBy(first, 1, tc.interval, zone))
+			require.Equal(t, tc.bulk, AdvanceTimestampWindowBoundaryBy(first, 2, tc.interval, zone))
+		})
+	}
+}
+
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{

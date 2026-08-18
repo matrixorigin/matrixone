@@ -1179,6 +1179,60 @@ func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestBoundedGapFillLordHoweNonHourlyFold(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("Australia/Lord_Howe")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	fiveMinutes := types.Datetime(5 * types.SecsPerMinute * types.MicroSecsPerSec)
+	atUTC := func(hour, minute int) types.Timestamp {
+		return types.UnixMicroToTimestamp(time.Date(2026, 4, 4, hour, minute, 0, 0, time.UTC).UnixMicro())
+	}
+	first := atUTC(14, 30)
+	finish := atUTC(15, 30)
+	arg := &TimeWin{GapFill: true, Interval: fiveMinutes, Sliding: fiveMinutes}
+	ctr := &container{
+		tsOid:      types.T_timestamp,
+		left:       types.Datetime(first),
+		gapFillEnd: types.Datetime(finish),
+	}
+
+	complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.Equal(t, []types.Datetime{
+		types.Datetime(atUTC(14, 30)),
+		types.Datetime(atUTC(14, 35)),
+		types.Datetime(atUTC(14, 40)),
+		types.Datetime(atUTC(14, 45)),
+		types.Datetime(atUTC(14, 50)),
+		types.Datetime(atUTC(14, 55)),
+		types.Datetime(atUTC(15, 0)),
+		types.Datetime(atUTC(15, 5)),
+		types.Datetime(atUTC(15, 10)),
+		types.Datetime(atUTC(15, 15)),
+		types.Datetime(atUTC(15, 20)),
+		types.Datetime(atUTC(15, 25)),
+	}, ctr.wStart)
+	require.Equal(t, []types.Datetime{
+		types.Datetime(atUTC(14, 35)),
+		types.Datetime(atUTC(14, 40)),
+		types.Datetime(atUTC(14, 45)),
+		types.Datetime(atUTC(14, 50)),
+		types.Datetime(atUTC(14, 55)),
+		types.Datetime(atUTC(15, 0)),
+		types.Datetime(atUTC(15, 5)),
+		types.Datetime(atUTC(15, 10)),
+		types.Datetime(atUTC(15, 15)),
+		types.Datetime(atUTC(15, 20)),
+		types.Datetime(atUTC(15, 25)),
+		types.Datetime(atUTC(15, 30)),
+	}, ctr.wEnd)
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newPartArg(t, proc, makeInterval(), false)

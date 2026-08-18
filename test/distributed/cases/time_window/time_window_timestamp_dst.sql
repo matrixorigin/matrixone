@@ -109,5 +109,28 @@ from tw_dst_day_fall
 group by k interval(event_ts, 1, day) gapfill(partition)
 order by _wstart;
 
+set time_zone = '+00:00';
+create table tw_lord_howe_fold(event_ts timestamp(6), value int);
+insert into tw_lord_howe_fold values
+  ('2026-04-04 14:30:00', 1),
+  ('2026-04-04 14:35:00', 2);
+
+set time_zone = 'Australia/Lord_Howe';
+
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, count(value) as n
+from tw_lord_howe_fold
+interval(event_ts, 5, minute)
+order by ws, we;
+
+create table tw_lord_howe_fold_gap(k int, event_ts timestamp(6), value int);
+insert into tw_lord_howe_fold_gap values
+  (1, '2026-04-04 14:30:00', 1),
+  (1, '2026-04-04 14:35:00', 2);
+
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, sum(value) as value_sum
+from tw_lord_howe_fold_gap
+group by k interval(event_ts, 5, minute) gapfill(partition)
+order by ws, we;
+
 set time_zone = @old_time_zone_time_window_timestamp_dst;
 drop database time_window_timestamp_dst;
