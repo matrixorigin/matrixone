@@ -1857,14 +1857,15 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 			(interval < 0 && candidateRaw >= math.MinInt64-interval) {
 			candidate := types.Timestamp(candidateRaw + interval)
 			candidateCivil := candidate.ToDatetime(loc)
+			sourceCivil := value.ToDatetime(loc)
 			grid := interval
 			if grid < 0 {
 				grid = -grid
 			}
 			if candidate != boundary && candidateCivil%types.Datetime(grid) == 0 &&
-				((interval > 0 && candidateCivil >= value.ToDatetime(loc) && candidateCivil <= civil &&
+				((interval > 0 && (candidateCivil >= sourceCivil || timestampWindowFoldStep(value, candidate, interval, loc)) && candidateCivil <= civil &&
 					(candidate < boundary || candidateCivil == civil)) ||
-					(interval < 0 && candidateCivil <= value.ToDatetime(loc) && candidateCivil >= civil &&
+					(interval < 0 && (candidateCivil <= sourceCivil || timestampWindowFoldStep(value, candidate, interval, loc)) && candidateCivil >= civil &&
 						(candidate > boundary || candidateCivil == civil))) {
 				return candidate
 			}
@@ -1912,7 +1913,8 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 		// Relative grid alignment is therefore the decisive signal; do not cap
 		// the candidate at targetCivil, which would reject the first valid point
 		// after a spring gap.
-		if civilDelta >= 0 && grid > 0 && civilDelta%grid == 0 {
+		if (civilDelta >= 0 || timestampWindowFoldStep(value, candidate, interval, loc)) &&
+			grid > 0 && civilDelta%grid == 0 {
 			return candidate
 		}
 		if candidateCivil == targetCivil {
@@ -1940,6 +1942,23 @@ func timestampWindowGapAt(value types.Timestamp, loc *time.Location) int64 {
 		return 0
 	}
 	return int64(currentOffset-previousOffset) * types.MicroSecsPerSec
+}
+
+func timestampWindowFoldStep(value, candidate types.Timestamp, interval int64, loc *time.Location) bool {
+	if loc == nil || interval == 0 || candidate == value {
+		return false
+	}
+	sourceCivil := value.ToDatetime(loc)
+	candidateCivil := candidate.ToDatetime(loc)
+	if candidateCivil == sourceCivil {
+		return false
+	}
+	valueInstant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	candidateInstant := time.UnixMicro(int64(candidate) - int64(types.UnixToTimestamp(0))).In(loc)
+	_, valueOffset := valueInstant.Zone()
+	_, candidateOffset := candidateInstant.Zone()
+	return (interval > 0 && candidate > value && candidateCivil < sourceCivil && candidateOffset < valueOffset) ||
+		(interval < 0 && candidate < value && candidateCivil > sourceCivil && candidateOffset > valueOffset)
 }
 
 // TimestampWindowBoundarySteps returns the number of boundary advances from

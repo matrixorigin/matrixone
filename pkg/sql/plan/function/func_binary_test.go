@@ -65,11 +65,14 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 	t.Run("fall-back-sub-hour-repeated-instant", func(t *testing.T) {
 		halfHour := int64(30 * types.SecsPerMinute * types.MicroSecsPerSec)
 		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+		firstLast := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
 		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
 		firstNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
 		secondNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
 
 		require.Equal(t, firstNext, AdvanceTimestampWindowBoundary(first, halfHour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundary(firstLast, halfHour, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(firstLast, 1, halfHour, zone))
 		require.Equal(t, secondNext, AdvanceTimestampWindowBoundary(second, halfHour, zone))
 		require.Equal(t, secondNext, AdvanceTimestampWindowBoundaryBy(second, 1, halfHour, zone))
 		require.Greater(t, int64(secondNext), int64(second))

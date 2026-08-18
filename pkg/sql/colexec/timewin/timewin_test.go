@@ -673,15 +673,16 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 		Interval: halfHour,
 		Sliding:  halfHour,
 	}
+	firstFoldLast := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
 	secondFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
 	secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
-	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{secondFold}, nil, proc.Mp()))
-	bat.Vecs[0].SetLength(1)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
-	bat.SetRowCount(1)
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{firstFoldLast, secondFold}, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(2)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(2)
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 	require.NoError(t, arg.Prepare(proc))
 
@@ -702,9 +703,9 @@ func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
 		}
 	}
 
-	require.Equal(t, []int64{2}, sums)
-	require.Equal(t, []types.Timestamp{secondFold}, starts)
-	require.Equal(t, []types.Timestamp{secondFoldHalfHour}, ends)
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Timestamp{firstFoldLast, secondFold}, starts)
+	require.Equal(t, []types.Timestamp{secondFold, secondFoldHalfHour}, ends)
 
 	arg.Free(proc, false, nil)
 	bat.Clean(proc.Mp())
