@@ -4,6 +4,7 @@ use mysql_compat_jdbc_get_tables;
 set session sql_mode='ONLY_FULL_GROUP_BY';
 create table t (id int primary key);
 create table t2 (id int primary key);
+insert into t values (1), (0);
 select TABLE_SCHEMA AS TABLE_CAT,
 NULL AS TABLE_SCHEM,
 TABLE_NAME,
@@ -44,4 +45,19 @@ where TABLE_SCHEMA = 'mysql_compat_jdbc_get_tables'
 having TABLE_TYPE = 'BASE TABLE';
 -- @regex("must appear in the GROUP BY clause", true)
 must appear in the GROUP BY clause
+select id AS duplicate_name, id AS duplicate_name
+from t
+having duplicate_name > 0;
+duplicate_name    duplicate_name
+1                 1
+select id + 1
+from t
+having id + 1 > 1;
+-- @regex("must appear in the GROUP BY clause", true)
+must appear in the GROUP BY clause
+select id AS duplicate_name, id + 1 AS duplicate_name
+from t
+having duplicate_name > 0;
+-- @regex("Column 'duplicate_name' in having clause is ambiguous", true)
+Column 'duplicate_name' in having clause is ambiguous
 drop database mysql_compat_jdbc_get_tables;

@@ -6,6 +6,7 @@ use mysql_compat_jdbc_get_tables;
 set session sql_mode='ONLY_FULL_GROUP_BY';
 create table t (id int primary key);
 create table t2 (id int primary key);
+insert into t values (1), (0);
 
 select TABLE_SCHEMA AS TABLE_CAT,
        NULL AS TABLE_SCHEM,
@@ -44,5 +45,22 @@ select TABLE_SCHEMA
 from INFORMATION_SCHEMA.TABLES
 where TABLE_SCHEMA = 'mysql_compat_jdbc_get_tables'
 having TABLE_TYPE = 'BASE TABLE';
+
+-- Equivalent duplicate aliases are still valid and resolve to the same output.
+select id AS duplicate_name, id AS duplicate_name
+from t
+having duplicate_name > 0;
+
+-- An anonymous repeated expression does not acquire HAVING output visibility.
+-- @regex("must appear in the GROUP BY clause",true)
+select id + 1
+from t
+having id + 1 > 1;
+
+-- Different expressions under the same alias are ambiguous in HAVING.
+-- @regex("Column 'duplicate_name' in having clause is ambiguous",true)
+select id AS duplicate_name, id + 1 AS duplicate_name
+from t
+having duplicate_name > 0;
 
 drop database mysql_compat_jdbc_get_tables;

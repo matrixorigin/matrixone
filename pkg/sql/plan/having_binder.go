@@ -42,17 +42,6 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := windowExprAstKey(astExpr)
-	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat && b.ctx != nil &&
-		!b.ctx.aggregateQueryForFullGroupBy() && b.isProjectedOutputExpr(astExpr) {
-		// Alias-before-column qualification returns the SELECT expression.
-		// Bind that expression as a projection, rather than applying
-		// ONLY_FULL_GROUP_BY checks to its source columns.
-		previous := b.bindingProjectedAlias
-		b.bindingProjectedAlias = true
-		expr, err := b.baseBindExpr(astExpr, depth, isRoot)
-		b.bindingProjectedAlias = previous
-		return expr, err
-	}
 
 	if !b.insideAgg {
 		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
@@ -112,6 +101,26 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 }
 
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
+		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() &&
+		!astExpr.Star && astExpr.NumParts == 1 {
+		projected, found, ambiguous := b.ctx.havingOutputExpr(astExpr.ColName())
+		if ambiguous {
+			return nil, ambiguousHavingColumn(b.GetContext(), astExpr.ColName())
+		}
+		if found {
+			// Bind the expression represented by the visible output name while
+			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
+			// flag is scoped to this recursive bind so an anonymous expression
+			// written directly in HAVING still follows normal visibility rules.
+			previous := b.bindingProjectedAlias
+			b.bindingProjectedAlias = true
+			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			b.bindingProjectedAlias = previous
+			return expr, err
+		}
+	}
+
 	if b.insideAgg || b.bindingProjectedAlias {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
@@ -197,17 +206,8 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 	}
 }
 
-func (b *HavingBinder) isProjectedOutputExpr(astExpr tree.Expr) bool {
-	if astExpr == nil || b.ctx == nil {
-		return false
-	}
-	astKey := semanticAstKey(astExpr)
-	for _, field := range b.ctx.projectByAst {
-		if field.ast == astExpr || (field.ast != nil && semanticAstKey(field.ast) == astKey) {
-			return true
-		}
-	}
-	return false
+func ambiguousHavingColumn(sysCtx context.Context, name string) error {
+	return moerr.NewInvalidInputf(sysCtx, "Column '%s' in having clause is ambiguous", name)
 }
 
 func (b *HavingBinder) newGroupByColumnError(astExpr *tree.UnresolvedName) error {

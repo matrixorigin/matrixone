@@ -619,12 +619,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 					// Return the original expression unchanged - let the binder handle it
 					return astExpr, nil
 				}
+			}
+			if expandAlias == NoAlias {
 				if havingBinder, ok := bc.binder.(*HavingBinder); ok &&
 					havingBinder.builder.mysqlFullGroupByCompat &&
 					!bc.aggregateQueryForFullGroupBy() {
-					if selectItem, ok := bc.havingOutputExpr(col); ok {
-						return selectItem, nil
-					}
+					// Keep the original unqualified name for HavingBinder. It
+					// resolves output aliases and implicit output names before
+					// falling back to the source-column visibility checks.
+					return astExpr, nil
 				}
 			}
 			if binding, ok := bc.bindingByCol[col]; ok {
@@ -641,6 +644,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			}
 
 			if expandAlias == AliasAfterColumn {
+				if _, ok := bc.binder.(*HavingBinder); ok {
+					projected, found, ambiguous := bc.havingOutputExpr(col)
+					if ambiguous {
+						return nil, ambiguousHavingColumn(bc.binder.GetContext(), col)
+					}
+					if found {
+						return projected, nil
+					}
+				}
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
 						return selectItem.astExpr, nil
@@ -702,12 +714,31 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 }
 
 // havingOutputExpr resolves an unqualified name against the query block's
-// implicit SELECT output names. Explicit aliases are handled by aliasMap before
-// this method is called. Only direct column projections are eligible here;
-// expressions without an explicit alias do not acquire a HAVING name that can
-// be resolved safely from the source scope.
-func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool) {
+// visible SELECT outputs. Explicit aliases take precedence over implicit
+// output names. Only direct column projections acquire an implicit name;
+// anonymous expressions must not make their source columns HAVING-visible.
+// The third return value reports duplicate output names with different
+// expressions, which are ambiguous rather than silently last-wins.
+func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool, bool) {
 	var selected tree.Expr
+	hasExplicit := false
+	for _, field := range bc.projectByAst {
+		if field.aliasName == "" || !strings.EqualFold(field.aliasName, name) {
+			continue
+		}
+		if selected == nil {
+			selected = field.ast
+			hasExplicit = true
+			continue
+		}
+		if semanticAstKey(selected) != semanticAstKey(field.ast) {
+			return nil, true, true
+		}
+	}
+	if hasExplicit {
+		return selected, true, false
+	}
+
 	for _, field := range bc.projectByAst {
 		if field.aliasName != "" {
 			continue
@@ -721,12 +752,10 @@ func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool) {
 			continue
 		}
 		if semanticAstKey(selected) != semanticAstKey(field.ast) {
-			// Duplicate output names with different expressions remain ambiguous;
-			// let normal source binding report the corresponding error.
-			return nil, false
+			return nil, true, true
 		}
 	}
-	return selected, selected != nil
+	return selected, selected != nil, false
 }
 
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)

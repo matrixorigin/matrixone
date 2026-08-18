@@ -7737,10 +7737,10 @@ func (builder *QueryBuilder) bindHaving(
 	ctx.binder = havingBinder
 	expandAlias := AliasAfterColumn
 	if builder.mysqlFullGroupByCompat && !ctx.aggregateQueryForFullGroupBy() {
-		// A non-aggregate HAVING may use a SELECT alias. Resolve that alias
-		// before source columns, while leaving ordinary source references on
-		// the existing ONLY_FULL_GROUP_BY validation path.
-		expandAlias = AliasBeforeColumn
+		// Defer unqualified-name resolution to HavingBinder. It must distinguish
+		// a visible output name from an anonymous expression that merely happens
+		// to be equal to a SELECT expression.
+		expandAlias = NoAlias
 	}
 	return splitAndBindCondition(clause.Expr, expandAlias, ctx)
 }
