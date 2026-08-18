@@ -101,7 +101,7 @@ func requestContextErr(execCtx *ExecCtx) error {
 	// existing protocol contract is to finish a read-only query without
 	// turning it into a transaction error.  A client disconnect first marks
 	// the routine as closing in beginClose, so a cancelled DML remains fenced.
-	if errors.Is(err, context.Canceled) && isReadOnlyStatement(execCtx) {
+	if errors.Is(err, context.Canceled) && isReadOnlyTransaction(execCtx) {
 		if ses, ok := execCtx.ses.(*Session); ok {
 			if rt := ses.getRoutine(); rt != nil && !rt.closing.Load() {
 				return nil
@@ -111,9 +111,30 @@ func requestContextErr(execCtx *ExecCtx) error {
 	return err
 }
 
-func isReadOnlyStatement(execCtx *ExecCtx) bool {
-	return execCtx != nil && execCtx.stmt != nil &&
-		execCtx.stmt.GetQueryType() == tree.QueryTypeDQL
+// isReadOnlyTransaction reports the write state that has actually reached the
+// transaction workspace.  The statement kind alone is insufficient: DQL
+// functions such as nextval and setval execute derived updates in the same
+// transaction.  Treat a missing transaction as read-only because there is no
+// transaction state that can be committed; fail closed for an active operator
+// with a missing workspace.
+func isReadOnlyTransaction(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.ses == nil {
+		return false
+	}
+	txnHandler := execCtx.ses.GetTxnHandler()
+	if txnHandler == nil {
+		return false
+	}
+	txnOp := txnHandler.GetTxn()
+	return isReadOnlyTxnOp(txnOp)
+}
+
+func isReadOnlyTxnOp(txnOp TxnOperator) bool {
+	if txnOp == nil {
+		return true
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && workspace.Readonly()
 }
 
 // execution succeeds during the transaction. commit the transaction
@@ -755,8 +776,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	// read-only statement must retain the transaction context for its whole
 	// finalization: KILL QUERY cancels reqCtx by design, and that cancellation
 	// may race with Commit after the initial requestContextErr check.
-	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyStatement(execCtx) &&
-		(execCtx.reqCtx.Err() == nil || requestContextErr(execCtx) != nil) {
+	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyTxnOp(th.txnOp) {
 		commitCtx = execCtx.reqCtx
 	}
 	ctx2, cancel := context.WithTimeoutCause(

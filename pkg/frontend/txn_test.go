@@ -49,6 +49,7 @@ type testWorkspace struct {
 	stmtId              uint64
 	reportErr1          bool
 	haveDDL             bool
+	readonly            bool
 	protectedCloneFiles []string
 	trackedLoadFiles    []string
 }
@@ -76,7 +77,7 @@ func (txn *testWorkspace) SetSyncProtectionJobID(jobID string) {}
 func (txn *testWorkspace) GetSyncProtectionJobID() string { return "" }
 
 func (txn *testWorkspace) Readonly() bool {
-	panic("implement me")
+	return txn.readonly
 }
 
 func (txn *testWorkspace) PPString() string {
@@ -97,7 +98,7 @@ func (txn *testWorkspace) GetSnapshotWriteOffset() int {
 }
 
 func newTestWorkspace() *testWorkspace {
-	return &testWorkspace{}
+	return &testWorkspace{readonly: true}
 }
 
 func (txn *testWorkspace) StartStatement() {
@@ -868,6 +869,7 @@ func TestFinishTxnRollsBackWhenRequestIsCancelled(t *testing.T) {
 		ID:     []byte{1, 2, 3, 4},
 		Status: txn.TxnStatus_Active,
 	}
+	txnOp.wp.readonly = false
 	ses.txnHandler.txnOp = txnOp
 	ses.txnHandler.txnCtx = ctx
 	ses.txnHandler.shareTxn = false
@@ -905,6 +907,7 @@ func TestCommitUsesRequestContext(t *testing.T) {
 		ID:     []byte{1, 2, 3, 4},
 		Status: txn.TxnStatus_Active,
 	}
+	txnOp.wp.readonly = false
 	ses.txnHandler.txnOp = txnOp
 	ses.txnHandler.txnCtx = txnCtx
 	ses.txnHandler.shareTxn = false
@@ -942,6 +945,7 @@ func TestReadOnlyCommitIgnoresKillDuringCommit(t *testing.T) {
 	}
 	txnOp.commitCheckContext = true
 	txnOp.commitHook = cancel
+	txnOp.wp.readonly = true
 	ses.txnHandler.txnOp = txnOp
 	ses.txnHandler.txnCtx = txnCtx
 	ses.txnHandler.shareTxn = false
@@ -957,6 +961,43 @@ func TestReadOnlyCommitIgnoresKillDuringCommit(t *testing.T) {
 	require.Nil(t, txnOp.commitCtx.Value(requestContextKey{}))
 	require.Equal(t, 1, txnOp.commitCalls)
 	require.Equal(t, 0, txnOp.rollbackCalls)
+}
+
+func TestWritableDQLCommitPropagatesKillDuringCommit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnCtx := defines.AttachAccountId(context.Background(), sysAccountID)
+	reqCtx, cancel := context.WithCancel(txnCtx)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	}).AnyTimes()
+	ses.txnHandler.storage = eng
+
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{
+		ID:     []byte{1, 2, 3, 4},
+		Status: txn.TxnStatus_Active,
+	}
+	txnOp.commitCheckContext = true
+	txnOp.commitHook = cancel
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = txnCtx
+	ses.txnHandler.shareTxn = false
+
+	execCtx := newTestExecCtx(reqCtx, ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.Select{}
+	execCtx.txnOpt = FeTxnOption{autoCommit: true}
+
+	err := finishTxnFunc(ses, nil, execCtx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.Equal(t, 1, txnOp.commitCalls)
+	require.Equal(t, 0, txnOp.rollbackCalls)
+	require.Equal(t, txn.TxnStatus_Active, txnOp.meta.Status)
 }
 
 func TestCommitTxnUnknownInvalidatesTxnOperator(t *testing.T) {
