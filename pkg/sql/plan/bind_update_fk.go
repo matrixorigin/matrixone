@@ -98,6 +98,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				oldColName2Idx,
 				newColName2Idx,
 				targetSelected,
+				false,
 			)
 			if err != nil {
 				return 0, 0, nil, err
@@ -352,7 +353,18 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetParentRestrictChecks(
 			plan.ForeignKeyDef_SET_DEFAULT:
 			lastNodeID, selectNodeTag, err = builder.appendUpdateParentRestrictCheck(
 				bindCtx, tableDef, alias, affectedFK, lastNodeID, selectNodeTag,
-				oldColName2Idx, newColName2Idx, nil, true)
+				oldColName2Idx, newColName2Idx, nil, true, true)
+			if err != nil {
+				return 0, 0, nil, err
+			}
+			selectNode = builder.updateInputProjectNode(lastNodeID)
+		case plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_SET_NULL:
+			if affectedFK.childTableDef.TblId != tableDef.TblId {
+				continue
+			}
+			lastNodeID, selectNodeTag, err = builder.appendUpdateParentRestrictCheck(
+				bindCtx, tableDef, alias, affectedFK, lastNodeID, selectNodeTag,
+				oldColName2Idx, newColName2Idx, nil, true, false)
 			if err != nil {
 				return 0, 0, nil, err
 			}
@@ -366,6 +378,8 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetParentRestrictChecks(
 // each repeated physical target after UPDATE IGNORE has selected its final
 // constraint-safe candidate. Emitting actions on alias-local rows would either
 // duplicate the child write or cascade only one component of a composite key.
+// Self-referencing mutating actions were already treated as restrictive during
+// candidate selection, so no legacy action remains to emit for them here.
 func (builder *QueryBuilder) appendMergedPhysicalTargetParentForeignKeyChecks(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -420,6 +434,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetParentForeignKeyChecks(
 			oldColName2Idx,
 			newColName2Idx,
 			targetSelected,
+			true,
 		)
 		if err != nil {
 			return 0, 0, nil, err
@@ -645,6 +660,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
+	skipSelfReferencingActions bool,
 ) (int32, int32, error) {
 	if tableDef == nil || len(tableDef.RefChildTbls) == 0 {
 		return lastNodeID, selectNodeTag, nil
@@ -695,6 +711,9 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				plan.ForeignKeyDef_NO_ACTION,
 				plan.ForeignKeyDef_SET_DEFAULT:
 			case plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_SET_NULL:
+				if skipSelfReferencingActions {
+					continue
+				}
 				return 0, 0, newLegacyUpdatePlannerRouteError(
 					updateRouteReasonForeignKey,
 					moerr.NewUnsupportedDML(
@@ -720,6 +739,7 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 				newColName2Idx,
 				targetSelected,
 				false,
+				true,
 			)
 			if err != nil {
 				return 0, 0, err
@@ -736,6 +756,9 @@ func (builder *QueryBuilder) appendUpdateParentForeignKeyChecks(
 
 	mutations := make([]updateParentForeignKey, 0, len(affected))
 	for _, affectedFK := range affected {
+		if skipSelfReferencingActions && affectedFK.childTableDef.TblId == tableDef.TblId {
+			continue
+		}
 		if affectedFK.fk.OnUpdate == plan.ForeignKeyDef_CASCADE ||
 			affectedFK.fk.OnUpdate == plan.ForeignKeyDef_SET_NULL {
 			mutations = append(mutations, affectedFK)
@@ -1845,6 +1868,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 	newColName2Idx map[string]int32,
 	targetSelected *plan.Expr,
 	filterInvalid bool,
+	allowSelfReferencingNull bool,
 ) (int32, int32, error) {
 	sourceNode := builder.updateInputProjectNode(lastNodeID)
 	sourceTypes := make([]plan.Type, len(sourceNode.ProjectList))
@@ -1944,7 +1968,7 @@ func (builder *QueryBuilder) appendUpdateParentRestrictCheck(
 			return 0, 0, err
 		}
 	}
-	if affectedFK.childTableDef.TblId == parentTableDef.TblId {
+	if allowSelfReferencingNull && affectedFK.childTableDef.TblId == parentTableDef.TblId {
 		var newKeyHasNull *plan.Expr
 		for _, parentColID := range affectedFK.fk.ForeignCols {
 			parentColName := parentColIDToName[parentColID]

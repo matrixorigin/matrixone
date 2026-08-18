@@ -3340,7 +3340,12 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 	updatedColsSet := make(map[string]struct{})
 	var contributions []physicalTargetContribution
 	for _, targetIdx := range targets {
+		colNames := make([]string, 0, len(assignedColsByTarget[targetIdx]))
 		for colName := range assignedColsByTarget[targetIdx] {
+			colNames = append(colNames, colName)
+		}
+		sort.Strings(colNames)
+		for _, colName := range colNames {
 			updatedColsSet[colName] = struct{}{}
 			contributions = append(contributions, physicalTargetContribution{
 				targetIdx: targetIdx,
@@ -3348,12 +3353,6 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 			})
 		}
 	}
-	sort.SliceStable(contributions, func(i, j int) bool {
-		if contributions[i].targetIdx != contributions[j].targetIdx {
-			return contributions[i].targetIdx < contributions[j].targetIdx
-		}
-		return contributions[i].colName < contributions[j].colName
-	})
 	updatedCols := make([]string, 0, len(updatedColsSet))
 	for colName := range updatedColsSet {
 		updatedCols = append(updatedCols, colName)
@@ -3411,15 +3410,19 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		branchScanTag := builder.genNewBindTag()
 		builder.qry.Nodes[branchScanID].BindingTags = []int32{branchScanTag}
 		rowIDPos := oldColName2Idx[sourceAlias+"."+catalog.Row_ID]
-		// A source alias contributes only the tuple accepted by its greedy
-		// candidate stage. Filtering merely on Rowid lets row_number select a
-		// different one-to-many tuple whose assignment marker is absent.
-		activePos := targetBranchActivePos[sourceIdx]
+		// Rowid decides whether this alias exists in the joined tuple. The active
+		// marker is only a priority when several tuples share that Rowid: choose
+		// the tuple carrying the alias assignment, but do not erase a distinct
+		// physical Rowid merely because an earlier sibling owns the marker.
 		activeExpr := &plan.Expr{
-			Typ: selectNode.ProjectList[activePos].Typ,
+			Typ: selectNode.ProjectList[rowIDPos].Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: branchScanTag, ColPos: activePos,
+				RelPos: branchScanTag, ColPos: rowIDPos,
 			}},
+		}
+		activeExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{activeExpr})
+		if err != nil {
+			return 0, nil, err
 		}
 		branchScanID = builder.appendNode(&plan.Node{
 			NodeType:   plan.Node_FILTER,
@@ -3450,6 +3453,13 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 			return 0, nil, err
 		}
 		dedupInputProject = append(dedupInputProject, rowIDPartitionExpr)
+		activePos := int32(len(dedupInputProject))
+		dedupInputProject = append(dedupInputProject, &plan.Expr{
+			Typ: selectNode.ProjectList[targetBranchActivePos[sourceIdx]].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: branchScanTag, ColPos: targetBranchActivePos[sourceIdx],
+			}},
+		})
 		dedupInputTag := builder.genNewBindTag()
 		dedupInputNode := &plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -3458,12 +3468,13 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 			BindingTags: []int32{dedupInputTag},
 		}
 		dedupInputID := builder.appendNode(dedupInputNode, bindCtx)
-		dedupID, dedupNode, dedupTag, err := builder.appendRowNumberDedupNode(
+		dedupID, dedupNode, dedupTag, err := builder.appendRowNumberDedupNodeWithPriority(
 			bindCtx,
 			dedupInputID,
 			dedupInputNode,
 			dedupInputTag,
 			[]int32{int32(len(selectNode.ProjectList))},
+			activePos,
 		)
 		if err != nil {
 			return 0, nil, err
@@ -4326,8 +4337,21 @@ func (builder *QueryBuilder) appendRowNumberDedupNode(
 	selectNodeTag int32,
 	partitionColPositions []int32,
 ) (int32, *plan.Node, int32, error) {
+	return builder.appendRowNumberDedupNodeWithPriority(
+		bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions, -1)
+}
+
+func (builder *QueryBuilder) appendRowNumberDedupNodeWithPriority(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	partitionColPositions []int32,
+	priorityColPosition int32,
+) (int32, *plan.Node, int32, error) {
 	return builder.appendRowNumberGuardNode(
-		bindCtx, lastNodeID, selectNode, selectNodeTag, partitionColPositions, "", "")
+		bindCtx, lastNodeID, selectNode, selectNodeTag,
+		partitionColPositions, priorityColPosition, "", "")
 }
 
 func (builder *QueryBuilder) appendRowNumberGuardNode(
@@ -4336,6 +4360,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	selectNode *plan.Node,
 	selectNodeTag int32,
 	partitionColPositions []int32,
+	priorityColPosition int32,
 	duplicateErrorMessage string,
 	duplicateErrorType string,
 ) (int32, *plan.Node, int32, error) {
@@ -4372,6 +4397,19 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 			Flag: plan.OrderBySpec_INTERNAL,
 		})
 	}
+	var orderBy []*plan.OrderBySpec
+	if priorityColPosition >= 0 {
+		priorityExpr := childColExpr(priorityColPosition)
+		partitionPriorityOrder := &plan.OrderBySpec{
+			Expr: priorityExpr,
+			Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_INTERNAL,
+		}
+		partitionBy = append(partitionBy, partitionPriorityOrder)
+		orderBy = []*plan.OrderBySpec{{
+			Expr: DeepCopyExpr(priorityExpr),
+			Flag: partitionPriorityOrder.Flag,
+		}}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PARTITION,
 		Children:    []int32{lastNodeID},
@@ -4390,6 +4428,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 				WindowFunc:  rowNumberFunc,
 				Name:        "row_number",
 				PartitionBy: partitionByExprs,
+				OrderBy:     orderBy,
 				Frame: &plan.FrameClause{
 					Type: plan.FrameClause_ROWS,
 					Start: &plan.FrameBound{

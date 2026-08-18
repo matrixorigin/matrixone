@@ -25,7 +25,7 @@ import (
 )
 
 func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port)
@@ -157,6 +157,38 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		require.Equal(t, []int64{2, 1}, queryInts("select u,v from right_join_t where id=1", 2),
 			"RIGHT JOIN target order must not depend on SET order or COM_STMT")
 
+		exec("update right_join_t set x=0 where id=1")
+		result = exec("update ignore right_join_t b right join right_join_t a on b.id=a.id set a.x=2,b.x=3 where a.id=1")
+		assertAffected(result, 2)
+		require.Equal(t, []int64{3}, queryInts("select x from right_join_t where id=1", 1))
+		rightPrepared, prepareErr := conn.PrepareContext(ctx,
+			"update ignore right_join_t b right join right_join_t a on b.id=a.id set a.x=?,b.x=? where a.id=1")
+		require.NoError(t, prepareErr)
+		defer rightPrepared.Close()
+		for range 2 {
+			exec("update right_join_t set x=0 where id=1")
+			result, execErr := rightPrepared.ExecContext(ctx, 2, 3)
+			require.NoError(t, execErr)
+			assertAffected(result, 2)
+			require.Equal(t, []int64{3}, queryInts("select x from right_join_t where id=1", 1))
+		}
+
+		exec("update right_join_t set x=0 where id=1")
+		result = exec("update ignore right_join_t a right join right_join_t b on a.id=b.id right join right_join_t c on b.id=c.id set a.x=1,b.x=2,c.x=3 where c.id=1")
+		assertAffected(result, 3)
+		require.Equal(t, []int64{1}, queryInts("select x from right_join_t where id=1", 1))
+
+		exec("update right_join_t set x=0 where id=1")
+		result = exec("update ignore right_join_t a left join right_join_t b on a.id=b.id right join right_join_t c on b.id=c.id set a.x=1,b.x=2,c.x=3 where c.id=1")
+		assertAffected(result, 3)
+		require.Equal(t, []int64{2}, queryInts("select x from right_join_t where id=1", 1))
+
+		exec("create table right_check_t (id int primary key, x int, y int, check (x < y))")
+		exec("insert into right_check_t values (1,1,4)")
+		result = exec("update ignore right_check_t b right join right_check_t a on b.id=a.id set a.x=3,b.x=5 where a.id=1")
+		assertAffected(result, 1)
+		require.Equal(t, []int64{3, 4}, queryInts("select x,y from right_check_t where id=1", 2))
+
 		exec("create table released_unique_t (id int primary key, u int unique, x int)")
 		exec("insert into released_unique_t values (1,1,0),(2,2,0),(3,3,0)")
 		result = exec("update ignore released_unique_t b join released_unique_t a on b.id=2 and a.id=1 set a.u=2,b.u=4")
@@ -222,10 +254,16 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 
 		exec("create table legacy_fk_t (id int primary key, k int unique, parent_k int, x int, foreign key(parent_k) references legacy_fk_t(k) on update cascade)")
 		exec("insert into legacy_fk_t values (1,10,null,0),(2,20,10,0)")
-		_, execErr := conn.ExecContext(ctx,
+		result = exec(
 			"update ignore legacy_fk_t a join legacy_fk_t b on a.id=b.id set a.k=11,b.x=9 where a.id=1")
-		require.Error(t, execErr)
-		require.NotContains(t, execErr.Error(), "panic")
-		require.Equal(t, []int64{10, 0}, queryInts("select k,x from legacy_fk_t where id=1", 2))
+		assertAffected(result, 1)
+		require.Equal(t, []int64{10, 9}, queryInts("select k,x from legacy_fk_t where id=1", 2))
+
+		exec("create table legacy_set_null_t (id int primary key, k int unique, parent_k int, x int, foreign key(parent_k) references legacy_set_null_t(k) on update set null)")
+		exec("insert into legacy_set_null_t values (1,10,null,0),(2,20,10,0)")
+		result = exec(
+			"update ignore legacy_set_null_t a join legacy_set_null_t b on a.id=b.id set a.k=11,b.x=9 where a.id=1")
+		assertAffected(result, 1)
+		require.Equal(t, []int64{10, 9}, queryInts("select k,x from legacy_set_null_t where id=1", 2))
 	})
 }
