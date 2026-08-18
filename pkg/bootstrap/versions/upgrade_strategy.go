@@ -144,7 +144,11 @@ type UpgradeEntry struct {
 	// an already-completed upgrade remains idempotent during a rolling restart.
 	RequiredProtocolVersion int64
 	PreSql                  string
-	PostSql                 string
+	// PreSqls contains additional pre-upgrade statements that must be sent to
+	// the executor independently and in order. A single Exec call only executes
+	// one statement even if the SQL text contains semicolon-separated statements.
+	PreSqls []string
+	PostSql string
 }
 
 // Upgrade entity execution upgrade entrance
@@ -174,6 +178,14 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	// 1. First, judge whether there is prefix sql
 	if u.PreSql != "" {
 		res, err := txn.Exec(u.PreSql, statementOption)
+		if err != nil {
+			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
+			return err
+		}
+		res.Close()
+	}
+	for _, sql := range u.PreSqls {
+		res, err := txn.Exec(sql, statementOption)
 		if err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err

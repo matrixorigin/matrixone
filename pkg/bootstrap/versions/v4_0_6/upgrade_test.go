@@ -100,8 +100,10 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
 	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
-	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
-	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop view if exists information_schema.key_column_usage")
+	require.Equal(t, []string{
+		"DROP TABLE IF EXISTS information_schema.KEY_COLUMN_USAGE;",
+		"DROP VIEW IF EXISTS information_schema.KEY_COLUMN_USAGE;",
+	}, keyColumnUsage.PreSqls)
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
@@ -110,48 +112,53 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	require.Contains(t, strings.ToLower(referentialConstraints.PreSql), "drop view if exists information_schema.referential_constraints")
 }
 
-func TestUpgradeInformationSchemaKeyColumnUsageFromLegacyTable(t *testing.T) {
-	entry := upgradeInformationSchemaKeyColumnUsage()
-	legacyTableExists := true
-	viewCreated := false
-	stub := gostub.Stub(&versions.CheckViewDefinition, func(
-		_ executor.TxnExecutor, accountID uint32, schema, viewName string,
-	) (bool, string, error) {
-		require.Equal(t, uint32(42), accountID)
-		require.Equal(t, sysview.InformationDBConst, schema)
-		require.Equal(t, "KEY_COLUMN_USAGE", viewName)
-		if viewCreated {
-			return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
-		}
-		return false, "", nil
-	})
-	defer stub.Reset()
+func TestUpgradeInformationSchemaKeyColumnUsageFromLegacyObject(t *testing.T) {
+	for _, objectKind := range []string{"table", "view"} {
+		t.Run(objectKind, func(t *testing.T) {
+			entry := upgradeInformationSchemaKeyColumnUsage()
+			objectExists := true
+			viewCreated := false
+			stub := gostub.Stub(&versions.CheckViewDefinition, func(
+				_ executor.TxnExecutor, accountID uint32, schema, viewName string,
+			) (bool, string, error) {
+				require.Equal(t, uint32(42), accountID)
+				require.Equal(t, sysview.InformationDBConst, schema)
+				require.Equal(t, "KEY_COLUMN_USAGE", viewName)
+				if viewCreated {
+					return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+				}
+				return false, "", nil
+			})
+			defer stub.Reset()
 
-	var executed []string
-	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-		executed = append(executed, sql)
-		switch sql {
-		case entry.PreSql:
-			require.True(t, legacyTableExists)
-			lowerSQL := strings.ToLower(sql)
-			require.Contains(t, lowerSQL, "drop table if exists information_schema.key_column_usage")
-			require.Contains(t, lowerSQL, "drop view if exists information_schema.key_column_usage")
-			require.Less(t, strings.Index(lowerSQL, "drop table"), strings.Index(lowerSQL, "drop view"))
-			legacyTableExists = false
-		case entry.UpgSql:
-			require.False(t, legacyTableExists)
-			viewCreated = true
-		}
-		return executor.Result{}, nil
-	}, nil)
+			var executed []string
+			txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				executed = append(executed, sql)
+				switch sql {
+				case entry.PreSqls[0]:
+					if objectKind == "table" {
+						objectExists = false
+					}
+				case entry.PreSqls[1]:
+					if objectKind == "view" {
+						objectExists = false
+					}
+				case entry.UpgSql:
+					require.False(t, objectExists)
+					viewCreated = true
+				}
+				return executor.Result{}, nil
+			}, nil)
 
-	require.NoError(t, entry.Upgrade(txn, 42))
-	require.Equal(t, []string{entry.PreSql, entry.UpgSql}, executed)
-	require.True(t, viewCreated)
+			require.NoError(t, entry.Upgrade(txn, 42))
+			require.Equal(t, append(append([]string{}, entry.PreSqls...), entry.UpgSql), executed)
+			require.True(t, viewCreated)
 
-	executed = nil
-	require.NoError(t, entry.Upgrade(txn, 42))
-	require.Empty(t, executed)
+			executed = nil
+			require.NoError(t, entry.Upgrade(txn, 42))
+			require.Empty(t, executed)
+		})
+	}
 }
 
 func TestUpgradeInformationSchemaColumnsCheck(t *testing.T) {
