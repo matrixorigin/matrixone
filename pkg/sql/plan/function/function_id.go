@@ -822,9 +822,17 @@ const (
 	// merges claim ids (562->567->569); referenced by name only, so renumbering is safe.
 	LOAD_TEXT = 569
 
+	// Manhattan distance. Completes the op_type set an IVF-FLAT index can be built
+	// with: vector_l1_ops was already accepted at CREATE INDEX, but without this
+	// function neither the user query nor the index's own generated search SQL
+	// (MetricTypeToDistFuncName) could name the metric (#25966).
+	// Takes 570 rather than 569: LOAD_TEXT reached main first, so keeping main's
+	// numbering intact leaves the next merge clean. Ids are referenced by name.
+	L1_DISTANCE = 570
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 570
+	FUNCTION_END_NUMBER = 571
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1406,6 +1414,7 @@ var functionIdRegister = map[string]int32{
 	"cosine_similarity": COSINE_SIMILARITY,
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
+	"l1_distance":       L1_DISTANCE,
 	"l2_distance":       L2_DISTANCE,
 	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,

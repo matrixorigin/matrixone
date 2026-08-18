@@ -453,6 +453,20 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 	}
 }
 
+func TestCTEReuseRejectsOccurrenceOutsideRewriteRoot(t *testing.T) {
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{0}},
+		{NodeType: planpb.Node_VALUE_SCAN},
+	}}}
+
+	reusable := builder.cteConsumersFullyDrain(1, []cteOccurrence{
+		{rootID: 0},
+		{rootID: 2},
+	})
+	require.False(t, reusable, "a rewrite rooted at node 1 cannot replace occurrence node 2")
+}
+
 func TestCTEMultiReferenceReuseRespectsNestedShadowing(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `with c as (
