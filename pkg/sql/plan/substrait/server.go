@@ -40,8 +40,8 @@ type ResolverServer struct {
 }
 
 func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManager, auditor ResolveAuditRecorder) (*ResolverServer, error) {
-	if address == "" || leases == nil || !leases.DurableReady() || auditor == nil {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address, a replayed lease manager, and an audit recorder")
+	if address == "" || leases == nil || (!leases.DurableReady() && !leases.BenchmarkReady()) || auditor == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address, an approved lease manager, and an audit recorder")
 	}
 	if tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil || len(tlsConfig.Certificates) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires a server certificate and verified client CA")

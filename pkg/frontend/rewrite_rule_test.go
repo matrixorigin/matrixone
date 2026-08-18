@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -758,6 +759,181 @@ func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
 		"select * from src.t where inline_keep = 1",
 	}, chains["src.t"])
 	require.Equal(t, "inline_db", remapDb["src"])
+}
+
+func TestRewriteSQLRemapUsesCanonicalInlinePrecedence(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"remapdb":{"SourceCase":"DstA"}}`))
+
+	for range 100 {
+		rewritten, err := rewriteSQL(ctx, ses,
+			`/*+ {"remapdb":{"sourcecase":"DstB"}} */ insert into sourcecase.t values (1)`)
+		require.NoError(t, err)
+		remaps, err := extractRemapDbByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Equal(t, []map[string]string{{"sourcecase": "dstb"}}, remaps)
+	}
+}
+
+func TestRewriteSQLUsesCanonicalKeysAcrossLayers(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{
+		"DstMixed.T": "select * from DstMixed.T where role_keep = 1",
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+		`{"rewrites":{"dSTMixed.t":"select * from DstMixed.T where session_keep=1"},`+
+			`"remapdb":{"SrcMixed":"DstMixed"}}`))
+
+	rewritten, err := rewriteSQL(ctx, ses,
+		`/*+ {"rewrites":{"DSTMIXED.T":"select * from DstMixed.T where inline_keep=1"}} */ `+
+			`select * from SrcMixed.T`)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(ctx, content, 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select * from DstMixed.T where role_keep = 1",
+		"select * from DstMixed.T where session_keep=1",
+		"select * from DstMixed.T where inline_keep=1",
+	}, chains["dstmixed.t"])
+	require.Equal(t, map[string]string{"srcmixed": "dstmixed"}, remapDb)
+}
+
+func TestValidateRemapRewritesUsesIdentifierComparisonMode(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 1), "equivalent")
+	require.ErrorContains(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"ChainSrc":"MID","mid":"dst"}}`, 1), "chaining is not allowed")
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"remapdb":{"SourceCase":"dst_a","sourcecase":"dst_b"}}`, 0))
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 1))
+	require.NoError(t, validateRemapRewrites(ctx,
+		`{"rewrites":{"MixedDB.t":"select 1","mixeddb.T":"select 2"}}`, 0))
+
+	for range 200 {
+		normalized, err := normalizeRewriteRules(ctx, map[string]string{
+			"hint_test.users": "select 'Alice'",
+			"hint_test.USERS": "select 'Bob'",
+		}, 1)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"hint_test.users": "select 'Alice'"}, normalized)
+	}
+}
+
+func TestRewriteSQLValidatesEquivalentLosersBeforeNormalization(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+
+	for _, invalid := range []string{"delete from shadow27190.t", "", "select from"} {
+		sql := fmt.Sprintf(`/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1","shadow27190.T":%q}} */ select id from shadow27190.t`, invalid)
+		_, err := rewriteSQL(ctx, ses, sql)
+		require.Error(t, err)
+	}
+
+	outer := `/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"shadow27190.t":"select * from shadow27190.t where id=1","shadow27190.T":"delete from shadow27190.t"}} */ select id from shadow27190.t`
+	_, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner, 1)
+	require.ErrorContains(t, err, "only accept SELECT-like statements")
+}
+
+func TestRewritePolicyModeTwoUsesComparisonIdentity(t *testing.T) {
+	ctx := context.Background()
+	normalized, err := normalizeRewriteRules(ctx, map[string]string{
+		"CaseDB.T": "select * from CaseDB.T where id=1",
+	}, 2)
+	require.NoError(t, err)
+	require.Contains(t, normalized, "casedb.t")
+}
+
+func BenchmarkRewriteSingleSQLPersistentMultiRulePolicy(b *testing.B) {
+	rules := make(map[string]string, 32)
+	for i := range 32 {
+		key := fmt.Sprintf("policy_db.t%d", i)
+		rules[key] = fmt.Sprintf("select * from %s where tenant_id = %d", key, i)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := rewriteSingleSQL(ctx, "select * from policy_db.t0", rules, nil, nil, 1, ""); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestSelectedRewriteWinnerValidatedForNonConsumerStatements(t *testing.T) {
+	ctx := context.Background()
+	assertAttachRejects := func(t *testing.T, rewritten string, want string) {
+		t.Helper()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer func() {
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+		}()
+		err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, rewritten, "", 1)
+		require.ErrorContains(t, err, want)
+	}
+
+	for _, test := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "ddl non select winner",
+			input: `/*+ {"rewrites":{"review27190.t":"delete from review27190.t"}} */ create table x(a int)`,
+			want:  "only accept SELECT-like statements",
+		},
+		{
+			name:  "set empty winner",
+			input: `/*+ {"rewrites":{"review27190.t":""}} */ set @a = 1`,
+			want:  "statement",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rewritten, err := rewriteSingleSQL(ctx, test.input, nil, nil, nil, 1, "")
+			require.NoError(t, err)
+			assertAttachRejects(t, rewritten, test.want)
+		})
+	}
+
+	outer := `/*+ {"rewrites":{"review27190.t":"select * from review27190.t"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"other27190.t":"select from"}} */ create table prepared_x(a int)`
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner, 1)
+	require.NoError(t, err)
+	assertAttachRejects(t, rewritten, "syntax error")
+}
+
+func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(1))
+	tcc := ses.GetTxnCompileCtx()
+	tcc.SetDatabase("SrcUse27190")
+	tcc.execCtx = &ExecCtx{
+		reqCtx: ctx, ses: ses, remapDb: map[string]string{"srcuse27190": "dstuse27190"},
+	}
+	require.Equal(t, "dstuse27190", tcc.DefaultDatabase())
 }
 
 func TestValidateRewriteRuleSQL(t *testing.T) {
