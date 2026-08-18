@@ -1844,6 +1844,9 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 			boundary = resolve(civil)
 		}
 	}
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		return foldBoundary
+	}
 
 	// A repeated civil hour contains two distinct aligned instants.  Resolving
 	// the target wall clock through time.Location chooses one occurrence and can
@@ -1884,6 +1887,9 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 	if count <= 0 || interval <= 0 || value == types.ZeroTimestamp {
 		return value
 	}
+	if count == 1 {
+		return AdvanceTimestampWindowBoundary(value, interval, loc)
+	}
 	delta, ok := safeTimestampWindowProduct(count, interval)
 	if !ok {
 		return value
@@ -1899,6 +1905,16 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 		return value
 	}
 	target := types.Datetime(targetCivil)
+	boundary := resolveTimestampWindowBoundary(target, loc)
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		if steps, ok := timestampWindowFoldStepCount(value, foldBoundary, interval, loc); ok && steps <= count {
+			remaining := count - steps
+			if remaining == 0 {
+				return foldBoundary
+			}
+			return AdvanceTimestampWindowBoundaryBy(foldBoundary, remaining, interval, loc)
+		}
+	}
 	candidateRaw, ok := safeTimestampWindowSum(int64(value), delta)
 	if ok && !gapAdjusted {
 		candidate := types.Timestamp(candidateRaw)
@@ -1921,7 +1937,7 @@ func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int
 			return candidate
 		}
 	}
-	return resolveTimestampWindowBoundary(target, loc)
+	return boundary
 }
 
 // timestampWindowGapAt reports a positive UTC-offset jump whose first valid
@@ -1961,6 +1977,164 @@ func timestampWindowFoldStep(value, candidate types.Timestamp, interval int64, l
 		(interval < 0 && candidate < value && candidateCivil > sourceCivil && candidateOffset > valueOffset)
 }
 
+// timestampWindowFoldBoundary returns an aligned boundary from the repeated
+// civil hour when the wall-clock target would skip it. A fold can contain more
+// than one aligned civil point, so derive the first/last point from the
+// transition rather than assuming the UTC offset change is divisible by the
+// window interval.
+func timestampWindowFoldBoundary(value, boundary types.Timestamp, interval int64, loc *time.Location) (types.Timestamp, bool) {
+	if loc == nil || interval == 0 || value == types.ZeroTimestamp {
+		return 0, false
+	}
+	grid := interval
+	if grid < 0 {
+		grid = -grid
+	}
+	if grid == 0 {
+		return 0, false
+	}
+
+	instant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	_, currentOffset := instant.Zone()
+	transitionStart, transitionEnd := instant.ZoneBounds()
+	var transition time.Time
+	var previousOffset, nextOffset int
+	var postTransition bool
+	switch {
+	case interval > 0:
+		if transitionEnd.IsZero() || !transitionEnd.After(instant) {
+			return 0, false
+		}
+		_, nextOffset = transitionEnd.Add(time.Microsecond).Zone()
+		if nextOffset >= currentOffset {
+			return 0, false
+		}
+		transition = transitionEnd
+		previousOffset = currentOffset
+		postTransition = false
+	case interval < 0:
+		if transitionStart.IsZero() || instant.Before(transitionStart) {
+			return 0, false
+		}
+		_, previousOffset = transitionStart.Add(-time.Microsecond).Zone()
+		if previousOffset <= currentOffset {
+			return 0, false
+		}
+		transition = transitionStart
+		postTransition = true
+	}
+
+	delta := int64(previousOffset - nextOffset)
+	if postTransition {
+		delta = int64(previousOffset - currentOffset)
+	}
+	if delta <= 0 {
+		return 0, false
+	}
+	delta *= types.MicroSecsPerSec
+
+	foldStart := types.UnixMicroToTimestamp(transition.UnixMicro())
+	foldStartCivil := int64(foldStart.ToDatetime(loc))
+	foldEndCivil := foldStartCivil + delta
+	sourceCivil := int64(value.ToDatetime(loc))
+	boundaryRaw := int64(boundary)
+	foldStartRaw := int64(foldStart)
+
+	alignedAtOrAfter := func(civil int64) int64 {
+		remainder := civil % grid
+		if remainder < 0 {
+			remainder += grid
+		}
+		if remainder != 0 {
+			civil += grid - remainder
+		}
+		return civil
+	}
+	alignedStrictlyBefore := func(civil int64) int64 {
+		remainder := civil % grid
+		if remainder < 0 {
+			remainder += grid
+		}
+		civil -= remainder
+		if remainder == 0 {
+			civil -= grid
+		}
+		return civil
+	}
+
+	if !postTransition {
+		candidateCivil := alignedAtOrAfter(foldStartCivil)
+		if candidateCivil >= foldEndCivil {
+			return 0, false
+		}
+		candidateRaw, ok := safeTimestampWindowSum(
+			foldStartRaw, candidateCivil-foldStartCivil)
+		if !ok || candidateRaw <= int64(value) || candidateRaw >= boundaryRaw {
+			return 0, false
+		}
+		return types.Timestamp(candidateRaw), true
+	}
+
+	limitCivil := sourceCivil
+	if limitCivil > foldEndCivil {
+		limitCivil = foldEndCivil
+	}
+	candidateCivil := alignedStrictlyBefore(limitCivil)
+	if candidateCivil >= foldStartCivil {
+		candidateRaw, ok := safeTimestampWindowSum(
+			foldStartRaw, candidateCivil-foldStartCivil)
+		if ok && candidateRaw > boundaryRaw && candidateRaw < int64(value) {
+			return types.Timestamp(candidateRaw), true
+		}
+	}
+
+	// No post-transition point lies between the current value and target. The
+	// preceding occurrence may still be the next reverse boundary.
+	lastCivil := alignedStrictlyBefore(foldEndCivil)
+	if lastCivil < foldStartCivil {
+		return 0, false
+	}
+	firstOccurrenceStart, ok := safeTimestampWindowSum(foldStartRaw, -delta)
+	if !ok {
+		return 0, false
+	}
+	firstOccurrenceRaw, ok := safeTimestampWindowSum(
+		firstOccurrenceStart, lastCivil-foldStartCivil)
+	if !ok || firstOccurrenceRaw <= boundaryRaw || firstOccurrenceRaw >= int64(value) {
+		return 0, false
+	}
+	return types.Timestamp(firstOccurrenceRaw), true
+}
+
+func timestampWindowFoldStepCount(value, repeated types.Timestamp, interval int64, loc *time.Location) (int64, bool) {
+	if interval <= 0 || loc == nil || repeated <= value {
+		return 0, false
+	}
+	instant := time.UnixMicro(int64(repeated) - int64(types.UnixToTimestamp(0))).In(loc)
+	transitionStart, _ := instant.ZoneBounds()
+	if transitionStart.IsZero() {
+		return 0, false
+	}
+	_, currentOffset := instant.Zone()
+	_, previousOffset := transitionStart.Add(-time.Microsecond).Zone()
+	delta := int64(previousOffset-currentOffset) * types.MicroSecsPerSec
+	if delta <= 0 {
+		return 0, false
+	}
+	firstOccurrence, ok := safeTimestampWindowSum(int64(repeated), -delta)
+	if !ok {
+		return 0, false
+	}
+	if firstOccurrence <= int64(value) {
+		return 1, true
+	}
+	span := firstOccurrence - int64(value)
+	if span <= 0 || span%interval != 0 {
+		return 0, false
+	}
+	return safeTimestampWindowSum(span/interval, 1)
+}
+
 // TimestampWindowBoundarySteps returns the number of boundary advances from
 // start to end.  Raw instant distance is exact for fixed-offset spans and for
 // hourly DST gaps/folds (including both occurrences of a fold).  Civil distance
@@ -1974,13 +2148,21 @@ func TimestampWindowBoundarySteps(start, end types.Timestamp, interval int64, lo
 	}
 	rawSpan := int64(end) - int64(start)
 	if rawSpan >= 0 && rawSpan%interval == 0 {
-		return rawSpan / interval
+		rawSteps := rawSpan / interval
+		if AdvanceTimestampWindowBoundaryBy(start, rawSteps, interval, loc) == end {
+			return rawSteps
+		}
 	}
 	civilStart := int64(start.ToDatetime(loc))
 	civilEnd := int64(end.ToDatetime(loc))
 	civilSpan := civilEnd - civilStart
 	if civilSpan >= 0 && civilSpan%interval == 0 {
-		return civilSpan / interval
+		// A repeated civil point can make the exact-looking civil quotient one
+		// step short; verify it against the boundary sequence before accepting it.
+		civilSteps := civilSpan / interval
+		if AdvanceTimestampWindowBoundaryBy(start, civilSteps, interval, loc) == end {
+			return civilSteps
+		}
 	}
 
 	// A reachable target normally matches one of the two exact quotients.  If

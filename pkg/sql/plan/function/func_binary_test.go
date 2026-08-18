@@ -77,6 +77,31 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 		require.Equal(t, secondNext, AdvanceTimestampWindowBoundaryBy(second, 1, halfHour, zone))
 		require.Greater(t, int64(secondNext), int64(second))
 	})
+	t.Run("fall-back-non-divisor-grid", func(t *testing.T) {
+		ninetyMinutes := int64(90 * types.SecsPerMinute * types.MicroSecsPerSec)
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+		afterSecond := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC).UnixMicro())
+
+		require.Equal(t, first, NormalizeTimestampWindowStart(first, ninetyMinutes, zone))
+		require.Equal(t, second, NormalizeTimestampWindowStart(second, ninetyMinutes, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundary(first, ninetyMinutes, zone))
+		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(first, 1, ninetyMinutes, zone))
+		require.Equal(t, afterSecond, AdvanceTimestampWindowBoundaryBy(first, 2, ninetyMinutes, zone))
+		require.Equal(t, int64(2), TimestampWindowBoundarySteps(first, afterSecond, ninetyMinutes, zone))
+		fifth := first
+		for i := 0; i < 5; i++ {
+			fifth = AdvanceTimestampWindowBoundary(fifth, ninetyMinutes, zone)
+		}
+		require.Equal(t, fifth, AdvanceTimestampWindowBoundaryBy(first, 5, ninetyMinutes, zone))
+		require.Equal(t, afterSecond, AdvanceTimestampWindowBoundary(second, ninetyMinutes, zone))
+		beforeFold := parse("2026-11-01 00:00:00")
+		bulk := beforeFold
+		for i := 0; i < 3; i++ {
+			bulk = AdvanceTimestampWindowBoundary(bulk, ninetyMinutes, zone)
+		}
+		require.Equal(t, bulk, AdvanceTimestampWindowBoundaryBy(beforeFold, 3, ninetyMinutes, zone))
+	})
 	t.Run("civil-day-dst-grid", func(t *testing.T) {
 		springStart := parse("2026-03-08 00:00:00")
 		springEnd := parse("2026-03-09 00:00:00")
