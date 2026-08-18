@@ -26,9 +26,11 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // GpuCagra represents the C++ gpu_cagra_t object.
@@ -568,14 +570,38 @@ func (gi *GpuCagra[B, Q]) Pack(filename string) error {
 	cDir := C.CString(tmpDir)
 	defer C.free(unsafe.Pointer(cDir))
 
+	logutil.Infof("GpuCagra.Pack: -> gpu_cagra_save_dir tmpDir=%s target=%s", tmpDir, filename)
+	t0 := time.Now()
 	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
 		C.free(unsafe.Pointer(errmsg))
+		logutil.Errorf("GpuCagra.Pack: gpu_cagra_save_dir returned error after %v: %s", time.Since(t0), errStr)
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
-
-	return Pack(tmpDir, filename)
+	// List what save_dir actually wrote so we know cuVS finished cleanly (vs died mid-write).
+	if entries, err := os.ReadDir(tmpDir); err == nil {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if fi, ferr := e.Info(); ferr == nil {
+				names = append(names, fmt.Sprintf("%s(%d)", e.Name(), fi.Size()))
+			} else {
+				names = append(names, e.Name())
+			}
+		}
+		logutil.Infof("GpuCagra.Pack: gpu_cagra_save_dir returned in %v; wrote %d files: %v",
+			time.Since(t0), len(entries), names)
+	} else {
+		logutil.Infof("GpuCagra.Pack: gpu_cagra_save_dir returned in %v (ReadDir failed: %v)", time.Since(t0), err)
+	}
+	logutil.Infof("GpuCagra.Pack: -> Pack (tar) tmpDir=%s target=%s", tmpDir, filename)
+	t1 := time.Now()
+	if err := Pack(tmpDir, filename); err != nil {
+		logutil.Errorf("GpuCagra.Pack: Pack (tar) FAILED after %v: %v", time.Since(t1), err)
+		return err
+	}
+	logutil.Infof("GpuCagra.Pack: Pack (tar) done in %v", time.Since(t1))
+	return nil
 }
 
 // Unpack extracts a .tar or .tar.gz file and loads index components via load_dir.

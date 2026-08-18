@@ -57,6 +57,7 @@ func Pack(dirPath string, outputPath string) error {
 		return err
 	}
 
+	logutil.Infof("cuvs.Pack: taring %d files from %s -> %s", len(files), dirPath, outputPath)
 	for _, file := range files {
 		if file.IsDir() {
 			continue
@@ -64,6 +65,7 @@ func Pack(dirPath string, outputPath string) error {
 		filePath := filepath.Join(dirPath, file.Name())
 		fi, err := os.Stat(filePath)
 		if err != nil {
+			logutil.Errorf("cuvs.Pack: Stat FAILED for %s: %v", filePath, err)
 			return err
 		}
 
@@ -79,10 +81,13 @@ func Pack(dirPath string, outputPath string) error {
 
 		f, err := os.Open(filePath)
 		if err != nil {
+			logutil.Errorf("cuvs.Pack: Open FAILED for %s: %v", filePath, err)
 			return err
 		}
+		logutil.Infof("cuvs.Pack: taring %s (%d bytes)", file.Name(), fi.Size())
 		if _, err := io.Copy(tw, f); err != nil {
 			f.Close()
+			logutil.Errorf("cuvs.Pack: io.Copy FAILED for %s after write: %v", file.Name(), err)
 			return err
 		}
 		f.Close()
