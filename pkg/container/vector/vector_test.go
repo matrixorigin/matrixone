@@ -113,6 +113,24 @@ func TestRuntimeStringDomainsRejectMixedConstantVectorAtomically(t *testing.T) {
 	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(1))
 }
 
+func TestConstRuntimeStringDomainSurvivesZeroLengthReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytes(types.T_varbinary.ToType(), []byte("selected"), 1, mp)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	vec.SetLength(0)
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	vec.SetLength(4)
+	for row := 0; row < vec.Length(); row++ {
+		require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(row))
+	}
+}
+
 func TestAppendCheckpointRollback(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_varchar.ToType())

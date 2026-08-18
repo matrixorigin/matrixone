@@ -313,10 +313,19 @@ func (v *Vector) SetLength(n int) {
 			v.binaryStringRows.TryExpandWithSize(n)
 			v.textStringRows.TryExpandWithSize(n)
 		} else if n < oldLength {
-			v.binaryStringRows.RemoveRange(uint64(n), uint64(oldLength))
-			v.textStringRows.RemoveRange(uint64(n), uint64(oldLength))
+			start := n
+			if v.IsConst() && start == 0 {
+				// Const row-level provenance belongs to physical row zero. Keep it
+				// while the broadcast has no logical rows so a later expansion can
+				// reuse the same folded/scalar value without changing its domain.
+				start = 1
+			}
+			v.binaryStringRows.RemoveRange(uint64(start), uint64(oldLength))
+			v.textStringRows.RemoveRange(uint64(start), uint64(oldLength))
 		}
-		v.normalizeBinaryStringRows()
+		if !v.IsConst() || n != 0 {
+			v.normalizeBinaryStringRows()
+		}
 	}
 }
 

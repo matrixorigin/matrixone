@@ -477,6 +477,23 @@ func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
 			require.Equal(t, "selected", result.GetStringAt(0))
 			require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
 			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
+
+			zeroBatch := batch.New(nil)
+			zeroBatch.SetRowCount(0)
+			result, err = expr.Eval(proc, []*batch.Batch{zeroBatch}, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Length())
+
+			nonemptyBatch := batch.New(nil)
+			nonemptyBatch.SetRowCount(4)
+			result, err = expr.Eval(proc, []*batch.Batch{nonemptyBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, 4, result.Length())
+			for row := 0; row < result.Length(); row++ {
+				require.Equal(t, "selected", result.GetStringAt(row))
+				require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(row))
+				require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(row))
+			}
 		})
 	}
 }
