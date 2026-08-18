@@ -201,8 +201,9 @@ func (b *HavingBinder) isProjectedOutputExpr(astExpr tree.Expr) bool {
 	if astExpr == nil || b.ctx == nil {
 		return false
 	}
-	for _, item := range b.ctx.aliasMap {
-		if item != nil && item.astExpr == astExpr {
+	astKey := semanticAstKey(astExpr)
+	for _, field := range b.ctx.projectByAst {
+		if field.ast == astExpr || (field.ast != nil && semanticAstKey(field.ast) == astKey) {
 			return true
 		}
 	}

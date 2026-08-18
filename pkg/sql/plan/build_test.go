@@ -2093,14 +2093,14 @@ func TestOnlyFullGroupByAllowsNonAggregateHavingDirectAlias(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestOnlyFullGroupByRejectsNonAggregateHavingDirectColumn(t *testing.T) {
+func TestOnlyFullGroupByAllowsNonAggregateHavingDirectColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 	_, err := runOneStmt(mock, t, `
 		SELECT n_regionkey
 		FROM nation
 		HAVING n_regionkey > 0`)
-	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+	require.NoError(t, err)
 }
 
 func TestMatrixOneNativeStillRejectsNonAggregateHavingColumn(t *testing.T) {

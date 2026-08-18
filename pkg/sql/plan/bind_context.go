@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -618,6 +619,13 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 					// Return the original expression unchanged - let the binder handle it
 					return astExpr, nil
 				}
+				if havingBinder, ok := bc.binder.(*HavingBinder); ok &&
+					havingBinder.builder.mysqlFullGroupByCompat &&
+					!bc.aggregateQueryForFullGroupBy() {
+					if selectItem, ok := bc.havingOutputExpr(col); ok {
+						return selectItem, nil
+					}
+				}
 			}
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
@@ -691,6 +699,34 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	}
 
 	return astExpr, err
+}
+
+// havingOutputExpr resolves an unqualified name against the query block's
+// implicit SELECT output names. Explicit aliases are handled by aliasMap before
+// this method is called. Only direct column projections are eligible here;
+// expressions without an explicit alias do not acquire a HAVING name that can
+// be resolved safely from the source scope.
+func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool) {
+	var selected tree.Expr
+	for _, field := range bc.projectByAst {
+		if field.aliasName != "" {
+			continue
+		}
+		column, ok := unwrapParenExpr(field.ast).(*tree.UnresolvedName)
+		if !ok || column.Star || !strings.EqualFold(column.ColName(), name) {
+			continue
+		}
+		if selected == nil {
+			selected = field.ast
+			continue
+		}
+		if semanticAstKey(selected) != semanticAstKey(field.ast) {
+			// Duplicate output names with different expressions remain ambiguous;
+			// let normal source binding report the corresponding error.
+			return nil, false
+		}
+	}
+	return selected, selected != nil
 }
 
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)
