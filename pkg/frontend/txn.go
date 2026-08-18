@@ -896,6 +896,14 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if statementContainsTransactionCharacteristic(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
+	// SET changes session state and must preserve an explicit transaction that
+	// was already active. The frontend still creates a temporary transaction
+	// for a standalone SET, so finish that transaction when there was no active
+	// user transaction at statement start. SET autocommit=1 is handled by
+	// TxnHandler.SetAutocommit, which commits the OFF -> ON transition directly.
+	if IsParameterModificationStatement(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
 		return true
 	}

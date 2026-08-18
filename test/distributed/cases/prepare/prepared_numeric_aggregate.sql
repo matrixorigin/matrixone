@@ -38,6 +38,16 @@ SET @value = NULL;
 EXECUTE p_ntile USING @value;
 DEALLOCATE PREPARE p_ntile;
 
+CREATE TABLE lag_lead_input(id INT PRIMARY KEY, g INT, v INT);
+INSERT INTO lag_lead_input VALUES (1, 1, 10), (2, 1, 20), (3, 1, 30), (4, 2, 40);
+PREPARE p_lag FROM 'SELECT id, LAG(v, ?) OVER (PARTITION BY g ORDER BY id) AS got FROM lag_lead_input ORDER BY id';
+SET @value = 1;
+EXECUTE p_lag USING @value;
+DEALLOCATE PREPARE p_lag;
+PREPARE p_lead FROM 'SELECT id, LEAD(v, ?) OVER (PARTITION BY g ORDER BY id) AS got FROM lag_lead_input ORDER BY id';
+EXECUTE p_lead USING @value;
+DEALLOCATE PREPARE p_lead;
+
 PREPARE p_recursive FROM 'WITH RECURSIVE r(n) AS (SELECT ? UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT CAST(SUM(n) AS SIGNED) AS got FROM r';
 SET @value = 1;
 EXECUTE p_recursive USING @value;
