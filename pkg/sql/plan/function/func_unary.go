@@ -5391,6 +5391,9 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 type mysqlTimePrefixCandidate struct {
 	leadingDigits        int
 	fieldCount           int
+	hourDigits           int
+	minuteDigits         int
+	secondDigits         int
 	dateInvalid          bool
 	dateYearDigits       int
 	hasOmittedMinute     bool
@@ -5409,6 +5412,7 @@ func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
 		return candidate
 	}
 	candidate.fieldCount = 1
+	candidate.hourDigits = candidate.leadingDigits
 	pos := candidate.leadingDigits
 	for pos < len(clock) && clock[pos] == ':' {
 		separatorStart := pos
@@ -5420,6 +5424,9 @@ func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
 			candidate.hasRepeatedBoundary = true
 			if candidate.fieldCount == 1 {
 				candidate.hasOmittedMinute = true
+			}
+			if candidate.fieldCount == 2 {
+				candidate.hasOmittedSeconds = true
 			}
 			if candidate.fieldCount >= 3 {
 				candidate.repeatedAfterSeconds = true
@@ -5438,8 +5445,16 @@ func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
 			break
 		}
 		candidate.fieldCount++
+		fieldStart := pos
 		for pos < len(clock) && clock[pos] >= '0' && clock[pos] <= '9' {
 			pos++
+		}
+		fieldDigits := pos - fieldStart
+		switch candidate.fieldCount {
+		case 2:
+			candidate.minuteDigits = fieldDigits
+		case 3:
+			candidate.secondDigits = fieldDigits
 		}
 	}
 	if candidate.fieldCount == 1 && candidate.leadingDigits > 0 &&
@@ -5474,19 +5489,24 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		// token. The complete candidate length is the boundary used by MySQL's
 		// full-DATETIME attempt: a short suffix still terminates the H:M prefix,
 		// while a longer nonnumeric suffix belongs to the failed candidate.
+		if token.trailingWhitespace && mysqlSignedNumericTimeSuffixForExtract(token) {
+			return false
+		}
 		if token.allDigits && token.trailingWhitespace {
 			return false
 		}
 		if token.trailingWhitespace {
 			return true
 		}
-		return len(clock)+len(suffix) > 12
+		return len(clock)+len(suffix) >= 12
 	}
-	// A signed numeric token after a repeated separator is still part of the
-	// already consumed TIME prefix when only trailing whitespace follows it.
-	// Keep the prefix boundary instead of treating that whitespace as a new
-	// DATETIME candidate (for example, "1:01:01: +1 ").
-	if candidate.repeatedAfterSeconds && mysqlSignedNumericTimeSuffixForExtract(token) {
+	// A signed numeric token after a repeated separator is ambiguous only when
+	// the complete clock candidate or the token boundary makes the consumed
+	// prefix unambiguous. Keep the exact field widths for a final token: a
+	// two-digit H:M:S candidate is invalid for MySQL when the token is attached
+	// directly (for example, "12:34:56: +1"), but trailing bytes terminate the
+	// token and preserve the already consumed clock fields.
+	if mysqlSignedNumericTimeSuffixBelongsToClock(candidate, token) {
 		return false
 	}
 	if !candidate.hasRepeatedBoundary && !candidate.dateInvalid {
@@ -5516,11 +5536,20 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 	return len(clock)+len(suffix) >= 12
 }
 
+func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
+	return candidate.repeatedAfterSeconds &&
+		candidate.fieldCount == 3 &&
+		mysqlSignedNumericTimeSuffixForExtract(token) &&
+		(token.trailingWhitespace ||
+			(candidate.hourDigits == 1 &&
+				candidate.minuteDigits == 2 &&
+				candidate.secondDigits == 2 &&
+				len(token.token) == 2))
+}
+
 func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
-	// The consumed TIME prefix remains the owner regardless of whether the
-	// signed numeric token is the final token or is followed by whitespace.
-	// In particular, `1:01:01: +1` and `1:01:01: +1 ` must have the same
-	// HOUR/MINUTE/SECOND result; the whitespace must not change ownership.
+	// A signed numeric token is only classified here; the candidate-specific
+	// ownership decision is made by mysqlSignedNumericTimeSuffixBelongsToClock.
 	if !token.present || len(token.token) < 2 {
 		return false
 	}
