@@ -396,18 +396,14 @@ func (c *Converter) appendValue(
 		}
 		return c.appendBytes(vec, data, column.Width, mp, budget)
 	case types.T_json:
-		var decoded any
-		if err := value.Unmarshal(&decoded); err != nil {
-			return errConversion
-		}
 		// Canonical Extended JSON preserves BSON distinctions such as int32 vs
 		// int64, Decimal128, Date and Binary instead of silently relaxing them
 		// into a lossy generic JSON number/string representation.
-		text, err := bson.MarshalExtJSON(decoded, true, false)
-		if err != nil {
+		text := value.String()
+		if text == "" {
 			return errConversion
 		}
-		jsonValue, err := types.ParseStringToByteJson(string(text))
+		jsonValue, err := types.ParseStringToByteJson(text)
 		if err != nil {
 			return errConversion
 		}
