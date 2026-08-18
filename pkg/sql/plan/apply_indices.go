@@ -940,6 +940,8 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 	}
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Sub:
+		return true
 	case *plan.Expr_F:
 		if exprImpl.F == nil || exprImpl.F.Func == nil {
 			return true

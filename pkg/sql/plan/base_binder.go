@@ -2706,7 +2706,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	default:
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
-
 	if astExpr.SubOp >= tree.ANY {
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
@@ -3346,6 +3345,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if (name == "in" || name == "not_in") && len(args) == 2 &&
+		containsVolatileFunction(args[0]) && b.ctx != nil {
+		b.ctx.volatileExprMemoID--
+		args[0].AuxId = b.ctx.volatileExprMemoID
+	}
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -4508,13 +4512,6 @@ func bindFuncExprImplByPlanExpr(
 		if rightList := args[1].GetList(); rightList != nil {
 			exactSingleComparison := len(rightList.List) == 1
 			leftIsPreparedParam := containsDynamicParam(args[0]) || args[0].ExactDecimalParam
-			preserveVolatileLeft := containsVolatileFunction(args[0])
-			for _, item := range rightList.List {
-				if !isRuntimeConstExpr(item) {
-					preserveVolatileLeft = false
-					break
-				}
-			}
 			// MySQL chooses the left runtime numeric parameter's REAL domain for
 			// the complete IN predicate when a runtime string peer is present. Do
 			// this before list packing so the vector and expanded comparisons share
@@ -4585,14 +4582,6 @@ func bindFuncExprImplByPlanExpr(
 				// Prepared TEXT parameters derive their exact DECIMAL domain from
 				// the execution value. Do not pack them into the peer-typed IN
 				// vector, which would truncate scale before that value is known.
-				if preserveVolatileLeft && !partitionIn {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
-					if err != nil {
-						return nil, err
-					}
-					inExprList = append(inExprList, inExpr)
-					continue
-				}
 				if !partitionIn && (leftIsPreparedParam || containsDynamicParam(rightVal) || rightVal.ExactDecimalParam) {
 					orExprList = append(orExprList, rightVal)
 					continue
@@ -4650,8 +4639,10 @@ func bindFuncExprImplByPlanExpr(
 			if name == "in" {
 				for _, expr := range orExprList {
 					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
 					tmpExpr, err := bindMixedInListComparison(
-						ctx, "=", DeepCopyExpr(args[0]), expr, exactComparison, !exactSingleComparison)
+						ctx, "=", left, expr, exactComparison, !exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
@@ -4661,8 +4652,10 @@ func bindFuncExprImplByPlanExpr(
 			} else {
 				for _, expr := range orExprList {
 					exactComparison := exactSingleComparison || leftIsPreparedParam || containsDynamicParam(expr) || expr.ExactDecimalParam
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
 					tmpExpr, err := bindMixedInListComparison(
-						ctx, "!=", DeepCopyExpr(args[0]), expr, exactComparison, !exactSingleComparison)
+						ctx, "!=", left, expr, exactComparison, !exactSingleComparison)
 					if err != nil {
 						return nil, err
 					}
