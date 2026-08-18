@@ -101,6 +101,14 @@ func TestMemoExpressionExecutorCachesOncePerRootEvaluation(t *testing.T) {
 	second.Free()
 }
 
+func TestMemoExpressionExecutorPreservesRowAlignment(t *testing.T) {
+	functionExecutor := &FunctionExpressionExecutor{}
+	memo := &memoExpressionExecutor{state: &memoExpressionState{executor: functionExecutor}}
+	require.True(t, expressionExecutorIsRowAligned(memo))
+	functionExecutor.folded.canFold = true
+	require.False(t, expressionExecutorIsRowAligned(memo))
+}
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

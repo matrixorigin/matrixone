@@ -557,7 +557,7 @@ func TestPreparedParamBindingTypesSkipPlansWithoutDependencies(t *testing.T) {
 	// A nil vector is deliberately safe here only when dependency inspection
 	// happens before parameter value access. This also proves the fast path does
 	// not allocate a result slice.
-	require.Nil(t, preparedParamBindingTypes(nil, nil, nil, 1))
+	require.Nil(t, preparedParamBindingTypes(nil, nil, nil, nil, nil, 1))
 }
 
 func TestPreparedExecuteParamStateOwnership(t *testing.T) {
@@ -1026,6 +1026,107 @@ func TestTransparentPrepareParamKind(t *testing.T) {
 	kind, err = transparentPrepareParamKind(tree.NewParamExpr(2), ses)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
+}
+
+func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
+	installBinaryParam := func(
+		t *testing.T,
+		prepareStmt *PrepareStmt,
+		cw *TxnComputationWrapper,
+		mysqlType defines.MysqlType,
+		value string,
+		isNull bool,
+	) {
+		t.Helper()
+		if prepareStmt.params != nil {
+			cw.proc.SetPrepareParams(nil)
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), isNull, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(mysqlType), 0}
+	}
+
+	for _, test := range []struct {
+		name  string
+		steps []struct {
+			typ    defines.MysqlType
+			value  string
+			isNull bool
+			want   types.T
+		}
+	}{
+		{
+			name: "fresh decimal and null reuse",
+			steps: []struct {
+				typ    defines.MysqlType
+				value  string
+				isNull bool
+				want   types.T
+			}{
+				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal128},
+			},
+		},
+		{
+			name: "integer widens to decimal",
+			steps: []struct {
+				typ    defines.MysqlType
+				value  string
+				isNull bool
+				want   types.T
+			}{
+				{defines.MYSQL_TYPE_LONGLONG, "7", false, types.T_int64},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
+			},
+		},
+		{
+			name: "null widens to decimal",
+			steps: []struct {
+				typ    defines.MysqlType
+				value  string
+				isNull bool
+				want   types.T
+			}{
+				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_text},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 209, "select ?")
+			defer prepareStmt.Close()
+			var metadataTypes []plan.Type
+			writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+			writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+				metadataTypes = make([]plan.Type, len(columns))
+				for i := range columns {
+					metadataTypes[i] = columns[i].Typ
+				}
+				return [][]byte{[]byte("refreshed")}, nil
+			}
+
+			for stepIndex, step := range test.steps {
+				installBinaryParam(t, prepareStmt, cw, step.typ, step.value, step.isNull)
+				_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				columns := plan2.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 1)
+				require.Equal(t, step.want, types.T(columns[0].Typ.Id), "step %d", stepIndex)
+				if step.value == "-12345678901234567890.123456789" {
+					require.Equal(t, int32(29), columns[0].Typ.Width)
+					require.Equal(t, int32(9), columns[0].Typ.Scale)
+					require.Len(t, metadataTypes, 1)
+					require.Equal(t, columns[0].Typ, metadataTypes[0])
+				}
+			}
+			require.Empty(t, prepareStmt.paramBindingDependencies)
+			require.Equal(t, []bool{true}, prepareStmt.paramResultMetadataDependencies)
+			require.Len(t, metadataTypes, 1)
+			require.Equal(t, test.steps[len(test.steps)-1].want, types.T(metadataTypes[0].Id))
+		})
+	}
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {

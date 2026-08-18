@@ -191,3 +191,38 @@ func PreparedParamCommonTypeDependencies(p *Plan, paramCount int) []bool {
 	}
 	return dependencies
 }
+
+// PreparedParamResultMetadataDependencies returns parameter positions whose
+// runtime type directly determines a result column's protocol metadata.
+func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
+	if p == nil || paramCount <= 0 {
+		return nil
+	}
+	query := p.GetQuery()
+	if query == nil || len(query.Steps) == 0 {
+		return nil
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return nil
+		}
+		step = int(query.ReturningStep)
+	}
+	nodeID := query.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return nil
+	}
+	var dependencies []bool
+	for _, expr := range query.Nodes[nodeID].ProjectList {
+		param := expr.GetP()
+		if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
+			continue
+		}
+		if dependencies == nil {
+			dependencies = make([]bool, paramCount)
+		}
+		dependencies[param.Pos] = true
+	}
+	return dependencies
+}

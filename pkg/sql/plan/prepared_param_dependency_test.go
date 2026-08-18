@@ -177,3 +177,14 @@ func TestPreparedParamCommonTypeDependenciesFromPublicSQLShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedParamResultMetadataDependencies(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, "prepare p from 'select ?, cast(? as decimal(10,2)), ? + 1'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []bool{true, false, false},
+		PreparedParamResultMetadataDependencies(prepare.Plan, 3))
+	require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 3))
+}

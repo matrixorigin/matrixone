@@ -135,6 +135,19 @@ func (expr *memoExpressionExecutor) Free() {
 func (expr *memoExpressionExecutor) IsColumnExpr() bool { return false }
 func (expr *memoExpressionExecutor) TypeName() string   { return "memo expression" }
 
+func expressionExecutorIsRowAligned(executor ExpressionExecutor) bool {
+	switch typed := executor.(type) {
+	case *ColumnExpressionExecutor:
+		return true
+	case *FunctionExpressionExecutor:
+		return !typed.folded.canFold
+	case *memoExpressionExecutor:
+		return expressionExecutorIsRowAligned(typed.state.executor)
+	default:
+		return false
+	}
+}
+
 type memoRootExpressionExecutor struct {
 	executor ExpressionExecutor
 	states   []*memoExpressionState
@@ -1199,13 +1212,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		// Constants, folded vectors, and list/vector literals are not row-aligned.
 		// They must be passed through unchanged; only column and non-folded
 		// function results map one-to-one to the input batch rows.
-		rowAligned := false
-		switch executor := expr.parameterExecutor[i].(type) {
-		case *ColumnExpressionExecutor:
-			rowAligned = true
-		case *FunctionExpressionExecutor:
-			rowAligned = !executor.folded.canFold
-		}
+		rowAligned := expressionExecutorIsRowAligned(expr.parameterExecutor[i])
 		if rowAligned && !parameter.IsConst() {
 			selected := expr.selectedParameterVectors[i]
 			if selected == nil {

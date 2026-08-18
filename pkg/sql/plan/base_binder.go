@@ -441,7 +441,8 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
-	if bindingType, found := b.preparedParamBindingType(int32(astExpr.Offset)); found && b.decimalParamCommonTypeTarget {
+	bindingType, bindingFound := b.preparedParamBindingType(int32(astExpr.Offset))
+	if bindingFound && b.decimalParamCommonTypeTarget {
 		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
 			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
 			return param, nil
@@ -455,6 +456,10 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		// to invalidate exactly that position on later executions.
 		param.Typ.Enumvalues = "mo_decimal_common_type_dependency"
 		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&bindingType))
+	}
+	if bindingFound {
+		param.Typ = makePlan2Type(&bindingType)
+		return param, nil
 	}
 	if b.decimalParamCommonTypeTarget {
 		// Let COALESCE/GREATEST/LEAST see the unresolved parameter directly. In
