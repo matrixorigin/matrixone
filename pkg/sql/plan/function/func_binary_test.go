@@ -139,6 +139,58 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 	})
 }
 
+func TestTimestampWindowBoundaryGuardsAndArithmetic(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	fixed := time.FixedZone("UTC+8", 8*60*60)
+	hour := int64(types.SecsPerHour * types.MicroSecsPerSec)
+	start, err := types.ParseTimestamp(zone, "2026-01-01 00:00:00", 6)
+	require.NoError(t, err)
+
+	t.Run("zero-and-non-positive-inputs", func(t *testing.T) {
+		require.Equal(t, types.ZeroTimestamp, NormalizeTimestampWindowStart(types.ZeroTimestamp, hour, zone))
+		require.Equal(t, types.ZeroTimestamp, AdvanceTimestampWindowBoundary(types.ZeroTimestamp, hour, zone))
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, 0, hour, zone))
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, 1, 0, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(types.ZeroTimestamp, start, hour, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, start, hour, zone))
+		require.Equal(t, int64(0), TimestampWindowBoundarySteps(start, types.Timestamp(int64(start)+hour), 0, zone))
+	})
+
+	t.Run("overflow-fails-closed", func(t *testing.T) {
+		require.Equal(t, start, AdvanceTimestampWindowBoundaryBy(start, math.MaxInt64, 2, zone))
+
+		product, ok := safeTimestampWindowProduct(math.MaxInt64, 2)
+		require.False(t, ok)
+		require.Zero(t, product)
+		product, ok = safeTimestampWindowProduct(0, math.MaxInt64)
+		require.True(t, ok)
+		require.Zero(t, product)
+		_, ok = safeTimestampWindowProduct(-1, 1)
+		require.False(t, ok)
+
+		sum, ok := safeTimestampWindowSum(math.MaxInt64, 1)
+		require.False(t, ok)
+		require.Zero(t, sum)
+		sum, ok = safeTimestampWindowSum(0, 0)
+		require.True(t, ok)
+		require.Zero(t, sum)
+		_, ok = safeTimestampWindowSum(math.MinInt64, -1)
+		require.False(t, ok)
+	})
+
+	t.Run("non-transition-helper-controls", func(t *testing.T) {
+		require.Zero(t, timestampWindowGapAt(start, fixed))
+		require.False(t, timestampWindowFoldStep(start, start, hour, fixed))
+		require.False(t, timestampWindowFoldStep(start, types.Timestamp(int64(start)+hour), 0, fixed))
+
+		_, ok := timestampWindowFoldBoundary(start, types.Timestamp(int64(start)+hour), hour, fixed)
+		require.False(t, ok)
+		_, ok = timestampWindowFoldStepCount(start, types.Timestamp(int64(start)+hour), hour, fixed)
+		require.False(t, ok)
+	})
+}
+
 func initAddFaultPointTestCase() []tcTemp {
 	return []tcTemp{
 		{
