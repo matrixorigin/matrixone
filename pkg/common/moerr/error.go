@@ -426,7 +426,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
 	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
-	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Unknown column '%s' in '%s'"},
+	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
 	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
 	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
 	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
@@ -1570,6 +1570,14 @@ func NewDerivedMustHaveAlias(ctx context.Context) *Error {
 
 func NewBadFieldError(ctx context.Context, column, table string) *Error {
 	return newError(ctx, ErrBadFieldError, column, table)
+}
+
+// NewBadFieldErrorf preserves a caller-facing diagnostic while classifying the
+// error as ErrBadFieldError for MySQL protocol compatibility.
+func NewBadFieldErrorf(ctx context.Context, format string, args ...any) *Error {
+	err := NewBadFieldError(ctx, "", "")
+	err.message = fmt.Sprintf(format, args...)
+	return err
 }
 
 func NewWrongDatetimeSpec(ctx context.Context, val string) *Error {
