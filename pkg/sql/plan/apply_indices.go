@@ -176,15 +176,67 @@ func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPost
 	if err != nil {
 		return nil, err
 	}
-	scaledU64, err := appendCastBeforeExpr(ctx, truncated, plan.Type{
+	// SATURATION, HALF ONE: the product.
+	//
+	// overfetch.Limit clamps the product at MaxUint64 rather than overflowing.
+	// The cast below cannot express that on its own -- CAST(... AS UNSIGNED)
+	// raises "data out of range" for anything at or above 2^64, so a perfectly
+	// valid large LIMIT would fail as a bound parameter while succeeding as a
+	// literal.
+	//
+	// The clamp is applied with least() in FLOAT space, before the cast, rather
+	// than by branching around the cast. A CASE cannot be relied on here: the
+	// vectorized evaluator may evaluate both arms and only then select, so an
+	// unguarded cast in the untaken arm would still raise. least() is
+	// branch-free, so the cast never sees an out-of-range input.
+	//
+	// maxU64AsFloat is the largest float64 strictly below 2^64 (2^64 - 2048;
+	// the ULP at that magnitude is 2^11). Clamping there is a no-op for every
+	// value Go would truncate -- float64 cannot represent anything between it
+	// and 2^64 -- so it only ever guards the cast.
+	const maxU64AsFloat = 18446744073709549568.0 // 2^64 - 2048
+	const twoPow64 = 18446744073709551616.0      // == float64(math.MaxUint64) in Go
+	castable, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
+		truncated, makePlan2Float64ConstExprWithType(maxU64AsFloat)})
+	if err != nil {
+		return nil, err
+	}
+	scaledU64, err := appendCastBeforeExpr(ctx, castable, plan.Type{
 		Id: int32(types.T_uint64), NotNullable: true})
 	if err != nil {
 		return nil, err
 	}
+	// Go compares `product >= float64(math.MaxUint64)`, and that conversion
+	// yields 2^64 exactly (MaxUint64 itself is not representable). Compare
+	// against the same 2^64 so the two agree on which k saturates.
+	overflows, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{
+		DeepCopyExpr(scaled), makePlan2Float64ConstExprWithType(twoPow64)})
+	if err != nil {
+		return nil, err
+	}
+	scaledU64, err = BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		overflows, makePlan2Uint64ConstExprWithType(math.MaxUint64), scaledU64})
+	if err != nil {
+		return nil, err
+	}
 
-	// The +10 floor keeps a small k from over-fetching too little to survive the filter.
+	// SATURATION, HALF TWO: the additive floor.
+	//
+	// The +10 floor keeps a small k from over-fetching too little to survive the
+	// filter, but k+10 wraps for k > MaxUint64-10, and unsigned addition raises
+	// rather than wrapping silently. overfetch.Limit clamps to MaxUint64 there.
+	//
+	// Clamping the ADDEND instead of guarding the sum keeps this branch-free for
+	// the same reason as above: least(k, MaxUint64-10) + 10 is at most MaxUint64
+	// by construction, so no evaluation order can overflow it.
+	clampedK, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
+		DeepCopyExpr(limit),
+		makePlan2Uint64ConstExprWithType(math.MaxUint64 - overfetch.MinExtraCandidates)})
+	if err != nil {
+		return nil, err
+	}
 	minCandidates, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
-		DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(overfetch.MinExtraCandidates)})
+		clampedK, makePlan2Uint64ConstExprWithType(overfetch.MinExtraCandidates)})
 	if err != nil {
 		return nil, err
 	}
