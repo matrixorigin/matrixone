@@ -25,7 +25,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 set probe_limit = 10;
@@ -34,63 +34,57 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 2  𝄀
-        ->  Table Function on ivf_search  𝄀
-              Index Reader Param:  Limit: 2  𝄀
-              Limit: 2  𝄀
-              Filter Cond: (`__mo_index_include_category` = 20)
+        ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
+              Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10, Index Filter: (__mo_index_include_category = 20)
 explain select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=post';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
+              Join Cond: (include_rounds_main.id = #[1,0])  𝄀
               ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
                     Filter Cond: (include_rounds_main.category = 20)  𝄀
-                    Runtime Filter Probe: include_rounds_main.id  𝄀
-              ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 12  𝄀
-                    Limit: 12
+              ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
+                    Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 12, NProbe: 10
 explain select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=pre';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (include_rounds_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Join Cond: (include_rounds_main.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
                     Filter Cond: (include_rounds_main.category = 20)  𝄀
                     Runtime Filter Probe: include_rounds_main.id  𝄀
               ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (mo_ivf_alias_0.pkid = include_rounds_main.id)  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = include_rounds_main.id)  𝄀
                     Runtime Filter Build: #[10,0]  𝄀
-                    ->  Table Function on ivf_search  𝄀
-                          Index Reader Param:  Limit: 2  𝄀
+                    ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
-                          Limit: 2  𝄀
+                          Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10  𝄀
                     ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
                           Filter Cond: (include_rounds_main.category = 20)
 select id, title, category
@@ -98,7 +92,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
@@ -106,14 +100,14 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 1 offset 1 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
@@ -121,7 +115,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=pre';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 drop table if exists include_rounds_residual;
@@ -152,7 +146,7 @@ from include_rounds_residual
 where category = 20 and note = "target"
 order by l2_distance(embedding, "[0,0,0]")
 limit 1 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  note[12,20,0]  𝄀
 13  ¦  target
 drop table include_rounds_residual;
 drop table include_rounds_main;

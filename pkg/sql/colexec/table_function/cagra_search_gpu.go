@@ -237,7 +237,7 @@ func (u *cagraSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		// other guard: without it a mismatched query (e.g. a vecf16 query against
 		// an f32-base/f32-storage index) would drive the f32->f16 storage override
 		// below and runCagraSearchHalf off the QUERY type and deserialize the
-		// on-disk index with the wrong storage type. Mirrors the CPU ivf_search guard.
+		// on-disk index with the wrong storage type. Mirrors the CPU IVF-FLAT scan guard.
 		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
 			return moerr.NewInvalidInput(proc.Ctx, "query vector type does not match the index base column type")
 		}

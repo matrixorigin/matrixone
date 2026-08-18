@@ -789,6 +789,37 @@ message IndexReaderParam {
   int32 partition_cn_idx = 6;
 }
 
+// VectorIndexTableRef identifies one hidden relation owned by a vector index.
+// Role is the algorithm-declared hidden-table type (for example metadata,
+// centroids, or entries).  Carrying resolved object/table metadata makes the
+// access path self-contained on remote CNs without rebuilding SQL text.
+message VectorIndexTableRef {
+  string role = 1;
+  ObjectRef object = 2;
+  TableDef table = 3;
+}
+
+// VectorIndexScan is the optimizer-visible contract for an ANN access path.
+// Algorithm mechanics (including adaptive IVF rounds) remain inside the
+// plugin reader; query semantics stay typed and visible in the outer plan.
+message VectorIndexScan {
+  ObjectRef source_table = 1;
+  TableDef source_table_def = 2;
+  IndexDef index = 3;
+  repeated VectorIndexTableRef hidden_tables = 4;
+  Expr query_vector = 5;
+  string distance_function = 6;
+  OrderBySpec.OrderByFlag direction = 7;
+  Expr candidate_limit = 8;
+  DistRange distance_range = 9;
+  repeated Expr pre_filters = 10;
+  repeated string included_columns = 11;
+  uint32 initial_probe_count = 12;
+  Expr first_round_limit = 13;
+  uint32 bucket_expand_step = 14;
+  int64 threads_search = 15;
+}
+
 message Node {
   enum NodeType {
     UNKNOWN = 0;
@@ -803,6 +834,7 @@ message Node {
     reserved 6; // former SOURCE_SCAN
     reserved "SOURCE_SCAN";
     EXTERNAL_FUNCTION = 7;
+    VECTOR_INDEX_SCAN = 8;
 
     // Proper Relational Operators
     PROJECT = 10;
@@ -1076,6 +1108,9 @@ message Node {
   // planner, so the right-side operator only needs to look up target keys and
   // must not retain incoming keys in its hashmap.
   bool dedup_input_keys_unique = 83;
+
+	// VECTOR_INDEX_SCAN only: typed vector-index access-path description.
+	VectorIndexScan vector_index_scan = 84;
 }
 
 message SnapshotExtraInfo {

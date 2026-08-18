@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,12 +60,12 @@ func TestNilTableFunctionLifecycle(t *testing.T) {
 	err := arg.Prepare(proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
-	require.ErrorContains(t, err, "apply operator missing table function")
+	require.ErrorContains(t, err, "apply operator missing parameterized source")
 
 	_, err = arg.Call(proc)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidState))
-	require.ErrorContains(t, err, "apply operator missing table function")
+	require.ErrorContains(t, err, "apply operator missing parameterized source")
 
 	require.NotPanics(t, func() {
 		arg.Reset(proc, false, nil)
@@ -157,6 +159,80 @@ func TestOuterApplyNullExtendsNullUnnestInput(t *testing.T) {
 	require.Equal(t, []int32{1, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.False(t, result.Batch.Vecs[1].IsNull(0))
 	require.True(t, result.Batch.Vecs[1].IsNull(1))
+}
+
+type scriptedAppliedSource struct {
+	row     int
+	emitted bool
+	prepare int
+	starts  int
+	ends    int
+	resets  int
+	frees   int
+	result  *batch.Batch
+}
+
+func (s *scriptedAppliedSource) ApplyPrepare(*process.Process) error              { s.prepare++; return nil }
+func (*scriptedAppliedSource) ApplyArgsEval(*batch.Batch, *process.Process) error { return nil }
+func (s *scriptedAppliedSource) ApplyStart(row int, proc *process.Process, _ process.Analyzer) error {
+	s.row, s.emitted = row, false
+	s.starts++
+	if s.result == nil {
+		s.result = batch.NewWithSize(1)
+		s.result.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	} else {
+		s.result.CleanOnlyData()
+	}
+	if err := vector.AppendFixed(s.result.Vecs[0], int64(row+10), false, proc.Mp()); err != nil {
+		return err
+	}
+	s.result.SetRowCount(1)
+	return nil
+}
+func (s *scriptedAppliedSource) ApplyCall(*process.Process) (vm.CallResult, error) {
+	if s.emitted {
+		return vm.CancelResult, nil
+	}
+	s.emitted = true
+	return vm.CallResult{Status: vm.ExecNext, Batch: s.result}, nil
+}
+func (s *scriptedAppliedSource) ApplyEnd(*process.Process) error     { s.ends++; return nil }
+func (s *scriptedAppliedSource) Reset(*process.Process, bool, error) { s.resets++ }
+func (s *scriptedAppliedSource) Free(proc *process.Process, _ bool, _ error) {
+	s.frees++
+	if s.result != nil {
+		s.result.Clean(proc.Mp())
+		s.result = nil
+	}
+}
+
+func TestApplyUsesParameterizedSourceLifecycle(t *testing.T) {
+	proc := testutil.NewProc(t)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.SetRowCount(2)
+	source := &scriptedAppliedSource{}
+	arg := NewArgument()
+	arg.Source = source
+	arg.Result = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
+	arg.Typs = []types.Type{types.T_int64.ToType()}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	t.Cleanup(func() {
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		arg.Release()
+		proc.Free()
+	})
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{10, 11}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	require.Equal(t, 1, source.prepare)
+	require.Equal(t, 2, source.starts)
 }
 
 func makeColumnExpr(pos int32, typ types.T) *plan.Expr {

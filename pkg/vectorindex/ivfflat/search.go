@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
@@ -71,18 +72,38 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 
 	logutil.Infof("IVFFLAT START: Load Centroids")
 	defer logutil.Infof("IVFFLAT END: Load Centroids")
-	// load centroids
-	sql := fmt.Sprintf(
-		"SELECT %s, %s FROM %s WHERE %s = %d",
-		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
-		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
-		sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable),
-		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
-		idxcfg.Ivfflat.Version,
-	)
-
-	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
-	res, err := runSql(proc, sql)
+	var res executor.Result
+	var err error
+	if proc != nil && proc.RelationScanner != nil {
+		versionCol := ivfColExpr(0, plan.Type{Id: int32(types.T_int64)})
+		filter, bindErr := ivfFuncExpr(proc.GetContext(), "=", versionCol, ivfInt64Expr(idxcfg.Ivfflat.Version))
+		if bindErr != nil {
+			return bindErr
+		}
+		res, err = proc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+			Schema:         tblcfg.DbName,
+			Table:          tblcfg.IndexTable,
+			PartitionCount: 1,
+			Columns: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+			},
+			Filter: filter,
+		})
+	} else {
+		// Legacy table-function path retained only until VECTOR_INDEX_SCAN owns
+		// every IVF query shape.
+		sql := fmt.Sprintf(
+			"SELECT %s, %s FROM %s WHERE %s = %d",
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_id),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid),
+			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable),
+			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Centroids_version),
+			idxcfg.Ivfflat.Version,
+		)
+		res, err = runSql(proc, sql)
+	}
 	if err != nil {
 		return err
 	}
@@ -94,10 +115,15 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 
 	ncenters := 0
 	centroids := make([][]T, idxcfg.Ivfflat.Lists)
-	elemsz := res.Batches[0].Vecs[1].GetType().GetArrayElementSize()
+	idVecPos, centroidVecPos := 0, 1
+	if proc != nil && proc.RelationScanner != nil {
+		idVecPos = 1
+		centroidVecPos = 2
+	}
+	elemsz := res.Batches[0].Vecs[centroidVecPos].GetType().GetArrayElementSize()
 	for _, bat := range res.Batches {
-		faVec := bat.Vecs[1]
-		idVec := bat.Vecs[0]
+		faVec := bat.Vecs[centroidVecPos]
+		idVec := bat.Vecs[idVecPos]
 		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
 		hasNull := faVec.HasNull()
 		for i, id := range ids {
@@ -163,7 +189,21 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		tblcfg.DbName, tblcfg.MetadataTable, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
-	res, err := runSql(proc, sql)
+	var res executor.Result
+	var err error
+	if proc != nil && proc.RelationScanner != nil {
+		res, err = proc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
+			Schema:         tblcfg.DbName,
+			Table:          tblcfg.MetadataTable,
+			PartitionCount: 1,
+			Columns: []string{
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			},
+		})
+	} else {
+		res, err = runSql(proc, sql)
+	}
 	if err != nil {
 		return err
 	}
@@ -174,7 +214,15 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	for _, bat := range res.Batches {
 		keyVec, valVec := bat.Vecs[0], bat.Vecs[1]
 		for i := 0; i < bat.RowCount(); i++ {
-			val := vector.GetFixedAtNoTypeCheck[float64](valVec, i)
+			var val float64
+			if valVec.GetType().Oid == types.T_varchar {
+				val, err = strconv.ParseFloat(valVec.GetStringAt(i), 64)
+				if err != nil {
+					return err
+				}
+			} else {
+				val = vector.GetFixedAtNoTypeCheck[float64](valVec, i)
+			}
 			switch keyVec.GetStringAt(i) {
 			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin:
 				qmin, ok1 = val, true
@@ -301,7 +349,7 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
 	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
 	// more selective at the scan than a runtime membership filter.
-	if exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold {
+	if sqlproc.RelationScanner == nil && exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold {
 		exactPk, buildErr := sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
 		if buildErr != nil {
 			err = buildErr
@@ -655,6 +703,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		rt.IncludeResult != nil ||
 		len(rt.RequestedIncludeColumns) > 0 ||
 		rt.PushdownFilterSQL != "" ||
+		len(rt.PushdownFilters) > 0 ||
 		rt.SearchRoundLimit > 0
 
 	if includeMode {
@@ -694,12 +743,43 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			}
 		}
 
-		if err = idx.getBloomFilter(sqlproc); err != nil {
-			return nil, nil, err
+		directExactMembership := sqlproc != nil && sqlproc.RelationScanner != nil &&
+			sqlproc.IvfHasMembershipFilter
+		if directExactMembership && len(sqlproc.IvfRuntimeFilterData) == 0 {
+			// The build side produced an exact empty set. Never interpret that as
+			// an absent filter and scan the index unrestricted.
+			return []any{}, []float64{}, nil
+		}
+		if !directExactMembership {
+			if err = idx.getBloomFilter(sqlproc); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		var sql string
-		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+		var res executor.Result
+		if sqlproc != nil && sqlproc.RelationScanner != nil {
+			scanCentroidIDs := activeCentroidIDs
+			if directExactMembership {
+				// PRE mode defines candidates by the filtered source PK set, not by
+				// whichever centroid happens to be nearest to the query. Scan the
+				// current entries version across all centroids and let the exact
+				// membership filter perform the restriction before Top-K.
+				scanCentroidIDs = nil
+				cursor.Exhausted = true
+			}
+			res, err = idx.scanEntries(
+				sqlproc,
+				idxcfg,
+				tblcfg,
+				query,
+				idx.Version,
+				scanCentroidIDs,
+				includeCols,
+				rt.PushdownFilters,
+				roundLimit,
+			)
+		} else if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 			sql, err = idx.buildExactSearchSQL(
 				idxcfg,
 				tblcfg,
@@ -730,14 +810,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				return nil, nil, err
 			}
 		}
+		if sqlproc == nil || sqlproc.RelationScanner == nil {
+			if err == nil {
+				res, err = runSql(sqlproc, sql)
+			}
+		}
 
-		res, runErr := runSql(sqlproc, sql)
-		if runErr != nil {
-			return nil, nil, runErr
+		if err != nil {
+			return nil, nil, err
 		}
 		defer res.Close()
 
-		if len(rt.BackgroundQueries) > 0 {
+		if sql != "" && len(rt.BackgroundQueries) > 0 {
 			if len(res.LogicalPlan.Nodes) > 0 && len(res.LogicalPlan.Steps) > 0 {
 				rootID := res.LogicalPlan.Steps[0]
 				if int(rootID) < len(res.LogicalPlan.Nodes) && res.LogicalPlan.Nodes[rootID] != nil {
@@ -828,71 +912,86 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return
 	}
 
-	// Re-rank distance. The ENTRY must stay a plain column so the ORDER BY
-	// index-param pushdown (readutil.SetIndexParam) can identify it — wrapping it
-	// in a CAST makes Args[0] a function and panics. The query must be a CONSTANT
-	// vec literal of the SAME (narrow) type as the entries, or the pushdown can't
-	// fold it and the pushed top-limit stays 0 ("top limit must be positive"). A
-	// cast of vecf32_from_base64(...) does NOT fold (vector casts aren't constant-
-	// folded), so for narrow entries quantize the f32 query to the entry type here
-	// and pass it via vec{bf16,f16,int8}_from_base64 — a STRICT decode that folds
-	// to a narrow literal, the narrow sibling of vecf32_from_base64. f32/f64 use
-	// their matching base64 decoders.
-	entryCol := sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
-	queryExpr, err := idx.entryQueryExpression(idxcfg, query)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	var sql string
-	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
-		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
-		// Query entries directly by pk list, skip centroid-based filtering.
-		//
-		// Do NOT add ORDER BY vec_dist / LIMIT here. Adding "ORDER BY vec_dist LIMIT k"
-		// makes the planner push the sort+limit INTO this entries Table Scan (EXPLAIN
-		// shows "Index Reader Param: Sort Key ... Limit: k" on the scan), which applies
-		// the LIMIT *before* the "pk IN (...)" / prefix_eq filter -- i.e. it turns our
-		// intended pre-filter into a POST-filter: it takes the global top-k by distance
-		// over ALL entries, then keeps only the candidates, so fewer than k matching rows
-		// survive (regressed vector_ivf_mode.sql). With no ORDER BY/LIMIT the scan stays
-		// a plain filtered read that returns the full candidate set; the downstream
-		// Node_SORT + LIMIT k does the ranking and truncation.
-		sql = fmt.Sprintf(
-			"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s)",
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			entryCol,
-			queryExpr,
-			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
+	var res executor.Result
+	if sqlproc != nil && sqlproc.RelationScanner != nil {
+		res, err = idx.scanEntries(
+			sqlproc,
+			idxcfg,
+			tblcfg,
+			query,
 			idx.Version,
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
-			sqlproc.ExactPkFilter,
-		)
-	} else {
-		sql = fmt.Sprintf(
-			"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s) ORDER BY vec_dist LIMIT %d",
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			entryCol,
-			queryExpr,
-			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
-			idx.Version,
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_id),
-			instr,
+			centroidsIDs,
+			nil,
+			rt.PushdownFilters,
 			rt.Limit,
 		)
+	} else {
+		// Re-rank distance. The ENTRY must stay a plain column so the ORDER BY
+		// index-param pushdown (readutil.SetIndexParam) can identify it — wrapping it
+		// in a CAST makes Args[0] a function and panics. The query must be a CONSTANT
+		// vec literal of the SAME (narrow) type as the entries, or the pushdown can't
+		// fold it and the pushed top-limit stays 0 ("top limit must be positive"). A
+		// cast of vecf32_from_base64(...) does NOT fold (vector casts aren't constant-
+		// folded), so for narrow entries quantize the f32 query to the entry type here
+		// and pass it via vec{bf16,f16,int8}_from_base64 — a STRICT decode that folds
+		// to a narrow literal, the narrow sibling of vecf32_from_base64. f32/f64 use
+		// their matching base64 decoders.
+		entryCol := sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+		queryExpr, queryErr := idx.entryQueryExpression(idxcfg, query)
+		if queryErr != nil {
+			return nil, nil, queryErr
+		}
+
+		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
+			// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
+			// Query entries directly by pk list, skip centroid-based filtering.
+			//
+			// Do NOT add ORDER BY vec_dist / LIMIT here. Adding "ORDER BY vec_dist LIMIT k"
+			// makes the planner push the sort+limit INTO this entries Table Scan (EXPLAIN
+			// shows "Index Reader Param: Sort Key ... Limit: k" on the scan), which applies
+			// the LIMIT *before* the "pk IN (...)" / prefix_eq filter -- i.e. it turns our
+			// intended pre-filter into a POST-filter: it takes the global top-k by distance
+			// over ALL entries, then keeps only the candidates, so fewer than k matching rows
+			// survive (regressed vector_ivf_mode.sql). With no ORDER BY/LIMIT the scan stays
+			// a plain filtered read that returns the full candidate set; the downstream
+			// Node_SORT + LIMIT k does the ranking and truncation.
+			sql = fmt.Sprintf(
+				"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s)",
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+				metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+				entryCol,
+				queryExpr,
+				sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
+				idx.Version,
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+				sqlproc.ExactPkFilter,
+			)
+		} else {
+			sql = fmt.Sprintf(
+				"SELECT %s, %s(%s, %s) as vec_dist FROM %s WHERE %s = %d AND %s IN (%s) ORDER BY vec_dist LIMIT %d",
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
+				metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+				entryCol,
+				queryExpr,
+				sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.EntriesTable),
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_version),
+				idx.Version,
+				sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_id),
+				instr,
+				rt.Limit,
+			)
+		}
+		res, err = runSql(sqlproc, sql)
 	}
 
-	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
 	defer res.Close()
 
-	if len(rt.BackgroundQueries) > 0 {
+	if sql != "" && len(rt.BackgroundQueries) > 0 {
 		if len(res.LogicalPlan.Nodes) > 0 && len(res.LogicalPlan.Steps) > 0 {
 			rootID := res.LogicalPlan.Steps[0]
 			if int(rootID) < len(res.LogicalPlan.Nodes) && res.LogicalPlan.Nodes[rootID] != nil {

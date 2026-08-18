@@ -513,6 +513,90 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	return nodeID, nil
 }
 
+// applyVectorIndicesEarly splices ANN access paths before statistics, join
+// ordering and distribution are finalized. Other secondary-index rewrites stay
+// in the established late pass; this traversal handles only the two vector
+// anchors and propagates their column remaps to ancestors.
+func (builder *QueryBuilder) applyVectorIndicesEarly(
+	nodeID int32,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, error) {
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		newChild, err := builder.applyVectorIndicesEarly(childID, colRefCnt, idxColMap)
+		if err != nil {
+			return nodeID, err
+		}
+		node.Children[i] = newChild
+	}
+	replaceColumnsForNode(node, idxColMap)
+
+	switch node.NodeType {
+	case plan.Node_PROJECT:
+		vecCtx := builder.buildVectorSortContext(node)
+		if vecCtx == nil {
+			vecCtx = builder.buildVectorSortContextThroughJoin(node)
+		}
+		if vecCtx == nil {
+			return nodeID, nil
+		}
+		newNodeID, handled, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+		if handled || err != nil {
+			return newNodeID, err
+		}
+	case plan.Node_SORT:
+		if _, projectOwned := builder.projectAnchoredSorts[nodeID]; projectOwned {
+			return nodeID, nil
+		}
+		vecCtx := builder.buildVectorSortContextFromSort(node)
+		if vecCtx == nil {
+			return nodeID, nil
+		}
+		newNodeID, _, err := builder.applyLogicalVectorIndexForSortContext(nodeID, vecCtx, colRefCnt, idxColMap)
+		return newNodeID, err
+	}
+	return nodeID, nil
+}
+
+func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, bool, error) {
+	if vecCtx == nil || vecCtx.scanNode == nil {
+		return nodeID, false, nil
+	}
+	indexes, err := builder.collectVectorIndexes(vecCtx.scanNode)
+	if err != nil {
+		return nodeID, true, err
+	}
+	if len(indexes) == 0 {
+		return nodeID, false, nil
+	}
+	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
+	for _, multi := range indexes {
+		p, ok := indexplugin.Get(multi.IndexAlgo)
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+			continue
+		}
+		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
+		if !ok {
+			continue
+		}
+		if err := builder.recordPreparedPluginDependencies(vecCtx.scanNode); err != nil {
+			return nodeID, true, err
+		}
+		vctxExt, mtiExt := toPlanplugin(vecCtx, multi)
+		newNodeID, applied, err := logical.BuildLogicalSearch(builder, vctxExt, mtiExt, nodeID, opts)
+		if err != nil || applied {
+			return newNodeID, true, err
+		}
+	}
+	return nodeID, false, nil
+}
+
 func joinCanConsumeIndexHints(node *plan.Node) bool {
 	return node != nil && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT ||
 		node.JoinType == plan.Node_SEMI || (node.JoinType == plan.Node_ANTI && node.IsRightJoin))

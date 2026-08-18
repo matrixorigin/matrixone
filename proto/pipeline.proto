@@ -762,4 +762,6 @@ message Apply {
   repeated int32 rel_list = 2;
   repeated int32 col_list = 3;
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
+  plan.VectorIndexScan vector_index_scan = 5;
+  repeated string vector_attrs = 6;
 }

@@ -492,10 +492,13 @@ func TestApplyIndicesForSortUsingIvfflat_JoinThroughKeepsProviderChild(t *testin
 	require.NoError(t, err)
 	require.Equal(t, tc.projNodeID, newNodeID)
 
-	funcScan := findFirstNodeByType(tc.builder, plan.Node_FUNCTION_SCAN)
-	require.NotNil(t, funcScan)
-	require.Equal(t, []int32{tc.providerNodeID}, funcScan.Children)
-	require.Equal(t, int32(1), funcScan.TblFuncExprList[1].GetCol().ColPos)
+	vectorScan := findFirstNodeByType(tc.builder, plan.Node_VECTOR_INDEX_SCAN)
+	require.NotNil(t, vectorScan)
+	require.Empty(t, vectorScan.Children)
+	require.Equal(t, int32(1), vectorScan.VectorIndexScan.QueryVector.GetCol().ColPos)
+	applyNode := findFirstNodeByType(tc.builder, plan.Node_APPLY)
+	require.NotNil(t, applyNode)
+	require.Equal(t, []int32{tc.providerNodeID, vectorScan.NodeId}, applyNode.Children)
 }
 
 func TestApplyIndicesForProject_JoinThroughReachesVectorRule(t *testing.T) {

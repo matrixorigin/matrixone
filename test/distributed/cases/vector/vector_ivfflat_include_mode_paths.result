@@ -21,28 +21,25 @@ from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (vector_ivfflat_include_phase6.id = mo_ivf_alias_0.pkid)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
+              Join Cond: (vector_ivfflat_include_phase6.id = #[1,0])  𝄀
               ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
                     Filter Cond: (vector_ivfflat_include_phase6.category >= 20)  𝄀
-                    Runtime Filter Probe: vector_ivfflat_include_phase6.id  𝄀
-              ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 12  𝄀
-                    Limit: 12
+              ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+                    Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 12, NProbe: 8
 select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40
 explain select id, title, category
@@ -50,22 +47,20 @@ from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 2  𝄀
-        ->  Table Function on ivf_search  𝄀
-              Index Reader Param:  Limit: 2  𝄀
-              Limit: 2  𝄀
-              Filter Cond: (`__mo_index_include_category` >= 20)
+        ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+              Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 2, NProbe: 8, Index Filter: (__mo_index_include_category >= 20)
 select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40
 explain select id, title, note
@@ -73,29 +68,34 @@ from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
--- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,3] INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (vector_ivfflat_include_phase6.id = mo_ivf_alias_0.pkid)  𝄀
+              Join Cond: (vector_ivfflat_include_phase6.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
                     Filter Cond: vector_ivfflat_include_phase6.note in ([n2 n4])  𝄀
                     Runtime Filter Probe: vector_ivfflat_include_phase6.id  𝄀
-              ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 9223372036854775807  𝄀
-                    Limit: 9223372036854775807  𝄀
-                    Filter Cond: (`__mo_index_include_category` >= 20)
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = vector_ivfflat_include_phase6.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on idx_ivf_include_phase6 [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: idx_ivf_include_phase6, Metric: l2_distance, Candidate Limit: 2, NProbe: 8, Index Filter: (__mo_index_include_category >= 20)  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase6.vector_ivfflat_include_phase6  𝄀
+                          Filter Cond: vector_ivfflat_include_phase6.note in ([n2 n4])
 select id, title, note
 from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,20,0]  ¦  note[12,20,0]  𝄀
 2  ¦  beta  ¦  n2  𝄀
 4  ¦  delta  ¦  n4
 drop table vector_ivfflat_include_phase6;

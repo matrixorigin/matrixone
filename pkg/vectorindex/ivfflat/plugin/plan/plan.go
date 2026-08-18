@@ -24,11 +24,16 @@ import (
 type Hooks struct{}
 
 var _ planplugin.Hooks = Hooks{}
+var _ planplugin.LogicalSearchHooks = Hooks{}
 
 func (Hooks) CanApply(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef) (bool, error) {
 	return pb.CanApplyIvfflat(vctx, mti)
 }
 
 func (Hooks) ApplyForSort(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
+	return pb.ApplyIndicesForSortUsingIvfflat(vctx, mti, nodeID, opts)
+}
+
+func (Hooks) BuildLogicalSearch(pb planplugin.PlanBuilder, vctx *planplugin.VectorSortContext, mti *planplugin.MultiTableIndexRef, nodeID int32, opts planplugin.ApplyForSortOpts) (int32, bool, error) {
 	return pb.ApplyIndicesForSortUsingIvfflat(vctx, mti, nodeID, opts)
 }

@@ -954,7 +954,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	t.Run("TableFunction_IndexReaderParam", func(t *testing.T) {
 		limit := plan.MakePlan2Int64ConstExprWithType(17)
 		op := &table_function.TableFunction{
-			FuncName: "ivf_search",
+			FuncName: "unnest",
 			FulltextSourceRef: &planpb.ObjectRef{
 				SchemaName: "publisher", ObjName: "source", SubscriptionName: "subscriber_alias",
 				PubInfo: &planpb.PubInfo{TenantId: 42},
@@ -1055,9 +1055,34 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, indexRef, restoredOp.TableFunction.FulltextIndexRef)
 	})
 
+	t.Run("Apply_VectorIndexScan", func(t *testing.T) {
+		op := apply.NewArgument()
+		op.VectorAttrs = []string{"pkid", "score"}
+		op.VectorIndexScan = &planpb.VectorIndexScan{
+			Index:            &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+			DistanceFunction: "l2_distance",
+			CandidateLimit:   plan.MakePlan2Uint64ConstExprWithType(8),
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Nil(t, pipeInstr.TableFunction)
+		data, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		var decoded pipeline.Instruction
+		require.NoError(t, decoded.Unmarshal(data))
+
+		restored, err := convertToVmOperator(&decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*apply.Apply)
+		require.Equal(t, op.VectorAttrs, restoredOp.VectorAttrs)
+		require.Equal(t, "idx", restoredOp.VectorIndexScan.GetIndex().GetIndexName())
+		require.Equal(t, uint64(8), restoredOp.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	})
+
 	t.Run("TableFunction_Limit", func(t *testing.T) {
 		op := table_function.NewArgument()
-		op.FuncName = "ivf_search"
+		op.FuncName = "unnest"
 		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
 		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
 			{Tag: 9, UseMembershipFilter: true},
@@ -3489,7 +3514,7 @@ func TestPrepareRemoteRunSendingDataKeepsConnectorChildTableFunctionParams(t *te
 	proc.Base.SessionInfo.TimeZone = time.UTC
 
 	tf := &table_function.TableFunction{
-		FuncName: "ivf_search",
+		FuncName: "unnest",
 		RuntimeFilterSpecs: []*planpb.RuntimeFilterSpec{
 			{Tag: 42},
 		},
