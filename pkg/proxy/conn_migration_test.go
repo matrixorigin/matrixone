@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -575,6 +576,8 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 type migrationUserLockQueryClient struct {
 	userLevelLocks                []*pb.UserLevelLock
 	userLevelLockReleaseSupported bool
+	prepareStmts                  []*pb.PrepareStmt
+	migrateToPrepareStmts         []*pb.PrepareStmt
 }
 
 func (c *migrationUserLockQueryClient) ServiceID() string {
@@ -586,9 +589,14 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 	case pb.CmdMethod_MigrateConnFrom:
 		return &pb.Response{MigrateConnFromResponse: &pb.MigrateConnFromResponse{
 			DB:                            "d1",
+			PrepareStmts:                  append([]*pb.PrepareStmt(nil), c.prepareStmts...),
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
 		}}, nil
+	case pb.CmdMethod_MigrateConnTo:
+		c.migrateToPrepareStmts = append(
+			[]*pb.PrepareStmt(nil), req.MigrateConnToRequest.PrepareStmts...)
+		return &pb.Response{MigrateConnToResponse: &pb.MigrateConnToResponse{Success: true}}, nil
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
 	}
@@ -602,6 +610,60 @@ func (c *migrationUserLockQueryClient) Release(response *pb.Response) {}
 
 func (c *migrationUserLockQueryClient) Close() error {
 	return nil
+}
+
+func TestMigrateConnFromFiltersCloseThatBackendHasNotDispatched(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	const closedID uint32 = 41
+	const liveID uint32 = 42
+	tun := &tunnel{}
+	commit := tun.trackClientRequest(
+		makeStmtCommandPacket(frontend.COM_STMT_CLOSE, closedID))
+	tun.commitClientRequest(commit)
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	ccc.tun = tun
+	queryClient := &migrationUserLockQueryClient{
+		userLevelLockReleaseSupported: true,
+		prepareStmts: []*pb.PrepareStmt{
+			{Name: frontend.GetPrepareStmtName(closedID), SQL: "select 41"},
+			{Name: frontend.GetPrepareStmtName(liveID), SQL: "select 42"},
+		},
+	}
+	ccc.queryClient = queryClient
+	ccc.moCluster = cluster
+
+	// Model the ordering where MigrateConnFrom exports the old session before
+	// the backend dispatches the already-forwarded COM_STMT_CLOSE.
+	resp, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+	assert.NoError(t, err)
+	if assert.Len(t, resp.PrepareStmts, 1) {
+		assert.Equal(t, frontend.GetPrepareStmtName(liveID), resp.PrepareStmts[0].Name)
+	}
+	assert.True(t, tun.hasUnsafeClientState(),
+		"the old backend must remain non-cacheable until migration completes")
+
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	assert.NoError(t, ccc.migrateConnContext(
+		context.Background(), "pipe", newMockServerConn(local)))
+	if assert.Len(t, queryClient.migrateToPrepareStmts, 1) {
+		assert.Equal(t, frontend.GetPrepareStmtName(liveID),
+			queryClient.migrateToPrepareStmts[0].Name)
+	}
+	assert.False(t, tun.hasUnsafeClientState(),
+		"successful migration carried the CLOSE into the new backend generation")
 }
 
 func TestMigrateConnContextRejectsUserLevelLocks(t *testing.T) {

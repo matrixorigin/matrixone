@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -165,6 +166,7 @@ type tunnel struct {
 		legacyResultEOFSeen      bool
 		prepareMetadataRemaining uint32
 		pendingLongData          map[uint32]struct{}
+		closedStatements         map[string]struct{}
 	}
 	clientDeprecatesEOF bool
 
@@ -353,7 +355,7 @@ const (
 	responsePhasePrepareMetadata
 )
 
-const maxPendingLongDataStatements = 1024
+const maxTrackedStatementIDs = 1024
 
 type clientRequestCommit struct {
 	closedStatementID uint32
@@ -416,7 +418,7 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 			s.pendingLongData = make(map[uint32]struct{})
 		}
 		if _, ok := s.pendingLongData[statementID]; !ok {
-			if len(s.pendingLongData) >= maxPendingLongDataStatements {
+			if len(s.pendingLongData) >= maxTrackedStatementIDs {
 				s.ambiguous = true
 				return commit
 			}
@@ -469,6 +471,17 @@ func (t *tunnel) commitClientRequest(commit clientRequestCommit) {
 		t.requestBoundary.statementID != commit.closedStatementID {
 		return
 	}
+	if t.requestBoundary.closedStatements == nil {
+		t.requestBoundary.closedStatements = make(map[string]struct{})
+	}
+	statementName := frontend.GetPrepareStmtName(commit.closedStatementID)
+	if _, ok := t.requestBoundary.closedStatements[statementName]; !ok {
+		if len(t.requestBoundary.closedStatements) >= maxTrackedStatementIDs {
+			t.requestBoundary.ambiguous = true
+			return
+		}
+		t.requestBoundary.closedStatements[statementName] = struct{}{}
+	}
 	delete(t.requestBoundary.pendingLongData, commit.closedStatementID)
 	t.resetTrackedRequestLocked()
 }
@@ -490,7 +503,50 @@ func (t *tunnel) hasUnsafeClientState() bool {
 	defer t.requestBoundary.Unlock()
 	return t.requestBoundary.inFlight ||
 		t.requestBoundary.ambiguous ||
+		len(t.requestBoundary.pendingLongData) > 0 ||
+		len(t.requestBoundary.closedStatements) > 0
+}
+
+func (t *tunnel) hasUntransferableClientState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight ||
+		t.requestBoundary.ambiguous ||
 		len(t.requestBoundary.pendingLongData) > 0
+}
+
+func (t *tunnel) filterClosedStatementsForMigration(stmts []*query.PrepareStmt) []*query.PrepareStmt {
+	if t == nil {
+		return stmts
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if len(t.requestBoundary.closedStatements) == 0 {
+		return stmts
+	}
+	filtered := stmts[:0]
+	for _, stmt := range stmts {
+		if stmt == nil {
+			filtered = append(filtered, stmt)
+			continue
+		}
+		if _, closed := t.requestBoundary.closedStatements[stmt.Name]; !closed {
+			filtered = append(filtered, stmt)
+		}
+	}
+	return filtered
+}
+
+func (t *tunnel) clearClosedStatements() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
 }
 
 func (t *tunnel) resetTrackedRequestLocked() {
@@ -579,6 +635,8 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		if !ok {
 			return
 		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		delete(s.closedStatements, frontend.GetPrepareStmtName(statementID))
 		if remaining == 0 {
 			t.finishTrackedResponseLocked(0, true)
 		} else {
@@ -745,7 +803,7 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer csp.mu.Unlock()
 	defer scp.mu.Unlock()
 
-	if t.hasUnsafeClientState() {
+	if t.hasUntransferableClientState() {
 		t.logger.Info("reason: client protocol state is not transferable")
 		return false
 	}

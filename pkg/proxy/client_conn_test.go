@@ -486,6 +486,11 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			tun.trackClientRequest(makeStmtCommandPacket(
 				frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
 		}},
+		{name: "forwarded statement close", makeUnsafe: func(tun *tunnel) {
+			commit := tun.trackClientRequest(
+				makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+			tun.commitClientRequest(commit)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tun := &tunnel{}

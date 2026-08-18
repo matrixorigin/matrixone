@@ -1234,6 +1234,7 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		quit := makeSimplePacket("quit")
 		quit[4] = byte(frontend.COM_QUIT)
 		tun.trackClientRequest(quit)
+		require.False(t, tun.hasUntransferableClientState())
 		require.False(t, tun.hasUnsafeClientState())
 	})
 
@@ -1272,7 +1273,8 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		close2 := tun.trackClientRequest(
 			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statement2))
 		tun.commitClientRequest(close2)
-		require.False(t, tun.hasUnsafeClientState())
+		require.False(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState())
 	})
 
 	t.Run("close is unsafe until forwarded without staged data", func(t *testing.T) {
@@ -1281,7 +1283,8 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41))
 		require.True(t, tun.hasUnsafeClientState())
 		tun.commitClientRequest(commit)
-		require.False(t, tun.hasUnsafeClientState())
+		require.False(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState())
 	})
 
 	t.Run("fragmented long data closes after its final packet", func(t *testing.T) {
@@ -1295,6 +1298,20 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		commit := tun.trackClientRequest(
 			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41))
 		tun.commitClientRequest(commit)
+		require.False(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("prepare ID reuse supersedes an older close", func(t *testing.T) {
+		tun := &tunnel{}
+		commit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+		tun.commitClientRequest(commit)
+
+		prepare := makeSimplePacket("select 1")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(0, 0))
 		require.False(t, tun.hasUnsafeClientState())
 	})
 
@@ -1330,12 +1347,25 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.True(t, tun.hasUnsafeClientState())
 
 		tun = &tunnel{}
-		for i := range maxPendingLongDataStatements + 1 {
+		for i := range maxTrackedStatementIDs + 1 {
 			tun.trackClientRequest(makeStmtCommandPacket(
 				frontend.COM_STMT_SEND_LONG_DATA, uint32(i), 0, 0, 'x'))
 		}
 		tun.requestBoundary.Lock()
-		require.Len(t, tun.requestBoundary.pendingLongData, maxPendingLongDataStatements)
+		require.Len(t, tun.requestBoundary.pendingLongData, maxTrackedStatementIDs)
+		require.True(t, tun.requestBoundary.ambiguous)
+		tun.requestBoundary.Unlock()
+	})
+
+	t.Run("forwarded close tracking stays bounded and conservative", func(t *testing.T) {
+		tun := &tunnel{}
+		for i := range maxTrackedStatementIDs + 1 {
+			commit := tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_CLOSE, uint32(i)))
+			tun.commitClientRequest(commit)
+		}
+		tun.requestBoundary.Lock()
+		require.Len(t, tun.requestBoundary.closedStatements, maxTrackedStatementIDs)
 		require.True(t, tun.requestBoundary.ambiguous)
 		tun.requestBoundary.Unlock()
 	})

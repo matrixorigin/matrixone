@@ -53,6 +53,12 @@ func (c *clientConn) migrateConnFromContext(
 		return nil, moerr.AttachCause(ctx, err)
 	}
 	r := resp.MigrateConnFromResponse
+	if r == nil {
+		return nil, moerr.NewInternalError(parent, "bad response")
+	}
+	if c.tun != nil {
+		r.PrepareStmts = c.tun.filterClosedStatementsForMigration(r.PrepareStmts)
+	}
 
 	c.log.Info("connection migrate from server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -228,14 +234,17 @@ func (c *clientConn) migrateConnContext(
 	if err != nil {
 		return err
 	}
-	if resp == nil {
-		return moerr.NewInternalError(ctx, "bad response")
-	}
 	if !resp.UserLevelLockReleaseSupported {
 		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
 	}
 	if len(resp.UserLevelLocks) > 0 {
 		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
-	return c.migrateConnToContext(ctx, sc, resp)
+	if err := c.migrateConnToContext(ctx, sc, resp); err != nil {
+		return err
+	}
+	if c.tun != nil {
+		c.tun.clearClosedStatements()
+	}
+	return nil
 }
