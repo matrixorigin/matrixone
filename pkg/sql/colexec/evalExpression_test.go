@@ -400,6 +400,65 @@ func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
 
 }
 
+func TestFlowControlConstantFoldingPreservesSelectedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name          string
+		fid           int32
+		sourceType    types.Type
+		resultType    types.Type
+		selectedIndex int
+		wantDomain    types.RuntimeStringDomain
+	}{
+		{name: "if text to binary", fid: function.IFF, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringText},
+		{name: "case text to binary", fid: function.CASE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringText},
+		{name: "coalesce text to binary", fid: function.COALESCE, sourceType: types.T_varchar.ToType(), resultType: types.T_varbinary.ToType(), selectedIndex: 0, wantDomain: types.RuntimeStringText},
+		{name: "if binary to text", fid: function.IFF, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringBinary},
+		{name: "case binary to text", fid: function.CASE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 1, wantDomain: types.RuntimeStringBinary},
+		{name: "coalesce binary to text", fid: function.COALESCE, sourceType: types.T_varbinary.ToType(), resultType: types.T_varchar.ToType(), selectedIndex: 0, wantDomain: types.RuntimeStringBinary},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			selected, err := vector.NewConstBytes(test.sourceType, []byte("selected"), 1, proc.Mp())
+			require.NoError(t, err)
+			selected.SetPrepareParamKind(vector.PrepareParamFloat)
+			fallback, err := vector.NewConstBytes(test.resultType, []byte("fallback"), 1, proc.Mp())
+			require.NoError(t, err)
+			condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+			require.NoError(t, err)
+
+			parameterVectors := []*vector.Vector{selected, fallback}
+			switch test.fid {
+			case function.IFF:
+				parameterVectors = []*vector.Vector{condition, selected, fallback}
+			case function.CASE:
+				parameterVectors = []*vector.Vector{condition, selected, fallback}
+			default:
+				condition.Free(proc.Mp())
+			}
+			expr := &FunctionExpressionExecutor{}
+			require.NoError(t, expr.Init(proc, len(parameterVectors), test.resultType))
+			expr.fid = test.fid
+			expr.folded.needFoldingCheck = true
+			expr.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, _ int, _ *function.FunctionSelectList) error {
+				rs := vector.MustFunctionResult[types.Varlena](result)
+				return rs.AppendBytes(params[test.selectedIndex].GetBytesAt(0), false)
+			}
+			for i, vec := range parameterVectors {
+				expr.SetParameter(i, NewFixedVectorExpressionExecutor(proc.Mp(), false, vec))
+			}
+			defer expr.Free()
+
+			result, err := expr.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.True(t, expr.folded.canFold)
+			require.Equal(t, "selected", result.GetStringAt(0))
+			require.Equal(t, test.wantDomain, result.GetRuntimeStringDomainAt(0))
+			require.Equal(t, vector.PrepareParamFloat, result.GetPrepareParamKindAt(0))
+		})
+	}
+}
+
 func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	params := vector.NewVec(types.T_text.ToType())

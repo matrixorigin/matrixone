@@ -333,6 +333,13 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 	switch defines.MysqlType(internal.Oid) {
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		return true
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// Character and binary casts are semantic boundaries even though the
+		// value conversion is shared with ordinary overload-coercion casts.
+		return true
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
 		return family == "signed" || family == "integer" ||
