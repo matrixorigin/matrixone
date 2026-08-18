@@ -27972,7 +27972,7 @@ yydefault:
 //line mysql_sql.y:11351
 		{
 			yyLOCAL = make([]string, 2)
-			yyLOCAL[0] = yyDollar[1].cstrUnion().Compare()
+			yyLOCAL[0] = yyDollar[1].cstrUnion().Origin()
 			yyLOCAL[1] = yyDollar[3].str
 		}
 		yyVAL.union = yyLOCAL
@@ -27986,7 +27986,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:11380
 		{
-			yyVAL.str = yyDollar[1].cstrUnion().Compare()
+			yyVAL.str = yyDollar[1].cstrUnion().Origin()
 		}
 	case 1703:
 		yyDollar = yyS[yypt-3 : yypt+1]

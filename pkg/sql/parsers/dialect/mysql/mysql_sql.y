@@ -11350,7 +11350,7 @@ index_name_and_type_opt:
 |   ident TYPE index_type
     {
         $$ = make([]string, 2)
-        $$[0] = $1.Compare()
+        $$[0] = $1.Origin()
         $$[1] = $3
     }
 
@@ -11378,7 +11378,7 @@ index_name:
     }
 |    ident
 	{
-		$$ = $1.Compare()
+		$$ = $1.Origin()
 	}
 
 column_def:
