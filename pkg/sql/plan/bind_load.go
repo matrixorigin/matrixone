@@ -91,7 +91,7 @@ func (builder *QueryBuilder) bindExternalScan(
 				case *tree.UnresolvedName:
 					colName := realCol.ColName()
 					if _, ok := tableDef.Name2ColIndex[colName]; !ok {
-						return -1, nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", colName)
+						return -1, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 					}
 					tbColIdx := tableDef.Name2ColIndex[colName]
 					if tableDef.Cols[tbColIdx].GeneratedCol != nil {

@@ -438,9 +438,10 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 
 func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		sql       string
-		finalName string
+		name               string
+		sql                string
+		finalName          string
+		wantSelectFragment string
 	}{
 		{
 			name:      "rename",
@@ -457,6 +458,24 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 			sql:       `ALTER TABLE t1 ADD COLUMN tmp INT, CHANGE COLUMN tmp added_col BIGINT;`,
 			finalName: "added_col",
 		},
+		{
+			name:               "rename implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, RENAME COLUMN tmp TO added_col;`,
+			finalName:          "added_col",
+			wantSelectFragment: "0",
+		},
+		{
+			name:               "modify implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, MODIFY COLUMN tmp BIGINT NOT NULL;`,
+			finalName:          "tmp",
+			wantSelectFragment: "0",
+		},
+		{
+			name:               "change implicit non-null default",
+			sql:                `ALTER TABLE t1 ADD COLUMN tmp INT NOT NULL, CHANGE COLUMN tmp added_col BIGINT NOT NULL;`,
+			finalName:          "added_col",
+			wantSelectFragment: "0",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
@@ -465,6 +484,16 @@ func TestAlterTableCopySupportsActionsOnEarlierAddedColumn(t *testing.T) {
 			alter := logicPlan.GetDdl().GetAlterTable()
 			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
 			require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, tc.finalName))
+
+			selectParts := strings.SplitN(alter.InsertTmpDataSql, " SELECT ", 2)
+			require.Len(t, selectParts, 2)
+			selectList := strings.SplitN(selectParts[1], " FROM ", 2)
+			require.Len(t, selectList, 2)
+			require.NotContains(t, selectList[0], "`tmp`",
+				"a column added by the same ALTER cannot be read from the source table")
+			if tc.wantSelectFragment != "" {
+				require.Contains(t, selectList[0], tc.wantSelectFragment)
+			}
 		})
 	}
 
