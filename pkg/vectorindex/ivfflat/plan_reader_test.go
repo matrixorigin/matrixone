@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,6 +84,23 @@ func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(17), version)
 	require.Len(t, scanner.requests, 1)
+}
+
+func TestRelationScanPolicyAssignsInMemoryRowsOnlyToPartitionZero(t *testing.T) {
+	require.True(t, ownsInMemoryPartition(1, 0))
+	require.True(t, ownsInMemoryPartition(2, 0))
+	require.False(t, ownsInMemoryPartition(2, 1))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
+}
+
+func TestValidateIvfQueryDimensions(t *testing.T) {
+	require.NoError(t, validateIvfQueryDimensions(3, 3))
+	require.NoError(t, validateIvfQueryDimensions(0, 3))
+	err := validateIvfQueryDimensions(128, 9)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vector ops between different dimensions (128, 9) is not permitted")
 }
 
 func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {

@@ -192,6 +192,21 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	var res executor.Result
 	var err error
 	if proc != nil && proc.RelationScanner != nil {
+		keyType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+		minFilter, bindErr := ivfFuncExpr(proc.GetContext(), "=", ivfColExpr(0, keyType),
+			ivfStringExpr(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin))
+		if bindErr != nil {
+			return bindErr
+		}
+		maxFilter, bindErr := ivfFuncExpr(proc.GetContext(), "=", ivfColExpr(0, keyType),
+			ivfStringExpr(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax))
+		if bindErr != nil {
+			return bindErr
+		}
+		filter, bindErr := ivfFuncExpr(proc.GetContext(), "or", minFilter, maxFilter)
+		if bindErr != nil {
+			return bindErr
+		}
 		res, err = proc.RelationScanner.ScanRelation(sqlexec.RelationScanRequest{
 			Schema:         tblcfg.DbName,
 			Table:          tblcfg.MetadataTable,
@@ -200,6 +215,7 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 			},
+			Filter: filter,
 		})
 	} else {
 		res, err = runSql(proc, sql)
@@ -214,6 +230,11 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 	for _, bat := range res.Batches {
 		keyVec, valVec := bat.Vecs[0], bat.Vecs[1]
 		for i := 0; i < bat.RowCount(); i++ {
+			key := keyVec.GetStringAt(i)
+			if key != catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin &&
+				key != catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax {
+				continue
+			}
 			var val float64
 			if valVec.GetType().Oid == types.T_varchar {
 				val, err = strconv.ParseFloat(valVec.GetStringAt(i), 64)
@@ -223,7 +244,7 @@ func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, t
 			} else {
 				val = vector.GetFixedAtNoTypeCheck[float64](valVec, i)
 			}
-			switch keyVec.GetStringAt(i) {
+			switch key {
 			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin:
 				qmin, ok1 = val, true
 			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax:

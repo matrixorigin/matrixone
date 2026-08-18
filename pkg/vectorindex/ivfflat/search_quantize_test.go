@@ -47,6 +47,24 @@ func mockQuantizeBoundsResult(m *mpool.MPool, qmin, qmax float64) executor.Resul
 	return executor.Result{Mp: m, Batches: []*batch.Batch{bat}}
 }
 
+func mockRawQuantizeMetadataResult(m *mpool.MPool) executor.Result {
+	bat := batch.NewWithSize(2)
+	keyVec := vector.NewVec(types.T_varchar.ToType())
+	valVec := vector.NewVec(types.T_varchar.ToType())
+	for _, row := range [][2]string{
+		{"clustering_start", "2026-08-18 12:34:56"},
+		{catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, "-2"},
+		{catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax, "6"},
+	} {
+		_ = vector.AppendBytes(keyVec, []byte(row[0]), false, m)
+		_ = vector.AppendBytes(valVec, []byte(row[1]), false, m)
+	}
+	bat.Vecs[0] = keyVec
+	bat.Vecs[1] = valVec
+	bat.SetRowCount(3)
+	return executor.Result{Mp: m, Batches: []*batch.Batch{bat}}
+}
+
 func TestLoadQuantizeBounds(t *testing.T) {
 	defer func() { runSql = sqlexec.RunSql }()
 
@@ -85,6 +103,31 @@ func TestLoadQuantizeBounds(t *testing.T) {
 	// sql error propagates
 	runSql = mock_runSql_parser_error
 	require.Error(t, (&IvfflatSearchIndex[float32]{}).loadQuantizeBounds(sqlproc, tblcfg, types.T_array_int8))
+}
+
+func TestLoadQuantizeBoundsDirectScanCarriesTypedFilter(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	scanner := &scriptedRelationScanner{t: t}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.Equal(t, int32(1), req.PartitionCount)
+		require.NotNil(t, req.Filter)
+		require.Equal(t, "or", req.Filter.GetF().Func.ObjName)
+		// Relation scans return the metadata table's raw varchar values. Keep an
+		// unrelated timestamp row in the batch to reproduce the CI failure even
+		// if a scanner implementation does not push the typed filter down.
+		return mockRawQuantizeMetadataResult(m)
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
+
+	require.NoError(t, idx.loadQuantizeBounds(sqlproc,
+		vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "meta"}, types.T_array_int8))
+	wantMul, wantAdd := quantizer.Int8Params(-2, 6)
+	require.Equal(t, wantMul, idx.QuantMul)
+	require.Equal(t, wantAdd, idx.QuantAdd)
+	require.Len(t, scanner.requests, 1)
 }
 
 // TestScoreFromQuantized verifies that the distance the entries query measures in

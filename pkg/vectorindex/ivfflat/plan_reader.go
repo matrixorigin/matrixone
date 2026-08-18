@@ -74,6 +74,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		proc:           proc,
 		partitionCount: req.PartitionCount,
 		partitionIndex: req.PartitionIndex,
+		ownsInMemory:   ownsInMemoryPartition(req.PartitionCount, req.PartitionIndex),
 		txnOffset:      req.TxnOffset,
 	}
 	if source := spec.SourceTable; source != nil && source.PubInfo != nil {
@@ -84,6 +85,10 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
+}
+
+func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
+	return partitionCount <= 1 || partitionIndex == 0
 }
 
 func (r *planReader) Close() error {
@@ -244,7 +249,8 @@ func (r *planReader) initialize() error {
 	idxcfg.Ivfflat.Lists = uint(lists)
 	idxcfg.Ivfflat.Metric = uint16(metricType)
 	idxcfg.Ivfflat.Version = version
-	idxcfg.Ivfflat.Dimensions = uint(r.req.QueryType.Width)
+	expectedDimensions := r.spec.SourceTableDef.Cols[partPos].Typ.Width
+	idxcfg.Ivfflat.Dimensions = uint(expectedDimensions)
 	idxcfg.Ivfflat.VectorType = tblcfg.KeyPartType
 	idxcfg.Ivfflat.CentroidType = tblcfg.KeyPartType
 	switch types.T(tblcfg.KeyPartType) {
@@ -263,13 +269,32 @@ func (r *planReader) initialize() error {
 		if decodeErr != nil {
 			return decodeErr
 		}
+		if dimensionErr := validateIvfQueryDimensions(expectedDimensions, len(query)); dimensionErr != nil {
+			return dimensionErr
+		}
+		if expectedDimensions <= 0 {
+			idxcfg.Ivfflat.Dimensions = uint(len(query))
+		}
 		return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
 	}
 	query, err := r.queryFloat32()
 	if err != nil {
 		return err
 	}
+	if err = validateIvfQueryDimensions(expectedDimensions, len(query)); err != nil {
+		return err
+	}
+	if expectedDimensions <= 0 {
+		idxcfg.Ivfflat.Dimensions = uint(len(query))
+	}
 	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
+}
+
+func validateIvfQueryDimensions(expected int32, actual int) error {
+	if expected > 0 && int(expected) != actual {
+		return moerr.NewArrayInvalidOpNoCtx(int(expected), actual)
+	}
+	return nil
 }
 
 func (r *planReader) hiddenTable(role string) string {
@@ -469,6 +494,7 @@ type relationScanner struct {
 	accountID      *uint32
 	partitionCount int32
 	partitionIndex int32
+	ownsInMemory   bool
 	txnOffset      int
 }
 
@@ -515,12 +541,14 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		Node:              &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},
 		CNCNT:             partitionCount,
 		CNIDX:             partitionIndex,
+		IsLocalCN:         s.ownsInMemory,
 		ShuffleByObjectID: partitionCount > 1,
 	}
+	policy := relationScanPolicy(partitionCount, s.ownsInMemory)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
 		BlockFilters: req.BlockFilters,
 		TxnOffset:    txnOffset,
-		Policy:       engine.Policy_CollectAllData,
+		Policy:       policy,
 		Rsp:          rsp,
 	})
 	if err != nil {
@@ -611,6 +639,19 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		}
 	}
 	return res, nil
+}
+
+// relationScanPolicy mirrors the distributed table-scan ownership contract:
+// partition zero owns committed in-memory/appendable rows, while every other
+// partition reads only persisted objects assigned by object ID. The scheduler
+// pins the coordinator-local CN at ordinal zero for VECTOR_INDEX_SCAN queries.
+// Replicated metadata/centroid requests set partitionCount=1 and therefore
+// read all visible data on every executing CN.
+func relationScanPolicy(partitionCount int32, ownsInMemory bool) engine.DataCollectPolicy {
+	if partitionCount > 1 && !ownsInMemory {
+		return engine.Policy_CollectCommittedPersistedData
+	}
+	return engine.Policy_CollectAllData
 }
 
 func filterRelationBatch(proc *process.Process, executor colexec.ExpressionExecutor, bat *batch.Batch) error {
