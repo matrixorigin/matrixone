@@ -112,7 +112,7 @@ func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 	tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n")
 	cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n")
 	pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
-	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
+	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\nproxy-services=[%q]\npython-udf-services=[%q]\n",
 		logConfig, tnConfig, cnConfig, cnConfig, proxyConfig, pythonConfig,
@@ -278,6 +278,48 @@ func TestLaunchRejectsMisclassifiedServiceConfigs(t *testing.T) {
 	err = startCNServiceCluster(context.Background(), []string{tnInCNServices, benchmarkCN}, nil, nil, true)
 	require.ErrorContains(t, err, "expected CN")
 	require.Empty(t, started)
+}
+
+func TestStartClusterRejectsMisclassifiedManifestBeforeAnyService(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "log", field: "logservices"},
+		{name: "proxy", field: "proxy-services"},
+		{name: "python", field: "python-udf-services"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setLaunchTestHooks(t)
+			*withProxy = true
+			wrongTN := writeLaunchTestFile(t, "wrong-tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=false\n")
+			logConfig := writeLaunchTestFile(t, "log.toml", "service-type=\"LOG\"\n")
+			tnConfig := writeLaunchTestFile(t, "tn.toml", "service-type=\"TN\"\n[tn.GCCfg]\ndisable-gc=true\n")
+			cnConfig := writeLaunchTestFile(t, "cn.toml", "service-type=\"CN\"\n[cn.sirius]\nenabled=true\nbenchmark-no-gc=true\n")
+			proxyConfig := writeLaunchTestFile(t, "proxy.toml", "service-type=\"PROXY\"\n")
+			pythonConfig := writeLaunchTestFile(t, "python.toml", "service-type=\"PYTHON_UDF\"\n")
+			entries := map[string]string{
+				"logservices":         fmt.Sprintf("logservices=[%q]", logConfig),
+				"tnservices":          fmt.Sprintf("tnservices=[%q]", tnConfig),
+				"cnservices":          fmt.Sprintf("cnservices=[%q]", cnConfig),
+				"proxy-services":      fmt.Sprintf("proxy-services=[%q]", proxyConfig),
+				"python-udf-services": fmt.Sprintf("python-udf-services=[%q]", pythonConfig),
+			}
+			entries[test.field] = fmt.Sprintf("%s=[%q]", test.field, wrongTN)
+			launch := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n", entries["logservices"], entries["tnservices"], entries["cnservices"], entries["proxy-services"], entries["python-udf-services"])
+			*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
+
+			started := 0
+			launchStartService = func(context.Context, *Config, *stopper.Stopper, chan struct{}) error {
+				started++
+				return nil
+			}
+			err := startCluster(context.Background(), nil, nil)
+			require.ErrorContains(t, err, "expected")
+			require.Zero(t, started)
+		})
+	}
 }
 
 func TestLaunchTNGCDisabledProof(t *testing.T) {
