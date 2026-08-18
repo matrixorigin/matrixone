@@ -18,6 +18,8 @@ cuVS already implements that split; MO was opting out of it.
 | `72f99d4930` | size the build against the index, not the dataset |
 | `241f7004fb` | cagra rotation BVT expectations |
 | `2e4ab2f2ad` | (unrelated) stale INCLUDE-column error expectation |
+| `dd6892c6af` | this document |
+| `13bf8459e4` | bound capacity by host memory, not only VRAM |
 
 Verified: `test_cuvs_worker` 162/162, GPU vector BVT 955/955, 12 new tag-free unit tests,
 `go vet` clean under default and `gpu` tags.
@@ -31,6 +33,7 @@ The build was failing for one reason but being sized for another. Separating the
 | dataset | 96.8 GB host, per sub-index | *nothing* on device — cuVS streams it from a host view; host bounded by `capacity` | **done** |
 | k-means trainset | `train_rows · 768 · 6` | clamping `kmeans_trainset_fraction` | **done** |
 | the index | `88M · (m + 8)` | `m`, and nothing else | **open** |
+| host build buffer | `capacity · 768 · 2` | `hostRowsFit`, 60% of `MemAvailable` | **done** |
 
 The dataset pressure was self-inflicted: MO allocated `count × dim` device memory and
 copied the host buffer up before calling the *device* `build` overload. cuVS's build is
@@ -40,6 +43,19 @@ encode through `batch_load_iterator` at a batch size that halves until it fits
 (`:1050-1097`). Measured at dim 960: within noise while the dataset fits (+0.8% at 1M),
 2.0× faster once it does not, peak VRAM 4.94 → 1.35 GB at 1M and near flat as rows grow,
 recall identical at 1.000 from 250k to 2.5M.
+
+This is the intended path, not an implementation detail we are leaning on. cuVS built
+this dataset to force it: `docs/source/cuvs_bench/wiki_all_dataset.rst` says wiki-all's
+~251 GB is "intentionally larger than the typical memory of GPUs ... to promote the use
+of compression and efficient out-of-core methods for both indexing and search." The
+`host_matrix_view` overloads are that mechanism, and the header's note about setting a
+stream pool for "kernel and copy overlapping" only means anything for host input.
+
+The index-size formula capacity is now sized against is the documented one rather than
+something reverse-engineered — `docs/source/neighbors/ivfpq.rst`, Index (device memory):
+`n_vectors * (pq_dim * pq_bits/8 + sizeof_idx) + n_clusters`. The same page's "Build peak
+memory usage (device)" is trainset + labels + centroids, with the index absent, which
+independently confirms the two phases do not overlap.
 
 **The two remaining resources never coexist.** The trainset and its k-means scratch are
 scoped to a block closing at `ivf_pq_build.cuh:1369`, before `detail::extend` at `:1374`
@@ -81,8 +97,8 @@ the sum of its parts.
 
 ## The one open question
 
-The table above is the *floor*. Measured peak runs above it, and the gap is not yet
-characterised:
+The `N·(m+8)` figure is a floor. Measured peak runs above it, and the shape of the gap
+decides whether SINGLE works:
 
 | rows | raw codes+ids | measured peak | overhead |
 |---|---|---|---|
@@ -91,17 +107,27 @@ characterised:
 | 5M | 1.00 GB | 1.57 GB | 0.57 GB |
 | 8M | 1.60 GB | 2.62 GB | **1.02 GB** |
 
-Constant at ~0.56 GB through 5M, then nearly doubling at 8M. Everything turns on which
-of those is the trend:
+Flat at ~0.56 GB through 5M, then nearly doubling at 8M. A linear fit projects 24.1 GB at
+88M, which would sink SINGLE at `m=192`.
 
-- **overhead constant (~0.6 GB)** → 88M at `m=192` is 18.2 GB. SINGLE works on the
-  template's own tuning, no change needed.
-- **overhead proportional (~1.64× the floor)** → 88M at `m=192` is 28.9 GB. SINGLE needs
-  `m≤128`, and the recall cost of that has to be paid.
+**That fit is probably wrong, and the cuVS docs say why.** `docs/source/neighbors/ivfpq.rst`:
 
-An 8 GB card cannot separate these, and `conservative_memory_allocation=true` was tested
-and is not the cause (8M: 2.62 vs 2.63 GB). This is the measurement the AWS box exists
-for.
+> Workspace size is not trivial, a heuristic controls the batch size to make sure the
+> workspace fits `raft::resource::get_workspace_free_bytes(res)`.
+
+The gap is not a fixed cost scaling with rows — it is cuVS **expanding to fill available
+workspace**. On the 7.34 GB dev card, with most of it idle, the heuristic took more; on a
+20 GB card carrying a 17.6 GB index there is little free, so it takes less. That also
+explains the 8M jump, which `conservative_memory_allocation=true` could not (2.62 vs
+2.63 GB) — it was never IVF list over-growth.
+
+So the overhead is self-limiting rather than additive, and the honest projection at
+`m=192` is "the 17.6 GB floor plus whatever workspace is left", not 24.1 GB. Still worth
+measuring, but the prior now favours SINGLE working on the template's own tuning.
+
+The itemised extras from the same page are negligible and already inside the floor:
+codebook `4·pq_dim·pq_len·2^pq_bits` = 0.79 MB, extras `n_clusters·(20 + 8·dim)` = 37 MB,
+list pointers 24 KB.
 
 ## What to run on AWS
 
@@ -145,10 +171,11 @@ flat now that retired sub-indexes are freed.
   `MemAvailable` — the same fraction as the device rule, deliberately not a second
   heuristic. Under SHARDED every rank views a disjoint slice of that one buffer
   (`ivf_pq.hpp:527`), so sharding divides the work but not the allocation.
-- **`large_workspace_resource` is unconfigured.** cuVS falls back to it when the trainset
-  does not fit comfortably (`kTolerableRatio = 4`, `:1266-1272`). Whether that spills to
-  managed memory or throws is unspecified in MO. Given the RMM history on this branch,
-  configure it deliberately rather than discovering the default at 88M.
+- **~~`large_workspace_resource` is unconfigured~~ — resolved by the cuVS docs.**
+  `docs/source/neighbors/ivfpq.rst`: "if there's not enough space left in the workspace
+  memory resource, IVF-PQ build automatically switches to the managed memory for the
+  training set and labels." An oversized trainset degrades to paging rather than
+  throwing, and needs no configuration from MO.
 - **Thin centroids warn, they do not refuse.** The ~39 points-per-centroid floor is a
   rule of thumb, not a cuVS constraint (`validate_build_params` only checks
   `rows >= n_lists`), so refusing would break configurations that work today.
