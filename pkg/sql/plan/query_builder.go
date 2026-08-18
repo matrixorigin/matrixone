@@ -7357,7 +7357,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}

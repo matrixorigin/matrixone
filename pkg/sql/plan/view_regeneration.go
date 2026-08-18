@@ -51,8 +51,8 @@ func ReplaceRegeneratedViewDependencies(
 	if data.LowerCaseTableNames != nil {
 		lowerCaseTableNames = *data.LowerCaseTableNames
 	}
-	updated, err := patchPersistedViewDependencies(
-		regenerated.TableDef.ViewSql.View, dependencies, lowerCaseTableNames)
+	updated, err := patchPersistedViewMetadata(
+		regenerated.TableDef.ViewSql.View, nil, dependencies, lowerCaseTableNames)
 	if err != nil {
 		return err
 	}
@@ -133,8 +133,8 @@ func RegenerateViewDefinition(
 		return nil, err
 	}
 
-	updatedViewData, err := patchPersistedViewDependencies(
-		persistedViewData, generatedData.Dependencies, lowerCaseTableNames)
+	updatedViewData, err := patchPersistedViewMetadata(
+		persistedViewData, &generatedData.Stmt, generatedData.Dependencies, lowerCaseTableNames)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +145,9 @@ func RegenerateViewDefinition(
 	}, nil
 }
 
-func patchPersistedViewDependencies(
+func patchPersistedViewMetadata(
 	persistedViewData string,
+	stableStatement *string,
 	dependencies []ViewDependency,
 	lowerCaseTableNames int64,
 ) (string, error) {
@@ -157,6 +158,13 @@ func patchPersistedViewDependencies(
 	encodedDependencies, err := json.Marshal(dependencies)
 	if err != nil {
 		return "", err
+	}
+	if stableStatement != nil {
+		encodedStatement, marshalErr := json.Marshal(*stableStatement)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["Stmt"] = encodedStatement
 	}
 	fields["dependencies"] = encodedDependencies
 	if _, ok := fields["lower_case_table_names"]; !ok {

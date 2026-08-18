@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -162,6 +163,63 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
+}
+
+func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
+	for _, rootSQL := range []string{
+		"create view v as select * from nation",
+		"create view v (k, name, rkey, comment) as select * from nation",
+	} {
+		t.Run(rootSQL, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+			persisted, err := json.Marshal(map[string]any{
+				"Stmt": rootSQL, "DefaultDatabase": "tpch", "future_field": map[string]bool{"keep": true},
+			})
+			require.NoError(t, err)
+
+			first, err := RegenerateViewDefinition(ctx, string(persisted))
+			require.NoError(t, err)
+			require.Len(t, first.TableDef.Cols, 4)
+			var firstData ViewData
+			require.NoError(t, json.Unmarshal([]byte(first.TableDef.ViewSql.View), &firstData))
+			require.NotContains(t, firstData.Stmt, "*")
+
+			ctx.tables["nation"].Cols = append(ctx.tables["nation"].Cols, &planpb.ColDef{
+				Name:       "n_extra",
+				OriginName: "n_extra",
+				Typ:        planpb.Type{Id: int32(types.T_int32)},
+				Default:    &planpb.Default{NullAbility: true},
+			})
+			second, err := RegenerateViewDefinition(ctx, first.TableDef.ViewSql.View)
+			require.NoError(t, err)
+			require.Len(t, second.TableDef.Cols, 4)
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal([]byte(second.TableDef.ViewSql.View), &fields))
+			require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
+		})
+	}
+}
+
+func TestAuthoritativeViewGenerationCapturesLimitZeroStarDependency(t *testing.T) {
+	const rootSQL = "create view v as select * from nation limit 0"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var data ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+	require.Len(t, data.Dependencies, 1)
+	require.Equal(t, "nation", data.Dependencies[0].RelationName)
 }
 
 func TestReplaceRegeneratedViewDependenciesPreservesViewData(t *testing.T) {
