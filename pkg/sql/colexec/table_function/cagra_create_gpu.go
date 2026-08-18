@@ -380,8 +380,22 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				freeBytes>>20, devices[0], perRow, rowsFit)
 		}
 
+		// CAGRA's per-row cost still includes the dataset, so its VRAM bound already
+		// keeps the host buffer at or under the device budget. The host bound is applied
+		// anyway: it costs one syscall, and it stops the two algorithms from drifting
+		// apart the next time one of their cost models changes.
+		hostRowsFit, availBytes, herr := hostRowsFittingMem(
+			uint64(u.idxcfg.CuvsCagra.Dimensions) * quantizationBytes(qt))
+		if herr != nil {
+			logutil.Warnf("CAGRA create: cannot read host memory (%v); "+
+				"capacity bounded by GPU memory only", herr)
+		} else if hostRowsFit > 0 {
+			logutil.Infof("CAGRA create: %d MB host available -> %d rows fit",
+				availBytes>>20, hostRowsFit)
+		}
+
 		threshold := int64(graphDegree)
-		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, threshold,
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"cagra", "max_index_capacity")
 		if err != nil {

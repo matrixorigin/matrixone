@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/shirou/gopsutil/v3/mem"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -68,6 +70,7 @@ type capacityPlan struct {
 	CdcCutoff int64 // rows before this index go to cuVS; the remainder to the CDC tail
 	NumSubIdx int64
 	VRAMBound bool // the GPU limit, not the request, decided Capacity
+	HostBound bool // host memory, not the request, decided Capacity
 }
 
 // planCapacity resolves how many rows one GPU sub-index may cover.
@@ -91,7 +94,7 @@ type capacityPlan struct {
 // its manifest and reloaded by a loader that branches on the configured mode, so silently
 // building sharded sub-indexes as single-GPU produces indexes that cannot be loaded back.
 func planCapacity(
-	srcRowCount, explicitCapacity, rowsFit, threshold int64,
+	srcRowCount, explicitCapacity, rowsFit, hostRowsFit, threshold int64,
 	sharded bool, algo, paramName string,
 ) (capacityPlan, error) {
 	if srcRowCount <= 0 {
@@ -108,10 +111,28 @@ func planCapacity(
 		capacity = rowsFit
 		vramBound = true
 	}
+	// Capacity is a HOST allocation before it is anything else: the C++ constructor
+	// does flattened_host_dataset.resize(capacity * dim) up front (ivf_pq.hpp:226,258),
+	// and resize value-initializes, so it is committed RSS rather than lazy pages.
+	//
+	// This bound used to come for free. While the per-row cost included the dataset
+	// term (dim * sizeof(Q)), bounding against VRAM incidentally bounded the host
+	// buffer at roughly the same figure. Sizing ivfpq against the PQ codes instead --
+	// correct, since the dataset is now streamed and never resident -- broke that
+	// coupling and multiplied the host allocation by dim*sizeof(Q)/(m+8), about 7.7x
+	// at dim 768 / f16 / m 192. Without an explicit bound a 20 GB card derives a 63M
+	// capacity and asks the host for 97 GB.
+	hostBound := false
+	if hostRowsFit > 0 && hostRowsFit < capacity {
+		capacity = hostRowsFit
+		hostBound = true
+		vramBound = false
+	}
 	// Never reserve for rows that do not exist.
 	if capacity > srcRowCount {
 		capacity = srcRowCount
 		vramBound = false
+		hostBound = false
 	}
 
 	if sharded && capacity < srcRowCount {
@@ -126,7 +147,14 @@ func planCapacity(
 		// One chunk covering a table smaller than the minimum is the legitimate
 		// small-table case: those rows go to the CDC tail and are served by brute force.
 		if capacity >= srcRowCount {
-			return capacityPlan{Capacity: capacity, CdcCutoff: 0, NumSubIdx: 1, VRAMBound: vramBound}, nil
+			return capacityPlan{Capacity: capacity, CdcCutoff: 0, NumSubIdx: 1,
+				VRAMBound: vramBound, HostBound: hostBound}, nil
+		}
+		if hostBound {
+			return capacityPlan{}, moerr.NewInvalidInputNoCtxf(
+				"%s: host memory allows only %d rows per sub-index but the k-means minimum is %d; "+
+					"lower it, or use a narrower storage type (QUANTIZATION), which shrinks the "+
+					"host build buffer", algo, capacity, threshold)
 		}
 		if vramBound {
 			return capacityPlan{}, moerr.NewInvalidInputNoCtxf(
@@ -139,7 +167,8 @@ func planCapacity(
 			algo, paramName, capacity, threshold)
 	}
 
-	plan := capacityPlan{Capacity: capacity, CdcCutoff: srcRowCount, VRAMBound: vramBound}
+	plan := capacityPlan{Capacity: capacity, CdcCutoff: srcRowCount,
+		VRAMBound: vramBound, HostBound: hostBound}
 	plan.NumSubIdx = (srcRowCount + capacity - 1) / capacity
 	// Only the LAST chunk can be short. If it is below the k-means minimum those rows
 	// cannot seed centroids, so they go to the CDC tail instead.
@@ -271,4 +300,36 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 		p.Thin = true
 	}
 	return p
+}
+
+// hostBudgetNumerator/Denominator mirror the GPU rule in cap_train_rows_to_gpu_mem:
+// take 60% of what is actually available, not all of it. The reasoning carries over
+// unchanged — the buffer is a single contiguous allocation, the allocator needs room
+// either side of it, and mo-service is still serving queries out of the same pool
+// while the build runs. Deliberately the same fraction as the device side: two memory
+// heuristics that can disagree is itself a defect.
+const hostBudgetNumerator, hostBudgetDenominator = 6, 10
+
+// hostRowsFittingMem returns how many rows of perRowBytes fit the host budget, and the
+// available figure it was derived from.
+//
+// perRowBytes here is the HOST cost of a row, which is not the device cost: what the
+// build buffer holds is dim * sizeof(Q) of storage-typed vector, whatever the index
+// ends up costing on the GPU.
+//
+// Unlike the GPU query, a failure here is NOT fatal. cudaMemGetInfo failing means the
+// device is unusable and guessing would reintroduce the OOM being prevented; a
+// gopsutil failure just means this one extra bound cannot be applied on this platform,
+// and the device bound plus the srcRowCount clamp still hold. Returning 0 disables the
+// bound rather than failing a build that would have worked.
+func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err error) {
+	if perRowBytes == 0 {
+		return 0, 0, nil
+	}
+	vm, err := mem.VirtualMemory()
+	if err != nil || vm == nil {
+		return 0, 0, err
+	}
+	budget := vm.Available / hostBudgetDenominator * hostBudgetNumerator
+	return int64(budget / perRowBytes), vm.Available, nil
 }

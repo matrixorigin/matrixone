@@ -28,7 +28,7 @@ The build was failing for one reason but being sized for another. Separating the
 
 | resource | 88M, dim 768, f16 | bounded by | state |
 |---|---|---|---|
-| dataset | 135 GB host | *nothing* — cuVS streams it from a host view | **done** |
+| dataset | 96.8 GB host, per sub-index | *nothing* on device — cuVS streams it from a host view; host bounded by `capacity` | **done** |
 | k-means trainset | `train_rows · 768 · 6` | clamping `kmeans_trainset_fraction` | **done** |
 | the index | `88M · (m + 8)` | `m`, and nothing else | **open** |
 
@@ -114,7 +114,7 @@ make -C cgo/cuvs bench_wiki88
 
 It already reports the train and encode phases separately at the real tuning, so the
 overhead column above extends directly. Host RAM is the limit on how far it goes: f16 at
-dim 768 is 1536 B/row, so 40M needs ~61 GB and the full 88M needs ~135 GB. Points at 16M
+dim 768 is 1536 B/row, so a 40M single-buffer run needs ~61 GB. Points at 16M
 and 32M are enough to tell a constant from a slope; the 8M jump is the thing to confirm
 or dismiss first, since a single anomalous point is the whole ambiguity.
 
@@ -133,9 +133,18 @@ flat now that retired sub-indexes are freed.
 
 ## Notes and residual risk
 
-- **Host RAM is the binding resource and is not solved here.** `flattened_host_dataset`
-  is still `capacity · dim · sizeof(Q)` — 135 GB for 88M in f16. Under SHARDED every rank
-  slices that one buffer, undivided by `G` (`ivf_pq.hpp:527`). Stated as a precondition.
+- **Host RAM is bounded by `capacity`, not by `N`.** An earlier version of this document
+  said 88M in f16 needs 135 GB of host RAM. That was wrong: `flattened_host_dataset` is
+  sized `capacity · dim · sizeof(Q)`, not `N · dim · sizeof(Q)`, and it is cleared after
+  each sub-index builds (`ivf_pq.hpp:418-419`, after all ranks join). Only one sub-index
+  buffer is live at a time, so 135 GB would require `capacity == N`.
+  What is true is that sizing capacity against the PQ codes made this buffer ~7.7x
+  bigger than the old dataset-based bound did (12.1 GB → 96.8 GB at dim 768 / f16 /
+  m 192), because the dataset term in the old per-row cost had been bounding the host
+  side for free. `planCapacity` now takes an explicit `hostRowsFit` from 60% of
+  `MemAvailable` — the same fraction as the device rule, deliberately not a second
+  heuristic. Under SHARDED every rank views a disjoint slice of that one buffer
+  (`ivf_pq.hpp:527`), so sharding divides the work but not the allocation.
 - **`large_workspace_resource` is unconfigured.** cuVS falls back to it when the trainset
   does not fit comfortably (`kTolerableRatio = 4`, `:1266-1272`). Whether that spills to
   managed memory or throws is unspecified in MO. Given the RMM history on this branch,
@@ -144,7 +153,8 @@ flat now that retired sub-indexes are freed.
   rule of thumb, not a cuVS constraint (`validate_build_params` only checks
   `rows >= n_lists`), so refusing would break configurations that work today.
 - **CAGRA is a different problem and is out of scope.** It reads actual vectors while
-  walking the graph, so its dataset is resident for the index's life — 135 GB in f16 at
-  88M, whatever the build does. `extend` also throws for float16 and is unsupported under
+  walking the graph, so its dataset is resident for the index's life — and unlike ivfpq
+  that residency is `N`, not `capacity`, since every sub-index must be loaded to search:
+  135 GB in f16 at 88M, whatever the build does. `extend` also throws for float16 and is unsupported under
   sharded (`cagra.hpp:711,718`). The only lever is a compressed (VPQ) dataset, a separate
   feature.

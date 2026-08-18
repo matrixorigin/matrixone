@@ -431,13 +431,28 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			}
 		}
 
+		// Capacity is a host allocation before it is a device one: InitEmpty resizes
+		// flattened_host_dataset to capacity*dim up front. Sizing against the PQ codes
+		// makes capacity ~7.7x larger than the old dataset-based bound did, so the host
+		// side now needs its own limit -- otherwise a 20 GB card derives 63M rows and
+		// asks the host for 97 GB.
+		hostRowsFit, availBytes, herr := hostRowsFittingMem(dim * quantizationBytes(qt))
+		if herr != nil {
+			// Non-fatal: the device bound and the srcRowCount clamp still apply.
+			logutil.Warnf("IVFPQ create: cannot read host memory (%v); "+
+				"capacity bounded by GPU memory only", herr)
+		} else if hostRowsFit > 0 {
+			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host -> %d rows fit",
+				availBytes>>20, dim*quantizationBytes(qt), hostRowsFit)
+		}
+
 		// lists defaults to the cuVS default when unset; a 0 threshold would silently
 		// disable the k-means minimum check below.
 		threshold := int64(u.idxcfg.CuvsIvfpq.Lists)
 		if threshold <= 0 {
 			threshold = int64(cuvs.DefaultIvfPqBuildParams().NLists)
 		}
-		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, threshold,
+		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"ivfpq", "max_index_capacity")
 		if err != nil {
@@ -445,9 +460,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 		u.idxcfg.IndexCapacity = plan.Capacity
 		u.cdcCutoff = plan.CdcCutoff
-		if plan.NumSubIdx > 1 || plan.VRAMBound {
-			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
-				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		if plan.NumSubIdx > 1 || plan.VRAMBound || plan.HostBound {
+			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v, host_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
+				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.HostBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
 		}
 
 		// Resolve the training sample against the capacity just chosen, and record the
