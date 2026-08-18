@@ -114,7 +114,8 @@ var (
 				collation_connection varchar(64),
 				database_collation varchar(64),
 				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
-				primary key(function_id)
+				primary key(function_id),
+				key name_db(name, db)
 			)`
 
 	MoCatalogMoMysqlCompatibilityModeDDL = `create table mo_catalog.mo_mysql_compatibility_mode (

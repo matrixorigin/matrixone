@@ -9,7 +9,7 @@ create procedure db0.p_source_qualified() 'begin select count(*) as answer from 
 set sql_mode = 'PIPES_AS_CONCAT';
 create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
-create function db0.f_clone_answer() returns int language sql as '42';
+create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 create database db0_copy_0 clone db0;
 show tables from db0_copy_0;
@@ -68,10 +68,10 @@ answer
 5
 select f_clone_answer();
 f_clone_answer()
-42
+5
 select * from v_clone_answer;
 answer
-42
+5
 drop database if exists db1;
 create database db1;
 use db1;

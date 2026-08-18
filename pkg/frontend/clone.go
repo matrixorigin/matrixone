@@ -1097,6 +1097,15 @@ func handleCloneDatabaseWithSource(
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
 		return
 	}
+	if source.userDefinedFuncs, err = rewriteCloneUserDefinedFunctionBodies(
+		reqCtx,
+		source.userDefinedFuncs,
+		source.srcResolveDBName,
+		stmt.DstDatabase.String(),
+		parserLowerCaseTableNames(ses),
+	); err != nil {
+		return
+	}
 	if source.storedProcedures, err = rewriteCloneStoredProcedureBodies(
 		reqCtx,
 		source.storedProcedures,

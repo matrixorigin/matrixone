@@ -281,7 +281,7 @@ func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
 	procedures := []storedProcedureDefinition{{
 		name: "p_source_reference",
 		lang: "sql",
-		body: "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call source_db.p_inner(); end",
+		body: "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call SOURCE_DB.p_inner(); end",
 	}}
 
 	rewritten, err := rewriteCloneStoredProcedureBodies(
@@ -294,7 +294,32 @@ func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
 	require.Contains(t, rewritten[0].body, "from `other_db`.`control_t`")
 	require.Contains(t, rewritten[0].body, "'source_db'")
 	require.NotContains(t, rewritten[0].body, "source_db.control_t")
-	require.Equal(t, procedures[0].body, "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call source_db.p_inner(); end")
+	require.Equal(t, procedures[0].body, "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call SOURCE_DB.p_inner(); end")
+}
+
+func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
+	functions := []userDefinedFunctionDefinition{
+		{
+			name: "f_source_table",
+			lang: "sql",
+			body: "select count(*) from SOURCE_DB.control_t where id = $1",
+		},
+		{
+			name: "f_expression",
+			lang: "sql",
+			body: "$1 + 1",
+		},
+	}
+
+	rewritten, err := rewriteCloneUserDefinedFunctionBodies(
+		context.Background(), functions, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 2)
+	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
+	require.Contains(t, rewritten[0].body, "$1")
+	require.Equal(t, "$1 + 1", rewritten[1].body)
+	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
 }
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {

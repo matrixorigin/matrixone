@@ -15,8 +15,8 @@ create procedure db0.p_sql_mode() 'begin select ''a'' || ''b'' as answer; end';
 set sql_mode = default;
 
 -- Functions are catalog metadata too. They must be restored before a view that
--- binds them, and source-qualified procedure references must bind the clone.
-create function db0.f_clone_answer() returns int language sql as '42';
+-- binds them, and source-qualified routine queries must bind the clone.
+create function db0.f_clone_answer() returns int language sql as 'select count(*) from db0.s1';
 create view db0.v_clone_answer as select f_clone_answer() as answer;
 
 create database db0_copy_0 clone db0;

@@ -327,6 +327,53 @@ func rewriteCloneStoredProcedureBodies(
 	return rewritten, nil
 }
 
+func rewriteCloneUserDefinedFunctionBodies(
+	ctx context.Context,
+	functions []userDefinedFunctionDefinition,
+	srcDBName string,
+	dstDBName string,
+	lowerCaseTableNames int64,
+) ([]userDefinedFunctionDefinition, error) {
+	rewritten := slices.Clone(functions)
+	for i := range rewritten {
+		if !strings.EqualFold(rewritten[i].lang, string(tree.SQL)) {
+			continue
+		}
+		body, err := rewriteCloneSQLFunctionBody(
+			ctx,
+			rewritten[i].body,
+			rewritten[i].sqlMode,
+			srcDBName,
+			dstDBName,
+			lowerCaseTableNames,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rewritten[i].body = body
+	}
+	return rewritten, nil
+}
+
+// SQL UDF query bodies follow the same parsing rule as the binder. Scalar
+// expressions cannot contain a qualified table reference, so they need no
+// database remap and remain byte-for-byte unchanged.
+func rewriteCloneSQLFunctionBody(
+	ctx context.Context,
+	body string,
+	sqlMode string,
+	srcDBName string,
+	dstDBName string,
+	lowerCaseTableNames int64,
+) (string, error) {
+	if !strings.Contains(body, "select") {
+		return body, nil
+	}
+	return rewriteCloneSQLRoutineBody(
+		ctx, body, sqlMode, srcDBName, dstDBName, lowerCaseTableNames,
+	)
+}
+
 func rewriteCloneSQLRoutineBody(
 	ctx context.Context,
 	body string,

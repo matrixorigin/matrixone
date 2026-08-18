@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 14)
+	require.Len(t, tenantUpgEntries, 15)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -94,10 +94,15 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctions.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctions.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctions.UpgSql), "drop index name")
+	userDefinedFunctionLookup := tenantUpgEntries[14]
+	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionLookup.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionLookup.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionLookup.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionLookup.UpgSql), "name_db")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 14)
+	require.Len(t, tenantUpgEntries, 15)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]

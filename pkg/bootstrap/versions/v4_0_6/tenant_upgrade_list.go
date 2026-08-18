@@ -39,6 +39,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaTableConstraints(),
 	upgradeInformationSchemaColumnsHideInternalColumns(),
 	dropUserDefinedFunctionNameIndex(),
+	addUserDefinedFunctionNameDatabaseIndex(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -105,6 +106,20 @@ func dropUserDefinedFunctionNameIndex() versions.UpgradeEntry {
 				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name",
 			)
 			return !exists, err
+		},
+	}
+}
+
+func addUserDefinedFunctionNameDatabaseIndex() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create index name_db on mo_catalog.mo_user_defined_function(name, db)",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckIndexDefinition(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db",
+			)
 		},
 	}
 }

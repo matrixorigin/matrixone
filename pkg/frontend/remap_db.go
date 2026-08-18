@@ -536,11 +536,11 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	}
 }
 
-func remapProcedureName(name *tree.ProcedureName, remap map[string]string) {
+func remapProcedureName(name *tree.ProcedureName, remap remapDbContext) {
 	if name == nil || !name.Name.ExplicitSchema {
 		return
 	}
-	if target, ok := remap[string(name.Name.SchemaName)]; ok {
+	if target, ok := remap.lookup(string(name.Name.SchemaName)); ok {
 		name.Name.SchemaName = tree.Identifier(target)
 	}
 }
