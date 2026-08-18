@@ -85,6 +85,48 @@ func BenchmarkPhraseSearchConcurrent(b *testing.B) {
 	})
 }
 
+// BenchmarkPhraseSparseIntersection isolates doc alignment. Alpha occurs only in even
+// docs and beta only in odd docs, so the two large posting lists never share a doc and
+// no positional block should be decoded by the lazy phrase cursor.
+func BenchmarkPhraseSparseIntersection(b *testing.B) {
+	bb := NewBuilder("phrase-sparse", int32(types.T_int64))
+	for d := 0; d < 50000; d++ {
+		term := "alpha"
+		if d&1 != 0 {
+			term = "beta"
+		}
+		if err := bb.Add(term, 0, int64(d)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	seg, err := bb.Finish()
+	if err != nil {
+		b.Fatal(err)
+	}
+	blob, err := seg.Serialize()
+	if err != nil {
+		b.Fatal(err)
+	}
+	loaded, err := Deserialize("phrase-sparse", bytes.NewReader(blob))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = loaded.dict.Close() })
+	idx := NewIndex([]*Segment{loaded}, nil)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, err := idx.SearchQuery([]byte("alpha beta"), false, ParserDefault, BM25, 10, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(res) != 0 {
+			b.Fatalf("expected no matches, got %d", len(res))
+		}
+	}
+}
+
 // BenchmarkPhraseStreamNoLimit — concern B, the materializing fallback: a no-LIMIT NL
 // phrase that matches ALL docs, so StreamQuery goes through SearchQuery(globalN).
 func BenchmarkPhraseStreamNoLimit(b *testing.B) {

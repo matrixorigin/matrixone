@@ -43,6 +43,42 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
+	ctx := context.Background()
+	source := &validatedVectorCacheData{
+		data: fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, []byte{1, 2, 3}),
+	}
+	defer source.Release()
+
+	rehomed := source.RehomeCacheData(func(data []byte) fscache.Data {
+		return fileservice.NewBytes(bytes.Clone(data))
+	})
+	defer rehomed.Release()
+
+	_, ok := rehomed.(validatedVectorCacheDataMarker)
+	require.True(t, ok)
+	require.Equal(t, []byte{1, 2, 3}, rehomed.Bytes())
+}
+
+type admissionTrackingData struct {
+	releaseTrackingData
+	blockedOwner *fscache.DataOwner
+}
+
+func (d *admissionTrackingData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	return owner != d.blockedOwner
+}
+
+func TestValidatedVectorCacheDataForwardsCacheAdmission(t *testing.T) {
+	blocked := new(fscache.DataOwner)
+	data := &validatedVectorCacheData{
+		data: &admissionTrackingData{blockedOwner: blocked},
+	}
+
+	require.False(t, data.CacheAdmissionAllowed(blocked))
+	require.True(t, data.CacheAdmissionAllowed(new(fscache.DataOwner)))
+}
+
 func (r *releaseTrackingData) Size() int64 {
 	return int64(len(r.bytes))
 }

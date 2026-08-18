@@ -73,7 +73,7 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			colName := col.ColName()
 			idx, ok := b.tableDef.Name2ColIndex[colName]
 			if !ok {
-				return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", col.ColNameOrigin())
+				return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", col.ColNameOrigin())
 			}
 
 			return &plan.Expr{
@@ -122,7 +122,7 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 	colName := astExpr.ColName()
 	idx, ok := b.tableDef.Name2ColIndex[colName]
 	if !ok {
-		return nil, moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
+		return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 	}
 
 	return &plan.Expr{

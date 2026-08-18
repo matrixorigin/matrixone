@@ -59,6 +59,9 @@ type validatedVectorCacheData struct {
 }
 
 var _ fscache.Data = (*validatedVectorCacheData)(nil)
+var _ fscache.DataOwnership = (*validatedVectorCacheData)(nil)
+var _ fscache.DataCacheReservation = (*validatedVectorCacheData)(nil)
+var _ fscache.DataCacheAdmission = (*validatedVectorCacheData)(nil)
 
 func (d *validatedVectorCacheData) Bytes() []byte {
 	return d.validatedVectorSnapshot()
@@ -89,6 +92,30 @@ func (d *validatedVectorCacheData) Retain() {
 
 func (d *validatedVectorCacheData) Release() {
 	d.data.Release()
+}
+
+func (d *validatedVectorCacheData) CommitCacheReservation() {
+	if reserved, ok := d.data.(fscache.DataCacheReservation); ok {
+		reserved.CommitCacheReservation()
+	}
+}
+
+func (d *validatedVectorCacheData) CacheAdmissionAllowed(owner *fscache.DataOwner) bool {
+	if admission, ok := d.data.(fscache.DataCacheAdmission); ok {
+		return admission.CacheAdmissionAllowed(owner)
+	}
+	return true
+}
+
+func (d *validatedVectorCacheData) CacheDataOwner() *fscache.DataOwner {
+	if owned, ok := d.data.(fscache.DataOwnership); ok {
+		return owned.CacheDataOwner()
+	}
+	return nil
+}
+
+func (d *validatedVectorCacheData) RehomeCacheData(copyData func([]byte) fscache.Data) fscache.Data {
+	return &validatedVectorCacheData{data: copyData(d.data.Bytes())}
 }
 
 func (d *validatedVectorCacheData) validatedVectorSnapshot() []byte {

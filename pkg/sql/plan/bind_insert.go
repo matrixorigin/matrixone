@@ -1827,7 +1827,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
-			colDef := tableDef.Cols[tableDef.Name2ColIndex[colName]]
+			colIdx, ok := tableDef.Name2ColIndex[colName]
+			if !ok {
+				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
+			}
+			colDef := tableDef.Cols[colIdx]
 			astExpr := astUpdateExpr.Expr
 
 			if colDef.GeneratedCol != nil {
