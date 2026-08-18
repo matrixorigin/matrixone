@@ -1,6 +1,6 @@
 # #27287/#27288/#27289 租户升级失败链路修复计划
 
-- 状态：实现与本地代码验证完成，distributed BVT 待 CI；subagent 独立审阅的 blocker/high 已关闭
+- 状态：实现、本地代码验证、真实数据逐级升级、account BVT 和 DDL BVT 完成；subagent 独立审阅的 blocker/high 已关闭
 - Tracking issues：
   - [#27287](https://github.com/matrixorigin/matrixone/issues/27287) tenant upgrade 失败后无退避热循环
   - [#27288](https://github.com/matrixorigin/matrixone/issues/27288) `TABLE_CONSTRAINTS` 升级未覆盖历史 base table 状态
@@ -302,6 +302,7 @@ GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s \
 2. 在最小 service fixture 中构造 tenant 的四种 `TABLE_CONSTRAINTS` 状态，执行相同 handler/entry 公共路径，验证最终 catalog 类型和 view definition。
 3. 从 `v4.0.4` 状态模拟失败中的 tenant task，升级到修复后的 `v4.0.5`，确认 `ready_tenant` 最终推进且没有同一 worker 的无界错误循环。
 4. 对已经完成目标 entry 的 tenant 再启动升级，确认 `CheckFunc` 跳过 DDL，version offset 和完成状态不回退。
+5. 真实持久化数据升级已执行：用 `7686f340df`（`TABLE_CONSTRAINTS` 改成 view 的提交之前）启动单机集群，执行 account BVT 并创建两个保留租户；随后按发布版本 `v2.1.0 -> v2.2.0 -> v3.0.0 -> v4.1.4` 顺序升级同一份 `mo-data`，最后以本 PR 的 `mo-service` 启动并完成 `4.0.6` 升级。
 
 ### 7.3 本地验证记录（2026-08-19）
 
@@ -309,7 +310,11 @@ GOWORK=off go test -mod=readonly -v -count=1 -timeout 120s \
 - 四个受影响 package 的新增/相关定向测试全部通过。
 - `pkg/bootstrap` 新增调度测试在 race detector 下重复 100 次通过，随后该 package 的完整 race test 通过。
 - `pkg/bootstrap`、`v4_0_5`、`v4_0_6`、`pkg/sql/plan` 的完整普通测试均在上述 PR 实现基线上通过。
-- DDL BVT case/result 已更新，但本地未运行 distributed BVT，仍需由 CI 或升级测试环境执行。
+- account BVT `zz_accesscontrol/create_account.sql` 在历史二进制和升级后的 PR 二进制上各执行一次；两次均为 150/150 成功。
+- 真实升级前，两个保留租户的 `information_schema.table_constraints` 均为 `relkind='r'` 的历史 base table，业务 marker 行分别为 101 和 202；升级后两个租户的 `create_version` 均为 `4.0.6`，`TABLE_CONSTRAINTS` 和 `KEY_COLUMN_USAGE` 均为 `relkind='v'`，canonical view SQL 已落盘，view 可查询，marker 行保持不变。
+- 真实升级中所有 version/tenant step 都完成：`2.0.3 -> 2.1.0 -> 2.2.0 -> 3.0.0 -> 4.0.0 -> 4.0.1 -> 4.0.2 -> 4.0.3 -> 4.0.4 -> 4.0.5 -> 4.0.6` 的 `state=2`，各步 `ready_tenant=total_tenant=3`（system tenant 加两个保留租户）。
+- 直接从 `v2.0.3` 跳到当前二进制会先遇到与本 PR 无关的历史 catalog 依赖（例如缺少 `mo_merge_settings`/`mo_feature_registry`），因此端到端验证采用发布版本逐级升级；这也避免把不受支持的跨代跳跃误当成本修复失败。
+- DDL BVT `ddl/drop_if_exists.sql` 在升级后的 PR 二进制上通过：47 条命令中 35 条执行成功、12 条按 case 标记忽略、0 失败，成功率 100%。
 
 ## 8. 发布与运行时验收
 
