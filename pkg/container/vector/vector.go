@@ -3206,6 +3206,7 @@ func (v *Vector) SetNull(i uint64) {
 func (v *Vector) SetNullPreservingPrepareParamCapacity(i uint64) {
 	v.nsp.Add(i)
 	v.clearPrepareParamKindAt(int(i))
+	v.clearBinaryStringAt(int(i))
 }
 
 // NormalizePrepareParamKinds collapses retained row provenance to the scalar

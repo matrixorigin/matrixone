@@ -368,7 +368,6 @@ type FunctionExpressionExecutor struct {
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
-	flowControlStaticDomains []types.StringDomain
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -840,23 +839,6 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
-	if expr.flowControlStaticDomains != nil {
-		expr.flowControlStaticDomains = expr.flowControlStaticDomains[:0]
-	}
-}
-
-func (expr *FunctionExpressionExecutor) ensureFlowControlStaticDomainRows(rows int) {
-	if rows <= len(expr.flowControlStaticDomains) {
-		return
-	}
-	old := len(expr.flowControlStaticDomains)
-	if rows <= cap(expr.flowControlStaticDomains) {
-		expr.flowControlStaticDomains = expr.flowControlStaticDomains[:rows]
-		clear(expr.flowControlStaticDomains[old:])
-		return
-	}
-	expr.flowControlStaticDomains = append(
-		expr.flowControlStaticDomains, make([]types.StringDomain, rows-old)...)
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -898,16 +880,30 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 	if value == nil || value.Length() == 0 {
 		return
 	}
+	resultDomain := types.StaticStringDomain(expr.resultType)
+	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
+		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
+		types.StaticStringDomain(*value.GetType()) == resultDomain &&
+		len(expr.flowControlKinds) == 0 &&
+		(!expr.flowControlKindSeen || expr.flowControlKind == vector.PrepareParamNone) {
+		expr.flowControlKind = vector.PrepareParamNone
+		expr.flowControlKindSeen = true
+		return
+	}
 	for row, selected := range selection {
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
-				staticDomain := types.StaticStringDomain(*value.GetType())
-				if staticDomain != types.StringDomainNone {
-					expr.ensureFlowControlStaticDomainRows(len(selection))
-					expr.flowControlStaticDomains[row] = staticDomain
+				switch staticDomain := types.StaticStringDomain(*value.GetType()); {
+				case staticDomain == types.StringDomainText && resultDomain == types.StringDomainBinary:
+					domain = types.RuntimeStringText
+				case staticDomain == types.StringDomainBinary && resultDomain == types.StringDomainText:
+					domain = types.RuntimeStringBinary
 				}
+			} else if (domain == types.RuntimeStringText && resultDomain == types.StringDomainText) ||
+				(domain == types.RuntimeStringBinary && resultDomain == types.StringDomainBinary) {
+				domain = types.RuntimeStringInherit
 			}
 			if domain != types.RuntimeStringInherit || len(expr.flowControlStringDomains) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
@@ -958,22 +954,8 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	if result == nil || rows <= 0 {
 		return nil
 	}
-	if len(expr.flowControlStringDomains) != 0 || len(expr.flowControlStaticDomains) != 0 {
+	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
-		resultDomain := types.StaticStringDomain(*result.GetType())
-		for row := 0; row < rows && row < len(expr.flowControlStaticDomains); row++ {
-			if expr.flowControlStringDomains[row] != types.RuntimeStringInherit {
-				continue
-			}
-			switch {
-			case expr.flowControlStaticDomains[row] == types.StringDomainText &&
-				resultDomain == types.StringDomainBinary:
-				expr.flowControlStringDomains[row] = types.RuntimeStringText
-			case expr.flowControlStaticDomains[row] == types.StringDomainBinary &&
-				resultDomain == types.StringDomainText:
-				expr.flowControlStringDomains[row] = types.RuntimeStringBinary
-			}
-		}
 		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
 			return err
 		}

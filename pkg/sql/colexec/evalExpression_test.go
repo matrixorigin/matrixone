@@ -149,7 +149,7 @@ func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(result, []byte("binary"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
 
-	expr := &FunctionExpressionExecutor{}
+	expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
 	expr.resetFlowControlPrepareParamKind()
 	expr.observeFlowControlPrepareParamKind(binary, nil, []bool{true, false})
 	expr.observeFlowControlPrepareParamKind(text, nil, []bool{false, true})
@@ -167,11 +167,33 @@ func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
 
-	expr := &FunctionExpressionExecutor{}
+	expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
 	expr.resetFlowControlPrepareParamKind()
 	expr.observeFlowControlPrepareParamKind(text, nil, []bool{true})
 	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
 	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+}
+
+func TestFlowControlSameDomainWithoutProvenanceKeepsFastPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value, err := vector.NewConstBytes(
+		types.T_varchar.ToType(), []byte("ordinary"), 65536, proc.Mp())
+	require.NoError(t, err)
+	defer value.Free(proc.Mp())
+	selection := make([]bool, value.Length())
+	for i := range selection {
+		selection[i] = true
+	}
+
+	for _, fid := range []int32{function.IFF, function.CASE, function.COALESCE} {
+		expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
+		expr.fid = fid
+		expr.observeFlowControlPrepareParamKind(value, nil, selection)
+		require.Nil(t, expr.flowControlStringDomains)
+		require.Nil(t, expr.flowControlKinds)
+		require.True(t, expr.flowControlKindSeen)
+		require.Equal(t, vector.PrepareParamNone, expr.flowControlKind)
+	}
 }
 
 func TestFlowControlUsesSourceDomainBeforeImplicitCast(t *testing.T) {
@@ -205,7 +227,7 @@ func TestFlowControlUsesSourceDomainBeforeImplicitCast(t *testing.T) {
 				parameterResults:  []*vector.Vector{source},
 				parameterExecutor: []ExpressionExecutor{nil},
 			}
-			expr := &FunctionExpressionExecutor{}
+			expr := &FunctionExpressionExecutor{resultType: tt.castType}
 			expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
 			require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
 			require.Equal(t, tt.want, result.GetRuntimeStringDomainAt(0))
@@ -232,7 +254,7 @@ func TestFlowControlKeepsExplicitCastAsSemanticBoundary(t *testing.T) {
 		parameterResults:  []*vector.Vector{source},
 		parameterExecutor: []ExpressionExecutor{nil},
 	}
-	expr := &FunctionExpressionExecutor{}
+	expr := &FunctionExpressionExecutor{resultType: types.T_varbinary.ToType()}
 	expr.observeFlowControlPrepareParamKind(casted, castExecutor, []bool{true})
 	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
 	require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))

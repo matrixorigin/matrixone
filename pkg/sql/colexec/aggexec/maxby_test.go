@@ -361,6 +361,34 @@ func TestMaxByNullContractAndDeterministicMerge(t *testing.T) {
 	restored.Free()
 }
 
+func TestMaxByNullWinnerClearsExplicitTextProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+	inputs := maxByInputs(
+		t, mp, []string{"older", "ignored"}, map[int]bool{1: true},
+		[]int64{9, 10}, []string{"a", "z"})
+	inputs[0].SetType(types.T_varbinary.ToType())
+	require.NoError(t, inputs[0].SetRuntimeStringDomainAtWithMP(
+		0, types.RuntimeStringText, mp))
+	defer func() {
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	exec := makeMaxByExec(mp, 7022, false, params).(*maxByExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, inputs))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.True(t, result[0].IsNull(0))
+	require.False(t, result[0].HasExplicitTextStringMetadata())
+	require.False(t, result[0].HasBinaryStringMetadata())
+	result[0].Free(mp)
+	exec.Free()
+}
+
 func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
 	mp := mpool.MustNewZero()
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
