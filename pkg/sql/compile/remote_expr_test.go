@@ -109,9 +109,63 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, vec.Length())
 	free()
-	require.Len(t, session.warnings, 1)
+	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
+	buildCast := func(proc *process.Process) *plan.Expr {
+		proc.Session = &remoteWarningSession{}
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			if name == "s" && !system {
+				return "12abc", nil
+			}
+			return nil, moerr.NewInternalErrorNoCtx("variable not found")
+		})
+
+		variable := makeTestVarExpr("s")
+		variable.GetV().System = false
+		targetType := types.T_float64.ToType()
+		cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+			variable,
+			{
+				Typ:  plan2.MakePlan2Type(&targetType),
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			},
+		})
+		require.NoError(t, err)
+		folded, err := foldVarExprsInExprInPlace(cast, proc)
+		require.NoError(t, err)
+		require.True(t, folded)
+		return cast
+	}
+
+	run := func(layout []int) uint64 {
+		proc := testutil.NewProcess(t)
+		cast := buildCast(proc)
+		executor, err := colexec.NewExpressionExecutor(proc, cast)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		for _, rows := range layout {
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt64Vector(make([]int64, rows), nil, proc.Mp())
+			input.SetRowCount(rows)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, rows, result.Length())
+			input.Vecs[0].Free(proc.Mp())
+		}
+		session := proc.Session.(*remoteWarningSession)
+		return session.totalWarnings
+	}
+
+	// A single two-row batch and two one-row batches represent the same
+	// logical result. Constant folding must not make their diagnostics differ.
+	require.Equal(t, uint64(2), run([]int{2}))
+	require.Equal(t, uint64(2), run([]int{1, 1}))
+	require.Equal(t, uint64(0), run([]int{0}))
 }
 
 func TestRemoteNumericCoercionWarningsFollowEvaluatedRows(t *testing.T) {
