@@ -44,10 +44,9 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat && b.ctx != nil &&
 		!b.ctx.aggregateQueryForFullGroupBy() && b.isProjectedOutputExpr(astExpr) {
-		// AliasOnly qualification returns the already-qualified SELECT
-		// expression or a direct projected source column. Bind that
-		// expression as a projection, rather than
-		// applying ONLY_FULL_GROUP_BY checks to its source columns.
+		// Alias-before-column qualification returns the SELECT expression.
+		// Bind that expression as a projection, rather than applying
+		// ONLY_FULL_GROUP_BY checks to its source columns.
 		previous := b.bindingProjectedAlias
 		b.bindingProjectedAlias = true
 		expr, err := b.baseBindExpr(astExpr, depth, isRoot)
@@ -134,28 +133,6 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		return expr, nil
-	} else if b.builder.mysqlFullGroupByCompat && b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() {
-		// A non-aggregate HAVING may refer to a projected SELECT alias, but
-		// ONLY_FULL_GROUP_BY must still reject an arbitrary source column that
-		// is not part of the projection. AliasOnly qualification leaves such
-		// names unresolved so they reach this validation path.
-		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
-		if err != nil {
-			return nil, err
-		}
-		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
-				return expr, nil
-			}
-			if b.bindingHaving && depth > 0 &&
-				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
-					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
-					b.corrColRefTargetsGroup(corr.Corr) ||
-					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
-				return expr, nil
-			}
-		}
-		return nil, b.newGroupByColumnError(astExpr)
 	} else if b.builder.mysqlCompatible {
 		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
@@ -226,11 +203,6 @@ func (b *HavingBinder) isProjectedOutputExpr(astExpr tree.Expr) bool {
 	}
 	for _, item := range b.ctx.aliasMap {
 		if item != nil && item.astExpr == astExpr {
-			return true
-		}
-	}
-	for _, field := range b.ctx.projectByAst {
-		if field.ast == astExpr {
 			return true
 		}
 	}

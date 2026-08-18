@@ -2041,6 +2041,7 @@ func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
 
 func TestOnlyFullGroupByAllowsNonAggregateHavingOnInformationSchemaView(t *testing.T) {
 	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 	p, err := runOneStmt(mock, t, `
 		SELECT TABLE_SCHEMA AS TABLE_CAT,
 		       NULL AS TABLE_SCHEM,
@@ -2092,14 +2093,14 @@ func TestOnlyFullGroupByAllowsNonAggregateHavingDirectAlias(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestOnlyFullGroupByAllowsNonAggregateHavingProjectedColumn(t *testing.T) {
+func TestOnlyFullGroupByRejectsNonAggregateHavingDirectColumn(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
 	_, err := runOneStmt(mock, t, `
 		SELECT n_regionkey
 		FROM nation
 		HAVING n_regionkey > 0`)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
 }
 
 func TestMatrixOneNativeStillRejectsNonAggregateHavingColumn(t *testing.T) {

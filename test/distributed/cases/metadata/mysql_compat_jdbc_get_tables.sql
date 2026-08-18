@@ -32,6 +32,7 @@ HAVING TABLE_TYPE IN ('TABLE', NULL, NULL, NULL, NULL)
 ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
 
 -- ONLY_FULL_GROUP_BY still rejects an unprojected HAVING source column.
+-- @regex("must appear in the GROUP BY clause",true)
 select TABLE_SCHEMA
 from INFORMATION_SCHEMA.TABLES
 where TABLE_SCHEMA = 'mysql_compat_jdbc_get_tables'
