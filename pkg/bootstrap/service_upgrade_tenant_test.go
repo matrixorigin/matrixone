@@ -81,6 +81,41 @@ func Test_asyncUpgradeTenantTask(t *testing.T) {
 	)
 }
 
+func TestAsyncUpgradeTenantTaskBacksOffAndStopsOnCancellation(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		var calls atomic.Int32
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sqlExecutor := executor.NewMemExecutor(func(string) (executor.Result, error) {
+			calls.Add(1)
+			cancel()
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("persistent catalog failure")
+		})
+		s := newServiceForTest(
+			"",
+			&memLocker{},
+			clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil,
+			sqlExecutor,
+			func(*service) {},
+			WithCheckUpgradeTenantDuration(time.Millisecond),
+		)
+
+		done := make(chan struct{})
+		go func() {
+			s.asyncUpgradeTenantTask(ctx)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("tenant upgrade worker did not stop after cancellation")
+		}
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+		require.Equal(t, int32(1), calls.Load(), "cancellation must stop retries after the failing attempt")
+	})
+}
+
 func Test_asyncUpgradeTenantTask_SkipsTenantAtTargetVersion(t *testing.T) {
 	sid := ""
 	runtime.RunTest(

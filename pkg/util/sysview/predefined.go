@@ -16,6 +16,7 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
@@ -23,6 +24,8 @@ import (
 // `mysql` database system tables
 // They are all Tenant level system tables
 var (
+	systemDatabaseListSQL = "'" + strings.Join(catalog.SystemDatabases, "','") + "'"
+
 	MysqlUserDDL = `CREATE TABLE mysql.user (
 			Host char(255)  NOT NULL DEFAULT '',
 			User char(32)  NOT NULL DEFAULT '',
@@ -202,8 +205,27 @@ var (
 		" then cast(split_part(upper(mo_show_visible_bin(mc.atttyp,3)), ' SRID ', 2) as bigint) else NULL end) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_is_hidden = 0 and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
+		"and mc.att_is_hidden = 0 "+
+		"and (mt.relkind<>'v' or mt.reldatabase in (%s) or "+
+		"(not exists (select 1 from mo_catalog.mo_view_refresh vr "+
+		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
+		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) or "+
+		"(exists (select 1 from mo_catalog.mo_view_refresh vr "+
+		"where vr.account_id=mc.account_id and vr.target_relation_id=mc.att_relname_id "+
+		"and vr.status='CURRENT') and (not exists (select 1 from mo_catalog.mo_view_dependencies vd "+
+		"where vd.account_id=mc.account_id and vd.target_relation_id=0 and vd.dependency_ordinal=0) or "+
+		"exists (select 1 from mo_catalog.mo_view_dependencies ga "+
+		"where ga.account_id=0 and ga.target_relation_id=0 and ga.dependency_ordinal=0 "+
+		"and ga.source_relation_kind not in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN'))) and "+
+		"not exists (select 1 from mo_catalog.mo_view_dependencies gd "+
+		"where gd.account_id=0 and gd.target_relation_id=0 and gd.dependency_ordinal=0 "+
+		"and gd.source_relation_kind in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN')))) "+
+		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s' and %s",
+		systemDatabaseListSQL, catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK, catalog.NonTemporaryTableSQLPredicate("mt"))
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +

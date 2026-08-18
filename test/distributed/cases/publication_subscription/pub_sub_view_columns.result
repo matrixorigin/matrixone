@@ -1,0 +1,22 @@
+drop account if exists view_columns_subscriber;
+create account view_columns_subscriber admin_name = 'admin' identified by '111';
+drop publication if exists view_columns_publication;
+drop database if exists view_columns_source;
+create database view_columns_source;
+create table view_columns_source.source_table (value bigint);
+create view view_columns_source.published_view as
+select value from view_columns_source.source_table;
+create publication view_columns_publication database view_columns_source account view_columns_subscriber;
+create database view_columns_subscription from sys publication view_columns_publication;
+select * from view_columns_subscription.published_view;
+➤ value[-5,64,0]
+desc view_columns_subscription.published_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+show columns from view_columns_subscription.published_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+value  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦
+drop database view_columns_subscription;
+drop publication view_columns_publication;
+drop database view_columns_source;
+drop account view_columns_subscriber;

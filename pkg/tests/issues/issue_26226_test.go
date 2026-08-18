@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +39,10 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		execSQLRequire(t, ctx, dbConn, "set role moadmin")
+		require.Eventually(t, func() bool {
+			return clusterservice.AllKnownCNsSupportViewMetadataRefresh(cn.ServiceID())
+		}, time.Minute, 100*time.Millisecond)
+		waitForViewMetadataRevalidation(t, ctx, dbConn)
 
 		const db = "issue_26226"
 		for _, stmt := range []string{

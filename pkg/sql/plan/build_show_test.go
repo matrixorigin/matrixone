@@ -17,11 +17,59 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSubscriptionMetaForResolvedObject(t *testing.T) {
+	meta := subscriptionMetaForResolvedObject(&plan.ObjectRef{
+		SchemaName:       "publisher_db",
+		SubscriptionName: "subscriber_alias",
+		PubInfo:          &plan.PubInfo{TenantId: 42},
+	})
+	require.Equal(t, int32(42), meta.AccountId)
+	require.Equal(t, "publisher_db", meta.DbName)
+	require.Equal(t, "subscriber_alias", meta.SubName)
+	require.Equal(t, pubsub.TableAll, meta.Tables)
+}
+
+func TestBuildShowTableValuesUsesQualifiedSubscriptionSource(t *testing.T) {
+	base := NewMockCompilerContext(false)
+	base.dbs["subdb"] = true
+	base.tables["source"] = &plan.TableDef{
+		Name: "source",
+		Cols: []*plan.ColDef{{
+			Name: "value",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	base.objects["source"] = &plan.ObjectRef{
+		SchemaName:       "publisherdb",
+		ObjName:          "source",
+		SubscriptionName: "subdb",
+		PubInfo:          &plan.PubInfo{TenantId: 7},
+	}
+	ctx := &subscriptionScopeCompilerContext{
+		MockCompilerContext: base,
+		subscription: &SubscriptionMeta{
+			AccountId: 7, DbName: "publisherdb", SubName: "subdb",
+			Tables: pubsub.TableAll,
+		},
+	}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"show table_values from subdb.source", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Nil(t, ctx.GetQueryingSubscription())
+}
 
 func TestCoverage_buildShowGrants_ForRole(t *testing.T) {
 	mock := NewMockOptimizer(false)

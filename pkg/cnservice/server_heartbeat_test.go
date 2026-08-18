@@ -197,6 +197,28 @@ func Test_heartbeat(t *testing.T) {
 	sv.heartbeat(ctx)
 }
 
+func TestViewMetadataHeartbeatCapabilityRequiresCatalogReadiness(t *testing.T) {
+	s := &service{}
+	require.False(t, s.viewMetadataRefreshReady())
+	boot := &testBootService{choice: 2}
+	s.viewMetadataBootstrap.Store(&bootstrapReadiness{service: boot})
+	require.False(t, s.viewMetadataRefreshReady())
+	boot.choice = 0
+	require.True(t, s.viewMetadataRefreshReady())
+	s.bootstrapMu.Lock()
+	defer s.bootstrapMu.Unlock()
+	ready := make(chan bool, 1)
+	go func() { ready <- s.viewMetadataRefreshReady() }()
+	select {
+	case value := <-ready:
+		require.True(t, value)
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat readiness waited for bootstrap lifecycle lock")
+	}
+	s.viewMetadataBootstrap.Store(nil)
+	require.True(t, s.viewMetadataRefreshReady())
+}
+
 func TestCNCommandPollProgressesWhileHeartbeatIsBlocked(t *testing.T) {
 	conf := &Config{}
 	conf.UUID = "cn-1"

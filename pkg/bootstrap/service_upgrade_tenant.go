@@ -351,7 +351,13 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 			}
 
 			for {
-				if hasUpgradeTenants, err := fn(); err != nil || hasUpgradeTenants {
+				hasUpgradeTenants, err := fn()
+				if err != nil {
+					// Retry on the next bounded check interval. Retrying here would
+					// spin on a persistent catalog error and delay cancellation.
+					break
+				}
+				if hasUpgradeTenants {
 					continue
 				}
 				break

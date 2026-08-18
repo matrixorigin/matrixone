@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,84 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type sharedTableDefCompilerContext struct {
+	*MockCompilerContext
+	obj      *plan.ObjectRef
+	tableDef *plan.TableDef
+}
+
+func (c *sharedTableDefCompilerContext) Resolve(
+	_, _ string,
+	_ *Snapshot,
+) (*ObjectRef, *TableDef, error) {
+	return c.obj, c.tableDef, nil
+}
+
+func TestConcurrentQueryBuildOwnsResolvedTableShell(t *testing.T) {
+	defaultExpr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 1}}},
+	}
+	shared := &plan.TableDef{
+		Name:      "shared_table",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{{
+			Name: "a", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true},
+			Default: &plan.Default{Expr: defaultExpr},
+		}},
+	}
+	ctx := &sharedTableDefCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(true),
+		obj:                 &plan.ObjectRef{DbName: "tpch", ObjName: shared.Name, Obj: 42},
+		tableDef:            shared,
+	}
+
+	const builders = 16
+	defs := make(chan *plan.TableDef, builders)
+	errs := make(chan error, builders)
+	var wg sync.WaitGroup
+	for range builders {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+				"select a from tpch.shared_table where exists "+
+					"(select 1 from tpch.shared_table)", 1)
+			if err != nil {
+				errs <- err
+				return
+			}
+			built, err := BuildPlan(ctx, stmts[0], false)
+			if err != nil {
+				errs <- err
+				return
+			}
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN {
+					defs <- node.GetTableDef()
+					return
+				}
+			}
+			errs <- fmt.Errorf("table scan not found")
+		}()
+	}
+	wg.Wait()
+	close(defs)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Empty(t, shared.Name2ColIndex)
+	seen := make(map[*plan.TableDef]struct{}, builders)
+	for def := range defs {
+		require.NotSame(t, shared, def)
+		require.Same(t, shared.Cols[0], def.Cols[0])
+		require.Same(t, defaultExpr, def.Cols[0].Default.Expr)
+		seen[def] = struct{}{}
+	}
+	require.Len(t, seen, builders)
+}
 
 func TestChooseRowCarrier(t *testing.T) {
 	makeExpr := func(typ types.T, width int32) *plan.Expr {

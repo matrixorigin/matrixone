@@ -18,8 +18,60 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
+
+func TestViewMetadataStatusRequiresPersistedCurrentRow(t *testing.T) {
+	require.False(t, viewMetadataStatusIsCurrent(false, "", "", "", true))
+	for _, status := range []string{
+		catalog.ViewRefreshStatusPending,
+		catalog.ViewRefreshStatusDiscovering,
+		catalog.ViewRefreshStatusRunning,
+		catalog.ViewRefreshStatusInvalid,
+	} {
+		require.False(t, viewMetadataStatusIsCurrent(true, status, "", "", true), status)
+	}
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusRevalidateRequired, "", true))
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusRevalidateScan, "", true))
+	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent,
+		catalog.ViewRefreshStatusLegacyScan, "", true))
+}
+
+func TestViewMetadataStatusFailsClosedBeforeDisabledBarrierTick(t *testing.T) {
+	require.True(t, viewMetadataStatusIsCurrent(false, "", "", catalog.ViewRefreshStatusLegacyScan, false))
+	require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "",
+		catalog.ViewRefreshStatusActivated, false))
+	require.True(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "",
+		catalog.ViewRefreshStatusActivated, true))
+	for _, status := range []string{
+		catalog.ViewRefreshStatusRevalidateRequired,
+		catalog.ViewRefreshStatusRevalidateScan,
+	} {
+		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, true))
+		require.False(t, viewMetadataStatusIsCurrent(true, catalog.ViewRefreshStatusCurrent, "", status, false))
+	}
+}
+
+func TestViewMetadataCatalogReadinessFallbackIsTyped(t *testing.T) {
+	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+	missingDatabase := moerr.NewBadDBNoCtx(catalog.MO_CATALOG)
+	retryable := moerr.NewTxnNeedRetryNoCtx()
+	require.True(t, ignoreViewMetadataCatalogReadinessError(missingTable, false))
+	require.True(t, ignoreViewMetadataCatalogReadinessError(missingDatabase, false))
+	require.False(t, ignoreViewMetadataCatalogReadinessError(missingTable, true))
+	require.False(t, ignoreViewMetadataCatalogReadinessError(retryable, false))
+}
+
+func TestSystemViewsDoNotRequireRefreshState(t *testing.T) {
+	tcc := &TxnCompilerContext{}
+	for _, databaseName := range catalog.SystemDatabases {
+		require.NoError(t, tcc.EnsureViewMetadataCurrent(databaseName, "system view", 0, 1))
+	}
+}
 
 func TestExecCtxWithRootSQLRestoresScopedValues(t *testing.T) {
 	ses := &Session{}
