@@ -373,7 +373,7 @@ func TestDiscardableGroupScratchRetriesAtExactFinalCapacity(t *testing.T) {
 	account, err := registry.Open(1 << 20)
 	require.NoError(t, err)
 	controller := &exactGroupScratchController{
-		limit: uint64(rows)*(groupSpillSelectionBytes+groupSpillRowIDBytes) - 1,
+		limit: uint64(rows)*groupSpillRowIDBytes - 1,
 	}
 	class, err := account.RegisterCapacityController(controller)
 	require.NoError(t, err)
@@ -383,24 +383,18 @@ func TestDiscardableGroupScratchRetriesAtExactFinalCapacity(t *testing.T) {
 		recoveryCapacityClass: class,
 	}
 
-	flags, err := resizeDiscardableGroupScratch[uint8](
-		&ctr, nil, 1, GroupAllocationSiteSpillFlags)
-	require.NoError(t, err)
 	rowIDs, err := resizeDiscardableGroupScratch[int32](
 		&ctr, nil, 1, GroupAllocationSiteSpillRows)
 	require.NoError(t, err)
 
-	// Growing disposable scratch releases each old borrower before acquiring
-	// its replacement. The deliberately one-byte-short floor rejects only the
-	// final row-id allocation, not an old+new transient overlap.
-	flags, err = resizeDiscardableGroupScratch(
-		&ctr, flags, rows, GroupAllocationSiteSpillFlags)
-	require.NoError(t, err)
+	// Growing disposable scratch releases the old borrower before acquiring
+	// its replacement. The deliberately one-byte-short floor rejects the final
+	// row-id allocation, not an old+new transient overlap.
 	rowIDs, err = resizeDiscardableGroupScratch(
 		&ctr, rowIDs, rows, GroupAllocationSiteSpillRows)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Nil(t, rowIDs)
-	require.Equal(t, uint64(rows), controller.used)
+	require.Zero(t, controller.used)
 
 	// Retrying with the exact final physical capacity succeeds, and terminal
 	// cleanup returns both the capacity class and allocation ledger to zero.
@@ -411,7 +405,6 @@ func TestDiscardableGroupScratchRetriesAtExactFinalCapacity(t *testing.T) {
 	require.Equal(t, controller.limit, controller.used)
 	require.Equal(t, controller.limit, controller.peak)
 
-	freeGroupScratch(&ctr, flags)
 	freeGroupScratch(&ctr, rowIDs)
 	require.Zero(t, controller.used)
 	require.Zero(t, account.Snapshot().Used)
@@ -453,10 +446,17 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 		name     string
 		current  uint64
 		incoming int
+		expected uint64
 	}{
 		{name: "empty", incoming: 0},
 		{name: "within one aggregate chunk", current: 17, incoming: 239},
-		{name: "selection scratch capped at one chunk", current: 10_000, incoming: 256},
+		{name: "row-id scratch capped at one chunk", current: 10_000, incoming: 256},
+		{
+			name:     "exact first chunk",
+			incoming: aggBatchSize,
+			expected: uint64(aggBatchSize) *
+				(groupSpillHashBytes + groupSpillRowIDBytes),
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -474,6 +474,9 @@ func TestRecoveryCapacityCoverCheckMatchesExactTarget(t *testing.T) {
 			}
 			target, err := ctr.recoveryCapacityTarget(test.incoming)
 			require.NoError(t, err)
+			if test.expected != 0 {
+				require.Equal(t, test.expected, target)
+			}
 			ctr.recoveryCapacityFloor = target
 			if target == 0 {
 				require.False(t, ctr.recoveryCapacityCovers(test.incoming))
@@ -522,7 +525,7 @@ func TestOptionalSpillBufferDoesNotBorrowRecoveryFloor(t *testing.T) {
 
 	reserved, borrowed := g.ctr.recoveryCapacity.Snapshot()
 	require.Equal(t,
-		uint64(hashmap.UnitLimit)*(groupSpillHashBytes+groupSpillSelectionBytes+groupSpillRowIDBytes),
+		uint64(hashmap.UnitLimit)*(groupSpillHashBytes+groupSpillRowIDBytes),
 		reserved,
 	)
 	require.Zero(t, borrowed)
@@ -1079,8 +1082,7 @@ func TestSpillReloadRaisesRecoveryFloorForAccumulatedRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, loaded)
 	require.GreaterOrEqual(t, g.ctr.recoveryCapacityFloor,
-		uint64(2*(groupSpillHashBytes+
-			groupSpillSelectionBytes+groupSpillRowIDBytes)))
+		uint64(2*(groupSpillHashBytes+groupSpillRowIDBytes)))
 	result, err := g.ctr.getNextFinalResult(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)

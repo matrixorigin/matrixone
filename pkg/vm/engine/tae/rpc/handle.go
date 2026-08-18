@@ -185,6 +185,8 @@ func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 type txnCommitRequestsIter struct {
 	cursor         int
 	curNorReq      *api.PrecommitWriteCmd
+	loaded         bool
+	loadErr        error
 	commitRequests *txn.TxnCommitRequest
 }
 
@@ -205,22 +207,43 @@ func (cri *txnCommitRequestsIter) Next() bool {
 	return cri.cursor < len(cri.commitRequests.Payload)
 }
 
-func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
-	cnReq := cri.commitRequests.Payload[cri.cursor].CNRequest
-
-	if cri.curNorReq == nil {
-		cri.curNorReq = new(api.PrecommitWriteCmd)
+// loadCurrent decodes the current CN payload at most once. loaded records an
+// attempted decode, including a failed one, so an invalid payload is not
+// decoded again by the metadata pre-scan and Entry.
+func (cri *txnCommitRequestsIter) loadCurrent() error {
+	if cri.loaded {
+		return cri.loadErr
 	}
 
-	if len(cri.curNorReq.EntryList) == 0 {
-		if err = cri.curNorReq.UnmarshalBinary(cnReq.Payload); err != nil {
-			return
-		}
+	cnReq := cri.commitRequests.Payload[cri.cursor].CNRequest
+	if cri.curNorReq == nil {
+		cri.curNorReq = new(api.PrecommitWriteCmd)
+	} else {
+		cri.curNorReq.Reset()
+	}
+
+	cri.loaded = true
+	cri.loadErr = cri.curNorReq.UnmarshalBinary(cnReq.Payload)
+	return cri.loadErr
+}
+
+func (cri *txnCommitRequestsIter) current() (*api.PrecommitWriteCmd, error) {
+	if err := cri.loadCurrent(); err != nil {
+		return nil, err
+	}
+	return cri.curNorReq, nil
+}
+
+func (cri *txnCommitRequestsIter) Entry() (entry any, err error) {
+	if err = cri.loadCurrent(); err != nil {
+		return
 	}
 
 	entry, cri.curNorReq.EntryList, err = pkgcatalog.ParseEntryList(cri.curNorReq.EntryList)
 	if len(cri.curNorReq.EntryList) == 0 {
 		cri.cursor++
+		cri.loaded = false
+		cri.loadErr = nil
 	}
 
 	return
@@ -258,8 +281,7 @@ func (h *Handle) handleRequests(
 
 	// Extract sync protection job ID and dedup policy from the first payload for CCPR validation
 	if len(commitRequests.Payload) > 0 && commitRequests.Payload[0].CNRequest != nil {
-		var precommitCmd api.PrecommitWriteCmd
-		if unmarshalErr := precommitCmd.UnmarshalBinary(commitRequests.Payload[0].CNRequest.Payload); unmarshalErr == nil {
+		if precommitCmd, unmarshalErr := iter.current(); unmarshalErr == nil {
 			if precommitCmd.SyncProtectionJobId != "" {
 				txn.SetSyncProtectionJobID(precommitCmd.SyncProtectionJobId)
 			}

@@ -15,6 +15,7 @@
 package malloc
 
 import (
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -102,6 +103,9 @@ func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
 		contract  BackingSizeContract
 	}{
 		{"class", upstream, want, BackingSizeContractClass},
+		{"hybrid-mmap", NewHybridMmapAllocator(), uint64(os.Getpagesize()), BackingSizeContractPage},
+		{"default-decorated-hybrid-mmap", DecorateWithDefaultConfig(NewHybridMmapAllocator()), uint64(os.Getpagesize()), BackingSizeContractPage},
+		{"jemalloc", newJemallocAllocatorForTest(t), 0, BackingSizeContractClass},
 		{"c", NewCAllocator(), request, BackingSizeContractExact},
 		{"sharded", NewShardedAllocator(1, newClassAllocator), want, BackingSizeContractClass},
 		{"metrics", NewMetricsAllocator(upstream, nil, nil, nil, nil, nil), want, BackingSizeContractClass},
@@ -118,12 +122,26 @@ func TestBackingSizePropagatesThroughDecorators(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := BackingSize(test.allocator, request)
 			require.NoError(t, err)
-			require.Equal(t, test.want, got)
+			if test.name == "jemalloc" {
+				require.GreaterOrEqual(t, got, uint64(request))
+			} else {
+				require.Equal(t, test.want, got)
+			}
 			contract, err := backingSizeContract(test.allocator)
 			require.NoError(t, err)
 			require.Equal(t, test.contract, contract)
 		})
 	}
+}
+
+func newJemallocAllocatorForTest(t *testing.T) *JemallocAllocator {
+	t.Helper()
+	allocator, err := NewJemallocAllocator()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, allocator.Close())
+	})
+	return allocator
 }
 
 func TestBackingSizeRejectsInconsistentContracts(t *testing.T) {
