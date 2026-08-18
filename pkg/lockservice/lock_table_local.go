@@ -593,6 +593,14 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				},
 			)
 			if err != nil {
+				if errors.Is(err, errEmptyLock) {
+					// A failed waiter cleanup may leave an empty entry in the
+					// ordered store. Remove it and retry this row against the
+					// next entry instead of waiting on or panicking on stale state.
+					l.deleteEmptyLockLocked(key, lock)
+					idx--
+					continue
+				}
 				return err
 			}
 			if hold {
@@ -829,12 +837,33 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 
 	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, lock)
 	if !ok || pairedLock.holders != lock.holders || pairedLock.waiters != lock.waiters {
-		// Do not return shared state to the pools while an unmatched endpoint may
-		// still reference it. Leaving the corrupt entry visible is safer than a
-		// use-after-reuse and makes the invariant failure observable.
+		// The endpoint may be stale because its paired entry was removed or its
+		// shared state was replaced while an aborted waiter was being detached.
+		// Do not return the possibly shared state to the pools. Remove the empty
+		// entry so a later request cannot try to hold it. If the paired endpoint
+		// is still live, rebuild this endpoint from the paired state first so a
+		// valid range lock is not split by the cleanup.
 		l.logger.Error("missing paired empty range lock during waiter cleanup",
 			zap.Uint64("table", l.bind.Table),
 			zap.Binary("key", key))
+		if ok && !pairedLock.isEmpty() {
+			repaired := pairedLock
+			repaired.value &^= flagLockRangeStart | flagLockRangeEnd
+			if lock.isLockRangeStart() {
+				repaired.value |= flagLockRangeStart
+			} else {
+				repaired.value |= flagLockRangeEnd
+			}
+			l.mu.store.Add(key, repaired)
+			return
+		}
+		l.mu.store.Delete(key)
+		if ok {
+			// Both endpoints are empty but do not share their backing state.
+			// Remove the paired stale entry as well; neither state is returned
+			// to the pools because its ownership is ambiguous.
+			l.mu.store.Delete(pairedKey)
+		}
 		return
 	}
 	l.mu.store.Delete(key)
@@ -850,6 +879,7 @@ func (l *localLockTable) addRangeLockLocked(
 		l1, ok1 := l.mu.store.Get(start)
 		l2, ok2 := l.mu.store.Get(end)
 		if ok1 && ok2 &&
+			!l1.isEmpty() && !l2.isEmpty() &&
 			l1.isShared() && l2.isShared() &&
 			l1.isLockRangeStart() && l2.isLockRangeEnd() {
 			addTxnLock := func() error {
@@ -957,6 +987,16 @@ func (l *localLockTable) addRangeLockLocked(
 				},
 			)
 			if holdErr != nil {
+				if errors.Is(holdErr, errEmptyLock) {
+					// A stale empty range endpoint is not a real conflict. Clean
+					// it and retry the range scan with the same request.
+					l.deleteEmptyLockLocked(conflictKey, conflictWith)
+					conflictWith = Lock{}
+					conflictKey = nil
+					prevStartKey = nil
+					rangeStartEncountered = false
+					continue
+				}
 				mc.rollback()
 				return nil, Lock{}, holdErr
 			}

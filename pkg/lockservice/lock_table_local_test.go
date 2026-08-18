@@ -349,6 +349,72 @@ func TestSynchronousWaiterRemovedFromEventsBeforeAfterWait(t *testing.T) {
 	)
 }
 
+func TestEmptyRangeEndpointIsRemovedBeforeNewRangeLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			// Simulate the state left by a failed range waiter cleanup: the two
+			// endpoints are both empty, but no longer share their backing state.
+			start := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			end := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, start)
+			lt.mu.store.Add([]byte{5}, end)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{0}, {10}}, txnID, newTestRangeExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestEmptyRowLockIsRemovedBeforeNewRowLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			stale := Lock{
+				value:   flagLockRow | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{3}, stale)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{3}}, txnID, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
 func TestMergeRangeWithNoConflict(t *testing.T) {
 	cases := []struct {
 		txnID         string
