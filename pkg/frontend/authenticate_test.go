@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -11635,11 +11636,67 @@ type backgroundExecTest struct {
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	dropDatabaseIgnoresForeignKeys bool
+	systemCTELimits                []bool
+	executionAccountIDs            []uint32
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
 	//TODO implement me
 	panic("implement me")
+}
+
+func TestInheritViewMetadataRevalidation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
+		ViewMetadataRefreshSupported: true,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, readyCluster)
+		}
+	})
+
+	t.Run("inherits active generation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
+		require.Contains(t, bh.executedSQLs[1], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[1],
+			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
+	})
+
+	t.Run("capability disabled", func(t *testing.T) {
+		disabled := &mockMOCluster{cnServices: []metadata.CNService{{
+			ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+		}}}
+		runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
+		defer runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
+		bh := &backgroundExecTest{}
+		bh.init()
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
+		require.Len(t, bh.executedSQLs, 2)
+		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
+		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
+
+		missing := &backgroundExecTest{}
+		missing.init()
+		missing.sql2err[catalog.ViewMetadataLifecycleGateSQL] =
+			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+		require.NoError(t, inheritViewMetadataRevalidation(
+			context.Background(), missing, ses.GetService(), 43))
+		require.Equal(t, []string{catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
+	})
 }
 
 func (bt *backgroundExecTest) GetExecResultBatches() []*batch.Batch {
@@ -11671,6 +11728,9 @@ func (bt *backgroundExecTest) GetExecStatsArray() statistic.StatsArray {
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
+	accountID, _ := defines.GetAccountId(ctx)
+	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}

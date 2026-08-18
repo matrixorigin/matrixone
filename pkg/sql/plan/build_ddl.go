@@ -141,6 +141,7 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	captureCtx := newViewDependencyCaptureContext(ctx)
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -174,13 +175,13 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	switch s := stmt.Select.(type) {
 	case *tree.ParenSelect:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, s.Select, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, captureCtx, s.Select, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		stmtPlan, err = bindAndOptimizeSelectQueryWithValidatorAndCapture(
-			plan.Query_SELECT, ctx, stmt, false, true, validate, captureColumnTypes, true)
+			plan.Query_SELECT, captureCtx, stmt, false, true, validate, captureColumnTypes, true)
 		if err != nil {
 			return nil, err
 		}
@@ -243,11 +244,14 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 		persistedCreateSQL = stableViewSQL
 	}
 
+	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{
-		Stmt:            viewSql,
-		DefaultDatabase: ctx.DefaultDatabase(),
-		SQLMode:         parserSQLModeFromContext(ctx),
-		SecurityType:    getViewSecurityTypeFromContext(ctx),
+		Stmt:                viewSql,
+		DefaultDatabase:     ctx.DefaultDatabase(),
+		SQLMode:             parserSQLModeFromContext(ctx),
+		SecurityType:        getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames: &lowerCaseTableNames,
+		Dependencies:        captureCtx.dependencies(),
 	})
 	if err != nil {
 		return nil, err
@@ -1189,6 +1193,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.deriveViewMetadata = true
 	bindCtx := NewBindContext(builder, nil)
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
@@ -1221,6 +1226,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			}
 		}
 		nullAbility := ctasExprCanBeNull(expr)
+		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
+			nullAbility = nullAbility || provenance.Source.Metadata.NullAbility
+		}
 		defaultDef := &plan.Default{NullAbility: nullAbility}
 		if provenance.State == ProvenanceSingleSource && provenance.Source != nil {
 			switch provenance.CTASDefaultPolicy {
@@ -1946,10 +1954,11 @@ func buildCreateTable(
 		if err != nil {
 			return nil, err
 		}
+		previousSubscription := ctx.GetQueryingSubscription()
 		if sub != nil {
 			ctx.SetQueryingSubscription(sub)
 			defer func() {
-				ctx.SetQueryingSubscription(nil)
+				ctx.SetQueryingSubscription(previousSubscription)
 			}()
 		}
 
@@ -2011,6 +2020,9 @@ func buildCreateTable(
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
 		likeSkeletonDef := normalizeLegacyTextCollationForCreateLike(tableDef)
+		if sub != nil {
+			ctx.SetQueryingSubscription(previousSubscription)
+		}
 		_, newStmt, err := constructCreateTableSQL(
 			ctx,
 			likeSkeletonDef,
@@ -2018,11 +2030,15 @@ func buildCreateTable(
 			true,
 			cloneStmt,
 			recoveredLegacyChecks,
+			sub,
 		)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			// The subscription binding belongs to the LIKE source only. The
+			// rewritten statement names the local target, so plan it with the
+			// caller's subscription context instead of the publisher binding.
 			// ConstructCreateTableSQL emits a bare `CREATE TABLE ...` without the
 			// IF NOT EXISTS clause, so propagate the original flag. Otherwise
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already

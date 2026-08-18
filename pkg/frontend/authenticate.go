@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1036,6 +1037,8 @@ var (
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
+		MoCatalogMoViewDependenciesDDL,
+		MoCatalogMoViewRefreshDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -10169,6 +10172,9 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
+		if rtnErr = inheritViewMetadataRevalidation(ctx, bh, ses.GetService(), newTenant.GetTenantID()); rtnErr != nil {
+			return rtnErr
+		}
 
 		return rtnErr
 	}
@@ -10181,6 +10187,38 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if err = createSubscription(ctx, bh, newTenant); err != nil {
 			return err
 		}
+	}
+	return err
+}
+
+func inheritViewMetadataRevalidation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+	accountID uint32,
+) error {
+	if err := bh.Exec(ctx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+			(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+			return nil
+		}
+		return err
+	}
+	err := bh.Exec(ctx, fmt.Sprintf(
+		"insert into %s.%s (%s) select %d,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,d.dependency_generation "+
+			"from %s.%s d where d.account_id=0 and d.target_relation_id=0 and d.dependency_ordinal=0 "+
+			"and d.source_relation_kind in ('%s','%s','%s','%s') and not exists (select 1 from %s.%s a "+
+			"where a.account_id=%d and a.target_relation_id=0 and a.dependency_ordinal=0)",
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, catalog.MoViewDependenciesColumns,
+		accountID, catalog.LegacyViewScanCursorDatabase, catalog.LegacyViewScanCursorRelation,
+		catalog.ViewRefreshStatusRevalidateScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
+		catalog.ViewRefreshStatusRevalidateRequired, catalog.ViewRefreshStatusRevalidateScan,
+		catalog.ViewRefreshStatusActivated, catalog.ViewRefreshStatusLegacyScan,
+		catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID))
+	if !compile.ViewMetadataRefreshEnabled(serviceID) &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+		return nil
 	}
 	return err
 }
@@ -10290,6 +10328,10 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+			return true
+		}
+		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
 			return true
 		}
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
