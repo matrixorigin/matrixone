@@ -107,32 +107,32 @@ func (c *DashboardCreator) initFSCacheRow() dashboard.Option {
 
 	cacheUsingPercent := func(componentFilter string) string {
 		// example result:
-		// sum by(component) (mo_fs_cache_bytes{instance=~"$instance", type="inuse", component=~".*mem"}) / sum by(component) (mo_fs_cache_bytes{instance=~"$instance", type="cap", component=~".*mem"})
+		// sum by(service, component) (mo_fs_cache_bytes{instance=~"$instance", type="inuse", component=~".*mem"}) / sum by(service, component) (mo_fs_cache_bytes{instance=~"$instance", type="cap", component=~".*mem"})
 		inuseFilter := `type="inuse",` + componentFilter
 		capilter := `type="cap",` + componentFilter
-		return `sum by(component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", inuseFilter) + `)` +
-			` / sum by(component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", capilter) + `)`
+		return `sum by(service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", inuseFilter) + `)` +
+			` / sum by(service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", capilter) + `)`
 	}
 
 	onePanel := func(title, componentFilter string, showBackingAccounting bool) row.Option {
 		queries := []string{
-			`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
-			`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
+			`sum by (service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="inuse", `+componentFilter) + `)`,
+			`sum by (service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="cap", `+componentFilter) + `)`,
 			cacheUsingPercent(componentFilter),
 		}
 		legends := []string{
-			"{{component}} - inuse",
-			"{{component}} - cap",
-			"{{component}} - Usage",
+			"{{service}}/{{component}} - inuse",
+			"{{service}}/{{component}} - cap",
+			"{{service}}/{{component}} - Usage",
 		}
 		if showBackingAccounting {
 			queries = append([]string{
-				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="logical", `+componentFilter) + `)`,
-				`sum by (component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="backing-overhead", `+componentFilter) + `)`,
+				`sum by (service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="logical", `+componentFilter) + `)`,
+				`sum by (service, component) (` + c.getMetricWithFilter("mo_fs_cache_bytes", `type="backing-overhead", `+componentFilter) + `)`,
 			}, queries...)
 			legends = append([]string{
-				"{{component}} - logical",
-				"{{component}} - backing overhead",
+				"{{service}}/{{component}} - logical",
+				"{{service}}/{{component}} - backing overhead",
 			}, legends...)
 		}
 		return c.withTimeSeries(

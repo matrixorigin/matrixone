@@ -288,12 +288,12 @@ func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *i
 	return b.ObjectStorage.Read(ctx, key, min, max)
 }
 
-func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	if b.updateCount.Add(1) == 1 {
 		close(b.updateStarted)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-b.releaseUpdate:
 		}
 	}
@@ -2449,6 +2449,42 @@ func TestS3FSIOMerger(t *testing.T) {
 	require.NoError(t, <-results)
 	require.NoError(t, <-results)
 	require.Equal(t, int64(1), storage.readCount.Load())
+}
+
+func TestNewS3FSCacheInitializationFailureRollsBackMemoryCache(t *testing.T) {
+	ctx := context.Background()
+	cachePath := t.TempDir() + "/not-a-directory"
+	require.NoError(t, os.WriteFile(cachePath, nil, 0o644))
+	name := t.Name()
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:     name,
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			DiskCapacity:   ptrTo(toml.ByteSize(1 << 20)),
+			DiskPath:       &cachePath,
+		},
+		nil,
+		false,
+		false,
+	)
+	require.Nil(t, fs)
+	require.Error(t, err)
+
+	registered := false
+	allMemoryCaches.Range(func(_, value any) bool {
+		if value.(memoryCacheRegistration).name == name {
+			registered = true
+			return false
+		}
+		return true
+	})
+	require.False(t, registered)
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {
