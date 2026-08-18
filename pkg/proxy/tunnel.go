@@ -1104,7 +1104,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		// otherwise a fragmented terminal response would never release request
 		// ownership and every later clean QUIT would unnecessarily miss cache.
 		if re == nil && packetSize >= preRecvLen {
-			prefixLen := preRecvLen
+			var prefixLen int
 			if p.name == pipeServerToClient {
 				const responseTrackingPrefixLen = mysqlHeadLen + 1 + 9 + 9 + 2
 				prefixLen = min(packetSize, responseTrackingPrefixLen)
