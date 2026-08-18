@@ -129,6 +129,25 @@ The itemised extras from the same page are negligible and already inside the flo
 codebook `4·pq_dim·pq_len·2^pq_bits` = 0.79 MB, extras `n_clusters·(20 + 8·dim)` = 37 MB,
 list pointers 24 KB.
 
+**Measured at 87.5M on an L40S (44.6 GB free VRAM), template tuning:**
+
+| what | predicted | measured | delta |
+|---|---|---|---|
+| tar on disk | 17.6 GB (`N·(m+8)`) | 18.98 GB (17.68 GiB) | +0.5% |
+| device peak during extend | "floor + leftover workspace" | **24.7 GB** (17.6 GB index + ~7 GB workspace) | +40% workspace over the floor |
+| device usage after Destroy | 0 | ~1 GB (cuVS ambient) | freed cleanly |
+| build wall (source scan + cuVS build + pack) | — | 3795 s (57 min scan + 1 min build + 4 min pack) | — |
+| SINGLE=1 invariant | held | held (`ivfpq_meta` = 1 row) | ✓ |
+| recall@10 (k=10, probe=128, lists=6000, 1000 queries) | — | 0.8790 | above 10M's 0.8422 (lists=4096, probe=128) despite lower probe coverage — denser lists win |
+| p50 latency (warm) | — | 7.15 ms | ~1.6× 10M's 4.18 ms, tracking list count |
+| cold-cache first-query load | — | 54.5 s | reading 17.68 GB tar into RAM + attach to GPU |
+
+**Question closed:** workspace is present and non-trivial (~40% of the index floor at
+this scale), but the self-limiting hypothesis holds — the heuristic did not run away.
+Peak stayed at 24 / 45 GB = 53% of card, safely inside the 60% VRAM rule the planner
+enforces. SINGLE works at `m=192` on a 45 GB card, and the answer is a measurement, not
+a linear extrapolation from the 7.34 GB dev-card series above.
+
 ## What to run on AWS
 
 **Experiment 1 — is the overhead constant?** This decides the hardware question.

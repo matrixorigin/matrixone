@@ -216,6 +216,13 @@ func calculatePqDim(dim uint64) uint64 {
 // scales with row count, and unlike the build dataset it cannot be streamed — a
 // search has to reach every list, so the whole index stays resident. Sub-index
 // rotation does not help here; splitting an index does not shrink the sum.
+//
+// Real peak during extend runs above this by ~30-40% for cuVS workspace that is
+// not folded in here: at 87.5M / dim 768 / f16 / m=192 the tar is 17.6 GB but the
+// device peak is ~24 GB (measured on an L40S). The 60% VRAM rule the planner
+// applies on top of this bound absorbs the gap on any workload measured so far,
+// but a user tuning a build to exactly the advertised rowsFit ceiling will OOM
+// before the check says they should. See ivfpq_train_extend.md for the numbers.
 func pqCodeBytes(dim, m, bitsPerCode uint64) uint64 {
 	if m == 0 {
 		m = calculatePqDim(dim)
