@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +71,59 @@ func TestFulltext2SearchPrepareLimit(t *testing.T) {
 	// prepared `LIMIT ?` parameter (a non-literal expr resolved at EXECUTE via evalLimitExpression)
 	// is covered end-to-end by the fulltext2_prepare BVT.
 	require.Equal(t, uint64(12), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 12}}}}).limit)
+}
+
+func TestFulltext2SearchRuntimeFilterStatus(t *testing.T) {
+	st := &fulltext2SearchState{limit: 3, plannedLimit: 3}
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterPass,
+	})
+	require.Zero(t, st.limit)
+	// PASS is a per-query downgrade. Reset must restore the planned candidate
+	// bound for the next query that receives an exact membership payload.
+	st.reset(nil, nil)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		membershipFilterBytes: []byte{1, 2, 3},
+		status:                fulltextMembershipFilterReady,
+	})
+	require.Equal(t, []byte{1, 2, 3}, st.filterBytes)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.reset(nil, nil)
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterDrop,
+	})
+	require.True(t, st.dropFilter)
+}
+
+func TestWaitFulltext2MembershipFilterPreservesTerminalState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    int32
+		status fulltextMembershipFilterStatus
+	}{
+		{name: "pass", typ: message.RuntimeFilter_PASS, status: fulltextMembershipFilterPass},
+		{name: "drop", typ: message.RuntimeFilter_DROP, status: fulltextMembershipFilterDrop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			mb := message.NewMessageBoard()
+			proc.SetMessageBoard(mb)
+			tag := int32(901)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: tc.typ}, mb)
+
+			res, err := waitFulltext2MembershipFilter(proc, []*plan.RuntimeFilterSpec{{
+				Tag: tag, UseMembershipFilter: true,
+			}})
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			require.Equal(t, tc.status, res.status)
+			require.Empty(t, res.membershipFilterBytes)
+		})
+	}
 }
 
 func TestFulltext2ScoreAlgo(t *testing.T) {

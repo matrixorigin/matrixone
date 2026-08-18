@@ -167,8 +167,9 @@ func TestScanBooleanGroups(t *testing.T) {
 
 func TestIsConjunctiveTermQuery(t *testing.T) {
 	tests := []struct {
-		query string
-		want  bool
+		query  string
+		parser string
+		want   bool
 	}{
 		{query: "+alpha", want: true},
 		{query: "+alpha +beta", want: true},
@@ -180,10 +181,20 @@ func TestIsConjunctiveTermQuery(t *testing.T) {
 		{query: "+alpha -beta"},
 		{query: "+alpha beta"},
 		{query: "+alpha ~beta"},
+		{query: "+中", parser: ParserDefault},
+		{query: "+中", parser: ParserNgram},
+		{query: "+中", parser: ParserJSON},
+		{query: "+中文", parser: ParserNgram},
+		{query: "+中文学习", parser: ParserNgram},
+		{query: "+json.value", parser: ParserJSONValue, want: true},
 	}
 	for _, tc := range tests {
-		t.Run(tc.query, func(t *testing.T) {
-			got, err := IsConjunctiveTermQuery([]byte(tc.query), ParserDefault)
+		t.Run(tc.parser+"/"+tc.query, func(t *testing.T) {
+			parser := tc.parser
+			if parser == "" {
+				parser = ParserDefault
+			}
+			got, err := IsConjunctiveTermQuery([]byte(tc.query), parser)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
