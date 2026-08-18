@@ -110,6 +110,26 @@ group by k interval(event_ts, 1, day) gapfill(partition)
 order by _wstart;
 
 set time_zone = '+00:00';
+create table tw_dst_fold_45(k int, event_ts timestamp(6), value int);
+insert into tw_dst_fold_45 values
+  (1, '2026-11-01 06:00:00', 1),
+  (1, '2026-11-01 06:30:00', 2);
+set time_zone = 'America/New_York';
+
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, sum(value) as value_sum
+from tw_dst_fold_45
+group by k interval(event_ts, 45, minute)
+order by ws, we;
+
+select unix_timestamp(_wstart) as ws, unix_timestamp(_wend) as we, sum(value) as value_sum
+from tw_dst_fold_45
+group by k interval(event_ts, 45, minute) gapfill(partition)
+order by ws, we;
+
+set time_zone = '+00:00';
+drop table tw_dst_fold_45;
+
+set time_zone = '+00:00';
 create table tw_lord_howe_fold(event_ts timestamp(6), value int);
 insert into tw_lord_howe_fold values
   ('2026-04-04 14:30:00', 1),

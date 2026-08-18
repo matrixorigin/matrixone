@@ -771,6 +771,77 @@ func TestTimeWinTimestampNonDivisorFoldBoundary(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimeWinTimestampFoldInteriorNormalization(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	interval := types.Datetime(45 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: interval,
+		Sliding:  interval,
+	}
+	raw := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+	}
+	keys := []types.Timestamp{
+		function.NormalizeTimestampWindowStart(raw[0], int64(interval), zone),
+		function.NormalizeTimestampWindowStart(raw[1], int64(interval), zone),
+	}
+	wantStarts := []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+	}
+	require.Equal(t, wantStarts, keys)
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], keys, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(len(keys))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	bat.SetRowCount(len(keys))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+	defer func() {
+		arg.Free(proc, false, nil)
+		bat.Clean(proc.Mp())
+		proc.Free()
+	}()
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, []types.Timestamp{
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro()),
+		types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 15, 0, 0, time.UTC).UnixMicro()),
+	}, ends)
+}
+
 func TestTimeWinTimestampLordHoweFoldKeepsFirstOccurrence(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("Australia/Lord_Howe")

@@ -1802,6 +1802,13 @@ func NormalizeTimestampWindowStart(value types.Timestamp, interval int64, loc *t
 	if roundTrip < truncatedCivil {
 		truncated += types.Timestamp(truncatedCivil - roundTrip)
 	}
+	// A fold can place the civil floor before the latest boundary reached by
+	// the source instant. Reuse the boundary-sequence helper so non-divisor
+	// grids retain the first occurrence instead of jumping back before the
+	// repeated interval.
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, truncated, interval, loc); ok {
+		return foldBoundary
+	}
 	return truncated
 }
 
@@ -2001,6 +2008,18 @@ func timestampWindowFoldBoundary(value, boundary types.Timestamp, interval int64
 	var postTransition bool
 	switch {
 	case interval > 0:
+		// A source in the post-transition occurrence can still need the
+		// preceding first occurrence when normalization floors into the
+		// repeated civil hour. Reuse the reverse-direction fold handling
+		// below; its boundary checks keep forward advance callers unchanged.
+		if !transitionStart.IsZero() && !instant.Before(transitionStart) {
+			_, previousOffset = transitionStart.Add(-time.Microsecond).Zone()
+			if previousOffset > currentOffset {
+				transition = transitionStart
+				postTransition = true
+				break
+			}
+		}
 		if transitionEnd.IsZero() || !transitionEnd.After(instant) {
 			return 0, false
 		}
