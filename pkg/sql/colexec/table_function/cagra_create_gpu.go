@@ -349,11 +349,17 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		devices = vectorindex.SimulateDevices(devices, u.tblcfg.GpuMultiSimulation)
 
 		// ---- capacity, bounded by what the GPU can actually hold ----
-		// See the ivfpq twin: every build is bounded, not just the default, because an
+		// As in the ivfpq twin, every build is bounded and not just the default one: an
 		// explicit cagra_max_index_capacity is a request rather than an override.
 		//
-		// CAGRA's per-row build cost adds the intermediate kNN graph (neighbour ids plus
-		// distances) on top of the dataset.
+		// The per-row COST, though, is deliberately not the ivfpq one, and the
+		// difference is not an oversight. ivfpq dropped the dataset term because it
+		// hands cuVS a host view and the vectors are streamed and then discarded --
+		// only the PQ codes stay. CAGRA cannot do that: it searches by walking the
+		// graph and reading the actual vectors, so its dataset is resident for the
+		// index's whole life, not just the build. Streaming the build would not change
+		// that, which is why CAGRA still sizes against dim*sizeof(Q) here. On top of it
+		// sits the intermediate kNN graph (neighbour ids plus distances).
 		perRow := uint64(u.idxcfg.CuvsCagra.Dimensions) * quantizationBytes(qt)
 		graphDegree := uint64(u.idxcfg.CuvsCagra.IntermediateGraphDegree)
 		if graphDegree == 0 {

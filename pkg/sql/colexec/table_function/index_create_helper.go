@@ -161,3 +161,114 @@ func quantizationBytes(qt metric.QuantizationType) uint64 {
 		return 4
 	}
 }
+
+// calculatePqDim mirrors cuVS index<IdxT>::calculate_pq_dim
+// (cuvs/cpp/src/neighbors/ivf_pq_index.cu:611), which is what cuVS uses when
+// pq_dim (our `m`) is left at 0. Sizing a build against the wrong value is not a
+// rounding error: at dim 768 cuVS picks 384, twice the 192 the wiki_all template
+// configures, so a default-m build needs twice the device memory a configured one
+// does.
+func calculatePqDim(dim uint64) uint64 {
+	if dim >= 128 {
+		dim /= 2
+	}
+	if r := dim &^ 31; r > 0 { // raft::round_down_safe(dim, 32)
+		return r
+	}
+	r := uint64(1)
+	for r<<1 <= dim {
+		r <<= 1
+	}
+	return r
+}
+
+// pqCodeBytes is the device footprint of ONE indexed row: its PQ code plus the
+// int64 payload cuVS stores alongside it in the IVF list. This is what actually
+// scales with row count, and unlike the build dataset it cannot be streamed — a
+// search has to reach every list, so the whole index stays resident. Sub-index
+// rotation does not help here; splitting an index does not shrink the sum.
+func pqCodeBytes(dim, m, bitsPerCode uint64) uint64 {
+	if m == 0 {
+		m = calculatePqDim(dim)
+	}
+	if bitsPerCode == 0 {
+		bitsPerCode = 8
+	}
+	return (m*bitsPerCode+7)/8 + 8
+}
+
+// trainsetBytesPerElem is the PEAK device cost of one vector component in the
+// k-means trainset.
+//
+// cuVS materialises the trainset as float32 whatever the storage type, and for a
+// non-float T it also allocates a trainset_tmp in T and converts
+// (ivf_pq_build.cuh:1288-1307). Both are live at the peak. So a NARROWER storage
+// type costs MORE here, not less: f16 is 4+2=6 bytes against f32's 4. Narrow
+// types still pay off in host memory and in the final index; this one term runs
+// the other way, and sizing it with the storage width under-counts f16 by a third.
+func trainsetBytesPerElem(qt metric.QuantizationType) uint64 {
+	if qt == metric.Quantization_F32 {
+		return 4
+	}
+	return 4 + quantizationBytes(qt)
+}
+
+// kmeansPointsPerCentroid is the conventional floor for k-means to have enough
+// evidence per cluster. cuVS does not enforce it — validate_build_params only
+// checks rows >= n_lists — so a build can train 16 points per centroid, succeed,
+// and quietly return a worse index.
+const kmeansPointsPerCentroid = 39
+
+// trainPlan is the resolved k-means training sample for one sub-index.
+type trainPlan struct {
+	Fraction float64 // effective fraction, after any clamp
+	Rows     int64   // effective training rows
+	Clamped  bool    // device memory, not the request, decided Rows
+	Thin     bool    // fewer than kmeansPointsPerCentroid rows per centroid
+}
+
+// planTrainFraction resolves how much of a sub-index cuVS may train on.
+//
+// The build has two phases whose allocations do NOT overlap: the trainset and its
+// k-means scratch are scoped to a block that closes at ivf_pq_build.cuh:1369,
+// before detail::extend at :1374 allocates the list data. Peak is therefore
+// max(train, index) and the two are budgeted independently — which is why the
+// fraction is clamped here rather than folded into the per-row cost that bounds
+// capacity. Trading capacity away to afford a larger training sample would be
+// backwards: capacity is bounded by the index, which no amount of streaming can
+// shrink, while the sample can simply be made smaller.
+//
+// maxTrainRows is what the device can hold (0 = not measured). cuVS floors the
+// sample at n_lists itself (ratio = max(1, N / max(fraction*N, n_lists)),
+// :1257-1260), so that floor is mirrored rather than imposed.
+func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) trainPlan {
+	if capacity <= 0 {
+		return trainPlan{}
+	}
+	frac := requested
+	if frac <= 0 || frac > 1 {
+		frac = 1
+	}
+
+	rows := int64(float64(capacity) * frac)
+	clamped := false
+	if maxTrainRows > 0 && rows > maxTrainRows {
+		rows = maxTrainRows
+		clamped = true
+	}
+	// cuVS's own floor, and it wins over the clamp: a sample below n_lists cannot
+	// seed the centroids at all, so if the device cannot hold n_lists rows the
+	// build is going to fail on its own terms rather than silently under-train.
+	if nLists > 0 && rows < nLists {
+		rows = nLists
+	}
+	if rows > capacity {
+		rows = capacity
+	}
+
+	p := trainPlan{Fraction: float64(rows) / float64(capacity), Rows: rows, Clamped: clamped}
+	if nLists > 0 && rows < nLists*kmeansPointsPerCentroid {
+		p.Thin = true
+	}
+	return p
+}

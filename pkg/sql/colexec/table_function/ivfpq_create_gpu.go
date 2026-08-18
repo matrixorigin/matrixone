@@ -386,22 +386,30 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// max_index_capacity is a request, and honouring a request larger than the
 		// device can take would reintroduce the OOM this bound exists to prevent.
 		//
-		// Per-row cost is not just the dataset. cuVS subsamples the k-means trainset as
-		// FLOAT32 whatever the storage type, so a quantized build still pays dim*4 for
-		// that fraction; leaving it out under-counts an int8 build by ~40%.
+		// The build dataset no longer costs device memory: build_internal hands cuVS a
+		// raft::host_matrix_view, which gathers the k-means trainset on the host and
+		// streams the encode in batches. So capacity is bounded by what STAYS
+		// resident -- the PQ codes plus their int64 payloads. That is also the honest
+		// bound: a search reaches every list, so the whole index must be loaded and
+		// splitting into sub-indexes does not shrink the total.
+		//
 		// Use the EFFECTIVE fraction, not the configured one. ivfpqConfig only forwards
 		// the config value when it is > 0 (model_gpu.go), so `kmeans_train_percent = 0`
-		// leaves cuVS on its own default of 0.5 -- and sizing against 0 there would
-		// under-count a dim-768 row by 1536 B, about a third, which is enough to spend
-		// the 60% headroom and OOM at the derived capacity.
+		// leaves cuVS on its own default of 0.5.
 		trainFrac := u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction
 		if trainFrac <= 0 {
 			trainFrac = cuvs.DefaultIvfPqBuildParams().KmeansTrainsetFraction
 		}
-		perRow := uint64(u.idxcfg.CuvsIvfpq.Dimensions) * quantizationBytes(qt)
-		perRow += uint64(float64(u.idxcfg.CuvsIvfpq.Dimensions) * 4 * trainFrac)
+		dim := uint64(u.idxcfg.CuvsIvfpq.Dimensions)
+		perRow := pqCodeBytes(dim, uint64(u.idxcfg.CuvsIvfpq.M),
+			uint64(u.idxcfg.CuvsIvfpq.BitsPerCode))
 
-		var rowsFit int64
+		// The trainset is budgeted separately because it never coexists with the
+		// index: its block closes at ivf_pq_build.cuh:1369, before detail::extend at
+		// :1374 allocates the list data. Peak is max(train, index), so folding the
+		// trainset into perRow would shrink capacity to buy something that is not
+		// competing for the same bytes.
+		var rowsFit, maxTrainRows int64
 		if len(devices) > 0 {
 			var freeBytes uint64
 			rowsFit, freeBytes, err = cuvs.RowsFittingFreeMem(devices[0], perRow)
@@ -412,8 +420,15 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 					"ivfpq: cannot size the index build against GPU memory (%v); "+
 						"set max_index_capacity explicitly", err)
 			}
-			logutil.Infof("IVFPQ create: %d MB free on device %d, %d B/row -> %d rows fit",
+			logutil.Infof("IVFPQ create: %d MB free on device %d, %d B/row resident -> %d rows fit",
 				freeBytes>>20, devices[0], perRow, rowsFit)
+
+			maxTrainRows, _, err = cuvs.RowsFittingFreeMem(devices[0], dim*trainsetBytesPerElem(qt))
+			if err != nil {
+				return moerr.NewInternalErrorf(proc.Ctx,
+					"ivfpq: cannot size the k-means trainset against GPU memory (%v); "+
+						"set kmeans_train_percent explicitly", err)
+			}
 		}
 
 		// lists defaults to the cuVS default when unset; a 0 threshold would silently
@@ -433,6 +448,30 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if plan.NumSubIdx > 1 || plan.VRAMBound {
 			logutil.Infof("IVFPQ create: capacity=%d (requested=%d, vram_bound=%v) -> %d sub-index(es) for %d rows; cdc_cutoff=%d",
 				plan.Capacity, requestedCapacity, plan.VRAMBound, plan.NumSubIdx, srcRowCount, plan.CdcCutoff)
+		}
+
+		// Resolve the training sample against the capacity just chosen, and record the
+		// EFFECTIVE fraction rather than the requested one. Without this the clamp is
+		// invisible: a request for 20% that the device can only honour at 3.7% still
+		// builds, still succeeds, and only shows up as recall nobody can explain.
+		tp := planTrainFraction(plan.Capacity, maxTrainRows, threshold, trainFrac)
+		if tp.Rows > 0 {
+			u.idxcfg.CuvsIvfpq.KmeansTrainsetFraction = tp.Fraction
+			if tp.Clamped {
+				logutil.Infof("IVFPQ create: kmeans trainset %.4f -> %.4f (%d rows of %d); "+
+					"GPU memory allows %d training rows",
+					trainFrac, tp.Fraction, tp.Rows, plan.Capacity, maxTrainRows)
+			}
+			if tp.Thin {
+				// Warn, do not refuse. The floor is a rule of thumb, not a cuVS
+				// constraint (validate_build_params only checks rows >= n_lists), and
+				// rejecting a build on a heuristic would break configurations that
+				// work today. Name both levers so the choice stays with the operator.
+				logutil.Warnf("IVFPQ create: %d training rows for %d lists is %.0f points "+
+					"per centroid, under the ~%d k-means wants; recall may suffer. "+
+					"Lower lists, or raise kmeans_train_percent / max_index_capacity.",
+					tp.Rows, threshold, float64(tp.Rows)/float64(threshold), kmeansPointsPerCentroid)
+			}
 		}
 
 		nthread := uint32(vectorindex.GetConcurrency(u.tblcfg.ThreadsBuild))
