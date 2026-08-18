@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -163,6 +164,65 @@ func TestRecursiveCteCanReferencePrecedingCte(t *testing.T) {
 	} {
 		_, err := runOneStmt(NewMockOptimizer(false), t, query)
 		require.NoError(t, err)
+	}
+}
+
+func TestRecursiveCteFilteredPrecedingCteStaysInline(t *testing.T) {
+	consumers := []string{
+		"select * from seq",
+		"select n from seq",
+		"select count(*) from seq",
+		"select sum(n) from seq",
+	}
+	for _, consumer := range consumers {
+		t.Run(consumer, func(t *testing.T) {
+			query := fmt.Sprintf(`with recursive base(n) as (
+				select n_nationkey from nation where n_nationkey = 2
+			), seq(n) as (
+				select n from base
+				union all
+				select seq.n + base.n
+				from seq cross join base
+				where seq.n < 8
+			)
+			%s`, consumer)
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+			require.NoError(t, err)
+			for _, node := range logicPlan.GetQuery().Nodes {
+				require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions,
+					"a preceding CTE used by recursive steps must not be partially shared")
+			}
+		})
+	}
+}
+
+func TestRecursiveCtePrecedingCteReuseStepGraphGuards(t *testing.T) {
+	queries := []string{
+		`with recursive base(n) as (
+			select n_nationkey from nation where n_nationkey = 2
+		), seq(n) as (
+			select n from base
+			union all
+			select seq.n + base.n from seq cross join base where seq.n < 4
+			union all
+			select seq.n + base.n from seq cross join base where seq.n < 4
+		)
+		select count(*) from seq`,
+		`with recursive base(n) as (
+			select n_nationkey from nation where n_nationkey = 2
+		), seq(n) as (
+			select n from base
+			union all
+			select seq.n + base.n from seq cross join base where seq.n < 8
+		)
+		select count(*) from seq cross join base`,
+	}
+	for _, query := range queries {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query)
+		require.NoError(t, err)
+		for _, node := range logicPlan.GetQuery().Nodes {
+			require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions)
+		}
 	}
 }
 

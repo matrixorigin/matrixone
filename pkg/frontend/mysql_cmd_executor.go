@@ -3192,7 +3192,14 @@ func buildPlanWithPrepareMode(
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().GetTxnOperator()
+	// A later statement in a multi-statement packet can reuse a compiler
+	// context whose process has already been released.  Planning does not
+	// require a transaction operator, so keep the tracing setup optional
+	// instead of dereferencing the missing process.
+	var txnOp client.TxnOperator
+	if proc := ctx.GetProcess(); proc != nil {
+		txnOp = proc.GetTxnOperator()
+	}
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
