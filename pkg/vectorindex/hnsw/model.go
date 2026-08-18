@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -193,6 +194,7 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	}
 	if empty {
 		// index empty, no file need to save
+		logutil.Infof("HnswModel.SaveToFile: empty index idx=%s, destroy only", idx.Id)
 		err = idx.Index.Destroy()
 		if err != nil {
 			return err
@@ -213,29 +215,50 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	// file is never orphaned on disk.
 	fpath := f.Name()
 	_ = f.Close()
+	// destroyed indicates whether GPU/native memory has been freed; used by the
+	// deferred cleanup to distinguish "save/checksum failed, tar is bogus, drop it"
+	// from "save+checksum succeeded but Destroy failed, tar is VALID, keep it".
+	destroyed := false
 	defer func() {
-		if idx.Path != fpath {
+		if idx.Path != fpath && !destroyed {
 			os.Remove(fpath)
 		}
 	}()
 
+	logutil.Infof("HnswModel.SaveToFile: idx=%s calling Save -> %s", idx.Id, fpath)
+	t0 := time.Now()
 	if err = idx.Index.Save(fpath); err != nil {
+		logutil.Errorf("HnswModel.SaveToFile: Save FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		return err
 	}
+	saveDur := time.Since(t0)
+	fi, _ := os.Stat(fpath)
+	savedBytes := int64(0)
+	if fi != nil {
+		savedBytes = fi.Size()
+	}
+	logutil.Infof("HnswModel.SaveToFile: Save done idx=%s in %v (%d bytes)", idx.Id, saveDur, savedBytes)
 
 	// get new checksum
 	chksum, err := saveToFileCheckSum(fpath)
 	if err != nil {
+		logutil.Errorf("HnswModel.SaveToFile: CheckSum FAILED idx=%s: %v", idx.Id, err)
 		return err
 	}
 	idx.Checksum = chksum
 
+	// Record the successfully-saved artifact BEFORE attempting Destroy. A Destroy
+	// failure does not invalidate the on-disk file, and letting the deferred cleanup
+	// remove it here would lose committed data.
+	idx.Path = fpath
+
 	// free memory
 	if err = idx.Index.Destroy(); err != nil {
+		logutil.Errorf("HnswModel.SaveToFile: Destroy FAILED idx=%s (file RETAINED at %s): %v", idx.Id, fpath, err)
 		return err
 	}
+	destroyed = true
 	idx.Index = nil
-	idx.Path = fpath
 
 	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
 	/*

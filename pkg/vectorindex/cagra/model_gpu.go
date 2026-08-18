@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -253,6 +254,7 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 
 	if idx.Len == 0 {
 		// Empty index — just release GPU memory, nothing to persist.
+		logutil.Infof("CagraModel.saveToFile: empty index idx=%s, destroy only", idx.Id)
 		if err := idx.Index.Destroy(); err != nil {
 			return err
 		}
@@ -267,25 +269,41 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 	tarPath := tarFile.Name()
 	tarFile.Close()
 
+	logutil.Infof("CagraModel.saveToFile: idx=%s len=%d calling Pack -> %s", idx.Id, idx.Len, tarPath)
+	t0 := time.Now()
 	if err = idx.Index.Pack(tarPath); err != nil {
+		logutil.Errorf("CagraModel.saveToFile: Pack FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		os.Remove(tarPath)
 		return err
 	}
+	packDur := time.Since(t0)
+	fi, _ := os.Stat(tarPath)
+	packedBytes := int64(0)
+	if fi != nil {
+		packedBytes = fi.Size()
+	}
+	logutil.Infof("CagraModel.saveToFile: Pack done idx=%s in %v (%d bytes)", idx.Id, packDur, packedBytes)
 
 	chksum, err := vectorindex.CheckSum(tarPath)
 	if err != nil {
+		logutil.Errorf("CagraModel.saveToFile: CheckSum FAILED idx=%s: %v", idx.Id, err)
 		os.Remove(tarPath)
 		return err
 	}
 	idx.Checksum = chksum
 
+	// Record the successfully-packed tar BEFORE attempting Destroy: a Destroy
+	// failure does not invalidate the on-disk artifact, and removing it here
+	// would lose committed data.
+	idx.Path = tarPath
+
 	// Free GPU memory — the index is now persisted on disk.
 	if err = idx.Index.Destroy(); err != nil {
-		os.Remove(tarPath)
+		logutil.Errorf("CagraModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
 		return err
 	}
 	idx.Index = nil
-	idx.Path = tarPath
+	logutil.Infof("CagraModel.saveToFile: DONE idx=%s path=%s", idx.Id, tarPath)
 	return nil
 }
 
