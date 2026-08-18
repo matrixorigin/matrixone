@@ -16,18 +16,24 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 type accountRecordingBackgroundExec struct {
@@ -46,6 +52,77 @@ func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) 
 type erroringBackgroundExec struct {
 	*backgroundExecTest
 	err error
+}
+
+// udfCreationGate models the database-row lock that serializes concurrent
+// CREATE FUNCTION statements. Each fake executor owns one transaction; the
+// gate is held from SELECT ... FOR UPDATE through COMMIT or ROLLBACK.
+type udfCreationGate struct {
+	txnMu            sync.Mutex
+	callsMu          sync.Mutex
+	lockCalls        int
+	exists           bool
+	inserts          int
+	firstLocked      chan struct{}
+	secondWaiting    chan struct{}
+	allowFirstCommit chan struct{}
+}
+
+type lockingUDFBackgroundExec struct {
+	*backgroundExecTest
+	gate      *udfCreationGate
+	holdsLock bool
+	result    ExecResult
+}
+
+func (bt *lockingUDFBackgroundExec) Exec(ctx context.Context, sql string) error {
+	bt.currentSql = sql
+	bt.executedSQLs = append(bt.executedSQLs, sql)
+
+	switch {
+	case sql == "begin;":
+		return nil
+	case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
+		bt.gate.callsMu.Lock()
+		bt.gate.lockCalls++
+		call := bt.gate.lockCalls
+		bt.gate.callsMu.Unlock()
+
+		if call == 1 {
+			bt.gate.txnMu.Lock()
+			close(bt.gate.firstLocked)
+			<-bt.gate.allowFirstCommit
+		} else {
+			close(bt.gate.secondWaiting)
+			bt.gate.txnMu.Lock()
+		}
+		bt.holdsLock = true
+		bt.result = newMrsForPasswordOfUser([][]interface{}{{int64(1)}})
+		return nil
+	case strings.HasPrefix(sql, "select function_id from mo_catalog.mo_user_defined_function"):
+		if bt.gate.exists {
+			bt.result = newMrsForPasswordOfUser([][]interface{}{{int64(1)}})
+		} else {
+			bt.result = newMrsForPasswordOfUser(nil)
+		}
+		return nil
+	case strings.HasPrefix(sql, "insert into mo_catalog.mo_user_defined_function"):
+		bt.gate.exists = true
+		bt.gate.inserts++
+		return nil
+	case sql == "commit;" || sql == "rollback;":
+		if bt.holdsLock {
+			bt.holdsLock = false
+			bt.gate.txnMu.Unlock()
+		}
+		return nil
+	default:
+		return bt.backgroundExecTest.Exec(ctx, sql)
+	}
+}
+
+func (bt *lockingUDFBackgroundExec) GetExecResultSet() []interface{} {
+	return []interface{}{bt.result}
 }
 
 func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
@@ -213,9 +290,168 @@ func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) 
 	})
 }
 
+func TestCloneImportedUserDefinedFunctionPackagesHaveIndependentOwnership(t *testing.T) {
+	ctx := context.Background()
+	fileService, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+
+	const sourcePath = "shared:udf/source/f_identity.py"
+	const contents = "def f_identity(x):\n    return x\n"
+	writeSource := func() {
+		require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
+			FilePath: sourcePath,
+			Entries:  []fileservice.IOEntry{{Size: int64(len(contents)), Data: []byte(contents)}},
+		}))
+	}
+	read := func(name string) string {
+		vector := &fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Size: -1}}}
+		require.NoError(t, fileService.Read(ctx, vector))
+		return string(vector.Entries[0].Data)
+	}
+	definition := userDefinedFunctionDefinition{name: "f_identity", lang: "python"}
+	body, err := json.Marshal(function.NonSqlUdfBody{Handler: "f_identity", Import: true, Body: sourcePath})
+	require.NoError(t, err)
+	definition.body = string(body)
+
+	writeSource()
+	cloned, stagedFiles, err := cloneImportedUserDefinedFunctionPackages(ctx, fileService, 7, []userDefinedFunctionDefinition{definition})
+	require.NoError(t, err)
+	require.Len(t, stagedFiles, 1)
+	require.Equal(t, string(body), definition.body)
+
+	var clonedBody function.NonSqlUdfBody
+	require.NoError(t, json.Unmarshal([]byte(cloned[0].body), &clonedBody))
+	require.NotEqual(t, sourcePath, clonedBody.Body)
+	require.Contains(t, strings.ToLower(clonedBody.Body), "shared:udf/clone/7/")
+	require.Equal(t, contents, read(clonedBody.Body))
+
+	// Dropping the source must leave the destination package callable.
+	require.NoError(t, fileService.Delete(ctx, sourcePath))
+	require.Equal(t, contents, read(clonedBody.Body))
+
+	// In the other direction, dropping a clone's package must not delete the
+	// independent source package.
+	writeSource()
+	_, secondFiles, err := cloneImportedUserDefinedFunctionPackages(ctx, fileService, 7, []userDefinedFunctionDefinition{definition})
+	require.NoError(t, err)
+	require.Len(t, secondFiles, 1)
+	require.NoError(t, fileService.Delete(ctx, secondFiles[0]))
+	require.Equal(t, contents, read(sourcePath))
+
+	// A failed clone owns and deletes only its destination staging object.
+	require.NoError(t, cleanupCloneUDFPackages(ctx, fileService, stagedFiles))
+	_, err = fileService.StatFile(ctx, stagedFiles[0])
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.NoError(t, cleanupCloneUDFPackages(ctx, fileService, stagedFiles))
+}
+
+func TestResolveCloneDatabaseRoutineTenantUsesTargetAdministrator(t *testing.T) {
+	const targetAccountID = uint32(7)
+	query := "select account_name, admin_name from mo_catalog.mo_account where account_id = 7"
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[query] = newMrsForRestoreStringRows(
+		[]string{"account_name", "admin_name"}, [][]interface{}{{"acc1", "root1"}},
+	)
+	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
+
+	tenant, err := resolveCloneDatabaseRoutineTenant(
+		context.Background(), bh, getDefaultAccount(), targetAccountID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, targetAccountID, tenant.GetTenantID())
+	require.Equal(t, "acc1", tenant.GetTenant())
+	require.Equal(t, "root1", tenant.GetUser())
+	require.Equal(t, uint32(accountAdminRoleID), tenant.GetDefaultRoleID())
+	require.Equal(t, uint32(sysAccountID), bh.accountID)
+
+	sameAccount := &TenantInfo{Tenant: "acc1", User: "owner", TenantID: targetAccountID}
+	got, err := resolveCloneDatabaseRoutineTenant(context.Background(), bh, sameAccount, targetAccountID)
+	require.NoError(t, err)
+	require.Same(t, sameAccount, got)
+	require.Equal(t, []string{query}, bh.executedSQLs)
+}
+
+func TestInitFunctionSerializesConcurrentExactSignatures(t *testing.T) {
+	const databaseName = "clone_target"
+	gate := &udfCreationGate{
+		firstLocked:      make(chan struct{}),
+		secondWaiting:    make(chan struct{}),
+		allowFirstCommit: make(chan struct{}),
+	}
+	newExecutor := func() *lockingUDFBackgroundExec {
+		base := &backgroundExecTest{}
+		base.init()
+		return &lockingUDFBackgroundExec{backgroundExecTest: base, gate: gate}
+	}
+	firstExec := newExecutor()
+	secondExec := newExecutor()
+
+	originalNewBackgroundExec := NewBackgroundExec
+	var execMu sync.Mutex
+	executors := []BackgroundExec{firstExec, secondExec}
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		execMu.Lock()
+		defer execMu.Unlock()
+		executor := executors[0]
+		executors = executors[1:]
+		return executor
+	}
+	t.Cleanup(func() { NewBackgroundExec = originalNewBackgroundExec })
+
+	locale := ""
+	functionStatement := func() *tree.CreateFunction {
+		return &tree.CreateFunction{
+			Name: tree.NewFuncName("f_exact", tree.ObjectNamePrefix{
+				SchemaName:     tree.Identifier(databaseName),
+				ExplicitSchema: true,
+			}),
+			ReturnType: tree.NewReturnType(&tree.T{InternalType: tree.InternalType{
+				Family:       tree.IntFamily,
+				FamilyString: "INT",
+				Width:        24,
+				Locale:       &locale,
+				Oid:          uint32(defines.MYSQL_TYPE_INT24),
+			}}),
+			Body:     "1",
+			Language: string(tree.SQL),
+		}
+	}
+	tenant := &TenantInfo{
+		Tenant:        "acc1",
+		User:          "root1",
+		TenantID:      7,
+		UserID:        1,
+		DefaultRole:   accountAdminRoleName,
+		DefaultRoleID: accountAdminRoleID,
+	}
+	newSession := func() *Session {
+		return &Session{feSessionImpl: feSessionImpl{tenant: tenant}}
+	}
+	ctx := defines.AttachAccountId(context.Background(), tenant.GetTenantID())
+	errs := make(chan error, 2)
+
+	go func() {
+		errs <- InitFunction(newSession(), &ExecCtx{reqCtx: ctx}, tenant, functionStatement())
+	}()
+	<-gate.firstLocked
+	go func() {
+		errs <- InitFunction(newSession(), &ExecCtx{reqCtx: ctx}, tenant, functionStatement())
+	}()
+	<-gate.secondWaiting
+	close(gate.allowFirstCommit)
+
+	firstErr := <-errs
+	secondErr := <-errs
+	require.NoError(t, firstErr)
+	require.Error(t, secondErr)
+	require.Equal(t, 1, gate.inserts)
+	require.Equal(t, 2, gate.lockCalls)
+}
+
 func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 	ctx := context.Background()
-	tenant := &TenantInfo{User: "root"}
+	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
 	function := userDefinedFunctionDefinition{
 		name:    "f_answer",
 		args:    "{}",
@@ -230,8 +466,9 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
 	require.Len(t, bh.executedSQLs, 1)
 	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
-	require.Contains(t, bh.executedSQLs[0], "\"f_answer\"")
+	require.Contains(t, bh.executedSQLs[0], "\"f_answer\",2")
 	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[0], "\"root1\"")
 	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
 	// the behavior under test rather than coupling this regression to its style.
 	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
@@ -247,7 +484,7 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 
 func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	ctx := context.Background()
-	tenant := &TenantInfo{User: "root"}
+	tenant := &TenantInfo{User: "root1", DefaultRoleID: accountAdminRoleID}
 	procedure := storedProcedureDefinition{
 		name:    "p_double",
 		args:    `[{"ArgName":"input_value","InOutType":0},{"ArgName":"output_value","InOutType":1}]`,
@@ -266,6 +503,7 @@ func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 	require.Contains(t, bh.executedSQLs[1], procedure.args)
 	require.Contains(t, bh.executedSQLs[1], "'PIPES_AS_CONCAT'")
 	require.Contains(t, bh.executedSQLs[1], "'target_db'")
+	require.Contains(t, bh.executedSQLs[1], "'root1'")
 	require.NotContains(t, bh.executedSQLs[1], "create procedure")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
@@ -341,6 +579,29 @@ func TestRewriteCloneStoredProcedureBodiesRewritesNestedControlFlow(t *testing.T
 				else select id from source_db.case_else_table;
 			end case;
 		end`)
+}
+
+func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_wrapped_source_references",
+		lang: "sql",
+		body: `begin
+			explain select * from source_db.explain_table;
+			explain analyze select * from source_db.analyze_table;
+			lock tables source_db.lock_table read;
+			check table source_db.check_table;
+		end`,
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	for _, table := range []string{"explain_table", "analyze_table", "lock_table", "check_table"} {
+		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
+	}
+	require.NotContains(t, rewritten[0].body, "source_db.")
 }
 
 func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *testing.T) {

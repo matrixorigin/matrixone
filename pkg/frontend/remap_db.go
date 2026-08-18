@@ -39,8 +39,9 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 // and would reject a remapped-away database before the planner sees it. It
 // covers SELECT and INSERT/UPDATE/DELETE (including their target tables, read
 // sources, expression containers, INSERT ... SELECT bodies and CTE bodies),
-// SQL procedure compound/control-flow bodies, table-level DDL, ANALYZE TABLE,
-// and prepared statement bodies.
+// SQL procedure compound/control-flow bodies, executable statement wrappers
+// (EXPLAIN, CHECK, LOCK, MERGE, LOAD/DUMP and sequence operations), table-level
+// DDL, ANALYZE TABLE, and prepared statement bodies.
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
@@ -183,8 +184,74 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 				remapTableName(entry.Table, remap)
 			}
 		}
+	case *tree.ExplainStmt:
+		remapDbInStmt(s.Statement, remap)
+	case *tree.ExplainAnalyze:
+		remapDbInStmt(s.Statement, remap)
+	case *tree.LockTableStmt:
+		for i := range s.TableLocks {
+			remapTableName(&s.TableLocks[i].Table, remap)
+		}
+	case *tree.CheckTableStmt:
+		for _, table := range s.Tables {
+			remapTableName(table, remap)
+		}
 	case *tree.PrepareStmt:
 		remapDbInStmt(s.Stmt, remap)
+	case *tree.Do:
+		remapDbInExprs(s.Exprs, remap)
+	case *tree.Merge:
+		remapDbInWith(s.With, remap)
+		remapDbInTableExpr(s.Target, remap)
+		remapDbInTableExpr(s.Source, remap)
+		remapDbInExpr(s.On, remap)
+		for _, clause := range s.Clauses {
+			if clause == nil {
+				continue
+			}
+			remapDbInExpr(clause.Condition, remap)
+			remapDbInUpdateExprs(clause.UpdateExprs, remap)
+			remapDbInExprs(clause.InsertValues, remap)
+		}
+		for _, returning := range s.Returning {
+			remapDbInExpr(returning.Expr, remap)
+		}
+	case *tree.Load:
+		remapTableName(s.Table, remap)
+	case *tree.DumpTable:
+		remapTableName(s.Table, remap)
+	case *tree.LoadTable:
+		remapTableName(s.Table, remap)
+	case *tree.CreateSequence:
+		remapTableName(s.Name, remap)
+	case *tree.DropSequence:
+		for _, name := range s.Names {
+			remapTableName(name, remap)
+		}
+	case *tree.AlterSequence:
+		remapTableName(s.Name, remap)
+	case *tree.ShowCreateTable:
+		remapObjectName(s.Name, remap)
+	case *tree.ShowCreateView:
+		remapObjectName(s.Name, remap)
+	case *tree.ShowColumns:
+		remapObjectName(s.Table, remap)
+		remapDatabaseName(&s.DBName, remap)
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowIndex:
+		remapObjectName(s.TableName, remap)
+		remapDatabaseName(&s.DbName, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowColumnNumber:
+		remapObjectName(s.Table, remap)
+		remapDatabaseName(&s.DbName, remap)
+	case *tree.ShowTableValues:
+		remapObjectName(s.Table, remap)
+		remapDatabaseName(&s.DbName, remap)
+	case *tree.ShowTableSize:
+		remapObjectName(s.Table, remap)
+		remapDatabaseName(&s.DbName, remap)
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked
@@ -580,5 +647,14 @@ func remapObjectName(on *tree.UnresolvedObjectName, remap remapDbContext) {
 	}
 	if target, ok := remap.lookup(on.Parts[1]); ok {
 		on.Parts[1] = target
+	}
+}
+
+func remapDatabaseName(name *string, remap remapDbContext) {
+	if name == nil {
+		return
+	}
+	if target, ok := remap.lookup(*name); ok {
+		*name = target
 	}
 }

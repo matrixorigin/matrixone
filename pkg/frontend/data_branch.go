@@ -533,6 +533,16 @@ func dataBranchCreateDatabase(
 		authStats statistic.StatsArray
 	)
 	stats.Reset()
+	// handleCloneDatabaseWithSource transfers imported-UDF package paths here
+	// only after its own work succeeds. This outer transaction still owns the
+	// files until its branch metadata and protection records commit.
+	defer func() {
+		if err != nil && len(source.clonedRoutineFiles) != 0 {
+			err = errors.Join(err, cleanupCloneUDFPackages(
+				execCtx.reqCtx, getPu(ses.GetService()).FileService, source.clonedRoutineFiles,
+			))
+		}
+	}()
 
 	if bh, deferred, err = getBackExecutor(
 		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},

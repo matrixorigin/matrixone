@@ -10012,6 +10012,26 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	return false, nil
 }
 
+func lockDatabaseForUDFCreation(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, err
+	}
+	lockSQL := fmt.Sprintf(
+		"select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d for update;",
+		escapeSQLString(dbName), accountID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, lockSQL); err != nil {
+		return false, err
+	}
+	resultSet, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(resultSet), nil
+}
+
 type createAccount struct {
 	IfNotExists  bool
 	Name         string
@@ -11008,8 +11028,18 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
-	// authticate db exists
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
+	// The database-row lock is the write-time serialization boundary for
+	// CREATE FUNCTION overloads. The older global unique(name) index was too
+	// broad, but a pre-transaction existence read leaves an exact signature
+	// race once names can be reused in another database.
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -11067,14 +11097,6 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 
 	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
-	}
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
 	}
 
 	var body string
