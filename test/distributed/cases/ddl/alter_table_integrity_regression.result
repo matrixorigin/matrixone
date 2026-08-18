@@ -131,4 +131,31 @@ select count(*) from self_restrict;
 count(*)
 0
 insert into self_restrict values (3,null), (4,3);
+create table add_then_rename (id int primary key);
+insert into add_then_rename values (1), (2);
+alter table add_then_rename
+add column tmp int,
+rename column tmp to added_col;
+select id, added_col from add_then_rename order by id;
+id    added_col
+1    null
+2    null
+create table add_then_modify (id int primary key);
+insert into add_then_modify values (1), (2);
+alter table add_then_modify
+add column tmp int,
+modify column tmp bigint;
+select id, tmp from add_then_modify order by id;
+id    tmp
+1    null
+2    null
+create table add_then_change (id int primary key);
+insert into add_then_change values (1), (2);
+alter table add_then_change
+add column tmp int,
+change column tmp added_col bigint;
+select id, added_col from add_then_change order by id;
+id    added_col
+1    null
+2    null
 drop database alter_table_integrity_regression;

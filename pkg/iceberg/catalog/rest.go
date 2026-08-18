@@ -924,6 +924,14 @@ func configCacheResponseWeight(key string, resp api.ConfigResponse) int64 {
 	return weight
 }
 
+// ValidateRESTCatalogURI applies the same URI policy used by REST requests
+// without issuing a request. Callers that persist catalog configuration should
+// use this before committing the URI.
+func ValidateRESTCatalogURI(rawBase string, allowPlainHTTP bool) error {
+	_, err := restURL(rawBase, nil, allowPlainHTTP)
+	return err
+}
+
 func restURL(rawBase string, segments []string, allowPlainHTTP bool) (string, error) {
 	rawBase = strings.TrimSpace(rawBase)
 	if rawBase == "" {
