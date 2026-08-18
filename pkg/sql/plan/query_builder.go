@@ -10220,7 +10220,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -10236,6 +10235,7 @@ func (builder *QueryBuilder) bindView(
 	if viewData.LowerCaseTableNames != nil {
 		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
 	}
+	viewCtx.lower = viewLowerCaseTableNames
 	originStmts, err := mysql.ParseWithSQLMode(
 		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
@@ -11188,7 +11188,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {
