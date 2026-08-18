@@ -11281,6 +11281,27 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractSignedSuffixTrailingWhitespaceOwnership(t *testing.T) {
+	inputs := []string{
+		"12:34:34 +1",
+		"12:34:34 +1 ",
+		"01:01:34 +1",
+		"01:01:34 +1 ",
+	}
+	want := []string{"12/34/34", "12/34/34", "1/1/34", "1/1/34"}
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			for i, input := range inputs {
+				t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+					hour, minute, second, ok := timeStringToClockForExtract(input)
+					require.True(t, ok)
+					require.Equal(t, want[i], fmt.Sprintf("%d/%d/%d", hour, minute, second))
+				})
+			}
+		})
+	}
+}
+
 func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
 	inputs := []string{
 		"01:01:01:: +",

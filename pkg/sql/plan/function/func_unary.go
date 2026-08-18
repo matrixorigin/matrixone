@@ -5533,7 +5533,21 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 	if token.allDigits && token.trailingWhitespace {
 		return false
 	}
+	if mysqlSignedNumericTimeSuffixForExtract(token) {
+		return len(clock)+mysqlConsumedSuffixLengthForExtract(suffix) >= 12
+	}
 	return len(clock)+len(suffix) >= 12
+}
+
+// mysqlConsumedSuffixLengthForExtract reports the suffix bytes consumed by
+// the temporal scanner. Trailing whitespace is outside the token boundary and
+// must not change ownership of an already complete H:M:S candidate.
+func mysqlConsumedSuffixLengthForExtract(suffix string) int {
+	end := len(suffix)
+	for end > 0 && mysqlWhitespaceForExtract(suffix[end-1]) {
+		end--
+	}
+	return end
 }
 
 func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
