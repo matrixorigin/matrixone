@@ -16,6 +16,7 @@ package plan
 
 import (
 	"math"
+	"sort"
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,6 +31,7 @@ func TestBuildCandidateLimit(t *testing.T) {
 		want       uint64
 		wantUsable bool
 	}{
+		{name: "no limit"},
 		{name: "limit only", limit: makePlan2Uint64ConstExprWithType(10), want: 10, wantUsable: true},
 		{name: "limit plus offset", limit: makePlan2Uint64ConstExprWithType(10), offset: makePlan2Uint64ConstExprWithType(5), want: 15, wantUsable: true},
 		{name: "zero offset", limit: makePlan2Uint64ConstExprWithType(10), offset: makePlan2Uint64ConstExprWithType(0), want: 10, wantUsable: true},
@@ -55,4 +57,61 @@ func TestBuildCandidateLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShouldPushFulltextCandidateLimit(t *testing.T) {
+	tests := []struct {
+		name              string
+		fulltextStreams   int
+		residualFilters   int
+		prefilterPushdown bool
+		exactPrefilter    bool
+		want              bool
+	}{
+		{name: "single stream without residual filter", fulltextStreams: 1, want: true},
+		{name: "single stream with exact pushed residual filter", fulltextStreams: 1, residualFilters: 1, prefilterPushdown: true, exactPrefilter: true, want: true},
+		{name: "single stream with approximate pushed residual filter", fulltextStreams: 1, residualFilters: 1, prefilterPushdown: true, want: false},
+		{name: "single stream with unpushed residual filter", fulltextStreams: 1, residualFilters: 1, want: false},
+		{name: "multiple streams without residual filter", fulltextStreams: 2, want: false},
+		{name: "multiple streams with exact pushed residual filter", fulltextStreams: 2, residualFilters: 1, prefilterPushdown: true, exactPrefilter: true, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldPushFulltextCandidateLimit(tc.fulltextStreams, tc.residualFilters, tc.prefilterPushdown, tc.exactPrefilter))
+		})
+	}
+}
+
+func TestApproximatePrefilterCannotBoundCandidateTopK(t *testing.T) {
+	type candidate struct {
+		id      string
+		score   float32
+		allowed bool
+	}
+	candidates := []candidate{
+		{id: "bloom-false-positive", score: 2, allowed: false},
+		{id: "true-result", score: 1, allowed: true},
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	filterAllowed := func(in []candidate) []candidate {
+		out := make([]candidate, 0, len(in))
+		for _, item := range in {
+			if item.allowed {
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+
+	// Bounding an approximate membership stream first lets a higher-scoring
+	// false positive occupy the only candidate slot. The final exact join then
+	// removes it and under-fills LIMIT 1.
+	require.Empty(t, filterAllowed(candidates[:1]))
+	require.Equal(t, "true-result", filterAllowed(candidates)[0].id)
+	require.False(t, shouldPushFulltextCandidateLimit(1, 1, true, false))
+	require.True(t, shouldPushFulltextCandidateLimit(1, 1, true, true))
 }

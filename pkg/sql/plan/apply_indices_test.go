@@ -5201,6 +5201,94 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.Nil(t, scan.Offset)
 }
 
+func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testing.T) {
+	tests := []struct {
+		name            string
+		integerPK       bool
+		pushdown        int8
+		dynamicLimit    bool
+		preparedPattern bool
+		naturalMode     bool
+		classicIndex    bool
+		pattern         string
+		wantCandidateK  bool
+	}{
+		{name: "exact integer prefilter", integerPK: true, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "approximate varchar prefilter", pushdown: 1, pattern: "+hello +world"},
+		{name: "pushdown disabled", integerPK: true, pattern: "+hello +world"},
+		{name: "prepared limit", integerPK: true, pushdown: 1, dynamicLimit: true, pattern: "+hello +world"},
+		{name: "prepared pattern", integerPK: true, pushdown: 1, preparedPattern: true},
+		{name: "natural mode", integerPK: true, pushdown: 1, naturalMode: true, pattern: "hello world"},
+		{name: "complex boolean", integerPK: true, pushdown: 1, pattern: "+hello world"},
+		{name: "classic index", integerPK: true, pushdown: 1, classicIndex: true, pattern: "+hello +world"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, true)
+			mockCtx := builder.compCtx.(*fullTextJoinMockCompilerContext)
+			mockCtx.fulltextBloomFilterPushdown = tc.pushdown
+			scan := builder.qry.Nodes[leftScanID]
+			if !tc.classicIndex {
+				convertFullTextJoinTestToFulltext2(builder, scan)
+			}
+			matchFn := scan.FilterList[0].GetF()
+			if tc.preparedPattern {
+				matchFn.Args[0] = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			} else {
+				matchFn.Args[0] = makePlan2StringConstExprWithType(tc.pattern, false)
+			}
+			mode := tree.FULLTEXT_BOOLEAN
+			if tc.naturalMode {
+				mode = tree.FULLTEXT_NL
+			}
+			matchFn.Args[1] = makePlan2Int64ConstExprWithType(int64(mode))
+			if tc.integerPK {
+				int64Type := planpb.Type{Id: int32(types.T_int64)}
+				scan.TableDef.Cols[0].Typ = int64Type
+				indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+				indexTable.Cols[1].Typ = int64Type
+			}
+			if tc.dynamicLimit {
+				scan.Limit = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			} else {
+				scan.Limit = makePlan2Uint64ConstExprWithType(10)
+			}
+			scan.Offset = makePlan2Uint64ConstExprWithType(5)
+
+			newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+				joinID,
+				scan,
+				map[[2]int32]int{},
+				map[[2]int32]*planpb.Expr{},
+			)
+			require.NoError(t, err)
+			require.True(t, changed)
+			functions := collectFullTextFunctionScans(builder, newID)
+			require.Len(t, functions, 1)
+			if tc.wantCandidateK {
+				require.Equal(t, uint64(15), functions[0].Limit.GetLit().GetU64Val())
+			} else {
+				require.Nil(t, functions[0].Limit)
+			}
+		})
+	}
+}
+
+func convertFullTextJoinTestToFulltext2(builder *QueryBuilder, scan *planpb.Node) {
+	logical := scan.TableDef.Indexes[0]
+	store := *logical
+	store.IndexAlgo = tree.INDEX_TYPE_FULLTEXT2.ToString()
+	store.IndexAlgoParams = `{"parser":"default"}`
+	store.IndexAlgoTableType = catalog.FullText2Index_TblType_Storage
+	store.IndexTableName = logical.IndexTableName + "_store"
+	meta := store
+	meta.IndexAlgoTableType = catalog.FullText2Index_TblType_Metadata
+	meta.IndexTableName = logical.IndexTableName + "_meta"
+	scan.TableDef.Indexes = []*planpb.IndexDef{&store, &meta}
+	registerFullTextJoinRegularIndexTable(builder, store.IndexTableName)
+}
+
 func TestFullTextDoesNotLimitIndependentIntersectionInputs(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	scan := builder.qry.Nodes[leftScanID]
@@ -5456,6 +5544,7 @@ func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText,
 
 type fullTextJoinMockCompilerContext struct {
 	*MockCompilerContext
+	fulltextBloomFilterPushdown int8
 }
 
 func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
@@ -5465,6 +5554,9 @@ func newFullTextJoinMockCompilerContext() *fullTextJoinMockCompilerContext {
 func (m *fullTextJoinMockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	if varName == "ft_relevancy_algorithm" {
 		return "", nil
+	}
+	if varName == "fulltext_bloom_filter_pushdown" {
+		return m.fulltextBloomFilterPushdown, nil
 	}
 	return m.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
 }
@@ -5606,10 +5698,11 @@ func collectFullTextFunctionScans(builder *QueryBuilder, nodeID int32) []*planpb
 
 	var nodes []*planpb.Node
 	if node.NodeType == planpb.Node_FUNCTION_SCAN &&
-		node.TableDef != nil &&
-		node.TableDef.TblFunc != nil &&
-		node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
-		nodes = append(nodes, node)
+		node.TableDef != nil && node.TableDef.TblFunc != nil {
+		name := node.TableDef.TblFunc.Name
+		if name == fulltext_index_scan_func_name || name == fulltext2_search_func_name {
+			nodes = append(nodes, node)
+		}
 	}
 	for _, childID := range node.Children {
 		nodes = append(nodes, collectFullTextFunctionScans(builder, childID)...)

@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +72,131 @@ func TestFulltext2SearchPrepareLimit(t *testing.T) {
 	// prepared `LIMIT ?` parameter (a non-literal expr resolved at EXECUTE via evalLimitExpression)
 	// is covered end-to-end by the fulltext2_prepare BVT.
 	require.Equal(t, uint64(12), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 12}}}}).limit)
+}
+
+func TestFulltext2SearchRuntimeFilterStatus(t *testing.T) {
+	st := &fulltext2SearchState{limit: 3, plannedLimit: 3}
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterPass,
+	})
+	require.Zero(t, st.limit)
+	// PASS is a per-query downgrade. Reset must restore the planned candidate
+	// bound for the next query that receives an exact membership payload.
+	st.reset(nil, nil)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		membershipFilterBytes: []byte{1, 2, 3},
+		status:                fulltextMembershipFilterReady,
+	})
+	require.Equal(t, []byte{1, 2, 3}, st.filterBytes)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.reset(nil, nil)
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterDrop,
+	})
+	require.True(t, st.dropFilter)
+}
+
+func TestWaitFulltext2MembershipFilterPreservesTerminalState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    int32
+		status fulltextMembershipFilterStatus
+	}{
+		{name: "pass", typ: message.RuntimeFilter_PASS, status: fulltextMembershipFilterPass},
+		{name: "drop", typ: message.RuntimeFilter_DROP, status: fulltextMembershipFilterDrop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			mb := message.NewMessageBoard()
+			proc.SetMessageBoard(mb)
+			tag := int32(901)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: tc.typ}, mb)
+
+			res, err := waitFulltext2MembershipFilter(proc, []*plan.RuntimeFilterSpec{{
+				Tag: tag, UseMembershipFilter: true,
+			}})
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			require.Equal(t, tc.status, res.status)
+			require.Empty(t, res.membershipFilterBytes)
+		})
+	}
+}
+
+func TestFulltextMembershipFilterPaths(t *testing.T) {
+	spec := func(tag int32, enabled bool) []*plan.RuntimeFilterSpec {
+		return []*plan.RuntimeFilterSpec{{Tag: tag, UseMembershipFilter: enabled}}
+	}
+
+	// Both waiters must keep the existing no-filter behavior for an absent or
+	// disabled runtime-filter specification.
+	proc := testutil.NewProc(t)
+	res, err := waitFulltextMembershipFilter(proc, nil)
+	require.NoError(t, err)
+	require.Nil(t, res)
+	res, err = waitFulltext2MembershipFilter(proc, spec(910, false))
+	require.NoError(t, err)
+	require.Nil(t, res)
+
+	// Build one production-shaped serialized key vector and feed it through the
+	// message board. This exercises the UNIQUEJOINKEYS -> docfilter path for
+	// both the legacy FULLTEXT waiter and FULLTEXT2's status-preserving waiter.
+	makePayload := func(t *testing.T) (*process.Process, []*plan.RuntimeFilterSpec, []byte) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		mb := message.NewMessageBoard()
+		proc.SetMessageBoard(mb)
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(11), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, int64(22), false, proc.Mp()))
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		message.SendMessage(message.RuntimeFilterMessage{
+			Tag:  910,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+			Data: data,
+		}, mb)
+		return proc, spec(910, true), data
+	}
+
+	proc, specs, _ := makePayload(t)
+	res, err = waitFulltextMembershipFilter(proc, specs)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, fulltextMembershipFilterReady, res.status)
+	require.NotEmpty(t, res.membershipFilterBytes)
+
+	proc, specs, _ = makePayload(t)
+	res, err = waitFulltext2MembershipFilter(proc, specs)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, fulltextMembershipFilterReady, res.status)
+	require.NotEmpty(t, res.membershipFilterBytes)
+
+	// An available terminal with no payload is a safe fail-open result. A
+	// malformed payload remains an error rather than silently becoming a filter.
+	proc = testutil.NewProc(t)
+	mb := message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: 911, Typ: message.RuntimeFilter_UNIQUEJOINKEYS}, mb)
+	res, err = waitFulltext2MembershipFilter(proc, spec(911, true))
+	require.NoError(t, err)
+	require.Equal(t, fulltextMembershipFilterPass, res.status)
+
+	proc = testutil.NewProc(t)
+	mb = message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: 912, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: []byte{1, 2, 3}}, mb)
+	_, err = waitFulltext2MembershipFilter(proc, spec(912, true))
+	require.Error(t, err)
+
+	_, err = buildFulltextMembershipFilter(proc, nil)
+	require.NoError(t, err)
+	_, err = buildFulltextMembershipFilter(proc, []byte{1, 2, 3})
+	require.Error(t, err)
 }
 
 func TestFulltext2ScoreAlgo(t *testing.T) {

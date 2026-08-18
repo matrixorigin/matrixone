@@ -476,6 +476,30 @@ func ParseBoolean(query []byte, tok tokenizer.Tokenizer) (BoolQuery, error) {
 	return q, nil
 }
 
+// IsConjunctiveTermQuery reports whether query is a pure Boolean conjunction:
+// one or more MUST clauses, each of which is a single term, with no other
+// clauses. Planner optimizations use the same parser/tokenizer boundary as the
+// executor instead of reinterpreting Boolean syntax.
+func IsConjunctiveTermQuery(query []byte, parser string) (bool, error) {
+	parser = normalizeParser(parser)
+	if _, err := DocTokenizer(parser); err != nil {
+		return false, err
+	}
+	q, err := buildBooleanQuery(string(query), parser)
+	if err != nil {
+		return false, err
+	}
+	if len(q.must) == 0 || len(q.mustNot) != 0 || len(q.should) != 0 || len(q.adjust) != 0 {
+		return false, nil
+	}
+	for _, c := range q.must {
+		if c.kind != clauseTerm {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // rawToClause builds a clause (with its impact weight) from a raw scanned clause,
 // recursing into groups. ok=false when it tokenizes to nothing.
 func rawToClause(rc rawClause, tok tokenizer.Tokenizer) (clause, bool, error) {
