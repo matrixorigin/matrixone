@@ -32,6 +32,7 @@ const (
 	backingSizeContractUnknown BackingSizeContract = iota
 	BackingSizeContractExact
 	BackingSizeContractClass
+	BackingSizeContractPage
 )
 
 func (c BackingSizeContract) String() string {
@@ -40,6 +41,8 @@ func (c BackingSizeContract) String() string {
 		return "exact"
 	case BackingSizeContractClass:
 		return "class"
+	case BackingSizeContractPage:
+		return "page"
 	default:
 		return "unknown"
 	}
@@ -89,7 +92,9 @@ func backingSizeContract(allocator Allocator) (BackingSizeContract, error) {
 	if err != nil {
 		return backingSizeContractUnknown, err
 	}
-	if contract != BackingSizeContractExact && contract != BackingSizeContractClass {
+	if contract != BackingSizeContractExact &&
+		contract != BackingSizeContractClass &&
+		contract != BackingSizeContractPage {
 		return backingSizeContractUnknown, moerr.NewInvalidStateNoCtxf(
 			"allocator %T reported an unknown backing-size contract", allocator)
 	}
@@ -109,6 +114,21 @@ func (c *ClassAllocator[T]) BackingSize(size uint64) (uint64, error) {
 
 func (*ClassAllocator[T]) BackingSizeContract() (BackingSizeContract, error) {
 	return BackingSizeContractClass, nil
+}
+
+func (*HybridMmapAllocator) BackingSize(size uint64) (uint64, error) {
+	backingSize, ok := HybridMmapAllocationSize(size)
+	if !ok {
+		if size == 0 {
+			return 0, moerr.NewInvalidInputNoCtx("backing size requires a positive request")
+		}
+		return 0, moerr.NewInternalErrorNoCtxf("cannot allocate %d bytes: too large", size)
+	}
+	return backingSize, nil
+}
+
+func (*HybridMmapAllocator) BackingSizeContract() (BackingSizeContract, error) {
+	return BackingSizeContractPage, nil
 }
 
 func (c *CAllocator) BackingSize(size uint64) (uint64, error) {
