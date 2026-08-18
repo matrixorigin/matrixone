@@ -1585,6 +1585,29 @@ func generateConstExpressionExecutor(
 		}
 		if err == nil {
 			vec.SetIsBin(con.IsBin)
+			if typ.Oid.IsMySQLString() {
+				domain := types.RuntimeStringInherit
+				effectiveDomain := types.StaticStringDomain(typ)
+				switch con.LiteralForm {
+				case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+					effectiveDomain = types.StringDomainText
+				case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+					plan.StringLiteralForm_STRING_LITERAL_HEX,
+					plan.StringLiteralForm_STRING_LITERAL_BIT:
+					effectiveDomain = types.StringDomainBinary
+				}
+				if effectiveDomain != types.StaticStringDomain(typ) {
+					if effectiveDomain == types.StringDomainBinary {
+						domain = types.RuntimeStringBinary
+					} else {
+						domain = types.RuntimeStringText
+					}
+				}
+				if err = vec.SetRuntimeStringDomainWithMP(domain, proc.Mp()); err != nil {
+					vec.Free(proc.Mp())
+					return nil, err
+				}
+			}
 		}
 	}
 	return vec, err

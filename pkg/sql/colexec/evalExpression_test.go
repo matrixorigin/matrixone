@@ -174,6 +174,32 @@ func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
 	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
 }
 
+func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		typ  types.Type
+		form plan.StringLiteralForm
+		want types.RuntimeStringDomain
+	}{
+		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit},
+		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText},
+		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary},
+		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec, err := generateConstExpressionExecutor(proc, test.typ, &plan.Literal{
+				Value:       &plan.Literal_Sval{Sval: "selected"},
+				LiteralForm: test.form,
+			}, nil)
+			require.NoError(t, err)
+			defer vec.Free(proc.Mp())
+			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
+		})
+	}
+}
+
 func TestFlowControlSameDomainWithoutProvenanceKeepsFastPath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	value, err := vector.NewConstBytes(
