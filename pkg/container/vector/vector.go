@@ -2749,6 +2749,31 @@ func (v *Vector) copyBinaryStringTo(dst *Vector, mp *mpool.MPool) error {
 }
 
 func (v *Vector) copyBinaryStringWindowTo(dst *Vector, start, end int, mp *mpool.MPool) error {
+	if v.IsConst() && start != end {
+		// A const vector stores every row-level override at physical row zero.
+		// Logical windows may start beyond the physical length, but every output
+		// row still selects that same physical value and domain.
+		switch v.GetRuntimeStringDomainAt(0) {
+		case types.RuntimeStringInherit:
+			dst.resetBinaryString()
+		case types.RuntimeStringBinary:
+			dst.setBinaryStringScalar(true)
+		case types.RuntimeStringText:
+			// Window metadata is copied before the borrowed const payload is
+			// installed, so the public setter would temporarily see a const-null
+			// destination and discard Text. Publish the already-validated source
+			// domain directly instead.
+			if err := dst.ensureBinaryStringCapacity(dst.length, mp); err != nil {
+				return err
+			}
+			dst.binaryStringRows.InitWithSize(int64(dst.length))
+			dst.textStringRows.InitWithSize(int64(dst.length))
+			dst.textStringRows.AddRange(0, uint64(dst.length))
+			dst.binaryString = false
+			dst.binaryStringRowsActive = true
+		}
+		return nil
+	}
 	if !v.binaryStringRowsActive {
 		dst.setBinaryStringScalar(v.binaryString)
 		return nil

@@ -201,6 +201,33 @@ func TestBatchWindowBroadcastsScalarConstants(t *testing.T) {
 	window.Clean(nil)
 }
 
+func TestBatchWindowBroadcastsConstRuntimeStringDomainAtOffset(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(
+		types.T_varbinary.ToType(), []byte("selected"), 1, mp)
+	require.NoError(t, err)
+	require.NoError(t, source.Vecs[0].SetRuntimeStringDomainWithMP(
+		types.RuntimeStringText, mp))
+	source.SetRowCount(4)
+	defer func() {
+		source.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	window, err := source.Window(2, 4)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.RowCount())
+	require.True(t, window.Vecs[0].IsConst())
+	for row := 0; row < window.RowCount(); row++ {
+		require.Equal(t, "selected", window.Vecs[0].GetStringAt(row))
+		require.Equal(t, types.RuntimeStringText,
+			window.Vecs[0].GetRuntimeStringDomainAt(row))
+	}
+	window.Clean(nil)
+}
+
 func TestBatchWindowRejectsMissingRowMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
 	provenance, err := vector.NewConstFixed(
