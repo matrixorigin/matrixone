@@ -305,7 +305,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// For example, TIMESTAMPADD with DATE input returns DATETIME type (from retType),
 	// but the actual vector type might be DATETIME (after TempSetType) or DATE (before TempSetType)
 	// We should preserve the retType (DATETIME) to ensure consistency
-	expr.Typ = plan.Type{Id: expr.Typ.Id, Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	expr.Typ.Scale = vec.GetType().Scale
+	expr.Typ.Width = vec.GetType().Width
 	expr.Expr = ec
 
 	return expr

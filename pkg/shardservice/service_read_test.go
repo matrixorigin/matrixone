@@ -23,11 +23,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/version"
@@ -137,6 +140,42 @@ func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) 
 	)
 	require.Equal(t, shard.Method_ShardReadV2, booleanReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(booleanReq)
+
+	crossDomain := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varbinary), Charset: uint32(types.CharsetBinary)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value:       &plan.Literal_Sval{Sval: "selected"},
+			LiteralForm: plan.StringLiteralForm_STRING_LITERAL_TEXT,
+		}},
+	}
+	readerReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: crossDomain}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, readerReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(readerReq)
+
+	rangesReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{RangesParam: shard.RangesParam{Exprs: []*plan.Expr{crossDomain}}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, rangesReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(rangesReq)
+
+	sameDomain := proto.Clone(crossDomain).(*plan.Expr)
+	sameDomain.Typ = plan.Type{Id: int32(types.T_varchar)}
+	sameDomainReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: sameDomain}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardRead, sameDomainReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(sameDomainReq)
 }
 
 func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {

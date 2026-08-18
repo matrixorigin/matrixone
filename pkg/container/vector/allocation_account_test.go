@@ -879,6 +879,29 @@ func TestConstSetPreservesSelectedBinaryString(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstSetRuntimeStringDomainAdmissionIsFailureAtomic(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 2)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_varbinary.ToType(), state.selection)
+	require.NoError(t, AppendBytes(destination, []byte("old"), false, mp))
+
+	source := NewVec(types.T_varbinary.ToType())
+	require.NoError(t, AppendBytes(source, []byte("new"), false, mp))
+	require.NoError(t, source.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+
+	set := GetConstSetFunction(types.T_varbinary.ToType(), mp)
+	err := set(destination, source, 0, 4)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, 1, destination.Length())
+	require.False(t, destination.IsConst())
+	require.Equal(t, "old", destination.GetStringAt(0))
+	require.Equal(t, types.RuntimeStringInherit, destination.GetRuntimeStringDomainAt(0))
+
+	source.Free(mp)
+	destination.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestVectorAllocationAccountCopyRollback(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 1)
 	mp := mpool.MustNewZero()

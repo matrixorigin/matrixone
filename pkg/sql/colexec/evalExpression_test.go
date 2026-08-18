@@ -177,15 +177,18 @@ func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
 func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {
-		name string
-		typ  types.Type
-		form plan.StringLiteralForm
-		want types.RuntimeStringDomain
+		name          string
+		typ           types.Type
+		form          plan.StringLiteralForm
+		want          types.RuntimeStringDomain
+		wantEffective types.StringDomain
 	}{
-		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit},
-		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText},
-		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary},
-		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit},
+		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
+		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
+		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
+		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
+		{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
+		{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -196,6 +199,13 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 			require.NoError(t, err)
 			defer vec.Free(proc.Mp())
 			require.Equal(t, test.want, vec.GetRuntimeStringDomainAt(0))
+			effective := types.StaticStringDomain(*vec.GetType())
+			if test.want == types.RuntimeStringText {
+				effective = types.StringDomainText
+			} else if test.want == types.RuntimeStringBinary {
+				effective = types.StringDomainBinary
+			}
+			require.Equal(t, test.wantEffective, effective)
 		})
 	}
 }

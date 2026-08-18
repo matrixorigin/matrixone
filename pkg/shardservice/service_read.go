@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -42,19 +43,40 @@ func hasVersionedPrepareParamMetadata(param pb.ReadParam) bool {
 	return false
 }
 
+func requiresVersionedShardRead(param pb.ReadParam) (bool, error) {
+	if hasVersionedPrepareParamMetadata(param) {
+		return true, nil
+	}
+	required, err := planpb.RequiresMORPCVersion22StringLiterals(param.ReaderBuildParam.Expr)
+	if err != nil || required {
+		return required, err
+	}
+	for _, expr := range param.RangesParam.Exprs {
+		required, err = planpb.RequiresMORPCVersion22StringLiterals(expr)
+		if err != nil || required {
+			return required, err
+		}
+	}
+	return false, nil
+}
+
 func (s *service) validateRemoteReadCompatibility(
 	ctx context.Context,
 	shard pb.TableShard,
 	param pb.ReadParam,
 ) error {
-	if !hasVersionedPrepareParamMetadata(param) {
+	required, err := requiresVersionedShardRead(param)
+	if err != nil {
+		return err
+	}
+	if !required {
 		return nil
 	}
 
 	target := shard.Replicas[0].CN
 	found := false
 	compatible := false
-	err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
 		ctx,
 		s.remote.cluster,
 		clusterservice.NewServiceIDSelector(target),
@@ -72,7 +94,7 @@ func (s *service) validateRemoteReadCompatibility(
 	}
 	return moerr.NewInternalErrorf(
 		ctx,
-		"cannot send prepared-parameter metadata to shard replica %s with an incompatible or unknown commit",
+		"cannot send versioned execution metadata to shard replica %s with an incompatible or unknown commit",
 		target,
 	)
 }

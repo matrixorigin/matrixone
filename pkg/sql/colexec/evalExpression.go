@@ -1557,6 +1557,11 @@ func generateConstExpressionExecutor(
 					return nil, err1
 				}
 				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
+			} else if typ.Oid.IsMySQLString() {
+				// Keep the plan type's charset on the materialized Vector. Raw
+				// HEX/BIT literals use a VARCHAR-shaped binary charset, and their
+				// LiteralForm therefore needs no runtime override.
+				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
 			}

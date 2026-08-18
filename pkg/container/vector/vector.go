@@ -6591,6 +6591,17 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
+		domain := types.RuntimeStringInherit
+		if length > 0 && !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+			domain = w.GetRuntimeStringDomainAt(int(sel))
+		}
+		// Admit the only fallible provenance allocation before SetConst*
+		// publishes the new payload, const state, and logical length.
+		if domain == types.RuntimeStringText {
+			if err := v.ensureBinaryStringCapacity(length, mp); err != nil {
+				return err
+			}
+		}
 		if err := set(v, w, sel, length); err != nil {
 			return err
 		}
@@ -6603,7 +6614,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 			v.resetBinaryString()
 		} else {
 			v.SetPrepareParamKind(w.GetPrepareParamKindAt(int(sel)))
-			if err := v.SetRuntimeStringDomainWithMP(w.GetRuntimeStringDomainAt(int(sel)), mp); err != nil {
+			if err := v.SetRuntimeStringDomainWithMP(domain, mp); err != nil {
 				return err
 			}
 		}
