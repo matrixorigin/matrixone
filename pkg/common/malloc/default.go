@@ -38,39 +38,9 @@ func GetDefault(defaultConfig *Config) Allocator {
 
 func newDefault(delta *Config) (allocator Allocator) {
 
-	// config
-	config := *defaultConfig.Load()
-	if delta != nil {
-		config = patchConfig(config, *delta)
-	}
-
-	// debug
-	if os.Getenv("MO_MALLOC_DEBUG") != "" {
-		config.CheckFraction = ptrTo(uint32(1))
-		config.FullStackFraction = ptrTo(uint32(1))
-		config.EnableMetrics = ptrTo(true)
-	}
-
-	// profile
+	config := loadDefaultConfig(delta)
 	defer func() {
-		if config.FullStackFraction != nil && *config.FullStackFraction > 0 {
-			allocator = NewProfileAllocator(
-				allocator,
-				globalProfiler,
-				*config.FullStackFraction,
-			)
-		}
-	}()
-
-	// checked
-	defer func() {
-		if config.CheckFraction != nil && *config.CheckFraction > 0 {
-			allocator = NewRandomAllocator(
-				allocator,
-				NewCheckedAllocator(allocator),
-				*config.CheckFraction,
-			)
-		}
+		allocator = decorateWithConfig(allocator, config)
 	}()
 
 	if config.Allocator == nil {
@@ -160,6 +130,44 @@ func newDefault(delta *Config) (allocator Allocator) {
 	default:
 		panic("unknown allocator: " + *config.Allocator)
 	}
+}
+
+// DecorateWithDefaultConfig applies the standard checked-allocation and
+// profiling layers to a specialized allocator without changing its backing
+// implementation.
+func DecorateWithDefaultConfig(allocator Allocator) Allocator {
+	return decorateWithConfig(allocator, loadDefaultConfig(nil))
+}
+
+func loadDefaultConfig(delta *Config) Config {
+	config := *defaultConfig.Load()
+	if delta != nil {
+		config = patchConfig(config, *delta)
+	}
+	if os.Getenv("MO_MALLOC_DEBUG") != "" {
+		config.CheckFraction = ptrTo(uint32(1))
+		config.FullStackFraction = ptrTo(uint32(1))
+		config.EnableMetrics = ptrTo(true)
+	}
+	return config
+}
+
+func decorateWithConfig(allocator Allocator, config Config) Allocator {
+	if config.CheckFraction != nil && *config.CheckFraction > 0 {
+		allocator = NewRandomAllocator(
+			allocator,
+			NewCheckedAllocator(allocator),
+			*config.CheckFraction,
+		)
+	}
+	if config.FullStackFraction != nil && *config.FullStackFraction > 0 {
+		allocator = NewProfileAllocator(
+			allocator,
+			globalProfiler,
+			*config.FullStackFraction,
+		)
+	}
+	return allocator
 }
 
 var globalProfiler = NewProfiler[HeapSampleValues]("malloc")

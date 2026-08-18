@@ -74,6 +74,14 @@ func (builder *QueryBuilder) mysqlFullGroupByAllowsColumn(ctx *BindContext, bind
 		builder.groupByIncludesPrimaryKey(ctx, binding)
 }
 
+func (bc *BindContext) aggregateQueryForFullGroupBy() bool {
+	return bc != nil &&
+		(len(bc.groups) > 0 ||
+			len(bc.times) > 0 ||
+			len(bc.aggregates) > 0 ||
+			bc.pendingAggregateQuery)
+}
+
 func (builder *QueryBuilder) groupByIncludesPrimaryKey(ctx *BindContext, binding *Binding) bool {
 	if binding.nodeId < 0 || int(binding.nodeId) >= len(builder.qry.Nodes) {
 		return false

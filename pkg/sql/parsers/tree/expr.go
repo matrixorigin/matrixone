@@ -1855,19 +1855,41 @@ func (s SampleExpr) String() string {
 }
 
 func (s SampleExpr) Format(ctx *FmtCtx) {
-	if s.typ == SampleRows {
-		ctx.WriteString(fmt.Sprintf("sample %d rows", s.n))
+	ctx.WriteString("sample(")
+	if s.isStar {
+		ctx.WriteByte('*')
 	} else {
-		ctx.WriteString(fmt.Sprintf("sample %.1f percent", s.k))
+		s.columns.Format(ctx)
 	}
+	ctx.WriteString(", ")
+	if s.typ == SampleRows {
+		ctx.WriteString(fmt.Sprintf("%d rows", s.n))
+		if s.level == SampleUsingRow {
+			ctx.WriteString(", 'row'")
+		}
+	} else {
+		ctx.WriteString(fmt.Sprintf("%.1f percent", s.k))
+	}
+	ctx.WriteByte(')')
 }
 
-func (s SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
-	newNode, skipChildren := v.Enter(node)
+func (s *SampleExpr) Accept(v Visitor) (node Expr, ok bool) {
+	newNode, skipChildren := v.Enter(s)
 	if skipChildren {
 		return v.Exit(newNode)
 	}
-	return v.Exit(node)
+	s = newNode.(*SampleExpr)
+	for i, column := range s.columns {
+		if column == nil {
+			continue
+		}
+		newColumn, ok := column.Accept(v)
+		if !ok {
+			return s, false
+		}
+		s.columns[i] = newColumn
+	}
+	return v.Exit(s)
 }
 
 func (s SampleExpr) Valid() error {
@@ -1886,6 +1908,17 @@ func (s SampleExpr) Valid() error {
 
 func (s SampleExpr) GetColumns() (columns Exprs, isStar bool) {
 	return s.columns, s.isStar
+}
+
+// SetColumns changes the sampled expressions while preserving the sampling
+// mode and limit.  It is used by view-definition rewriting to replace
+// SAMPLE(*) with the columns visible when the view is created.
+func (s *SampleExpr) SetColumns(columns Exprs, isStar bool) {
+	if s == nil {
+		return
+	}
+	s.columns = columns
+	s.isStar = isStar
 }
 
 func (s SampleExpr) GetSampleDetail() (isSampleRows bool, usingRow bool, n int32, k float64) {
@@ -1955,6 +1988,11 @@ const (
 	FULLTEXT_NL_QUERY_EXPANSION
 	FULLTEXT_BOOLEAN
 	FULLTEXT_QUERY_EXPANSION
+	// FULLTEXT_BM25 — IN BM25 MODE: ranked bag-of-words retrieval on a fulltext2
+	// index (each token an OR term, no positional phrase), so it works on a
+	// POSITION_FREE index. Distinct from FullTextMatchExpr.IsBm25 (the BM25() verb
+	// of the standalone bm25 index).
+	FULLTEXT_BM25
 )
 
 type FullTextMatchExpr struct {
@@ -1980,6 +2018,8 @@ func (node *FullTextSearchType) ToString() string {
 		return "IN BOOLEAN MODE"
 	case FULLTEXT_QUERY_EXPANSION:
 		return "WITH QUERY EXPANSION"
+	case FULLTEXT_BM25:
+		return "IN BM25 MODE"
 
 	default:
 		return "Unknown FullSearchType"

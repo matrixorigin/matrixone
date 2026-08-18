@@ -20,6 +20,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,14 +62,27 @@ func makeMaxByExec(mp *mpool.MPool, id int64, nonNullValue bool, params []types.
 }
 
 func (exec *maxByExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
+	if len(vectors) != 3 {
+		return moerr.NewInternalErrorNoCtx("max_by requires three input vectors")
+	}
+	if err := exec.fillRow(groupIndex, row, vectors); err != nil {
+		return err
+	}
+	exec.compactChunk(exec.getChunk(groupIndex))
+	return nil
 }
 
 func (exec *maxByExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if len(vectors) != 3 {
 		return moerr.NewInternalErrorNoCtx("max_by requires three input vectors")
 	}
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	for row := 0; row < vectors[0].Length(); row++ {
+		if err := exec.fillRow(groupIndex, row, vectors); err != nil {
+			return err
+		}
+	}
+	exec.compactChunk(exec.getChunk(groupIndex))
+	return nil
 }
 
 func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -79,28 +93,47 @@ func (exec *maxByExec) BatchFill(offset int, groups []uint64, vectors []*vector.
 		if group == GroupNotMatched {
 			continue
 		}
-		rows := [3]int{offset + i, offset + i, offset + i}
-		for column := range rows {
-			if vectors[column].IsConst() {
-				rows[column] = 0
-			}
+		if err := exec.fillRow(int(group-1), offset+i, vectors); err != nil {
+			return err
 		}
-		if vectors[1].IsNull(uint64(rows[1])) || exec.nonNullValue && vectors[0].IsNull(uint64(rows[0])) {
-			continue
+	}
+	exec.compactBatchGroups(groups)
+	return nil
+}
+
+func (exec *maxByExec) fillRow(
+	groupIndex int,
+	row int,
+	vectors []*vector.Vector,
+) error {
+	rows := [3]int{row, row, row}
+	for column := range rows {
+		if vectors[column].IsConst() {
+			rows[column] = 0
 		}
-		x, y := exec.getXY(group - 1)
-		state := &exec.state[x]
-		if state.vecs[1].IsNull(uint64(y)) || candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
-			if err := exec.copyWinner(x, state.vecs, int(y), vectors, rows); err != nil {
-				return err
-			}
-		}
+	}
+	if vectors[1].IsNull(uint64(rows[1])) ||
+		exec.nonNullValue && vectors[0].IsNull(uint64(rows[0])) {
+		return nil
+	}
+	x, y := exec.getXY(uint64(groupIndex))
+	state := &exec.state[x]
+	if state.vecs[1].IsNull(uint64(y)) ||
+		candidateWins(vectors, rows, state.vecs, int(y), exec.argTypes) {
+		return exec.copyWinner(x, state.vecs, int(y), vectors, rows)
+	}
+	if candidateEquals(vectors, rows, state.vecs, int(y), exec.argTypes) &&
+		vectors[0].GetBinaryStringMetadataAt(rows[0]) {
+		return state.vecs[0].SetIsBinaryStringAt(int(y), true, exec.mp)
 	}
 	return nil
 }
 
 func (exec *maxByExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
+	if err := exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -124,8 +157,14 @@ func (exec *maxByExec) BatchMerge(next AggFuncExec, offset int, groups []uint64)
 			if err := exec.copyWinner(x1, current, int(y1), candidate, rows); err != nil {
 				return err
 			}
+		} else if candidateEquals(candidate, rows, current, int(y1), exec.argTypes) &&
+			candidate[0].GetBinaryStringMetadataAt(rows[0]) {
+			if err := current[0].SetIsBinaryStringAt(int(y1), true, exec.mp); err != nil {
+				return err
+			}
 		}
 	}
+	exec.compactBatchGroups(groups)
 	return nil
 }
 
@@ -140,6 +179,12 @@ func candidateWins(candidate []*vector.Vector, candidateRows [3]int, current []*
 	// final deterministic fallback so partial aggregation merge order cannot
 	// change the result when it is not.
 	return compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) > 0
+}
+
+func candidateEquals(candidate []*vector.Vector, candidateRows [3]int, current []*vector.Vector, currentRow int, typs []types.Type) bool {
+	return compareVectorValue(candidate[1], candidateRows[1], current[1], currentRow, typs[1]) == 0 &&
+		compareNullableVectorValue(candidate[2], candidateRows[2], current[2], currentRow, typs[2]) == 0 &&
+		compareNullableRaw(candidate[0], candidateRows[0], current[0], currentRow) == 0
 }
 
 func compareNullableVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ types.Type) int {
@@ -243,8 +288,7 @@ func (exec *maxByExec) copyWinner(
 	srcRows [3]int,
 ) error {
 	usage := exec.ensureVarlenaUsage(chunk)
-	oldLive := make([]int, len(dst))
-	newLive := make([]int, len(dst))
+	var oldLive, newLive [3]int
 	// Reserve every fallible varlen allocation before mutating any of the three
 	// correlated state vectors. Without this preflight, an OOM after copying the
 	// value but before copying order/tie would publish a mixed winner. Growing
@@ -269,20 +313,33 @@ func (exec *maxByExec) copyWinner(
 			return err
 		}
 	}
-	for i := range dst {
-		if src[i].IsNull(uint64(srcRows[i])) {
-			dst[i].SetNull(uint64(dstRow))
-			continue
-		}
-		if err := dst[i].SetRawBytesAt(dstRow, src[i].GetRawBytesAt(srcRows[i]), exec.mp); err != nil {
+	if !src[0].IsNull(uint64(srcRows[0])) {
+		if err := dst[0].PreflightSetPrepareParamKindAt(
+			dstRow,
+			src[0].GetPrepareParamKindAt(srcRows[0]),
+			exec.mp,
+		); err != nil {
 			return err
 		}
-		dst[i].UnsetNull(uint64(dstRow))
+	}
+	for i := range dst {
+		if src[i].IsNull(uint64(srcRows[i])) {
+			if i == 0 {
+				dst[i].SetNullPreservingPrepareParamCapacity(uint64(dstRow))
+			} else {
+				dst[i].SetNull(uint64(dstRow))
+			}
+			continue
+		}
 		if i == 0 {
-			if err := dst[i].SetPrepareParamKindAtWithMP(
-				dstRow, src[i].GetPrepareParamKindAt(srcRows[i]), exec.mp); err != nil {
+			if err := dst[i].SetRawBytesAtFromAndUnsetNull(dstRow, src[i], srcRows[i], exec.mp); err != nil {
 				return err
 			}
+		} else {
+			if err := dst[i].SetRawBytesAtFrom(dstRow, src[i], srcRows[i], exec.mp); err != nil {
+				return err
+			}
+			dst[i].UnsetNull(uint64(dstRow))
 		}
 	}
 	for i, vec := range dst {
@@ -290,12 +347,61 @@ func (exec *maxByExec) copyWinner(
 			usage[i].liveBytes += newLive[i] - oldLive[i]
 			usage[i].staleBytes += oldLive[i]
 		}
+	}
+	return nil
+}
+
+func (exec *maxByExec) getChunk(groupIndex int) int {
+	x, _ := exec.getXY(uint64(groupIndex))
+	return x
+}
+
+func (exec *maxByExec) compactChunk(chunk int) {
+	if chunk < 0 || chunk >= len(exec.state) {
+		return
+	}
+	if len(exec.state[chunk].vecs) != 0 {
+		exec.state[chunk].vecs[0].NormalizePrepareParamKinds()
+	}
+	usage := exec.ensureVarlenaUsage(chunk)
+	for i, vec := range exec.state[chunk].vecs {
 		// Compaction is an optional bound on stale varlen area. A failed compact
 		// clone leaves the valid original untouched, so memory pressure must not
 		// turn a fully copied winner into an aggregate error with ambiguous state.
 		_ = compactMaxByStateVector(vec, &usage[i], exec.mp)
 	}
-	return nil
+}
+
+func (exec *maxByExec) compactBatchGroups(groups []uint64) {
+	var chunks [hashmap.UnitLimit]int
+	chunkCount := 0
+	for _, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		chunk := exec.getChunk(int(group - 1))
+		seen := false
+		for i := 0; i < chunkCount; i++ {
+			if chunks[i] == chunk {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			continue
+		}
+		if chunkCount == len(chunks) {
+			// Normal Group work units are bounded by UnitLimit. Keep the public
+			// aggregate API correct for a larger caller without allocating a map.
+			exec.compactChunk(chunk)
+			continue
+		}
+		chunks[chunkCount] = chunk
+		chunkCount++
+	}
+	for i := 0; i < chunkCount; i++ {
+		exec.compactChunk(chunks[i])
+	}
 }
 
 func maxByAreaBytes(value []byte) int {
@@ -398,4 +504,9 @@ func (exec *maxByExec) Flush() ([]*vector.Vector, error) {
 	}
 	exec.varlenaUsage = nil
 	return result, nil
+}
+
+func (exec *maxByExec) Free() {
+	exec.varlenaUsage = nil
+	exec.aggExec.Free()
 }

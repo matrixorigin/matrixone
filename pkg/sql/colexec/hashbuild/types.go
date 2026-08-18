@@ -48,8 +48,6 @@ const (
 	SendSucceed
 )
 
-const HashBuildAllocationOwner mpool.AllocationOwner = 1
-
 const (
 	HashBuildSpillAllocationSiteSelectedData mpool.AllocationSite = iota + 64
 	HashBuildSpillAllocationSiteSelectedArea
@@ -131,7 +129,7 @@ type container struct {
 	spillAccountedWrite    *mpool.AccountedBuffer
 	spillAccountedBuckets  [spillNumBuckets]*mpool.AccountedBuffer
 	spillCoalesceDisabled  bool
-	recoveryCapacity       *process.HashBuildRecoveryCapacity
+	recoveryCapacity       *process.ExecutionRecoveryCapacity
 	recoveryCapacityClass  mpool.AllocationCapacityClass
 	expressionRecoveryPeak uint64
 	expressionRecoveryRows int
@@ -153,8 +151,8 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	fdToken   *process.HashBuildSpillFDReservation
-	diskToken *process.HashBuildSpillDiskReservation
+	fdToken   *process.ExecutionSpillFDReservation
+	diskToken *process.ExecutionSpillDiskReservation
 	rows      int64
 	bytes     uint64
 	bucket    int
@@ -183,7 +181,7 @@ func (b *spillFileBundle) release() {
 	}
 }
 
-func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBuildSpillFDReservation) {
+func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.ExecutionSpillFDReservation) {
 	if b == nil || file == nil {
 		return
 	}
@@ -207,14 +205,14 @@ func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBu
 	b.mu.Unlock()
 }
 
-func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudgetGeneration, bytes uint64) (uint64, bool, error) {
+func (b *spillFileBundle) growDisk(file *os.File, budget *process.ExecutionResourceGeneration, bytes uint64) (uint64, bool, error) {
 	if b == nil || file == nil || budget == nil {
-		return 0, false, process.ErrHashBuildBudgetInvalid
+		return 0, false, process.ErrExecutionResourceInvalid
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.released {
-		return 0, false, process.ErrHashBuildSpillReservationInactive
+		return 0, false, process.ErrExecutionSpillReservationInactive
 	}
 	if b.entries == nil {
 		b.entries = make(map[*os.File]*spillFileEntry)
@@ -320,7 +318,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 ) error {
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -337,7 +335,7 @@ func (hashBuild *HashBuild) SetAllocationAccount(
 }
 
 func (hashBuild *HashBuild) installRecoveryCapacity(
-	budget *process.HashBuildBudgetGeneration,
+	budget *process.ExecutionResourceGeneration,
 ) error {
 	ctr := &hashBuild.ctr
 	account := ctr.hashmapBuilder.mapAllocationAccount
@@ -354,7 +352,7 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	if ctr.recoveryCapacityClass != mpool.AllocationCapacityClassDefault {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	capacity, err := process.NewHashBuildRecoveryCapacity(budget)
+	capacity, err := process.NewExecutionRecoveryCapacity(budget)
 	if err != nil {
 		return err
 	}
@@ -365,7 +363,7 @@ func (hashBuild *HashBuild) installRecoveryCapacity(
 	}
 	selection, err := vector.NewAllocationAccountSelectionWithCapacityClass(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -421,7 +419,7 @@ func (hashBuild *HashBuild) releaseRecoveryCapacity(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildSpillAllocationSiteSelectedData,
 		HashBuildSpillAllocationSiteSelectedArea,
 		HashBuildSpillAllocationSiteSelectedNulls,
@@ -451,7 +449,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	selection, err := hashtable.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteHashCell,
 		HashBuildAllocationSiteHashDescriptor,
 	)
@@ -460,7 +458,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	iteratorAllocation, err := hashmap.NewIteratorAllocation(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteHashIterator,
 	)
 	if err != nil {
@@ -468,7 +466,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	batchSelection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteBatchData,
 		HashBuildAllocationSiteBatchArea,
 		HashBuildAllocationSiteBatchNulls,
@@ -479,7 +477,7 @@ func (hb *HashmapBuilder) SetAllocationAccount(
 	}
 	uniqueKeySelection, err := vector.NewAllocationAccountSelection(
 		account,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteUniqueKeyData,
 		HashBuildAllocationSiteUniqueKeyArea,
 		HashBuildAllocationSiteUniqueKeyNulls,
@@ -739,7 +737,7 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 // durably transferred to spill storage.
 func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) error {
 	if idx < 0 || idx >= len(hb.Batches.Buf) {
-		return process.ErrHashBuildBudgetInvalid
+		return process.ErrExecutionResourceInvalid
 	}
 	if bat := hb.Batches.Buf[idx]; bat != nil {
 		bat.Clean(proc.Mp())

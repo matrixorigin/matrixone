@@ -32,6 +32,34 @@ func MaxNodeSize(keySize, valueSize uint32) uint64 {
 	return uint64(maxNodeSize) + uint64(keySize) + uint64(valueSize) + maxPadding
 }
 
+// ArenaFootprint returns the bytes consumed from Arena.Size and the trailing
+// bytes that must remain addressable for the unused part of node.tower.  The
+// latter is a one-node safety suffix, not consumed capacity; callers planning
+// several additions add every consumed value and retain only the maximum
+// prefix-plus-trailing requirement.
+func (p AddPlan) ArenaFootprint(keySize, valueSize uint32) (
+	consumed uint64,
+	trailing uint64,
+	ok bool,
+) {
+	if p.height < 1 || p.height > maxHeight ||
+		uint64(keySize)+uint64(valueSize)+uint64(maxNodeSize) > math.MaxUint32 {
+		return 0, 0, false
+	}
+	unused := uint64((maxHeight - int(p.height)) * linksSize)
+	physical := uint64(maxNodeSize) - unused +
+		uint64(keySize) + uint64(valueSize)
+	return physical + nodeAlignment - 1, unused, true
+}
+
+// MaxNodeTrailingSize is the fixed suffix needed when nodes are copied into a
+// fresh arena in a different insertion order.  Arena.Size does not consume
+// this suffix, so one arena-wide allowance is sufficient regardless of row
+// count.
+func MaxNodeTrailingSize() uint64 {
+	return uint64((maxHeight - 1) * linksSize)
+}
+
 type links struct {
 	nextOffset atomic.Uint32
 	prevOffset atomic.Uint32

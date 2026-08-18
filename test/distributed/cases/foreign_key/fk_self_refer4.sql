@@ -157,19 +157,65 @@ alter table t1 drop foreign key fk1, drop foreign key fk2, drop foreign key fk1;
 --error duplicate fk1
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 
---no error
+--error fk1 does not exist after the first drop
 alter table t1 drop foreign key fk1, drop foreign key fk1, drop foreign key fk1;
 
---error fk1 does not exist
+--error duplicate fk1; the preceding failed ALTER leaves fk1 unchanged
 alter table t1 add constraint fk1 foreign key (b) references t1(a), drop foreign key fk1, add constraint fk1 foreign key (b) references t1(a);
 
 --error. fk1 duplicate in new add constraint
 alter table t1 add constraint fk1 foreign key (b) references t1(a), add constraint fk1 foreign key (b) references t1(a);
 
---no error
+--error duplicate fk1; failed ALTER statements above are atomic
 alter table t1 add constraint `fk1` foreign key (b) references t1(a);
 
 --no error
 alter table t1 drop constraint fk1;
+
+-- ordered FK action state: accepted statements must materialize their final state
+drop table if exists seq_fk;
+create table seq_fk(a int primary key, b int, constraint fk_seq foreign key (b) references seq_fk(a));
+
+-- DROP -> ADD -> DROP leaves the constraint absent
+alter table seq_fk drop foreign key fk_seq,
+    add constraint fk_seq foreign key (b) references seq_fk(a),
+    drop foreign key fk_seq;
+show create table seq_fk;
+
+-- ADD -> DROP is valid against the state produced by the preceding action
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a),
+    drop foreign key fk_seq;
+show create table seq_fk;
+
+-- a repeated DROP fails atomically and leaves the original constraint present
+alter table seq_fk add constraint fk_seq foreign key (b) references seq_fk(a);
+alter table seq_fk drop foreign key fk_seq, drop foreign key fk_seq;
+show create table seq_fk;
+
+-- multiple ADD actions keep their statement order in the materialized schema
+alter table seq_fk drop foreign key fk_seq,
+    add constraint fk_first foreign key (b) references seq_fk(a),
+    add constraint fk_second foreign key (b) references seq_fk(a);
+show create table seq_fk;
+drop table seq_fk;
+
+-- ordered self-FK/index dependency state
+drop table if exists seq_self_fk_index;
+create table seq_self_fk_index(a int, b int, unique key idx_b(b));
+
+-- adding a self FK before dropping its selected unique index is rejected atomically
+alter table seq_self_fk_index
+    add constraint fk_new foreign key (a) references seq_self_fk_index(b),
+    drop index idx_b;
+show create table seq_self_fk_index;
+
+-- after the old self FK is dropped, its formerly selected index is droppable
+alter table seq_self_fk_index
+    add constraint fk_old foreign key (a) references seq_self_fk_index(b);
+alter table seq_self_fk_index
+    drop foreign key fk_old,
+    drop index idx_b;
+show create table seq_self_fk_index;
+drop table seq_self_fk_index;
 
 drop database if exists fk_self_refer4;

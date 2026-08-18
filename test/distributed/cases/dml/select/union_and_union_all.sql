@@ -366,3 +366,26 @@ where B.IID = 2 and (A.PHONE <> B.PHONE or A.NAME is null);
 
 drop table t17;
 select * from (select 'tb1' as name, 1 as count union all select 'tb3' as name, 3 as count union all select 'tb2' as name, 2 as count) as u order by count;
+
+-- issue #27108: a branch-local constant-false predicate must stay above a global aggregate
+SELECT
+    check_id,
+    status,
+    check_id <> 'excluded' AS should_block
+FROM (
+    SELECT
+        'bronze' AS gate_name,
+        'keep' AS check_id,
+        CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status
+    FROM (SELECT 1 AS n) t
+
+    UNION ALL
+
+    SELECT
+        'bronze',
+        'excluded',
+        CASE WHEN COUNT(*) >= 2 THEN 'PASS' ELSE 'FAIL' END
+    FROM (SELECT 1 AS n) t
+) v
+WHERE status = 'FAIL'
+  AND check_id <> 'excluded';

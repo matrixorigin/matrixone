@@ -384,6 +384,9 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		needCast := true
 		fn := expr.GetF()
 		if fn != nil {
+			// fulltext_match / bm25_match are rewritten to an index-scan join by the
+			// optimizer; leave them un-cast so the rewrite can find them by name in the
+			// filter list (a wrapping cast(... AS BOOL) would hide the function).
 			needCast = fn.Func.ObjName != "fulltext_match"
 		}
 		// expr must be bool type, if not, try to do type convert
@@ -1618,7 +1621,8 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	var lit *plan.Literal
 	if constExpr.GetLit() != nil {
 		lit = constExpr.GetLit()
-	} else if funcExpr := constExpr.GetF(); funcExpr != nil {
+	} else if funcExpr := constExpr.GetF(); funcExpr != nil &&
+		funcExpr.Func != nil && funcExpr.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.Args) > 0 {
 			if innerLit := funcExpr.Args[0].GetLit(); innerLit != nil {

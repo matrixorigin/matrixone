@@ -91,6 +91,39 @@ func newBatchAllocationTestSource(
 	return bat
 }
 
+func TestBatchAccountedExtraBufferMoveAndClean(t *testing.T) {
+	state := newTestBatchAllocationAccount(t, 8)
+	mp := mpool.MustNewZero()
+	var nilBatch *Batch
+	require.ErrorIs(t, nilBatch.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	nilBatch.MoveExtraBufferFrom(nil)
+	empty := NewWithSize(0)
+	require.ErrorIs(t, empty.SetAccountedExtraBuffer(nil), mpool.ErrAllocationAccountInvalid)
+	empty.MoveExtraBufferFrom(empty)
+	empty.Clean(mp)
+	buffer, err := mpool.NewAccountedBuffer(mp, state.account, 1, 5)
+	require.NoError(t, err)
+	_, err = buffer.Write(bytes.Repeat([]byte("x"), 4096))
+	require.NoError(t, err)
+	used := state.account.Snapshot().Used
+	require.Positive(t, used)
+
+	source := NewWithSize(0)
+	require.NoError(t, source.SetAccountedExtraBuffer(buffer))
+	buffer.Free() // ownership moved to source
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	destination := NewWithSize(0)
+	destination.MoveExtraBufferFrom(source)
+	require.Empty(t, source.ExtraBuf)
+	require.Len(t, destination.ExtraBuf, 4096)
+	source.Clean(mp)
+	require.Equal(t, used, state.account.Snapshot().Used)
+	destination.Clean(mp)
+	require.Zero(t, state.account.Snapshot().Used)
+	finalizeTestBatchAllocationAccount(t, state)
+}
+
 func TestBatchAllocationAccountCloneDupAndWindow(t *testing.T) {
 	state := newTestBatchAllocationAccount(t, 64)
 	mp := mpool.MustNewZero()
@@ -299,6 +332,10 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	source := newBatchAllocationTestSource(t, mp, nil)
 	source.Vecs[0].GetGrouping().Add(1, 7, 31)
 	source.Vecs[1].GetGrouping().Add(2, 9)
+	require.NoError(t, source.Vecs[1].SetIsBinaryStringAt(0, true))
+	kinds := make([]vector.PrepareParamKind, source.RowCount())
+	kinds[0] = vector.PrepareParamInteger
+	require.NoError(t, source.Vecs[1].SetPrepareParamKindsWithMP(kinds, mp))
 	source.ExtraBuf = bytes.Repeat([]byte("x"), 1<<20)
 
 	var encoded bytes.Buffer
@@ -316,6 +353,9 @@ func TestBatchGroupingCodecRoundTrip(t *testing.T) {
 	for i := range source.Vecs {
 		require.True(t, decoded.Vecs[i].GetGrouping().IsSame(source.Vecs[i].GetGrouping()))
 	}
+	require.True(t, decoded.Vecs[1].GetIsBinaryStringAt(0))
+	require.False(t, decoded.Vecs[1].GetIsBinaryStringAt(1))
+	require.Equal(t, vector.PrepareParamInteger, decoded.Vecs[1].GetPrepareParamKindAt(0))
 	withoutGrouping := newBatchAllocationTestSource(t, mp, nil)
 	encoded.Reset()
 	require.NoError(t, withoutGrouping.MarshalBinaryWithGroupingTo(&encoded))
@@ -355,8 +395,12 @@ func TestBatchGroupingCodecRejectsStableMetadataBeforePayloadAllocation(t *testi
 			source := NewWithSize(0)
 			source.Attrs = test.attrs
 			source.ExtraBuf = test.extra
+			var payload bytes.Buffer
+			require.NoError(t, source.MarshalBinaryTo(&payload))
 			var encoded bytes.Buffer
-			require.NoError(t, source.MarshalBinaryTo(&encoded))
+			payloadSize := int64(payload.Len())
+			encoded.Write(types.EncodeInt64(&payloadSize))
+			encoded.Write(payload.Bytes())
 
 			decoded := NewOffHeapEmpty()
 			require.NoError(t, decoded.SetAllocationAccount(state.selection))

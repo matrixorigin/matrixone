@@ -238,6 +238,25 @@ func TestUnionBatchVarlenWindowAliasForcedGrowth(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestUnionBatchVarlenSelfAliasSparseFlagsPreservesMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, values, isNull := newForcedGrowthAliasVector(t, mp)
+	selected := vec.Length() - 1
+	require.False(t, isNull[selected])
+	require.NoError(t, vec.SetIsBinaryStringAt(selected, true, mp))
+	flags := make([]uint8, vec.Length())
+	flags[selected] = 1
+	oldLength := vec.Length()
+
+	require.NoError(t, vec.UnionBatch(vec, 0, 1, flags, mp))
+	require.Equal(t, oldLength+1, vec.Length())
+	require.Equal(t, values[selected], string(vec.GetBytesAt(oldLength)))
+	require.True(t, vec.GetBinaryStringMetadataAt(oldLength))
+
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func newForcedGrowthAliasVector(
 	t *testing.T,
 	mp *mpool.MPool,

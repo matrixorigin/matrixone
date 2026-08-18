@@ -106,6 +106,10 @@ func TestS3FSCopyObject(t *testing.T) {
 	copied, err = noCopier.CopyObject(ctx, src, "objects/a", "objects/b")
 	require.NoError(t, err)
 	require.False(t, copied)
+	_, err = noCopier.CopyObject(ctx, src, "", "objects/b")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	_, err = noCopier.CopyObject(ctx, src, "objects/a", "")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 
 	dstStorage.exists = true
 	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
@@ -130,6 +134,10 @@ func TestS3FSCopyObject(t *testing.T) {
 	require.Error(t, err)
 	_, err = dst.CopyObject(ctx, src, "objects/a", "~~")
 	require.Error(t, err)
+	_, err = dst.CopyObject(ctx, src, "", "objects/b")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	_, err = dst.CopyObject(ctx, src, "objects/a", "")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
 
 func TestObjectCopyCapabilityFallbacks(t *testing.T) {
@@ -246,6 +254,15 @@ type generatedRangeObjectStorage struct {
 	reads []objectStorageReadRange
 }
 
+type controlledRangeObjectStorage struct {
+	dummyObjectStorage
+	data            []byte
+	followerStarted chan struct{}
+	releaseFollower chan struct{}
+	followerOnce    sync.Once
+	readCount       atomic.Int64
+}
+
 type heldWriter struct {
 	once    sync.Once
 	started chan struct{}
@@ -271,12 +288,12 @@ func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *i
 	return b.ObjectStorage.Read(ctx, key, min, max)
 }
 
-func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	if b.updateCount.Add(1) == 1 {
 		close(b.updateStarted)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-b.releaseUpdate:
 		}
 	}
@@ -306,6 +323,34 @@ func (g *generatedRangeObjectStorage) readRanges() []objectStorageReadRange {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]objectStorageReadRange(nil), g.reads...)
+}
+
+func (c *controlledRangeObjectStorage) Read(
+	ctx context.Context,
+	key string,
+	min *int64,
+	max *int64,
+) (io.ReadCloser, error) {
+	if c.readCount.Add(1) > 1 {
+		c.followerOnce.Do(func() { close(c.followerStarted) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.releaseFollower:
+		}
+	}
+	start := int64(0)
+	if min != nil {
+		start = *min
+	}
+	end := int64(len(c.data))
+	if max != nil {
+		end = *max
+	}
+	if start < 0 || end < start || end > int64(len(c.data)) {
+		return nil, errors.New("expected a valid bounded range read")
+	}
+	return io.NopCloser(bytes.NewReader(c.data[start:end])), nil
 }
 
 func (w *heldWriter) Write(p []byte) (int, error) {
@@ -902,19 +947,31 @@ func TestS3PrefetchFile(t *testing.T) {
 	assert.Nil(t, err)
 
 	// read
+	// Exercise representative cache reads without repeatedly rereading the
+	// whole object. The old 1000-point ramp performed about 4 GiB of reads for
+	// an 8 MiB fixture while checking the same disk-cache hit invariant.
+	readSizes := []int{
+		1,
+		4 << 10,
+		_ReadCoalesceSize,
+		1 << 20,
+		len(data) / 2,
+		len(data) - 1,
+		len(data),
+	}
 	lastHit := int64(0)
-	for i := 1; i < len(data); i += len(data) / 1000 {
+	for _, size := range readSizes {
 		vec := &IOVector{
 			FilePath: "foo/bar",
 			Entries: []IOEntry{
 				{
-					Size: int64(i),
+					Size: int64(size),
 				},
 			},
 		}
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)
-		assert.Equal(t, data[:i], vec.Entries[0].Data)
+		assert.Equal(t, data[:size], vec.Entries[0].Data)
 		assert.Equal(t, lastHit+1, pcSet.FileService.Cache.Disk.Hit.Load())
 		vec.Release()
 		lastHit++
@@ -1407,14 +1464,18 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
 
-	data := make([]byte, (9<<20)+1)
+	data := make([]byte, 1025)
 	data[0] = 1
 	data[len(data)-1] = 2
-	require.NoError(t, fs.Write(ctx, IOVector{
-		FilePath: "foo/bar",
-		Entries:  []IOEntry{{Size: int64(len(data)), Data: data}},
-		Policy:   SkipAllCache,
-	}))
+	storage := &controlledRangeObjectStorage{
+		data:            data,
+		followerStarted: make(chan struct{}),
+		releaseFollower: make(chan struct{}),
+	}
+	releaseFollower := sync.OnceFunc(func() { close(storage.releaseFollower) })
+	fs.storage = storage
+	fs.rawStorage = storage
+	t.Cleanup(releaseFollower)
 
 	writer := &heldWriter{
 		started: make(chan struct{}),
@@ -1433,7 +1494,7 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 		FilePath: "foo/bar",
 		Entries: []IOEntry{
 			{Offset: 0, Size: 1},
-			{Offset: 9 << 20, Size: 1},
+			{Offset: int64(len(data) - 1), Size: 1},
 		},
 	}
 	t.Cleanup(followerVector.Release)
@@ -1462,16 +1523,22 @@ func TestS3FSCacheFillDoesNotWaitForNonProducingLeader(t *testing.T) {
 	followerDone := make(chan error, 1)
 	go func() { followerDone <- fs.Read(ctx, followerVector) }()
 	select {
+	case <-storage.followerStarted:
 	case err := <-followerDone:
 		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
+		t.Fatal("cache-producing follower completed before the controlled storage read was observed")
+	case <-time.After(5 * time.Second):
 		releaseWriter()
-		select {
-		case <-followerDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("cache-producing follower did not terminate after leader release")
-		}
-		t.Fatal("cache-producing follower waited for a non-cache-producing leader")
+		releaseFollower()
+		t.Fatal("cache-producing follower did not start storage read while non-cache-producing leader was blocked")
+	}
+	releaseFollower()
+	select {
+	case err := <-followerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		releaseWriter()
+		t.Fatal("cache-producing follower did not terminate after storage release")
 	}
 	require.Equal(t, []byte{1}, followerVector.Entries[0].Data)
 	require.Equal(t, []byte{2}, followerVector.Entries[1].Data)
@@ -1501,11 +1568,16 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { fs.Close(ctx) })
-	storage := &generatedRangeObjectStorage{}
+	generatedStorage := &generatedRangeObjectStorage{}
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: generatedStorage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
+	}
 	fs.storage = storage
 	vector := &IOVector{
 		FilePath: "foo/bar",
-		Policy:   SkipFullFilePreloads,
+		Policy:   SkipFullFilePreloads | SkipDiskCacheWrites,
 		Entries:  []IOEntry{{Offset: 0, Size: 1}},
 	}
 	t.Cleanup(vector.Release)
@@ -1514,22 +1586,58 @@ func TestS3FSRangeMergeWaitHasBoundedFallback(t *testing.T) {
 	require.Nil(t, waitMerge)
 	releaseMerge := sync.OnceFunc(finishMerge)
 	t.Cleanup(releaseMerge)
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	t.Cleanup(releaseRead)
 
+	readCtx := WithEventLogger(context.Background())
+	waiterLogger := readCtx.Value(EventLoggerKey).(*eventLogger)
 	readDone := make(chan error, 1)
-	go func() { readDone <- fs.Read(context.Background(), vector) }()
+	readExited := make(chan struct{})
+	go func() {
+		defer close(readExited)
+		readDone <- fs.Read(readCtx, vector)
+	}()
+	t.Cleanup(func() {
+		releaseRead()
+		releaseMerge()
+		select {
+		case <-readExited:
+		case <-time.After(5 * time.Second):
+			t.Error("range follower goroutine did not terminate")
+		}
+	})
+	require.Eventually(t, func() bool {
+		waiterLogger.mu.Lock()
+		defer waiterLogger.mu.Unlock()
+		for _, ev := range *waiterLogger.events {
+			if ev.ev == str_ioMerger_Merge_wait {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, time.Millisecond,
+		"range follower did not join the held merge generation")
+	select {
+	case <-storage.readStarted:
+		require.True(t, fs.ioMerger.IsMerging(fs.readMergeKey(vector)),
+			"the timed-out follower must bypass, rather than replace, the held generation")
+	case err := <-readDone:
+		require.NoError(t, err)
+		t.Fatal("range follower completed before its fallback storage read was observed")
+	case <-time.After(5 * time.Second):
+		releaseMerge()
+		releaseRead()
+		t.Fatal("range follower did not bypass the timed-out merge generation")
+	}
+	releaseRead()
 	select {
 	case err := <-readDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		releaseMerge()
-		select {
-		case <-readDone:
-		case <-time.After(time.Second):
-			t.Fatal("range follower did not terminate after merge release")
-		}
-		t.Fatal("range follower rejoined a timed-out merge generation")
+		t.Fatal("range follower did not terminate after its fallback storage read was released")
 	}
-	reads := storage.readRanges()
+	reads := generatedStorage.readRanges()
 	require.Len(t, reads, 1)
 	require.Equal(t, int64(0), *reads[0].min)
 	require.Equal(t, int64(1), *reads[0].max)
@@ -2341,6 +2449,42 @@ func TestS3FSIOMerger(t *testing.T) {
 	require.NoError(t, <-results)
 	require.NoError(t, <-results)
 	require.Equal(t, int64(1), storage.readCount.Load())
+}
+
+func TestNewS3FSCacheInitializationFailureRollsBackMemoryCache(t *testing.T) {
+	ctx := context.Background()
+	cachePath := t.TempDir() + "/not-a-directory"
+	require.NoError(t, os.WriteFile(cachePath, nil, 0o644))
+	name := t.Name()
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:     name,
+			Endpoint: "disk",
+			Bucket:   t.TempDir(),
+		},
+		CacheConfig{
+			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			DiskCapacity:   ptrTo(toml.ByteSize(1 << 20)),
+			DiskPath:       &cachePath,
+		},
+		nil,
+		false,
+		false,
+	)
+	require.Nil(t, fs)
+	require.Error(t, err)
+
+	registered := false
+	allMemoryCaches.Range(func(_, value any) bool {
+		if value.(memoryCacheRegistration).name == name {
+			registered = true
+			return false
+		}
+		return true
+	})
+	require.False(t, registered)
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {

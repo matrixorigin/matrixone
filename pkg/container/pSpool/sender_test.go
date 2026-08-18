@@ -45,6 +45,76 @@ func TestCachedBatchPreservesPrepareParamKind(t *testing.T) {
 	require.Equal(t, vector.PrepareParamFloat, copied.Vecs[0].GetPrepareParamKind())
 	cache.CacheBatch(useCache, cacheID, copied)
 	cache.free()
+
+	constant := batch.NewWithSize(1)
+	constant.Vecs[0], err = vector.NewConstBytes(types.T_text.ToType(), []byte("raw"), 2, mp)
+	require.NoError(t, err)
+	constant.Vecs[0].SetIsBinaryString(true)
+	constant.SetRowCount(2)
+	defer constant.Clean(mp)
+	constantCache := initCachedBatch(mp, 1)
+	constantCopy, useCache, cacheID, err := constantCache.GetCopiedBatch(constant)
+	require.NoError(t, err)
+	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(0))
+	require.True(t, constantCopy.Vecs[0].GetIsBinaryStringAt(1))
+	constantCache.CacheBatch(useCache, cacheID, constantCopy)
+	constantCache.free()
+}
+
+func TestCachedBatchPreservesMixedBinaryStringRows(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	source := batch.NewWithSize(1)
+	source.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("raw"), false, mp))
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte("text"), false, mp))
+	require.NoError(t, source.Vecs[0].SetIsBinaryStringAt(0, true))
+	source.SetRowCount(2)
+	defer source.Clean(mp)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, copied.Vecs[0].GetIsBinaryStringAt(0))
+	require.False(t, copied.Vecs[0].GetIsBinaryStringAt(1))
+	cache.CacheBatch(useCache, cacheID, copied)
+	cache.free()
+}
+
+func TestCachedBatchMovesAccountedExtraBufferOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+
+	payload, err := mpool.NewAccountedBuffer(mp, account, 1, 1)
+	require.NoError(t, err)
+	_, err = payload.Write([]byte("accounted partial aggregate state"))
+	require.NoError(t, err)
+	source := batch.NewWithSize(0)
+	require.NoError(t, source.SetAccountedExtraBuffer(payload))
+	require.Positive(t, account.Snapshot().Used)
+
+	cache := initCachedBatch(mp, 1)
+	copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+	require.NoError(t, err)
+	require.True(t, useCache)
+	require.Empty(t, source.ExtraBuf)
+	require.False(t, source.HasAccountedExtraBuffer())
+	require.Equal(t, "accounted partial aggregate state", string(copied.ExtraBuf))
+	require.True(t, copied.HasAccountedExtraBuffer())
+
+	// Returning the copied batch to the spool cache is the terminal owner
+	// transition for ExtraBuf and must release the physical charge exactly once.
+	cache.CacheBatch(useCache, cacheID, copied)
+	require.Zero(t, account.Snapshot().Used)
+	source.Clean(mp)
+	cache.free()
+	account.Seal()
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }
 
 func TestCachedBatchHeterogeneousPrepareParamKindSingleCopy(t *testing.T) {

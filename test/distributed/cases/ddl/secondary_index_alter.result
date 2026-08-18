@@ -129,3 +129,21 @@ Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    C
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx4";
 name    type    column_name
 insert into t1 values(29);
+drop table if exists seq_idx;
+create table seq_idx(a int primary key, b int);
+alter table seq_idx add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, add index idx_seq(b), drop index idx_seq;
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
+create index idx_seq on seq_idx(b);
+alter table seq_idx drop index idx_seq, drop index idx_seq;
+Can't DROP 'idx_seq'; check that column/key exists
+show create table seq_idx;
+Table    Create Table
+seq_idx    CREATE TABLE `seq_idx` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx_seq` (`b`)\n)
+drop table seq_idx;

@@ -6669,6 +6669,61 @@ var supportedArrayOperations = []FuncNew{
 		},
 	},
 
+	// function `l1_distance`
+	{
+		functionId: L1_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1DistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1DistanceArray[float64]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[int8] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_uint8, types.T_array_uint8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[uint8] },
+			},
+		},
+	},
+
 	// function `l2_distance`
 	{
 		functionId: L2_DISTANCE,
@@ -10874,6 +10929,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 && parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -11782,10 +11840,30 @@ var supportedControlBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					typ := types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+					if typ.Scale > 0 {
+						typ.Width = typ.Scale
+					}
+					return typ
 				},
 				newOp: func() executeLogicOfOverload {
 					return Truncate
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_timestamp, types.T_int64, types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_timestamp.ToTypeWithScale(parameters[0].Scale)
+					if typ.Scale > 0 {
+						typ.Width = typ.Scale
+					}
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return TruncateTimestamp
 				},
 			},
 		},
@@ -13423,6 +13501,53 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LoadFileDatalink
+				},
+			},
+		},
+	},
+
+	// function `load_text`
+	// Like load_file but returns the datalink's EXTRACTED plain text (PDF/DOCX
+	// parsed via GetPlainText), not the raw bytes — so it yields the same text the
+	// fulltext index build indexes. Used by fulltext2 CDC datalink resolution.
+	{
+		functionId: LOAD_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 1,
+				volatile:   true,
+				args:       []types.T{types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
+				},
+			},
+			{
+				overloadId: 2,
+				volatile:   true,
+				args:       []types.T{types.T_datalink},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LoadText
 				},
 			},
 		},

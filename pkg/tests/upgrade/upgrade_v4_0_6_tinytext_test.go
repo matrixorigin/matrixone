@@ -42,7 +42,7 @@ import (
 )
 
 func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
-	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
@@ -177,12 +177,12 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			readdedTable, legacyReaddedSQL,
 		)
 
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, sourceTable, "payload"))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, alterCopyTable, "payload"))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, modifiedTable, "payload"))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, readdedTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, sourceTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, alterCopyTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, modifiedTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, readdedTable, "payload"))
 		require.Equal(t, int64(0), tinyTextCatalogVersion(t, ctx, conn, databaseName, sourceTable))
 		require.Equal(t, int64(0), tinyTextCatalogVersion(t, ctx, conn, databaseName, cloneTable))
 		require.Equal(t, int64(1), tinyTextCatalogVersion(t, ctx, conn, databaseName, renamedTable))
@@ -222,9 +222,10 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 			t, showCreateTableSQL(t, ctx, conn, databaseName, readdedTable), "payload",
 		)
 		// Recovery is planner-owned and deliberately does not mutate the old
-		// catalog row in place.
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
+		// catalog row in place. The metadata function maps its persisted TEXT
+		// width marker to the MySQL-compatible bound.
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, cloneTable, "payload"))
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(t, ctx, conn, databaseName, renamedTable, renamedColumnName))
 
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "set session sql_mode = 'STRICT_TRANS_TABLES'")
 		for _, tableName := range []string{assignTarget, ignoreTarget, updateTarget} {
@@ -397,10 +398,10 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, renamedCopyTable, renamedColumnName,
 		))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, modifiedCopyTable, "payload",
 		))
-		require.Equal(t, int64(0), tinyTextCatalogWidth(
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, readdedCopyTable, "payload",
 		))
 		for _, table := range []struct {
@@ -470,7 +471,7 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		requireLegacyAlteredTextDDL(t, modifiedManifestSQL, "payload")
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "drop table "+databaseName+"."+modifiedTable)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, modifiedManifestSQL)
-		require.Equal(t, int64(0), tinyTextCatalogWidth(
+		require.Equal(t, int64(types.MaxStringSize), tinyTextCatalogWidth(
 			t, ctx, conn, databaseName, modifiedTable, "payload",
 		))
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,

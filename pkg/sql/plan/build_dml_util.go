@@ -5242,6 +5242,14 @@ func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 }
 
 func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
+	return runSqlWithSnapshot(ctx, sql, nil)
+}
+
+func runSqlWithSnapshot(
+	ctx CompilerContext,
+	sql string,
+	snapshot *Snapshot,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -5253,13 +5261,21 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 	if err != nil {
 		return executor.Result{}, err
 	}
+	txn := proc.GetTxnOperator()
+	if IsSnapshotValid(snapshot) {
+		txn = txn.CloneSnapshotOp(*snapshot.TS)
+	}
+	if snapshot != nil && snapshot.Tenant != nil {
+		accountId = snapshot.Tenant.TenantID
+		topContext = defines.AttachAccountId(topContext, accountId)
+	}
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// Internal SQL here is part of the input statement and must not increment it.
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
-		WithTxn(proc.GetTxnOperator()).
+		WithTxn(txn).
 		WithDatabase(proc.GetSessionInfo().Database).
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(accountId)
@@ -5743,7 +5759,7 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			// skip async
 			var async bool
-			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			async, err = catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 			if err != nil {
 				return err
 			}
@@ -5857,7 +5873,7 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			// skip async
 			var async bool
-			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			async, err = catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 			if err != nil {
 				return err
 			}
@@ -6634,7 +6650,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	}
 
 	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -7081,7 +7097,7 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
 	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -7121,7 +7137,7 @@ func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindC
 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
 
 	// skip async
-	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	async, err := indexplugin.IsAsync(indexdef.IndexAlgo, indexdef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}

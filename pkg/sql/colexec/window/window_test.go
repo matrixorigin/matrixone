@@ -35,6 +35,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	execpartition "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1211,6 +1212,129 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	orderExpr := newColExprWithType(0, types.T_float64.ToType())
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:       "rank",
+				WindowFunc: newFunExpr("rank"),
+				OrderBy:    []*plan.OrderBySpec{{Expr: orderExpr}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000002), 1,
+		math.Float64frombits(0x7ff8000000000001), -1,
+	}, nil, proc.Mp()))
+	bat.SetRowCount(4)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_float64.ToType()),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+	bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		-1,
+	}, nil, proc.Mp()))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+	bat.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestWindowValueResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	rows := colexec.DefaultBatchSize + 17
@@ -1470,6 +1594,240 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	first.SetRowCount(2)
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 2}, nil, proc.Mp())
+	// Deliberately reuse the same order values in both groups. Without the
+	// partition-key prefix this would look like one peer stream.
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10}, nil, proc.Mp())
+	second.SetRowCount(2)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, arg.Fs, 2)
+	require.Len(t, arg.ctr.orderVecs, 2)
+	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makeBatch := func(partitionValue int32) *batch.Batch {
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = testutil.MakeInt32Vector(
+			[]int32{partitionValue, partitionValue, partitionValue}, nil, proc.Mp())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []float64{
+			math.Float64frombits(0x7ff8000000000002),
+			math.Float64frombits(0x7ff8000000000001),
+			-1,
+		}, nil, proc.Mp()))
+		bat.Vecs[2] = testutil.MakeInt32Vector([]int32{2, 1, 0}, nil, proc.Mp())
+		bat.SetRowCount(3)
+		return bat
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_int32.ToType())},
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(1, types.T_float64.ToType())},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeBatch(1), makeBatch(2)})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 3}, arg.ctr.ps)
+	require.Equal(t, []int32{1, 1, 1, 2, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{0, 1, 2, 0, 1, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+	require.Equal(t, []int64{1, 2, 3, 1, 2, 3},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int32
+	}{
+		{name: "asc", want: []int32{10, 20}},
+		{name: "desc", flag: plan.OrderBySpec_DESC, want: []int32{60, 40}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 1, 1, 1, 1, 1}, nil, proc.Mp())
+			input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+			require.NoError(t, vector.AppendFixedList(input.Vecs[1], []float64{
+				math.Float64frombits(0x7ff8000000000002), math.Inf(1), 1, 0, -1,
+				math.Inf(-1), math.Float64frombits(0x7ff8000000000001),
+			}, nil, proc.Mp()))
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{70, 60, 40, 31, 20, 10, 71}, nil, proc.Mp())
+			input.SetRowCount(7)
+
+			// This is the physical shape of ROW_NUMBER() ... WHERE rn <= 2:
+			// the PARTITION reducer must retain the SQL-order prefix before the
+			// window operator assigns row numbers.
+			partitionArg := &execpartition.Partition{
+				OrderBySpecs: []*plan.OrderBySpec{
+					{Expr: newColExprWithType(0, types.T_int32.ToType())},
+					{Expr: newColExprWithType(1, types.T_float64.ToType()), Flag: tc.flag},
+					{Expr: newColExprWithType(2, types.T_int32.ToType())},
+				},
+				Limit: &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_uint64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 2}}},
+				},
+				PartitionByCount: 1,
+				PreReduce:        true,
+			}
+			partitionChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partitionArg.AppendChild(partitionChild)
+			require.NoError(t, partitionArg.Prepare(proc))
+
+			partitionExpr := newColExprWithType(0, types.T_int32.ToType())
+			orderExpr := newColExprWithType(1, types.T_float64.ToType())
+			windowArg := &Window{
+				WinSpecList: []*plan.Expr{{
+					Expr: &plan.Expr_W{W: &plan.WindowSpec{
+						Name:        "row_number",
+						WindowFunc:  newFunExpr("row_number"),
+						PartitionBy: []*plan.Expr{partitionExpr},
+						OrderBy: []*plan.OrderBySpec{
+							{Expr: orderExpr, Flag: tc.flag},
+							{Expr: newColExprWithType(2, types.T_int32.ToType())},
+						},
+					}},
+				}},
+				Aggs:          []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+				PartitionTopN: true,
+			}
+			windowArg.AppendChild(partitionArg)
+			require.NoError(t, windowArg.Prepare(proc))
+
+			result, err := vm.Exec(windowArg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+
+			windowArg.Free(proc, false, nil)
+			partitionArg.Free(proc, false, nil)
+			partitionChild.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(
+		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+
+	partitionVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, partitionVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(partitionVec, int32(1), false, mp))
+	orderVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, orderVec.SetAllocationAccount(selection))
+	require.NoError(t, vector.AppendFixed(orderVec, int32(10), false, mp))
+	input := batch.NewOffHeapWithSize(2)
+	input.SetVector(0, partitionVec)
+	input.SetVector(1, orderVec)
+	input.SetRowCount(1)
+
+	partitionExpr := newColExpr(0)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExpr(1),
+				}},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	// Mirror child-first pipeline cleanup. The remaining account usage belongs
+	// to Window's materialized input and expression duplicates.
+	child.Free(proc, false, nil)
+	require.Positive(t, account.Snapshot().Used)
+	arg.Reset(proc, false, nil)
+	require.Zero(t, account.Snapshot().Used)
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Free(proc, false, nil)
+	snapshot := account.Seal()
+	require.Zero(t, snapshot.Used)
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
+	proc.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestWindowOrderHonorsCancellation(t *testing.T) {
@@ -2076,6 +2434,99 @@ func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 		testSearchLeftRightNumeric(t, mp, types.T_float64,
 			[]float64{1, 2, 2, 4}, []float64{4, 2, 2, 1}, f64Lit)
 	})
+}
+
+func TestBuildRangeIntervalFloatNaNsUseSQLOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oid        types.T
+		ascValues  []any
+		descValues []any
+		literal    func() *plan.Expr
+	}{
+		{
+			name: "float32",
+			oid:  types.T_float32,
+			ascValues: []any{
+				float32(1), float32(2), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			descValues: []any{
+				float32(2), float32(1), math.Float32frombits(0x7fc00001), math.Float32frombits(0x7fc00002),
+			},
+			literal: f32Lit,
+		},
+		{
+			name: "float64",
+			oid:  types.T_float64,
+			ascValues: []any{
+				float64(1), float64(2), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			descValues: []any{
+				float64(2), float64(1), math.Float64frombits(0x7ff8000000000001), math.Float64frombits(0x7ff8000000000002),
+			},
+			literal: f64Lit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+			for _, direction := range []struct {
+				name   string
+				values []any
+				desc   bool
+			}{
+				{name: "asc", values: tc.ascValues},
+				{name: "desc", values: tc.descValues, desc: true},
+			} {
+				t.Run(direction.name, func(t *testing.T) {
+					vec := vector.NewVec(tc.oid.ToType())
+					switch tc.oid {
+					case types.T_float32:
+						values := make([]float32, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float32)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					case types.T_float64:
+						values := make([]float64, len(direction.values))
+						for i, value := range direction.values {
+							values[i] = value.(float64)
+						}
+						require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+					}
+					defer vec.Free(mp)
+
+					ctr := &container{
+						orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+						desc:      []bool{direction.desc},
+					}
+					frame := &plan.FrameClause{
+						Type: plan.FrameClause_RANGE,
+						Start: &plan.FrameBound{
+							Type: plan.FrameBound_PRECEDING,
+							Val:  tc.literal(),
+						},
+						End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+					}
+
+					// A finite row adjacent to the NaN peer group must still use
+					// the SQL relation for the binary search.
+					start, end, err := ctr.buildRangeInterval(1, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 0, start)
+					require.Equal(t, 2, end)
+
+					// All NaN payloads are one peer group, and an offset from a
+					// NaN remains NaN for RANGE boundary purposes.
+					start, end, err = ctr.buildRangeInterval(2, 0, 4, frame)
+					require.NoError(t, err)
+					require.Equal(t, 2, start)
+					require.Equal(t, 4, end)
+				})
+			}
+		})
+	}
 }
 
 // TestSearchLeftRightDecimalTypes covers decimal64/128.

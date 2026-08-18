@@ -79,26 +79,105 @@ func visibleAppendableRows(
 	layout objectio.SpecialColumnLayout,
 	ts *types.TS,
 ) ([]int64, error) {
-	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
-	if !ok || int(commitPos) >= len(bat.Vecs) {
-		return nil, moerr.NewInternalError(ctx, "appendable object has no commit timestamp")
+	commitPos, err := validateBackupTombstoneBatch(ctx, bat, layout)
+	if err != nil {
+		return nil, err
 	}
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[commitPos])
-	var aborts []bool
+	commitVec := bat.Vecs[commitPos]
+	commitTSs, err := ioutil.ValidateTombstoneCommitTSColumn(
+		bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length(),
+		commitVec,
+	)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(
+			ctx,
+			"appendable tombstone has invalid commit timestamp column: %v",
+			err,
+		)
+	}
+	var abortVec *vector.Vector
 	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
-		abortVec := bat.Vecs[abortPos]
-		if !abortVec.IsConstNull() {
-			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		}
+		abortVec = bat.Vecs[abortPos]
 	}
-	rows := make([]int64, 0, len(commitTSs))
-	for row, commitTS := range commitTSs {
-		if (aborts != nil && aborts[row]) || (ts != nil && commitTS.GT(ts)) {
+	rowCount := bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length()
+	rows := make([]int64, 0, rowCount)
+	for row := range rowCount {
+		commitTS := commitTSs.At(row)
+		if commitVec.IsNull(uint64(row)) {
+			return nil, moerr.NewInternalErrorf(ctx, "appendable tombstone commit timestamp row %d is null", row)
+		}
+		if abortVec != nil {
+			if abortVec.IsNull(uint64(row)) {
+				return nil, moerr.NewInternalErrorf(ctx, "appendable tombstone abort row %d is null", row)
+			}
+			if vector.GetFixedAtNoTypeCheck[bool](abortVec, row) {
+				continue
+			}
+		}
+		if ts != nil && commitTS.GT(ts) {
 			continue
 		}
 		rows = append(rows, int64(row))
 	}
 	return rows, nil
+}
+
+func validateBackupTombstoneBatch(
+	ctx context.Context,
+	bat *batch.Batch,
+	layout objectio.SpecialColumnLayout,
+) (uint16, error) {
+	if bat == nil || len(bat.Vecs) < len(objectio.TombstoneSeqnums_DN_Created) {
+		return 0, moerr.NewInternalError(ctx, "appendable tombstone has too few columns")
+	}
+	if bat.Vecs[objectio.TombstoneAttr_Rowid_Idx] == nil ||
+		bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].GetType().Oid != types.T_Rowid {
+		return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid rowid column")
+	}
+	if bat.Vecs[objectio.TombstoneAttr_PK_Idx] == nil {
+		return 0, moerr.NewInternalError(ctx, "appendable tombstone has no primary-key column")
+	}
+
+	rows := bat.Vecs[objectio.TombstoneAttr_Rowid_Idx].Length()
+	for pos, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, moerr.NewInternalErrorf(ctx, "appendable tombstone column %d is nil", pos)
+		}
+		if vec.Length() != rows {
+			return 0, moerr.NewInternalErrorf(
+				ctx,
+				"appendable tombstone column %d has %d rows, expected %d",
+				pos,
+				vec.Length(),
+				rows,
+			)
+		}
+	}
+
+	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
+	if !ok || int(commitPos) >= len(bat.Vecs) || int(commitPos) < len(objectio.TombstoneSeqnums_CN_Created) {
+		return 0, moerr.NewInternalError(ctx, "appendable tombstone has no commit timestamp")
+	}
+	commitVec := bat.Vecs[commitPos]
+	if commitVec.GetType().Oid != types.T_TS || commitVec.IsConstNull() {
+		return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid commit timestamp column")
+	}
+
+	if physicalPos := layout.PhysicalAddr; physicalPos != objectio.InvalidSpecialColumnPosition {
+		if int(physicalPos) >= len(bat.Vecs) || bat.Vecs[physicalPos].GetType().Oid != types.T_Rowid {
+			return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid physical rowid column")
+		}
+	}
+	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+		if int(abortPos) >= len(bat.Vecs) {
+			return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid abort column")
+		}
+		abortVec := bat.Vecs[abortPos]
+		if abortVec.GetType().Oid != types.T_bool || abortVec.IsConstNull() {
+			return 0, moerr.NewInternalError(ctx, "appendable tombstone has invalid abort column")
+		}
+	}
+	return commitPos, nil
 }
 
 func NewBackupDeltaLocDataSource(
@@ -270,10 +349,12 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 					if !tombstone.GetCNCreated() {
 						layout, err := loadSpecialColumnLayout(ctx, d.fs, location)
 						if err != nil {
+							bat.Clean(common.DebugAllocator)
 							return false, err
 						}
 						visibleRows, err := visibleAppendableRows(ctx, bat, layout, &d.ts)
 						if err != nil {
+							bat.Clean(common.DebugAllocator)
 							return false, err
 						}
 						if len(visibleRows) != bat.Vecs[0].Length() {
@@ -381,21 +462,61 @@ func trimTombstoneData(
 		}
 		layout, err := loadSpecialColumnLayout(ctx, fs, location)
 		if err != nil {
+			bat.Clean(common.DebugAllocator)
 			return err
 		}
 		visibleRows, err := visibleAppendableRows(ctx, bat, layout, &ts)
 		if err != nil {
+			bat.Clean(common.DebugAllocator)
 			return err
 		}
 		if len(visibleRows) != bat.Vecs[0].Length() {
 			bat.Shrink(visibleRows, false)
 		}
-		bat = formatData(bat)
+		canonical, err := canonicalizeBackupTombstone(ctx, bat, layout)
+		if err != nil {
+			bat.Clean(common.DebugAllocator)
+			return err
+		}
+		bat = canonical
 		(*objectsData)[name].sortKey = sortKey
 		(*objectsData)[name].data = make([]*batch.Batch, 0)
 		(*objectsData)[name].data = append((*objectsData)[name].data, bat)
 	}
 	return nil
+}
+
+// canonicalizeBackupTombstone converts an appendable tombstone batch to the
+// non-appendable TN tombstone layout written into a backup. visibleAppendableRows
+// has already removed aborted rows and rows newer than the backup timestamp, so
+// physical row addresses and the abort column are no longer needed. The commit
+// timestamp must remain because restored TN tombstones use it for visibility.
+func canonicalizeBackupTombstone(
+	ctx context.Context,
+	data *batch.Batch,
+	layout objectio.SpecialColumnLayout,
+) (*batch.Batch, error) {
+	commitPos, err := validateBackupTombstoneBatch(ctx, data, layout)
+	if err != nil {
+		return nil, err
+	}
+	result := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
+	result.Vecs[objectio.TombstoneAttr_Rowid_Idx] = data.Vecs[objectio.TombstoneAttr_Rowid_Idx]
+	result.Vecs[objectio.TombstoneAttr_PK_Idx] = data.Vecs[objectio.TombstoneAttr_PK_Idx]
+	result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx] = data.Vecs[commitPos]
+
+	for pos, vec := range data.Vecs {
+		if pos == objectio.TombstoneAttr_Rowid_Idx ||
+			pos == objectio.TombstoneAttr_PK_Idx ||
+			pos == int(commitPos) {
+			continue
+		}
+		vec.Free(common.DebugAllocator)
+	}
+	data.Vecs = nil
+	data.Attrs = nil
+	data.SetRowCount(0)
+	return formatData(result), nil
 }
 
 func appendValToBatch(
@@ -571,15 +692,27 @@ func ReWriteCheckpointAndBlockFromKey(
 	tombstonesData2 := make(map[string]*objData, 0)
 
 	defer func() {
-		for i := range objectsData {
-			if objectsData[i] != nil && objectsData[i].data != nil {
-				for z := range objectsData[i].data {
-					for y := range objectsData[i].data[z].Vecs {
-						objectsData[i].data[z].Vecs[y].Free(common.DebugAllocator)
+		released := make(map[*objData]struct{})
+		cleanup := func(data map[string]*objData) {
+			for _, objectData := range data {
+				if objectData == nil || objectData.data == nil {
+					continue
+				}
+				if _, ok := released[objectData]; ok {
+					continue
+				}
+				released[objectData] = struct{}{}
+				for _, bat := range objectData.data {
+					if bat != nil {
+						bat.Clean(common.DebugAllocator)
 					}
 				}
+				objectData.data = nil
 			}
 		}
+		cleanup(objectsData)
+		cleanup(tombstonesData)
+		cleanup(tombstonesData2)
 	}()
 	phaseNumber = 1
 	// Load checkpoint
@@ -706,7 +839,17 @@ func ReWriteCheckpointAndBlockFromKey(
 			segment := objectName.SegmentId()
 			name := objectio.BuildObjectName(&segment, fileNum)
 			var writer *ioutil.BlockWriter
-			writer, err = ioutil.NewBlockWriter(dstFs, name.String())
+			if objectData.dataType == objectio.SchemaTombstone {
+				writer, err = ioutil.NewBlockWriterNew(
+					dstFs,
+					name,
+					0,
+					objectio.TombstoneSeqnums_DN_Created,
+					true,
+				)
+			} else {
+				writer, err = ioutil.NewBlockWriter(dstFs, name.String())
+			}
 			if err != nil {
 				return err
 			}

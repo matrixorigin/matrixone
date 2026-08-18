@@ -29,16 +29,19 @@ import (
 // ResolverServer is an opt-in CN lifecycle component. A disabled deployment
 // creates no listener and changes no native query path.
 type ResolverServer struct {
-	server   *http.Server
-	mu       sync.Mutex
-	listener net.Listener
-	done     chan error
-	closed   bool
+	server    *http.Server
+	mu        sync.Mutex
+	listener  net.Listener
+	serveDone chan error
+	closeDone chan struct{}
+	closeErr  error
+	closing   bool
+	closed    bool
 }
 
 func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManager, auditor ResolveAuditRecorder) (*ResolverServer, error) {
-	if address == "" || leases == nil || !leases.Ready() || !leases.Protected() || auditor == nil {
-		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address, a replayed lease manager, and an audit recorder")
+	if address == "" || leases == nil || (!leases.DurableReady() && !leases.BenchmarkReady()) || auditor == nil {
+		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires an address, an approved lease manager, and an audit recorder")
 	}
 	if tlsConfig == nil || tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert || tlsConfig.ClientCAs == nil || len(tlsConfig.Certificates) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("substrait: resolver requires a server certificate and verified client CA")
@@ -47,7 +50,7 @@ func NewResolverServer(address string, tlsConfig *tls.Config, leases *LeaseManag
 	if config.MinVersion < tls.VersionTLS12 {
 		config.MinVersion = tls.VersionTLS12
 	}
-	return &ResolverServer{server: &http.Server{Addr: address, Handler: ResolveHandler(leases, nil, auditor), TLSConfig: config, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10}, done: make(chan error, 1)}, nil
+	return &ResolverServer{server: &http.Server{Addr: address, Handler: ResolveHandler(leases, nil, auditor), TLSConfig: config, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 8 << 10}, serveDone: make(chan error, 1)}, nil
 }
 
 func (s *ResolverServer) Start() error {
@@ -66,27 +69,65 @@ func (s *ResolverServer) Start() error {
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
-		s.done <- err
+		s.serveDone <- err
 	}()
 	return nil
 }
 
 func (s *ResolverServer) Close(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
-		return nil
-	}
-	started := s.listener != nil
-	if !started {
-		s.closed = true
-		return nil
-	}
-	if err := s.server.Shutdown(ctx); err != nil {
+		err := s.closeErr
+		s.mu.Unlock()
 		return err
 	}
-	err := <-s.done
+	if s.closing {
+		done := s.closeDone
+		s.mu.Unlock()
+		select {
+		case <-done:
+			s.mu.Lock()
+			err := s.closeErr
+			s.mu.Unlock()
+			return err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	s.closing = true
+	s.closeDone = make(chan struct{})
+	started := s.listener != nil
+	listener := s.listener
+	server := s.server
+	done := s.closeDone
+	s.mu.Unlock()
+	var result error
+	if started {
+		shutdownErr := context.Cause(ctx)
+		if shutdownErr == nil {
+			shutdownErr = server.Shutdown(ctx)
+		}
+		if shutdownErr != nil {
+			result = errors.Join(result, shutdownErr)
+			result = errors.Join(result, server.Close())
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				result = errors.Join(result, err)
+			}
+		}
+		result = errors.Join(result, <-s.serveDone)
+	}
+	s.mu.Lock()
 	s.closed = true
+	s.closing = false
 	s.listener = nil
-	return err
+	s.closeErr = result
+	close(done)
+	s.mu.Unlock()
+	return result
 }

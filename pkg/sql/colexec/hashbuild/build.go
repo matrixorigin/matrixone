@@ -72,7 +72,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
 	hashBuild.ctr.spillUUID = fmt.Sprintf("hb_%d", hashBuildSpillSequence.Add(1))
 
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	if err != nil {
 		return TerminalBudgetError(proc.Ctx, err)
 	}
@@ -187,7 +187,7 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 		} else {
 			jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
 			if jm == nil {
-				return process.ErrHashBuildBudgetInvalid
+				return process.ErrExecutionResourceInvalid
 			}
 			joinMapOwned = true
 			jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
@@ -200,7 +200,7 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 		jm.IncRef(hashBuild.JoinMapRefCnt)
 		if spillMode {
 			if ctr.spillBundle == nil || ctr.hashmapBuilder.budget == nil {
-				return process.ErrHashBuildBudgetInvalid
+				return process.ErrExecutionResourceInvalid
 			}
 			payload := message.SpillBuildPayload{
 				Files:     ctr.spillBundle.accountedFiles(),
@@ -258,7 +258,7 @@ func (hashBuild *HashBuild) build(
 	}
 
 	defer func() {
-		observeHashBuildBudget(analyzer, ctr.hashmapBuilder.budget)
+		observeExecutionResourceBudget(analyzer, ctr.hashmapBuilder.budget)
 		for _, f := range spillFiles {
 			if f != nil {
 				f.Close()
@@ -564,7 +564,7 @@ func (hashBuild *HashBuild) build(
 	return nil
 }
 
-func observeHashBuildBudget(analyzer process.Analyzer, budget *process.HashBuildBudgetGeneration) {
+func observeExecutionResourceBudget(analyzer process.Analyzer, budget *process.ExecutionResourceGeneration) {
 	if analyzer == nil || budget == nil {
 		return
 	}
@@ -1098,7 +1098,7 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	scratch, err := mpool.NewAccountedBuffer(
 		proc.Mp(),
 		hashBuild.ctr.hashmapBuilder.mapAllocationAccount,
-		HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 		HashBuildAllocationSiteRuntimeFilterScratch,
 	)
 	if err != nil {
@@ -1214,7 +1214,7 @@ func serializedRuntimeFilterBounds(
 				}
 			}
 			if rowBytes > math.MaxUint64-valueBytes {
-				return 0, 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, process.ErrExecutionResourceInvalid
 			}
 			rowBytes += valueBytes
 		}
@@ -1226,7 +1226,7 @@ func serializedRuntimeFilterBounds(
 		}
 		if rowBytes > types.VarlenaInlineSize {
 			if areaBytes > math.MaxUint64-rowBytes {
-				return 0, 0, process.ErrHashBuildBudgetInvalid
+				return 0, 0, process.ErrExecutionResourceInvalid
 			}
 			areaBytes += rowBytes
 		}
@@ -1252,7 +1252,7 @@ func (hashBuild *HashBuild) fallbackOptionalRuntimeFilter(
 	if hashBuild.OpAnalyzer != nil {
 		stats := hashBuild.OpAnalyzer.GetOpStats()
 		if kind == runtimefilter.OptionalFallbackBudgetAdmission {
-			var budgetErr *process.HashBuildBudgetError
+			var budgetErr *process.ExecutionResourceError
 			if !errors.As(err, &budgetErr) {
 				return false
 			}
