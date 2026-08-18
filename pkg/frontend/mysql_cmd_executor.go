@@ -3962,13 +3962,7 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
-	for {
-		explainStmt, ok := stmt.(*tree.ExplainStmt)
-		if !ok {
-			break
-		}
-		stmt = explainStmt.Statement
-	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
 		return stats, err
@@ -3981,6 +3975,25 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	}
 	stats.Add(&delta)
 	return stats, err
+}
+
+// unwrapExecutableExplainStatement returns the statement that an executable
+// EXPLAIN wrapper will run. The wrapper itself has no table privileges, while
+// the plan belongs to its inner query and must be checked against that query's
+// privilege set at every prepared execution.
+func unwrapExecutableExplainStatement(stmt tree.Statement) tree.Statement {
+	for {
+		switch explainStmt := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = explainStmt.Statement
+		case *tree.ExplainAnalyze:
+			stmt = explainStmt.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = explainStmt.Statement
+		default:
+			return stmt
+		}
+	}
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
