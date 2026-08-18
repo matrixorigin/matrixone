@@ -6889,6 +6889,16 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, ErrorResponse, resp.category)
 
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{"review27190.t": "select 1"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
 	ses.rewriteEnabled.Store(false)
 	const nonPolicyJSON = `/*+ {"optimizer":"keep"} */ select 1`
 	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_PREPARE, data: []byte(nonPolicyJSON)})

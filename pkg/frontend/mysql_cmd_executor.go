@@ -5231,6 +5231,30 @@ func wrapNativePrepareSQL(name, materializedSQL string) string {
 	return fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(name), materializedSQL)
 }
 
+func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string, lowerCaseTableNames int64) error {
+	rest := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	for strings.HasPrefix(rest, "/*+") || strings.HasPrefix(rest, "/*!+") {
+		contentStart := 3
+		if strings.HasPrefix(rest, "/*!+") {
+			contentStart = 4
+		}
+		end := strings.Index(rest[contentStart:], "*/")
+		if end < 0 {
+			break
+		}
+		end += contentStart
+		content := strings.TrimSpace(rest[contentStart:end])
+		if strings.HasPrefix(content, "{") {
+			if _, _, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(
+				ctx, content, lowerCaseTableNames); err != nil {
+				return err
+			}
+		}
+		rest = strings.TrimLeft(rest[end+2:], " \t\r\n\f")
+	}
+	return nil
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -5336,6 +5360,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 				return resp, nil
 			}
 			preparedRemapDb = extractInlineRemapDb(sql)
+		}
+		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
 		}
 		ses.addSqlCount(1)
 
