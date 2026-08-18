@@ -87,5 +87,57 @@ limit 2 offset 1;
 explain select id from ft_exact
 where match(body) against('+needle -other' in boolean mode) and category = 'keep'
 limit 2 offset 1;
+-- @regex("Limit: 3",false)
+explain select id from ft_exact
+where match(body) against('+(needle other)' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+-- @regex("Limit: 3",false)
+explain select id from ft_exact
+where match(body) against('+needle ~other' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+
+-- The existing no-residual path remains broader than the residual-WHERE fast
+-- path and continues to push LIMIT+OFFSET without a membership dependency.
+-- @regex("Limit: 3",true)
+explain select id from ft_exact
+where match(body) against('needle' in natural language mode)
+limit 2 offset 1;
+
+-- A CJK MUST operand under ngram is executed as a positional phrase, not a
+-- single term, so it must not enter the pure-MUST residual-WHERE route.
+create table ft_ngram (
+    id bigint primary key,
+    body text not null,
+    category varchar(20) not null
+);
+insert into ft_ngram values
+(1, '中文 中文', 'drop'),
+(2, '中文', 'keep'),
+(3, '中文', 'keep');
+create fulltext2 index ft_ngram_idx on ft_ngram(body) with parser ngram;
+-- @regex("Limit: 3",false)
+explain select id from ft_ngram
+where match(body) against('+中文' in boolean mode) and category = 'keep'
+limit 2 offset 1;
+
+-- Predicates peeled into a FULLTEXT2 INCLUDE filter are evaluated inside the
+-- search rather than by an external membership filter. Preserve main's normal
+-- candidate limit for this no-residual/in-index path.
+create table ft_include (
+    id bigint primary key,
+    body text not null,
+    category bigint not null,
+    payload varchar(20) not null
+);
+insert into ft_include values
+(1, 'needle needle needle', 0, 'a'),
+(2, 'needle', 1, 'b'),
+(3, 'needle', 1, 'c'),
+(4, 'needle', 1, 'd');
+create fulltext2 index ft_include_idx on ft_include(body) include(category) with parser gojieba;
+-- @regex("Limit: 3",true)
+explain select id, payload from ft_include
+where match(body) against('needle' in natural language mode) and category = 1
+limit 2 offset 1;
 
 drop database fulltext2_candidate_limit;

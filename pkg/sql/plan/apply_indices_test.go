@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -5246,6 +5247,25 @@ func TestFullTextCandidateLimitIncludesOffset(t *testing.T) {
 	require.Nil(t, scan.Offset)
 }
 
+func TestFullTextCandidateLimitWithoutResidualFilterKeepsDynamicLimit(t *testing.T) {
+	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
+	scan := builder.qry.Nodes[leftScanID]
+	scan.Limit = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+
+	newID, changed, err := builder.applyFullTextFiltersForScanInJoin(
+		joinID,
+		scan,
+		map[[2]int32]int{},
+		map[[2]int32]*planpb.Expr{},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	functions := collectFullTextFunctionScans(builder, newID)
+	require.Len(t, functions, 1)
+	require.NotNil(t, functions[0].Limit.GetP())
+	require.Equal(t, int32(0), functions[0].Limit.GetP().Pos)
+}
+
 func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T) {
 	builder, joinID, leftScanID, _ := buildFullTextJoinRewriteTestPlan(t, true, false, false)
 	builder.sqlCalcFoundRows = true
@@ -5274,23 +5294,41 @@ func TestFullTextCandidateLimitSQLCalcFoundRowsKeepsCompleteStream(t *testing.T)
 func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testing.T) {
 	tests := []struct {
 		name            string
-		integerPK       bool
+		pkType          types.T
 		pushdown        int8
 		dynamicLimit    bool
 		preparedPattern bool
-		naturalMode     bool
+		mode            tree.FullTextSearchType
 		classicIndex    bool
+		parser          string
 		pattern         string
 		wantCandidateK  bool
 	}{
-		{name: "exact integer prefilter", integerPK: true, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
-		{name: "approximate varchar prefilter", pushdown: 1, pattern: "+hello +world"},
-		{name: "pushdown disabled", integerPK: true, pattern: "+hello +world"},
-		{name: "prepared limit", integerPK: true, pushdown: 1, dynamicLimit: true, pattern: "+hello +world"},
-		{name: "prepared pattern", integerPK: true, pushdown: 1, preparedPattern: true},
-		{name: "natural mode", integerPK: true, pushdown: 1, naturalMode: true, pattern: "hello world"},
-		{name: "complex boolean", integerPK: true, pushdown: 1, pattern: "+hello world"},
-		{name: "classic index", integerPK: true, pushdown: 1, classicIndex: true, pattern: "+hello +world"},
+		{name: "exact int8 prefilter", pkType: types.T_int8, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int16 prefilter", pkType: types.T_int16, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int32 prefilter", pkType: types.T_int32, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact int64 prefilter", pkType: types.T_int64, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint8 prefilter", pkType: types.T_uint8, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint16 prefilter", pkType: types.T_uint16, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint32 prefilter", pkType: types.T_uint32, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "exact uint64 prefilter", pkType: types.T_uint64, pushdown: 1, pattern: "+hello +world", wantCandidateK: true},
+		{name: "bit is not an exact membership type", pkType: types.T_bit, pushdown: 1, pattern: "+hello +world"},
+		{name: "approximate varchar prefilter", pkType: types.T_varchar, pushdown: 1, pattern: "+hello +world"},
+		{name: "uuid prefilter", pkType: types.T_uuid, pushdown: 1, pattern: "+hello +world"},
+		{name: "pushdown disabled", pkType: types.T_int64, pattern: "+hello +world"},
+		{name: "prepared limit", pkType: types.T_int64, pushdown: 1, dynamicLimit: true, pattern: "+hello +world"},
+		{name: "prepared pattern", pkType: types.T_int64, pushdown: 1, preparedPattern: true},
+		{name: "natural mode", pkType: types.T_int64, pushdown: 1, mode: tree.FULLTEXT_NL, pattern: "hello world"},
+		{name: "should clause", pkType: types.T_int64, pushdown: 1, pattern: "+hello world"},
+		{name: "explicit phrase", pkType: types.T_int64, pushdown: 1, pattern: `+"hello world"`},
+		{name: "prefix", pkType: types.T_int64, pushdown: 1, pattern: "+hello*"},
+		{name: "group", pkType: types.T_int64, pushdown: 1, pattern: "+(hello world)"},
+		{name: "must not", pkType: types.T_int64, pushdown: 1, pattern: "+hello -world"},
+		{name: "adjust", pkType: types.T_int64, pushdown: 1, pattern: "+hello ~world"},
+		{name: "default cjk becomes phrase", pkType: types.T_int64, pushdown: 1, pattern: "+中"},
+		{name: "ngram cjk becomes phrase", pkType: types.T_int64, pushdown: 1, parser: fulltext2.ParserNgram, pattern: "+中文"},
+		{name: "json value atomic term", pkType: types.T_int64, pushdown: 1, parser: fulltext2.ParserJSONValue, pattern: "+json.value", wantCandidateK: true},
+		{name: "classic index", pkType: types.T_int64, pushdown: 1, classicIndex: true, pattern: "+hello +world"},
 	}
 
 	for _, tc := range tests {
@@ -5301,6 +5339,9 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 			scan := builder.qry.Nodes[leftScanID]
 			if !tc.classicIndex {
 				convertFullTextJoinTestToFulltext2(builder, scan)
+				if tc.parser != "" {
+					scan.TableDef.Indexes[0].IndexAlgoParams = fmt.Sprintf(`{"parser":%q}`, tc.parser)
+				}
 			}
 			matchFn := scan.FilterList[0].GetF()
 			if tc.preparedPattern {
@@ -5308,17 +5349,15 @@ func TestFullTextCandidateLimitWithResidualFilterRequiresExactPrefilter(t *testi
 			} else {
 				matchFn.Args[0] = makePlan2StringConstExprWithType(tc.pattern, false)
 			}
-			mode := tree.FULLTEXT_BOOLEAN
-			if tc.naturalMode {
-				mode = tree.FULLTEXT_NL
+			mode := tc.mode
+			if mode == 0 {
+				mode = tree.FULLTEXT_BOOLEAN
 			}
 			matchFn.Args[1] = makePlan2Int64ConstExprWithType(int64(mode))
-			if tc.integerPK {
-				int64Type := planpb.Type{Id: int32(types.T_int64)}
-				scan.TableDef.Cols[0].Typ = int64Type
-				indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
-				indexTable.Cols[1].Typ = int64Type
-			}
+			pkType := planpb.Type{Id: int32(tc.pkType)}
+			scan.TableDef.Cols[0].Typ = pkType
+			indexTable := mockCtx.tables[strings.ToLower(scan.TableDef.Indexes[0].IndexTableName)]
+			indexTable.Cols[1].Typ = pkType
 			if tc.dynamicLimit {
 				scan.Limit = &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
 			} else {
