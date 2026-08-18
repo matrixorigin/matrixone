@@ -5389,17 +5389,18 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 }
 
 type mysqlTimePrefixCandidate struct {
-	leadingDigits        int
-	fieldCount           int
-	hourDigits           int
-	minuteDigits         int
-	secondDigits         int
-	dateInvalid          bool
-	dateYearDigits       int
-	hasOmittedMinute     bool
-	hasOmittedSeconds    bool
-	hasRepeatedBoundary  bool
-	repeatedAfterSeconds bool
+	leadingDigits          int
+	fieldCount             int
+	hourDigits             int
+	minuteDigits           int
+	secondDigits           int
+	dateInvalid            bool
+	dateYearDigits         int
+	hasOmittedMinute       bool
+	hasOmittedSeconds      bool
+	hasRepeatedBoundary    bool
+	repeatedAfterSeconds   bool
+	trailingSeparatorCount int
 }
 
 // mysqlTimePrefixCandidateForExtract records the field boundary consumed by
@@ -5467,6 +5468,9 @@ func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
 	if candidate.fieldCount >= 3 && strings.HasSuffix(clock, ":") {
 		candidate.hasRepeatedBoundary = true
 		candidate.repeatedAfterSeconds = true
+		for pos := len(clock) - 1; pos >= 0 && clock[pos] == ':'; pos-- {
+			candidate.trailingSeparatorCount++
+		}
 	}
 	if year, month, day, yearDigits, _, ok := mysqlSeparatedDatePartsForExtract(clock); ok {
 		candidate.dateYearDigits = yearDigits
@@ -5561,11 +5565,23 @@ func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandida
 	if token.trailingWhitespace {
 		return true
 	}
-	return candidate.repeatedAfterSeconds &&
-		candidate.hourDigits == 1 &&
-		candidate.minuteDigits == 2 &&
-		candidate.secondDigits == 2 &&
-		len(token.token) == 2
+	if !candidate.repeatedAfterSeconds || len(token.token) != 2 {
+		return false
+	}
+	switch candidate.trailingSeparatorCount {
+	case 1:
+		return candidate.hourDigits == 1 &&
+			candidate.minuteDigits == 2 &&
+			candidate.secondDigits == 2
+	case 2:
+		// MySQL retains a two-separator candidate only when one of the
+		// minute/second fields is itself one digit. A complete two-digit
+		// clock becomes an invalid date-shaped candidate instead.
+		return candidate.hourDigits == 1 &&
+			(candidate.minuteDigits == 1 || candidate.secondDigits == 1)
+	default:
+		return false
+	}
 }
 
 func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {

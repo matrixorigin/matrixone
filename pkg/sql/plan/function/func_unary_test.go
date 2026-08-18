@@ -11315,6 +11315,13 @@ func TestStringTimeExtractSignedSuffixWidthOwnership(t *testing.T) {
 		{input: "01:01:34 +123 ", want: "1/1/34"},
 		{input: "01:01:34 -123", want: "NULL"},
 		{input: "01:01:34 -123 ", want: "1/1/34"},
+		{input: "1:01:34: +1", want: "1/1/34"},
+		{input: "1:01:34:: +1", want: "NULL"},
+		{input: "1:1:34:: +1", want: "1/1/34"},
+		{input: "1:01:4:: +1", want: "1/1/4"},
+		{input: "1:01:34:: +1 ", want: "1/1/34"},
+		{input: "0:00:34:: +1", want: "NULL"},
+		{input: "9:59:59:: +1", want: "NULL"},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
