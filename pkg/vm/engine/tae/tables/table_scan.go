@@ -80,7 +80,9 @@ TombstoneRangeScanByObject scans the an object's tombstones committed in the ran
 Since the returned batch must have accruate ts for each row, we need collect the data from appendable objects.
 
 Targets:
- 1. CNCreated entries where start <= CreatedAt <= end
+ 1. CNCreated entries where start <= CreatedAt <= end. These immutable source
+    objects remain the unique scan owners after tombstone merges; scanning the
+    TN-created copies as well would duplicate the same delete rows.
  2. Appendable entries whose catalog lifetime can overlap the range. All live
     appendable entries created before end remain candidates because their rows
     can commit out of object creation order.
@@ -103,16 +105,13 @@ func TombstoneRangeScanByObject(
 	// solely because an object's catalog lifetime precedes start.
 	for ok := it.Last(); ok; ok = it.Prev() {
 		tombstone := it.Item()
-		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
-			dropped := tombstone.GetNextVersion()
-			deleteAt := dropped.GetDeleteAt()
-			if tombstone.IsAppendable() || !deleteAt.GT(&end) {
-				// The dropped counterpart owns persisted appendable data. For a
-				// non-appendable object, its replacement owns the range only after
-				// the source object's delete commits within that range. A later
-				// tombstone merge must not hide the historical source object.
-				continue
-			}
+		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
+			tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
+			// The D counterpart owns the same persisted appendable data. A
+			// non-appendable C entry is different: it is the immutable
+			// CN-created source of a tombstone merge and remains the unique
+			// range-scan owner after its drop commits.
+			continue
 		}
 
 		if tombstone.IsAppendable() {
@@ -131,7 +130,8 @@ func TombstoneRangeScanByObject(
 				}
 			}
 		} else {
-			// we only check the created version of the object.
+			// Check only CN-created immutable source versions. Tombstone-merge
+			// outputs copy these rows and are deliberately excluded below.
 			if tombstone.HasDropIntent() {
 				continue
 			}

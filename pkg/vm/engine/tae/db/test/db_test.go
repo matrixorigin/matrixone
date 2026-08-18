@@ -12682,6 +12682,80 @@ func TestMergeBlocksWithConcurrentTombstoneMergeCommit(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
+func TestMergeBlocksWithTombstoneMergeCommittedInsideTransferRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before the delete. The merge output cannot
+	// observe the later tombstone and must transfer it before committing.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	// Rewrite the CN-created tombstone into a TN-created tombstone object and
+	// commit it before the data merge captures its collection upper bound.
+	tombstoneTxn, tombstoneRel := tae.GetRelation()
+	tombstoneObj := testutil.GetOneTombstoneMeta(tombstoneRel)
+	require.False(t, tombstoneObj.IsAppendable())
+	require.True(t, tombstoneObj.ObjectStats.GetCNCreated())
+	tombstoneTask, err := jobs.NewMergeObjectsTask(
+		nil, tombstoneTxn, []*catalog.ObjectEntry{tombstoneObj}, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+	require.NoError(t, tombstoneTask.OnExec(ctx))
+	require.NoError(t, tombstoneTxn.Commit(ctx))
+
+	require.NoError(t, dataTask.OnExec(ctx))
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	// Every row was deleted after the data merge snapshot. Missing the
+	// delete after its source is replaced resurrects all ten rows in the merged
+	// data object.
+	tae.CheckRowsByScan(0, true)
+}
+
 func TestDedup3(t *testing.T) {
 	ctx := context.Background()
 
