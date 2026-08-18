@@ -819,9 +819,12 @@ type UpdateBinder struct {
 
 type OndupUpdateBinder struct {
 	baseBinder
-	scanTag   int32
-	selectTag int32
-	tableDef  *plan.TableDef
+	scanTag             int32
+	selectTag           int32
+	tableDef            *plan.TableDef
+	targetDBName        string
+	targetTableName     string
+	lowerCaseTableNames int64
 }
 
 type TableBinder struct {
