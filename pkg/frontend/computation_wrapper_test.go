@@ -1093,6 +1093,18 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
+		{
+			name: "decimal width and scale widen",
+			steps: []struct {
+				typ    defines.MysqlType
+				value  string
+				isNull bool
+				want   types.T
+			}{
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", false, types.T_decimal64},
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 209, "select ?")
@@ -1120,6 +1132,14 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 					require.Len(t, metadataTypes, 1)
 					require.Equal(t, columns[0].Typ, metadataTypes[0])
 				}
+				if test.name == "decimal width and scale widen" {
+					wantWidths := []int32{3, 9}
+					wantScales := []int32{2, 4}
+					require.Equal(t, wantWidths[stepIndex], columns[0].Typ.Width)
+					require.Equal(t, wantScales[stepIndex], columns[0].Typ.Scale)
+					require.Len(t, metadataTypes, 1)
+					require.Equal(t, columns[0].Typ, metadataTypes[0])
+				}
 			}
 			require.Empty(t, prepareStmt.paramBindingDependencies)
 			require.Equal(t, []bool{true}, prepareStmt.paramResultMetadataDependencies)
@@ -1127,6 +1147,42 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 			require.Equal(t, test.steps[len(test.steps)-1].want, types.T(metadataTypes[0].Id))
 		})
 	}
+}
+
+func TestUnionPreparedDecimalParamsRefreshResultMetadata(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 210, "select ? union all select ?")
+	defer prepareStmt.Close()
+
+	const value = "-12345678901234567890.123456789"
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+	}
+
+	var metadataTypes []plan.Type
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+		metadataTypes = make([]plan.Type, len(columns))
+		for i := range columns {
+			metadataTypes[i] = columns[i].Typ
+		}
+		return [][]byte{[]byte("refreshed")}, nil
+	}
+
+	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Empty(t, prepareStmt.paramBindingDependencies)
+	require.Equal(t, []bool{true, true}, prepareStmt.paramResultMetadataDependencies)
+	columns := plan2.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 1)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	require.Equal(t, int32(29), columns[0].Typ.Width)
+	require.Equal(t, int32(9), columns[0].Typ.Scale)
+	require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
 }
 
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {

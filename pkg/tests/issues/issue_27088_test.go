@@ -43,6 +43,22 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
+		directStmt, err := conn.PrepareContext(ctx, "select ?")
+		require.NoError(t, err)
+		defer directStmt.Close()
+		for _, test := range []struct {
+			arg  any
+			want string
+		}{
+			{int64(42), "42"},
+			{float64(1.25), "1.25"},
+			{"1.25", "1.25"},
+		} {
+			var got string
+			require.NoError(t, directStmt.QueryRowContext(ctx, test.arg).Scan(&got))
+			require.Equal(t, test.want, got)
+		}
+
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
 		defer func() {

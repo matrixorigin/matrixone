@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -573,13 +574,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		return expr.null, nil
 	}
 
-	if expr.vec == nil {
-		expr.vec, err = newExpressionConstBytes(
-			expr.typ, val, 1, proc.Mp(), expr.allocation,
-		)
-	} else {
-		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
-	}
+	expr.vec, err = setPreparedParamValue(
+		expr.vec, expr.typ, val, proc.Mp(), expr.allocation)
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
@@ -588,6 +584,82 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.foldedNull = false
 	}
 	return expr.vec, err
+}
+
+func setPreparedParamValue(
+	vec *vector.Vector,
+	typ types.Type,
+	value []byte,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	text := string(value)
+	switch typ.Oid {
+	case types.T_bool:
+		parsed, err := types.ParseBool(text)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_int64:
+		parsed, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_uint64:
+		parsed, err := strconv.ParseUint(text, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_float64:
+		parsed, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_decimal64:
+		parsed, err := types.ParseDecimal64(text, typ.Width, typ.Scale)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_decimal128:
+		parsed, err := types.ParseDecimal128(text, typ.Width, typ.Scale)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	case types.T_decimal256:
+		parsed, err := types.ParseDecimal256(text, typ.Width, typ.Scale)
+		if err != nil {
+			return nil, err
+		}
+		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
+	default:
+		if !typ.IsVarlen() {
+			return nil, moerr.NewInternalErrorNoCtx(
+				fmt.Sprintf("unsupported fixed prepared parameter type %s", typ))
+		}
+		if vec == nil {
+			return newExpressionConstBytes(typ, value, 1, mp, selection)
+		}
+		return vec, vector.SetConstBytes(vec, value, 1, mp)
+	}
+}
+
+func setPreparedParamFixed[T any](
+	vec *vector.Vector,
+	typ types.Type,
+	value T,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*vector.Vector, error) {
+	if vec == nil {
+		return newExpressionConstFixed(typ, value, 1, mp, selection)
+	}
+	return vec, vector.SetConstFixed(vec, value, 1, mp)
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

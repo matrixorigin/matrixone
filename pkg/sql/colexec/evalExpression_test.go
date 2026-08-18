@@ -425,6 +425,42 @@ func TestParamExpressionExecutorPreservesProtocolMetadataPerParameter(t *testing
 	require.Equal(t, "text", textVec.GetStringAt(0))
 }
 
+func TestParamExpressionExecutorParsesFixedNumericTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	for _, value := range []string{"1.25", "42", "1.5", "true"} {
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+	}
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	tests := []struct {
+		typ  types.Type
+		want any
+	}{
+		{types.New(types.T_decimal64, 3, 2), types.Decimal64(125)},
+		{types.T_int64.ToType(), int64(42)},
+		{types.T_float64.ToType(), float64(1.5)},
+		{types.T_bool.ToType(), true},
+	}
+	for pos, test := range tests {
+		executor := NewParamExpressionExecutor(proc.Mp(), pos, test.typ)
+		vec, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err)
+		switch want := test.want.(type) {
+		case types.Decimal64:
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0))
+		case int64:
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](vec, 0))
+		case float64:
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](vec, 0))
+		case bool:
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
+		}
+		executor.Free()
+	}
+}
+
 func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

@@ -188,3 +188,13 @@ func TestPreparedParamResultMetadataDependencies(t *testing.T) {
 		PreparedParamResultMetadataDependencies(prepare.Plan, 3))
 	require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 3))
 }
+
+func TestPreparedParamResultMetadataDependenciesFollowUnionOutputs(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, "prepare p from 'select ? union all select ?'")
+	require.NoError(t, err)
+	prepare := logicPlan.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Equal(t, []bool{true, true},
+		PreparedParamResultMetadataDependencies(prepare.Plan, 2))
+}

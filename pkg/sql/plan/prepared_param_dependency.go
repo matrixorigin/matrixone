@@ -214,15 +214,62 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 		return nil
 	}
 	var dependencies []bool
-	for _, expr := range query.Nodes[nodeID].ProjectList {
-		param := expr.GetP()
+	visited := make(map[[2]int32]bool)
+	var traceOutput func(int32, int32)
+	var traceExpr func(int32, *Expr)
+	markParam := func(param *planpb.ParamRef) {
 		if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
-			continue
+			return
 		}
 		if dependencies == nil {
 			dependencies = make([]bool, paramCount)
 		}
 		dependencies[param.Pos] = true
+	}
+	traceExpr = func(currentNodeID int32, expr *Expr) {
+		if expr == nil {
+			return
+		}
+		if param := expr.GetP(); param != nil {
+			markParam(param)
+			return
+		}
+		ref := expr.GetCol()
+		if ref == nil || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
+			return
+		}
+		node := query.Nodes[currentNodeID]
+		if node == nil || len(node.Children) != 1 {
+			return
+		}
+		traceOutput(node.Children[0], ref.ColPos)
+	}
+	traceOutput = func(currentNodeID, colPos int32) {
+		key := [2]int32{currentNodeID, colPos}
+		if visited[key] || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
+			return
+		}
+		visited[key] = true
+		node := query.Nodes[currentNodeID]
+		if node == nil {
+			return
+		}
+		switch node.NodeType {
+		case planpb.Node_UNION, planpb.Node_UNION_ALL,
+			planpb.Node_INTERSECT, planpb.Node_INTERSECT_ALL,
+			planpb.Node_MINUS, planpb.Node_MINUS_ALL:
+			for _, childID := range node.Children {
+				traceOutput(childID, colPos)
+			}
+			return
+		}
+		if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+			return
+		}
+		traceExpr(currentNodeID, node.ProjectList[colPos])
+	}
+	for _, expr := range query.Nodes[nodeID].ProjectList {
+		traceExpr(nodeID, expr)
 	}
 	return dependencies
 }

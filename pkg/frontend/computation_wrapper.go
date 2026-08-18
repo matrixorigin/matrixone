@@ -1108,9 +1108,15 @@ func preparedResultDecimalType(width, scale int32) types.Type {
 	}
 }
 
-func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, dependencies []bool, count int) bool {
+func preparedParamBindingTypesEqualAtDependencies(
+	left, right []types.Type,
+	commonDependencies, resultDependencies []bool,
+	count int,
+) bool {
 	for i := 0; i < count; i++ {
-		if i >= len(dependencies) || !dependencies[i] {
+		commonDependent := i < len(commonDependencies) && commonDependencies[i]
+		resultDependent := i < len(resultDependencies) && resultDependencies[i]
+		if !commonDependent && !resultDependent {
 			continue
 		}
 		var leftType, rightType types.Type
@@ -1120,7 +1126,11 @@ func preparedParamBindingTypesEqualAtDependencies(left, right []types.Type, depe
 		if i < len(right) {
 			rightType = right[i]
 		}
-		if !preparedParamBindingCategoryEqual(leftType, rightType) {
+		equal := preparedParamBindingCategoryEqual(leftType, rightType)
+		if resultDependent && !commonDependent {
+			equal = leftType.Eq(rightType)
+		}
+		if !equal {
 			return false
 		}
 	}
@@ -1470,7 +1480,9 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.protocolVersion != protocolVersion
 	paramBindingMismatch := !preparedParamBindingTypesEqualAtDependencies(
 		prepareStmt.paramBindingTypes, paramBindingTypes,
-		paramDependencies, len(preparePlan.ParamTypes))
+		prepareStmt.paramBindingDependencies,
+		prepareStmt.paramResultMetadataDependencies,
+		len(preparePlan.ParamTypes))
 	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) ||
 		fkSensitive || paramBindingMismatch
 
@@ -1499,7 +1511,9 @@ func initExecuteStmtParamWithResolverInSession(
 		convergedBindingTypes := paramState.bindingTypesFor(
 			newCommonDependencies, newResultDependencies, len(newPreparePlan.ParamTypes))
 		if !preparedParamBindingTypesEqualAtDependencies(
-			paramBindingTypes, convergedBindingTypes, newDependencies, len(newPreparePlan.ParamTypes)) {
+			paramBindingTypes, convergedBindingTypes,
+			newCommonDependencies, newResultDependencies,
+			len(newPreparePlan.ParamTypes)) {
 			newPlan, err = rebuildWithBindingTypes(convergedBindingTypes, newDependencies)
 			if err != nil {
 				return nil, nil, nil, "", false, err
@@ -1515,7 +1529,9 @@ func initExecuteStmtParamWithResolverInSession(
 				finalCommonDependencies, finalResultDependencies, len(newPreparePlan.ParamTypes))
 			if !slices.Equal(newDependencies, finalDependencies) ||
 				!preparedParamBindingTypesEqualAtDependencies(
-					convergedBindingTypes, finalBindingTypes, finalDependencies, len(newPreparePlan.ParamTypes)) {
+					convergedBindingTypes, finalBindingTypes,
+					finalCommonDependencies, finalResultDependencies,
+					len(newPreparePlan.ParamTypes)) {
 				return nil, nil, nil, "", false, moerr.NewInternalError(
 					reqCtx, "prepared parameter dependencies did not converge after schema rebuild")
 			}
