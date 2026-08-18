@@ -80,8 +80,41 @@ func TestNormalizeTextLiteralFormsForCompatibility(t *testing.T) {
 			IsBin:       true,
 			LiteralForm: StringLiteralForm_STRING_LITERAL_HEX,
 		}}},
+		{Typ: Type{Id: 65}, Expr: &Expr_Lit{Lit: &Literal{
+			Value:       &Literal_Sval{Sval: "explicit text"},
+			LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+		}}},
 	}}}}
 	require.NoError(t, expr.NormalizeTextLiteralFormsForCompatibility())
 	require.Equal(t, StringLiteralForm_STRING_LITERAL_NONE, expr.GetF().Args[0].GetLit().LiteralForm)
 	require.Equal(t, StringLiteralForm_STRING_LITERAL_HEX, expr.GetF().Args[1].GetLit().LiteralForm)
+	require.Equal(t, StringLiteralForm_STRING_LITERAL_TEXT, expr.GetF().Args[2].GetLit().LiteralForm)
+}
+
+func TestRequiresMORPCVersion22StringLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  Type
+		form StringLiteralForm
+		want bool
+	}{
+		{name: "ordinary text", typ: Type{Id: 61}, form: StringLiteralForm_STRING_LITERAL_TEXT},
+		{name: "text override on binary", typ: Type{Id: 65}, form: StringLiteralForm_STRING_LITERAL_TEXT, want: true},
+		{name: "binary override on text", typ: Type{Id: 61}, form: StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: true},
+		{name: "binary on binary", typ: Type{Id: 65}, form: StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER},
+		{name: "legacy inherit", typ: Type{Id: 65}, form: StringLiteralForm_STRING_LITERAL_NONE},
+		{name: "legacy hex", typ: Type{Id: 61}, form: StringLiteralForm_STRING_LITERAL_HEX},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr := &Expr{Typ: test.typ, Expr: &Expr_Lit{Lit: &Literal{
+				Value:       &Literal_Sval{Sval: "value"},
+				LiteralForm: test.form,
+				IsBin:       test.form == StringLiteralForm_STRING_LITERAL_HEX,
+			}}}
+			required, err := RequiresMORPCVersion22StringLiterals(&struct{ Expr *Expr }{Expr: expr})
+			require.NoError(t, err)
+			require.Equal(t, test.want, required)
+		})
+	}
 }

@@ -93,6 +93,17 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteStringLiteralPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
 func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
 	if stats.Empty() {
 		return nil
@@ -150,16 +161,18 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	if err != nil {
 		return nil, err
 	}
-	if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
-		return nil, err
-	}
 	if isRemote {
+		if err = validateRemoteStringLiteralPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
+		return nil, err
 	}
 	ctx := &scopeContext{
 		parent: nil,
@@ -1605,6 +1618,25 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
 			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
+		)
+	}
+	return nil
+}
+
+func validateRemoteStringLiteralPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	requiresVersion22, err := plan.RequiresMORPCVersion22StringLiterals(p)
+	if err != nil {
+		return err
+	}
+	if !requiresVersion22 {
+		return nil
+	}
+	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"cross-domain string literal provenance requires MORPC protocol version 22",
 		)
 	}
 	return nil

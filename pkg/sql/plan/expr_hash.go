@@ -19,6 +19,7 @@ import (
 	"hash/fnv"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -99,7 +100,7 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 	switch v := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		writeByte(h, tagLit)
-		hashLitInto(h, v.Lit)
+		hashLitInto(h, expr.Typ, v.Lit)
 	case *plan.Expr_Col:
 		writeByte(h, tagCol)
 		if v.Col != nil {
@@ -151,28 +152,34 @@ func hashExprInto(h writeByter, expr *plan.Expr) {
 // literalForExecutableIdentity returns a shallow copy only when diagnostic or
 // wire-compatibility fields must be normalized. Keep value-bearing fields,
 // including IsBin, non-text LiteralForm, and Src, intact.
-func literalForExecutableIdentity(lit *plan.Literal) *plan.Literal {
-	if lit == nil || !lit.IsSerialized && lit.LiteralForm != plan.StringLiteralForm_STRING_LITERAL_TEXT {
+func literalForExecutableIdentity(typ plan.Type, lit *plan.Literal) *plan.Literal {
+	if lit == nil || !lit.IsSerialized &&
+		(lit.LiteralForm != plan.StringLiteralForm_STRING_LITERAL_TEXT ||
+			executableLiteralForm(typ, lit.LiteralForm) == lit.LiteralForm) {
 		return lit
 	}
 	literalCopy := *lit
 	literalCopy.IsSerialized = false
 	// NONE is the wire-compatible spelling of an ordinary text literal in
 	// plans produced before LiteralForm existed.
-	if literalCopy.LiteralForm == plan.StringLiteralForm_STRING_LITERAL_TEXT {
+	if executableLiteralForm(typ, literalCopy.LiteralForm) ==
+		plan.StringLiteralForm_STRING_LITERAL_NONE {
 		literalCopy.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_NONE
 	}
 	return &literalCopy
 }
 
-func executableLiteralForm(form plan.StringLiteralForm) plan.StringLiteralForm {
-	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT {
+func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.StringLiteralForm {
+	staticDomain := types.StaticStringDomain(types.NewWithCharset(
+		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)))
+	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
+		staticDomain == types.StringDomainText {
 		return plan.StringLiteralForm_STRING_LITERAL_NONE
 	}
 	return form
 }
 
-func hashLitInto(h writeByter, lit *plan.Literal) {
+func hashLitInto(h writeByter, typ plan.Type, lit *plan.Literal) {
 	if lit == nil {
 		writeByte(h, 0)
 		return
@@ -222,7 +229,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 		} else {
 			writeByte(h, 0)
 		}
-		writeUint32(h, uint32(executableLiteralForm(lit.LiteralForm)))
+		writeUint32(h, uint32(executableLiteralForm(typ, lit.LiteralForm)))
 	case *plan.Literal_Bval:
 		writeByte(h, 12)
 		if v.Bval {
@@ -252,7 +259,7 @@ func hashLitInto(h writeByter, lit *plan.Literal) {
 	default:
 		// Uncommon literal variants — fall back to marshal.
 		writeByte(h, 0xff)
-		if b, err := literalForExecutableIdentity(lit).Marshal(); err == nil {
+		if b, err := literalForExecutableIdentity(typ, lit).Marshal(); err == nil {
 			_, _ = h.Write(b)
 		}
 	}
@@ -278,7 +285,7 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 		if !ok {
 			return false
 		}
-		return literalEqual(av.Lit, bv.Lit)
+		return literalEqual(a.Typ, av.Lit, bv.Lit)
 	case *plan.Expr_Col:
 		bv, ok := b.Expr.(*plan.Expr_Col)
 		if !ok {
@@ -355,7 +362,7 @@ func exprStructuralEqual(a, b *plan.Expr) bool {
 	}
 }
 
-func literalEqual(a, b *plan.Literal) bool {
+func literalEqual(typ plan.Type, a, b *plan.Literal) bool {
 	if a == b {
 		return true
 	}
@@ -402,7 +409,7 @@ func literalEqual(a, b *plan.Literal) bool {
 	case *plan.Literal_Sval:
 		bv, ok := b.Value.(*plan.Literal_Sval)
 		return ok && av.Sval == bv.Sval && a.IsBin == b.IsBin &&
-			executableLiteralForm(a.LiteralForm) == executableLiteralForm(b.LiteralForm)
+			executableLiteralForm(typ, a.LiteralForm) == executableLiteralForm(typ, b.LiteralForm)
 	case *plan.Literal_Bval:
 		bv, ok := b.Value.(*plan.Literal_Bval)
 		return ok && av.Bval == bv.Bval
@@ -426,8 +433,8 @@ func literalEqual(a, b *plan.Literal) bool {
 		return ok && av.Jsonval == bv.Jsonval
 	default:
 		// Uncommon literal variant — binary fallback.
-		ab, aerr := literalForExecutableIdentity(a).Marshal()
-		bb, berr := literalForExecutableIdentity(b).Marshal()
+		ab, aerr := literalForExecutableIdentity(typ, a).Marshal()
+		bb, berr := literalForExecutableIdentity(typ, b).Marshal()
 		if aerr != nil || berr != nil {
 			return false
 		}

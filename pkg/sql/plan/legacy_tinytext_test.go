@@ -52,11 +52,11 @@ func TestRecoverLegacyTinyTextFromCreateSQL(t *testing.T) {
 }
 
 func TestLegacyLikeColumnsTreatNoneAndTextLiteralFormsAsEquivalent(t *testing.T) {
-	makeColumn := func(form planpb.StringLiteralForm) *planpb.ColDef {
+	makeColumn := func(literalType types.Type, form planpb.StringLiteralForm) *planpb.ColDef {
 		return &planpb.ColDef{
 			Name: "payload", Typ: planpb.Type{Id: int32(types.T_text)},
 			Default: &planpb.Default{Expr: &planpb.Expr{
-				Typ: planpb.Type{Id: int32(types.T_varchar)},
+				Typ: planpb.Type{Id: int32(literalType.Oid), Charset: uint32(literalType.Charset)},
 				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 					Value: &planpb.Literal_Sval{Sval: "x"}, LiteralForm: form,
 				}},
@@ -64,8 +64,11 @@ func TestLegacyLikeColumnsTreatNoneAndTextLiteralFormsAsEquivalent(t *testing.T)
 		}
 	}
 	require.True(t, legacyLikeColumnsCompatible(
-		makeColumn(planpb.StringLiteralForm_STRING_LITERAL_NONE),
-		makeColumn(planpb.StringLiteralForm_STRING_LITERAL_TEXT)))
+		makeColumn(types.T_varchar.ToType(), planpb.StringLiteralForm_STRING_LITERAL_NONE),
+		makeColumn(types.T_varchar.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT)))
+	require.False(t, legacyLikeColumnsCompatible(
+		makeColumn(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_NONE),
+		makeColumn(types.T_varbinary.ToType(), planpb.StringLiteralForm_STRING_LITERAL_TEXT)))
 }
 
 func TestRecoverLegacyTinyTextDoesNotOverrideAlteredSchemas(t *testing.T) {

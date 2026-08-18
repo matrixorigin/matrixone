@@ -75,12 +75,60 @@ func (m *Expr) NormalizeTextLiteralFormsForCompatibility() error {
 	if err := m.ValidateStringLiteralForms(); err != nil {
 		return err
 	}
-	return m.walkStringLiterals(func(_ *Expr, lit *Literal) error {
-		if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_TEXT {
+	return m.walkStringLiterals(func(expr *Expr, lit *Literal) error {
+		if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_TEXT &&
+			staticStringDomainForPlanType(expr.Typ) == planStringDomainText {
 			lit.LiteralForm = StringLiteralForm_STRING_LITERAL_NONE
 		}
 		return nil
 	})
+}
+
+const (
+	planStringDomainNone uint8 = iota
+	planStringDomainText
+	planStringDomainBinary
+)
+
+func staticStringDomainForPlanType(typ Type) uint8 {
+	if !isPlanMySQLStringType(typ.Id) {
+		return planStringDomainNone
+	}
+	// CharsetBinary is 1 in the plan wire contract and is authoritative even
+	// for CHAR/VARCHAR/TEXT-shaped OIDs.
+	if typ.Charset == 1 {
+		return planStringDomainBinary
+	}
+	switch typ.Id {
+	case 64, 65, 70: // BINARY, VARBINARY, BLOB
+		return planStringDomainBinary
+	default:
+		return planStringDomainText
+	}
+}
+
+// RequiresMORPCVersion22StringLiterals reports whether an owner contains a
+// literal form that changes the expression's static string domain. Older plan
+// readers ignore LiteralForm, so these overrides cannot cross a remote owner
+// boundary before MORPC version 22.
+func RequiresMORPCVersion22StringLiterals(owner any) (bool, error) {
+	required := false
+	err := walkExpressionsInOwner(owner, func(expr *Expr) error {
+		return expr.walkStringLiterals(func(literalExpr *Expr, lit *Literal) error {
+			if err := literalExpr.validateStringLiteralForm(lit); err != nil {
+				return err
+			}
+			staticDomain := staticStringDomainForPlanType(literalExpr.Typ)
+			switch lit.LiteralForm {
+			case StringLiteralForm_STRING_LITERAL_TEXT:
+				required = required || staticDomain == planStringDomainBinary
+			case StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER:
+				required = required || staticDomain == planStringDomainText
+			}
+			return nil
+		})
+	})
+	return required, err
 }
 
 func (m *Expr) walkStringLiterals(visitor func(*Expr, *Literal) error) error {
@@ -153,6 +201,12 @@ func ValidateStringLiteralFormsInOwner(owner any) error {
 // validateStringLiteralFormsInOwner validates every expression nested in a
 // decoded plan without coupling this boundary check to every plan node shape.
 func validateStringLiteralFormsInOwner(owner any) error {
+	return walkExpressionsInOwner(owner, func(expr *Expr) error {
+		return expr.ValidateStringLiteralForms()
+	})
+}
+
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -170,7 +224,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 				return nil
 			}
 			if expr, ok := value.Interface().(*Expr); ok {
-				return expr.ValidateStringLiteralForms()
+				return visitor(expr)
 			}
 			pointer := value.Pointer()
 			if _, ok := seen[pointer]; ok {
