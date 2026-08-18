@@ -297,6 +297,91 @@ func TestRewriteCloneStoredProcedureBodies(t *testing.T) {
 	require.Equal(t, procedures[0].body, "begin if exists (select 1 from source_db.control_t) then select id from source_db.control_t; else select 'source_db' as marker from other_db.control_t; end if; call SOURCE_DB.p_inner(); end")
 }
 
+func TestRewriteCloneStoredProcedureBodiesRewritesNestedControlFlow(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_nested_source_references",
+		lang: "sql",
+		body: `begin
+			if exists (select 1 from source_db.if_table) then
+				select id from source_db.then_table;
+			elseif exists (select 1 from source_db.elif_table) then
+				call source_db.p_inner();
+			else
+				select id from source_db.else_table;
+			end if;
+			case 1
+				when 1 then select id from source_db.case_table;
+				else select id from source_db.case_else_table;
+			end case;
+		end`,
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	for _, table := range []string{
+		"if_table", "then_table", "elif_table", "else_table", "case_table", "case_else_table",
+	} {
+		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
+		require.NotContains(t, rewritten[0].body, "source_db."+table)
+	}
+	require.Contains(t, rewritten[0].body, "call target_db.p_inner()")
+	require.Equal(t, procedures[0].body, `begin
+			if exists (select 1 from source_db.if_table) then
+				select id from source_db.then_table;
+			elseif exists (select 1 from source_db.elif_table) then
+				call source_db.p_inner();
+			else
+				select id from source_db.else_table;
+			end if;
+			case 1
+				when 1 then select id from source_db.case_table;
+				else select id from source_db.case_else_table;
+			end case;
+		end`)
+}
+
+func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("opaque routine languages are not parsed or rewritten", func(t *testing.T) {
+		procedures := []storedProcedureDefinition{{
+			name: "p_external", lang: "javascript", body: "source_db.table",
+		}}
+		functions := []userDefinedFunctionDefinition{{
+			name: "f_external", lang: "javascript", body: "select source_db.table",
+		}}
+
+		rewrittenProcedures, err := rewriteCloneStoredProcedureBodies(ctx, procedures, "source_db", "target_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, procedures, rewrittenProcedures)
+
+		rewrittenFunctions, err := rewriteCloneUserDefinedFunctionBodies(ctx, functions, "source_db", "target_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, functions, rewrittenFunctions)
+	})
+
+	t.Run("invalid SQL aborts the clone", func(t *testing.T) {
+		_, err := rewriteCloneStoredProcedureBodies(ctx, []storedProcedureDefinition{{
+			name: "p_invalid", lang: "sql", body: "select from",
+		}}, "source_db", "target_db", 1)
+		require.Error(t, err)
+
+		_, err = rewriteCloneUserDefinedFunctionBodies(ctx, []userDefinedFunctionDefinition{{
+			name: "f_invalid", lang: "sql", body: "select from",
+		}}, "source_db", "target_db", 1)
+		require.Error(t, err)
+	})
+
+	t.Run("identity mapping does not parse the body", func(t *testing.T) {
+		body, err := rewriteCloneSQLRoutineBody(ctx, "not valid SQL", "", "source_db", "source_db", 1)
+		require.NoError(t, err)
+		require.Equal(t, "not valid SQL", body)
+	})
+}
+
 func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 	functions := []userDefinedFunctionDefinition{
 		{
