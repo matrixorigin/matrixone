@@ -4247,7 +4247,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	if ctx.bindingNonRecurCte() {
+	// CTE reuse currently rewrites consumers reachable from the main query
+	// root. A CTE referenced while another CTE is being bound can also have
+	// consumers in separately appended steps, especially recursive anchor and
+	// member steps. Keep such nested references inline until reuse can rewrite
+	// the complete step graph; otherwise the added producer and an unreplaced
+	// consumer share one mutable subtree and column remapping visits it twice.
+	if ctx.bindingCte() {
 		cteRef.hasNestedUse = true
 		if ctx.cteState.cte != nil {
 			ctx.cteState.cte.hasNestedRef = true

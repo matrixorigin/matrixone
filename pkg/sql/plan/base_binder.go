@@ -939,7 +939,12 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 			newCandExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Expr, whenExpr.Cond)
 			args = append(args, newCandExpr)
 		} else {
-			args = append(args, whenExpr.Cond)
+			// An untyped parameter is represented as TEXT until its surrounding
+			// expression provides a type.  CASE WHEN is a boolean context, so
+			// make that contract explicit before the CASE overload checker sees
+			// the parameter.  Without this cast `CASE WHEN ?` is rejected as
+			// [TEXT ...], even though the same expression with a literal works.
+			args = append(args, bindCaseConditionParam(whenExpr.Cond))
 		}
 		args = append(args, whenExpr.Val)
 	}
@@ -951,6 +956,13 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr("case", args, depth)
+}
+
+func bindCaseConditionParam(expr tree.Expr) tree.Expr {
+	if _, ok := unwrapParenExpr(expr).(*tree.ParamExpr); !ok {
+		return expr
+	}
+	return tree.NewCastExpr(expr, tree.TYPE_BOOL)
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot bool) (*Expr, error) {
