@@ -16,18 +16,24 @@ package apply
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	_ "github.com/matrixorigin/matrixone/pkg/indexplugin/all"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -240,4 +246,133 @@ func makeColumnExpr(pos int32, typ types.T) *plan.Expr {
 		Typ:  plan.Type{Id: int32(typ)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}},
 	}
+}
+
+type scriptedVectorReader struct {
+	values   []int64
+	next     int
+	closed   int
+	closeErr error
+	readErr  error
+}
+
+var _ engine.Reader = (*scriptedVectorReader)(nil)
+
+func (r *scriptedVectorReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
+	if r.readErr != nil {
+		return false, r.readErr
+	}
+	if r.next >= len(r.values) {
+		return true, nil
+	}
+	out.CleanOnlyData()
+	if err := vector.AppendFixed(out.Vecs[0], r.values[r.next], false, mp); err != nil {
+		return false, err
+	}
+	out.SetRowCount(1)
+	r.next++
+	return false, nil
+}
+
+func (r *scriptedVectorReader) Close() error                  { r.closed++; return r.closeErr }
+func (*scriptedVectorReader) SetOrderBy([]*plan.OrderBySpec)  {}
+func (*scriptedVectorReader) GetOrderBy() []*plan.OrderBySpec { return nil }
+func (*scriptedVectorReader) SetIndexParam(*plan.IndexReaderParam) {
+}
+func (*scriptedVectorReader) SetFilterZM(objectio.ZoneMap) {}
+
+func vectorSourceSpec() *plan.VectorIndexScan {
+	return &plan.VectorIndexScan{
+		Index:           &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:     plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(3),
+		FirstRoundLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+}
+
+func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
+	proc := testutil.NewProc(t)
+	source := NewVectorSource(vectorSourceSpec(), []string{"pkid"}, []types.Type{types.T_int64.ToType()}).(*vectorSource)
+	t.Cleanup(func() {
+		source.Free(proc, false, nil)
+		proc.Free()
+	})
+
+	require.NoError(t, source.ApplyPrepare(proc))
+	in := batch.NewWithSize(0)
+	in.SetRowCount(1)
+	require.NoError(t, source.ApplyArgsEval(in, proc))
+	require.Equal(t, 1, source.queryVec.Length())
+	require.Equal(t, uint64(3), vector.GetFixedAtNoTypeCheck[uint64](source.limitVec, 0))
+	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](source.firstRoundVec, 0))
+
+	// The registered IVF plugin is reached. The test process deliberately has
+	// no transaction, so NewPlanReader rejects it after ApplyStart has passed
+	// the registry and SearchPlugin dispatch boundary.
+	err := source.ApplyStart(0, proc, nil)
+	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
+}
+
+func TestVectorSourceReaderLifecycle(t *testing.T) {
+	proc := testutil.NewProc(t)
+	source := &vectorSource{
+		attrs:  []string{"pkid"},
+		types:  []types.Type{types.T_int64.ToType()},
+		reader: &scriptedVectorReader{values: []int64{42}},
+	}
+	t.Cleanup(func() {
+		source.Free(proc, false, nil)
+		proc.Free()
+	})
+
+	result, err := source.ApplyCall(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, []int64{42}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+
+	result, err = source.ApplyCall(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult.Status, result.Status)
+	require.Nil(t, source.reader)
+
+	readErr := errors.New("reader failed")
+	source.reader = &scriptedVectorReader{readErr: readErr}
+	result, err = source.ApplyCall(proc)
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, vm.CancelResult.Status, result.Status)
+}
+
+func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
+	proc := testutil.NewProc(t)
+	source := &vectorSource{
+		spec:  vectorSourceSpec(),
+		attrs: []string{"pkid"},
+		types: []types.Type{types.T_int64.ToType()},
+	}
+	t.Cleanup(func() { proc.Free() })
+
+	source.queryVec = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+	require.NoError(t, vector.AppendArray(source.queryVec, []float32(nil), true, proc.Mp()))
+	source.limitVec = vector.NewVec(types.T_uint64.ToType())
+	require.NoError(t, vector.AppendFixed(source.limitVec, uint64(1), false, proc.Mp()))
+	require.NoError(t, source.ApplyStart(0, proc, nil))
+	require.NotNil(t, source.reader)
+	require.NoError(t, source.ApplyEnd(proc))
+	require.Nil(t, source.reader)
+
+	source.reader = &scriptedVectorReader{values: []int64{7}}
+	source.output = batch.NewWithSize(1)
+	source.output.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.output.Vecs[0], int64(7), false, proc.Mp()))
+	source.output.SetRowCount(1)
+	source.Reset(proc, false, nil)
+	require.Nil(t, source.reader)
+	require.Nil(t, source.queryVec)
+	require.Zero(t, source.output.RowCount())
+
+	source.reader = &scriptedVectorReader{closeErr: errors.New("close failed")}
+	require.Error(t, source.closeReader())
+	require.Nil(t, source.reader)
+	source.Free(proc, false, nil)
+	require.Nil(t, source.output)
 }

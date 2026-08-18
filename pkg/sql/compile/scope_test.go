@@ -2567,6 +2567,100 @@ func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
 	require.Equal(t, payload, membership)
 }
 
+func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	newScopeFor := func(spec *plan.VectorIndexScan) *Scope {
+		return &Scope{
+			Proc: proc,
+			DataSource: &Source{node: &plan.Node{
+				NodeType:        plan.Node_VECTOR_INDEX_SCAN,
+				VectorIndexScan: spec,
+			}},
+		}
+	}
+
+	_, err := newScopeFor(nil).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+	_, err = newScopeFor(&plan.VectorIndexScan{}).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "missing index metadata")
+
+	nullQuery := &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	readers, err := newScopeFor(nullQuery).buildVectorIndexReaders(nil)
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+
+	query := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 2}))},
+		}},
+	}
+	nullLimit := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}
+	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "candidate limit did not fold")
+
+	wrongLimitType := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "candidate limit is not uint64")
+
+	noReaderPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(noReaderPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "has no scan reader")
+
+	ivfflatPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(ivfflatPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
+
+	unknownPlugin := &plan.VectorIndexScan{
+		Index:          &plan.IndexDef{IndexAlgo: "missing"},
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	_, err = newScopeFor(unknownPlugin).buildVectorIndexReaders(nil)
+	require.ErrorContains(t, err, "is not registered")
+
+	membership, hasMembership := vectorScanMembershipFilter(nil)
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		spec: &plan.RuntimeFilterSpec{UseMembershipFilter: true},
+		expr: &plan.Expr{},
+	}})
+	require.Nil(t, membership)
+	require.True(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}},
+	}})
+	require.Nil(t, membership)
+	require.False(t, hasMembership)
+	membership, hasMembership = vectorScanMembershipFilter([]receivedRuntimeFilter{{
+		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
+		}}}},
+	}})
+	require.Equal(t, []byte{9, 8, 7}, membership)
+	require.False(t, hasMembership)
+}
+
 func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
