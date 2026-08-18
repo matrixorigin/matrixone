@@ -5551,14 +5551,21 @@ func mysqlConsumedSuffixLengthForExtract(suffix string) int {
 }
 
 func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
+	if candidate.fieldCount != 3 || !mysqlSignedNumericTimeSuffixForExtract(token) {
+		return false
+	}
+	// Once the signed token is terminated by whitespace, MySQL keeps the
+	// already consumed clock candidate, regardless of the token's width. The
+	// boundary is significant: the same token without trailing whitespace is
+	// still part of the ambiguous candidate and may make it invalid.
+	if token.trailingWhitespace {
+		return true
+	}
 	return candidate.repeatedAfterSeconds &&
-		candidate.fieldCount == 3 &&
-		mysqlSignedNumericTimeSuffixForExtract(token) &&
-		(token.trailingWhitespace ||
-			(candidate.hourDigits == 1 &&
-				candidate.minuteDigits == 2 &&
-				candidate.secondDigits == 2 &&
-				len(token.token) == 2))
+		candidate.hourDigits == 1 &&
+		candidate.minuteDigits == 2 &&
+		candidate.secondDigits == 2 &&
+		len(token.token) == 2
 }
 
 func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {

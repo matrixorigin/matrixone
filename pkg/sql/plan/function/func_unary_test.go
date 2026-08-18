@@ -11302,6 +11302,33 @@ func TestStringTimeExtractSignedSuffixTrailingWhitespaceOwnership(t *testing.T) 
 	}
 }
 
+func TestStringTimeExtractSignedSuffixWidthOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "01:01:34 +01", want: "NULL"},
+		{input: "01:01:34 +01 ", want: "1/1/34"},
+		{input: "01:01:34 -01", want: "NULL"},
+		{input: "01:01:34 -01 ", want: "1/1/34"},
+		{input: "01:01:34 +123", want: "NULL"},
+		{input: "01:01:34 +123 ", want: "1/1/34"},
+		{input: "01:01:34 -123", want: "NULL"},
+		{input: "01:01:34 -123 ", want: "1/1/34"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
 func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.T) {
 	inputs := []string{
 		"01:01:01:: +",
