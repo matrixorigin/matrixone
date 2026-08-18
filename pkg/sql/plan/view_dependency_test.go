@@ -34,6 +34,17 @@ type namedSnapshotViewContext struct {
 	snapshot *Snapshot
 }
 
+type physicalOwnerViewContext struct {
+	*rootSQLCompilerContext
+	accountID uint32
+}
+
+func (c *physicalOwnerViewContext) ResolveViewDependencyAccount(
+	*ObjectRef, *TableDef, *Snapshot,
+) (uint32, error) {
+	return c.accountID, nil
+}
+
 func (c *namedSnapshotViewContext) ResolveSnapshotWithSnapshotName(
 	_ string,
 ) (*Snapshot, error) {
@@ -74,6 +85,35 @@ func TestAuthoritativeViewGenerationCapturesDirectDependency(t *testing.T) {
 		Version:             17,
 		LowerCaseTableNames: 1,
 	}}, data.Dependencies)
+}
+
+func TestViewDependencyPhysicalOwnerSurvivesRegeneration(t *testing.T) {
+	const rootSQL = "create view v as select n_nationkey from nation"
+	ctx := &physicalOwnerViewContext{
+		rootSQLCompilerContext: &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		},
+		accountID: 0,
+	}
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 7, nil }
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	persisted := p.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
+
+	var created ViewData
+	require.NoError(t, json.Unmarshal([]byte(persisted), &created))
+	require.Len(t, created.Dependencies, 1)
+	require.Equal(t, uint32(0), created.Dependencies[0].AccountID)
+
+	regenerated, err := RegenerateViewDefinition(ctx, persisted)
+	require.NoError(t, err)
+	require.Len(t, regenerated.Dependencies, 1)
+	require.Equal(t, uint32(0), regenerated.Dependencies[0].AccountID)
 }
 
 func TestAuthoritativeViewGenerationCapturesViewNotItsSources(t *testing.T) {

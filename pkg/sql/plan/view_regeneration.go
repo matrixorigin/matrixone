@@ -74,6 +74,26 @@ func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
 }
 
+func (c *viewRegenerationContext) ResolveViewDependencyAccount(
+	obj *ObjectRef,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) (uint32, error) {
+	if resolver, ok := c.CompilerContext.(ViewDependencyIdentityResolver); ok {
+		return resolver.ResolveViewDependencyAccount(obj, tableDef, snapshot)
+	}
+	accountID, err := c.CompilerContext.GetAccountId()
+	if err != nil {
+		return 0, err
+	}
+	if obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	} else if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
+	}
+	return accountID, nil
+}
+
 // RegenerateViewDefinition parses a persisted View with its original lexical
 // and database context, then delegates to genViewTableDef. Unknown ViewData JSON
 // fields are retained when the dependency snapshot is updated.
