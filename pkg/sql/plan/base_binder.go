@@ -3006,6 +3006,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if (name == "in" || name == "not_in") && len(args) == 2 &&
+		containsVolatileFunction(args[0]) && b.ctx != nil {
+		b.ctx.volatileExprMemoID--
+		args[0].AuxId = b.ctx.volatileExprMemoID
+	}
 	//promote interval expr rewrite here
 	if name == "interval" {
 		if len(astArgs) == 2 {
@@ -4110,7 +4115,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", left, expr)
 					if err != nil {
 						return nil, err
 					}
@@ -4119,7 +4126,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
+					left := DeepCopyExpr(args[0])
+					left.AuxId = args[0].AuxId
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", left, expr)
 					if err != nil {
 						return nil, err
 					}
