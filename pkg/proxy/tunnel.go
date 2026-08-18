@@ -157,9 +157,14 @@ type tunnel struct {
 		inFlight                 bool
 		ambiguous                bool
 		command                  frontend.CommandType
+		statementID              uint32
+		statementIDValid         bool
+		longDataContinuation     bool
+		longDataNextSequence     byte
 		phase                    responsePhase
 		legacyResultEOFSeen      bool
 		prepareMetadataRemaining uint32
+		pendingLongData          map[uint32]struct{}
 	}
 	clientDeprecatesEOF bool
 
@@ -348,36 +353,124 @@ const (
 	responsePhasePrepareMetadata
 )
 
-func commandHasNoResponse(cmd frontend.CommandType) bool {
-	return cmd == frontend.COM_QUIT ||
-		cmd == frontend.COM_STMT_SEND_LONG_DATA ||
-		cmd == frontend.COM_STMT_CLOSE
+const maxPendingLongDataStatements = 1024
+
+type clientRequestCommit struct {
+	closedStatementID uint32
+	closesStatement   bool
 }
 
-func (t *tunnel) trackClientRequest(msg []byte) {
-	msg = firstMySQLPacketPrefix(msg)
-	if t == nil || len(msg) < preRecvLen || msg[3] != 0 {
-		return
+func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
+	var commit clientRequestCommit
+	if t == nil {
+		return commit
 	}
-	cmd := frontend.CommandType(msg[4])
-	if commandHasNoResponse(cmd) {
-		return
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < mysqlHeadLen {
+		return commit
 	}
 
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	if t.requestBoundary.inFlight {
+	s := &t.requestBoundary
+	if s.longDataContinuation {
+		if msg[3] != s.longDataNextSequence {
+			s.ambiguous = true
+			return commit
+		}
+		s.longDataNextSequence++
+		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
+			s.longDataContinuation = false
+		}
+		return commit
+	}
+	if msg[3] != 0 {
+		if !s.inFlight {
+			s.ambiguous = true
+		}
+		return commit
+	}
+	if len(msg) < preRecvLen || mysqlPacketPayloadLength(msg) < 1 {
+		s.ambiguous = true
+		return commit
+	}
+	if s.inFlight {
 		// MySQL commands are sequential. Once a peer pipelines two commands we
 		// keep this generation non-cacheable instead of retaining an unbounded
 		// command queue or guessing which response belongs to which request.
-		t.requestBoundary.ambiguous = true
+		s.ambiguous = true
+		return commit
+	}
+
+	cmd := frontend.CommandType(msg[4])
+	switch cmd {
+	case frontend.COM_QUIT:
+		return commit
+	case frontend.COM_STMT_SEND_LONG_DATA:
+		if mysqlPacketPayloadLength(msg) < 7 || len(msg) < mysqlHeadLen+7 {
+			s.ambiguous = true
+			return commit
+		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		if s.pendingLongData == nil {
+			s.pendingLongData = make(map[uint32]struct{})
+		}
+		if _, ok := s.pendingLongData[statementID]; !ok {
+			if len(s.pendingLongData) >= maxPendingLongDataStatements {
+				s.ambiguous = true
+				return commit
+			}
+			s.pendingLongData[statementID] = struct{}{}
+		}
+		if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+			s.longDataContinuation = true
+			s.longDataNextSequence = 1
+		}
+		return commit
+	case frontend.COM_STMT_CLOSE:
+		if mysqlPacketPayloadLength(msg) < 5 || len(msg) < mysqlHeadLen+5 {
+			s.ambiguous = true
+			return commit
+		}
+		statementID := binary.LittleEndian.Uint32(msg[5:9])
+		s.inFlight = true
+		s.command = cmd
+		s.statementID = statementID
+		s.statementIDValid = true
+		commit.closedStatementID = statementID
+		commit.closesStatement = true
+		return commit
+	}
+
+	s.inFlight = true
+	s.command = cmd
+	s.statementIDValid = false
+	if (cmd == frontend.COM_STMT_EXECUTE || cmd == frontend.COM_STMT_RESET) &&
+		mysqlPacketPayloadLength(msg) >= 5 && len(msg) >= mysqlHeadLen+5 {
+		s.statementID = binary.LittleEndian.Uint32(msg[5:9])
+		s.statementIDValid = true
+	}
+	s.phase = responsePhaseFirst
+	s.legacyResultEOFSeen = false
+	s.prepareMetadataRemaining = 0
+	return commit
+}
+
+func (t *tunnel) commitClientRequest(commit clientRequestCommit) {
+	if t == nil || !commit.closesStatement {
 		return
 	}
-	t.requestBoundary.inFlight = true
-	t.requestBoundary.command = cmd
-	t.requestBoundary.phase = responsePhaseFirst
-	t.requestBoundary.legacyResultEOFSeen = false
-	t.requestBoundary.prepareMetadataRemaining = 0
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.ambiguous ||
+		!t.requestBoundary.inFlight ||
+		t.requestBoundary.command != frontend.COM_STMT_CLOSE ||
+		!t.requestBoundary.statementIDValid ||
+		t.requestBoundary.statementID != commit.closedStatementID {
+		return
+	}
+	delete(t.requestBoundary.pendingLongData, commit.closedStatementID)
+	t.resetTrackedRequestLocked()
 }
 
 func (t *tunnel) hasInFlightClientRequest() bool {
@@ -389,17 +482,44 @@ func (t *tunnel) hasInFlightClientRequest() bool {
 	return t.requestBoundary.inFlight
 }
 
-func (t *tunnel) finishTrackedResponseLocked(status uint16) {
+func (t *tunnel) hasUnsafeClientState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight ||
+		t.requestBoundary.ambiguous ||
+		len(t.requestBoundary.pendingLongData) > 0
+}
+
+func (t *tunnel) resetTrackedRequestLocked() {
+	t.requestBoundary.inFlight = false
+	t.requestBoundary.command = 0
+	t.requestBoundary.statementID = 0
+	t.requestBoundary.statementIDValid = false
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
+}
+
+func (t *tunnel) finishTrackedResponseLocked(status uint16, successful bool) {
 	if status&frontend.SERVER_MORE_RESULTS_EXISTS != 0 {
 		t.requestBoundary.phase = responsePhaseFirst
 		t.requestBoundary.legacyResultEOFSeen = false
 		return
 	}
-	t.requestBoundary.inFlight = false
-	t.requestBoundary.command = 0
-	t.requestBoundary.phase = responsePhaseFirst
-	t.requestBoundary.legacyResultEOFSeen = false
-	t.requestBoundary.prepareMetadataRemaining = 0
+	if t.requestBoundary.statementIDValid {
+		switch t.requestBoundary.command {
+		case frontend.COM_STMT_EXECUTE:
+			delete(t.requestBoundary.pendingLongData, t.requestBoundary.statementID)
+		case frontend.COM_STMT_RESET:
+			if successful {
+				delete(t.requestBoundary.pendingLongData, t.requestBoundary.statementID)
+			}
+		}
+	}
+	t.resetTrackedRequestLocked()
 }
 
 func (t *tunnel) trackServerResponse(msg []byte) {
@@ -417,7 +537,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		return
 	}
 	if isErrPacket(msg) {
-		t.finishTrackedResponseLocked(0)
+		t.finishTrackedResponseLocked(0, false)
 		return
 	}
 
@@ -427,18 +547,18 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			s.prepareMetadataRemaining--
 		}
 		if s.prepareMetadataRemaining == 0 {
-			t.finishTrackedResponseLocked(0)
+			t.finishTrackedResponseLocked(0, true)
 		}
 		return
 	case responsePhaseLocalInfile:
 		if status, ok := okPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		}
 		return
 	case responsePhaseResult:
 		if t.clientDeprecatesEOF {
 			if status, ok := eofOKPacketStatus(msg); ok {
-				t.finishTrackedResponseLocked(status)
+				t.finishTrackedResponseLocked(status, true)
 			}
 			return
 		}
@@ -450,7 +570,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			s.legacyResultEOFSeen = true
 			return
 		}
-		t.finishTrackedResponseLocked(status)
+		t.finishTrackedResponseLocked(status, true)
 		return
 	}
 
@@ -460,7 +580,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			return
 		}
 		if remaining == 0 {
-			t.finishTrackedResponseLocked(0)
+			t.finishTrackedResponseLocked(0, true)
 		} else {
 			s.phase = responsePhasePrepareMetadata
 			s.prepareMetadataRemaining = remaining
@@ -468,18 +588,18 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		return
 	}
 	if status, ok := okPacketStatus(msg); ok {
-		t.finishTrackedResponseLocked(status)
+		t.finishTrackedResponseLocked(status, true)
 		return
 	}
 	if s.command == frontend.COM_STATISTICS {
-		t.finishTrackedResponseLocked(0)
+		t.finishTrackedResponseLocked(0, true)
 		return
 	}
 	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
 		if status, ok := legacyEOFPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		} else if status, ok := eofOKPacketStatus(msg); ok {
-			t.finishTrackedResponseLocked(status)
+			t.finishTrackedResponseLocked(status, true)
 		}
 		return
 	}
@@ -625,9 +745,8 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer csp.mu.Unlock()
 	defer scp.mu.Unlock()
 
-	// The last message must be from server to client.
-	if scp.mu.lastCmdTime.Before(csp.mu.lastCmdTime) {
-		t.logger.Info("reason: client packet is after server packet")
+	if t.hasUnsafeClientState() {
+		t.logger.Info("reason: client protocol state is not transferable")
 		return false
 	}
 
@@ -890,8 +1009,6 @@ type pipe struct {
 		// inTxn indicates that if the session is in a txn. It only
 		// matters for server end.
 		inTxn bool
-		// Track last cmd time and whether we are in a transaction.
-		lastCmdTime time.Time
 	}
 
 	// tun is the tunnel that the pipe belongs to.
@@ -963,8 +1080,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var lastSeq int16 = -1
 	var rotated bool
 	var stopAfterSend bool
+	var clientCommit clientRequestCommit
 	prepareNextMessage := func() (terminate bool, err error) {
 		stopAfterSend = false
+		clientCommit = clientRequestCommit{}
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -979,8 +1098,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}
 		packetSize, re := p.src.preRecv()
 		// A fragmented packet may leave only its four-byte header in the buffer.
-		// c2s needs the command byte for event detection. s2c needs a bounded
-		// prefix containing both length-encoded OK fields and its status flags;
+		// c2s needs the command and prepared-statement identifiers for request
+		// tracking. s2c needs a bounded prefix containing both length-encoded OK
+		// fields and its status flags;
 		// otherwise a fragmented terminal response would never release request
 		// ownership and every later clean QUIT would unnecessarily miss cache.
 		if re == nil && packetSize >= preRecvLen {
@@ -988,6 +1108,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if p.name == pipeServerToClient {
 				const responseTrackingPrefixLen = mysqlHeadLen + 1 + 9 + 9 + 2
 				prefixLen = min(packetSize, responseTrackingPrefixLen)
+			} else {
+				const requestTrackingPrefixLen = mysqlHeadLen + 1 + 4 + 2
+				prefixLen = min(packetSize, requestTrackingPrefixLen)
 			}
 			re = p.src.receiveAtLeast(prefixLen)
 		}
@@ -1061,7 +1184,6 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if len(tempBuf) > 3 {
 				lastSeq = int16(tempBuf[3])
 			}
-			p.mu.lastCmdTime = time.Now()
 		} else {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
@@ -1070,11 +1192,10 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				p.tun.markExpectedClientQuit()
 				stopAfterSend = true
 			}
-			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+			if !isEmptyPacket(tempBuf) {
 				if !isCmdQuit(tempBuf) {
-					p.tun.trackClientRequest(tempBuf)
+					clientCommit = p.tun.trackClientRequest(tempBuf)
 				}
-				p.mu.lastCmdTime = time.Now()
 			}
 		}
 		return false, nil
@@ -1107,6 +1228,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 
 		if err = p.src.sendTo(p.dst); err != nil {
 			return wrapPipeSendError(p.name, err)
+		}
+		if p.name == pipeClientToServer {
+			p.tun.commitClientRequest(clientCommit)
 		}
 		if stopAfterSend {
 			// COM_QUIT is terminal even when another complete packet is already

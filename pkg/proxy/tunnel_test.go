@@ -823,17 +823,14 @@ func TestCanStartTransfer(t *testing.T) {
 		require.False(t, can)
 	})
 
-	t.Run("lastCmd", func(t *testing.T) {
+	t.Run("inFlight", func(t *testing.T) {
 		tu := &tunnel{
 			logger: logger,
 		}
 		tu.mu.csp = &pipe{}
 		tu.mu.scp = &pipe{}
 		tu.mu.started = true
-		csp, scp := tu.getPipes()
-		now := time.Now()
-		csp.mu.lastCmdTime = now.Add(time.Second)
-		scp.mu.lastCmdTime = now
+		tu.trackClientRequest(makeSimplePacket("select 1"))
 		can := tu.canStartTransfer(false)
 		require.False(t, can)
 	})
@@ -857,10 +854,6 @@ func TestCanStartTransfer(t *testing.T) {
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
 		tu.mu.started = true
-		csp, scp := tu.getPipes()
-		now := time.Now()
-		csp.mu.lastCmdTime = now
-		scp.mu.lastCmdTime = now.Add(time.Second)
 		can := tu.canStartTransfer(false)
 		require.True(t, can)
 	})
@@ -1218,29 +1211,133 @@ func makePrepareOKPacket(columns, params uint16) []byte {
 	return msg
 }
 
+func makeStmtCommandPacket(cmd frontend.CommandType, statementID uint32, tail ...byte) []byte {
+	msg := make([]byte, mysqlHeadLen+1+4+len(tail))
+	payloadLen := len(msg) - mysqlHeadLen
+	msg[0] = byte(payloadLen)
+	msg[1] = byte(payloadLen >> 8)
+	msg[2] = byte(payloadLen >> 16)
+	msg[4] = byte(cmd)
+	binary.LittleEndian.PutUint32(msg[5:9], statementID)
+	copy(msg[9:], tail)
+	return msg
+}
+
 func TestTunnelRequestBoundaryTracker(t *testing.T) {
-	t.Run("invalid and response-free packets", func(t *testing.T) {
+	t.Run("nil and quit packets", func(t *testing.T) {
 		var nilTunnel *tunnel
 		nilTunnel.trackClientRequest(nil)
 		nilTunnel.trackServerResponse(nil)
 
 		tun := &tunnel{}
 		tun.trackClientRequest(nil)
+		quit := makeSimplePacket("quit")
+		quit[4] = byte(frontend.COM_QUIT)
+		tun.trackClientRequest(quit)
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("orphan continuation stays conservative", func(t *testing.T) {
+		tun := &tunnel{}
 		nonCommand := makeSimplePacket("continuation")
 		nonCommand[3] = 1
 		tun.trackClientRequest(nonCommand)
-		for _, cmd := range []frontend.CommandType{
-			frontend.COM_QUIT,
-			frontend.COM_STMT_SEND_LONG_DATA,
-			frontend.COM_STMT_CLOSE,
-		} {
-			packet := makeSimplePacket("no response")
-			packet[4] = byte(cmd)
-			tun.trackClientRequest(packet)
+		require.False(t, tun.hasInFlightClientRequest())
+		require.True(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("prepared long data lifecycle", func(t *testing.T) {
+		const statement1 uint32 = 41
+		const statement2 uint32 = 42
+		tun := &tunnel{}
+
+		longData1 := makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, statement1, 0, 0, 'a')
+		longData2 := makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, statement2, 0, 0, 'b')
+		tun.trackClientRequest(longData1)
+		tun.trackClientRequest(longData1)
+		tun.trackClientRequest(longData2)
+		require.False(t, tun.hasInFlightClientRequest())
+		require.True(t, tun.hasUnsafeClientState())
+
+		close1 := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statement1))
+		require.True(t, tun.hasUnsafeClientState(),
+			"state must remain unsafe until CLOSE is forwarded")
+		tun.commitClientRequest(close1)
+		require.True(t, tun.hasUnsafeClientState(),
+			"another statement still owns staged long data")
+
+		close2 := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statement2))
+		tun.commitClientRequest(close2)
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("close is unsafe until forwarded without staged data", func(t *testing.T) {
+		tun := &tunnel{}
+		commit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41))
+		require.True(t, tun.hasUnsafeClientState())
+		tun.commitClientRequest(commit)
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("fragmented long data closes after its final packet", func(t *testing.T) {
+		tun := &tunnel{}
+		first := makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x')
+		first[0], first[1], first[2] = 0xff, 0xff, 0xff
+		tun.trackClientRequest(first)
+		tun.trackClientRequest([]byte{0, 0, 0, 1})
+
+		commit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41))
+		tun.commitClientRequest(commit)
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("execute consumes long data on success or error", func(t *testing.T) {
+		for _, response := range [][]byte{makeOKPacket(8), makeErrPacket(8)} {
+			tun := &tunnel{}
+			tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
+			tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 1))
+			require.True(t, tun.hasInFlightClientRequest())
+			tun.trackServerResponse(response)
+			require.False(t, tun.hasUnsafeClientState())
 		}
-		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("reset clears long data only on success", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_RESET, 1))
+		tun.trackServerResponse(makeErrPacket(8))
+		require.True(t, tun.hasUnsafeClientState())
+
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_RESET, 1))
 		tun.trackServerResponse(makeOKPacket(8))
-		require.False(t, tun.hasInFlightClientRequest())
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("malformed and excessive long data stay bounded and conservative", func(t *testing.T) {
+		tun := &tunnel{}
+		malformed := makeStmtCommandPacket(frontend.COM_STMT_SEND_LONG_DATA, 1)
+		tun.trackClientRequest(malformed)
+		require.True(t, tun.hasUnsafeClientState())
+
+		tun = &tunnel{}
+		for i := range maxPendingLongDataStatements + 1 {
+			tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_SEND_LONG_DATA, uint32(i), 0, 0, 'x'))
+		}
+		tun.requestBoundary.Lock()
+		require.Len(t, tun.requestBoundary.pendingLongData, maxPendingLongDataStatements)
+		require.True(t, tun.requestBoundary.ambiguous)
+		tun.requestBoundary.Unlock()
 	})
 
 	t.Run("error response", func(t *testing.T) {
@@ -1384,6 +1481,62 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun.trackServerResponse(coalesced)
 		require.False(t, tun.hasInFlightClientRequest())
 	})
+}
+
+func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clientProxy, client := net.Pipe()
+	defer client.Close()
+	backendProxy, backend := net.Pipe()
+	defer backend.Close()
+
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1)
+	backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2)
+	csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+	tun.mu.csp = csp
+	tun.mu.scp = &pipe{}
+	tun.mu.started = true
+
+	pipeDone := make(chan error, 1)
+	go func() { pipeDone <- csp.kickoff(ctx, tun.mu.scp) }()
+	require.NoError(t, csp.waitReady(ctx))
+
+	forward := func(packet []byte) {
+		t.Helper()
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := client.Write(packet)
+			writeDone <- err
+		}()
+		got := make([]byte, len(packet))
+		_, err := io.ReadFull(backend, got)
+		require.NoError(t, err)
+		require.Equal(t, packet, got)
+		require.NoError(t, <-writeDone)
+	}
+
+	const statementID uint32 = 42
+	longData := makeStmtCommandPacket(
+		frontend.COM_STMT_SEND_LONG_DATA, statementID, 0, 0, 'x')
+	forward(longData)
+	require.False(t, tun.canStartTransfer(true),
+		"staged long data cannot be reconstructed on a migrated CN")
+
+	closeStmt := makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statementID)
+	forward(closeStmt)
+	require.NoError(t, client.Close())
+	select {
+	case err := <-pipeDone:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(time.Second):
+		t.Fatal("client-to-server pipe did not stop")
+	}
+
+	require.True(t, tun.canStartTransfer(true),
+		"closing the statement discards its staged long data")
 }
 
 func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
@@ -1546,10 +1699,6 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 	)
 	tun.mu.scp = &pipe{}
 	tun.mu.csp = &pipe{}
-	now := time.Now()
-	tun.mu.csp.mu.lastCmdTime = now
-	tun.mu.scp.mu.lastCmdTime = now.Add(time.Second)
-
 	err := tun.transferSync(ctx)
 	require.Error(t, err)
 	require.Equal(t, 0, cache.popCount)

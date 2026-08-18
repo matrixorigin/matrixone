@@ -475,41 +475,56 @@ func TestClientConn_HandleQuitEventMarksExpectedCacheQuit(t *testing.T) {
 }
 
 func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
-	tun := &tunnel{}
-	tun.mu.csp = &pipe{}
-	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
-	tun.mu.scp = &pipe{}
-	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
-	tun.trackClientRequest(makeSimplePacket("select 1"))
+	for _, tc := range []struct {
+		name       string
+		makeUnsafe func(*tunnel)
+	}{
+		{name: "outstanding response", makeUnsafe: func(tun *tunnel) {
+			tun.trackClientRequest(makeSimplePacket("select 1"))
+		}},
+		{name: "staged statement long data", makeUnsafe: func(tun *tunnel) {
+			tun.trackClientRequest(makeStmtCommandPacket(
+				frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := &tunnel{}
+			tun.mu.csp = &pipe{}
+			tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+			tun.mu.scp = &pipe{}
+			tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+			tc.makeUnsafe(tun)
 
-	var pushed, closed, quit int
-	c := &clientConn{
-		log: runtime.DefaultRuntime().Logger(),
-		tun: tun,
-		sc: &killCurrentServerConn{
-			cn: &CNServer{connID: 11, uuid: "cn1"},
-			closeFn: func() error {
-				closed++
-				return nil
-			},
-			quitFn: func() error {
-				quit++
-				return nil
-			},
-		},
-		connCache: &mockConnCache{
-			pushFn: func(cacheKey, ServerConn) bool {
-				pushed++
-				return true
-			},
-		},
+			var pushed, closed, quit int
+			c := &clientConn{
+				log: runtime.DefaultRuntime().Logger(),
+				tun: tun,
+				sc: &killCurrentServerConn{
+					cn: &CNServer{connID: 11, uuid: "cn1"},
+					closeFn: func() error {
+						closed++
+						return nil
+					},
+					quitFn: func() error {
+						quit++
+						return nil
+					},
+				},
+				connCache: &mockConnCache{
+					pushFn: func(cacheKey, ServerConn) bool {
+						pushed++
+						return true
+					},
+				},
+			}
+
+			require.NoError(t, c.handleQuitCommand(context.Background()))
+			require.Zero(t, pushed, "unsafe protocol state must keep the backend out of the cache")
+			require.Equal(t, 1, closed)
+			require.Zero(t, quit, "discard cleanup must not wait for a protocol-level QUIT response")
+			require.False(t, c.isConnCached())
+		})
 	}
-
-	require.NoError(t, c.handleQuitCommand(context.Background()))
-	require.Zero(t, pushed, "an outstanding response must keep the backend out of the cache")
-	require.Equal(t, 1, closed)
-	require.Zero(t, quit, "discard cleanup must not wait for a protocol-level QUIT response")
-	require.False(t, c.isConnCached())
 }
 
 func TestClientConn_HandleQuitEventClosesRejectedCacheEntry(t *testing.T) {
