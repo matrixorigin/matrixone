@@ -3929,13 +3929,7 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
-	for {
-		explainStmt, ok := stmt.(*tree.ExplainStmt)
-		if !ok {
-			break
-		}
-		stmt = explainStmt.Statement
-	}
+	stmt = unwrapExecutableExplainStatement(stmt)
 	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
 		return stats, err
@@ -3948,6 +3942,25 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	}
 	stats.Add(&delta)
 	return stats, err
+}
+
+// unwrapExecutableExplainStatement returns the statement that an executable
+// EXPLAIN wrapper will run. The wrapper itself has no table privileges, while
+// the plan belongs to its inner query and must be checked against that query's
+// privilege set at every prepared execution.
+func unwrapExecutableExplainStatement(stmt tree.Statement) tree.Statement {
+	for {
+		switch explainStmt := stmt.(type) {
+		case *tree.ExplainStmt:
+			stmt = explainStmt.Statement
+		case *tree.ExplainAnalyze:
+			stmt = explainStmt.Statement
+		case *tree.ExplainPhyPlan:
+			stmt = explainStmt.Statement
+		default:
+			return stmt
+		}
+	}
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
@@ -4232,7 +4245,7 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
-	err = executeStmtWithTxn(ses, nil, execCtx)
+	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
 		return abortStagedReturning(execCtx, err)
 	}
@@ -4764,18 +4777,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.Base.SessionInfo = process.SessionInfo{
-		User:          ses.GetUserName(),
-		Host:          pu.SV.Host,
-		ConnectionID:  uint64(resper.GetU32(CONNID)),
-		Database:      ses.GetDatabaseName(),
-		Version:       makeServerVersion(pu, version),
-		TimeZone:      ses.GetTimeZone(),
-		StorageEngine: pu.StorageEngine,
-		LastInsertID:  ses.GetLastInsertID(),
-		SqlHelper:     ses.GetSqlHelper(),
-		Buf:           ses.GetBuffer(),
-		LogLevel:      zapcore.InfoLevel, //TODO: need set by session level config
-		SessionId:     ses.GetSessId(),
+		User:                ses.GetUserName(),
+		Host:                pu.SV.Host,
+		ConnectionID:        uint64(resper.GetU32(CONNID)),
+		Database:            ses.GetDatabaseName(),
+		Version:             makeServerVersion(pu, version),
+		TimeZone:            ses.GetTimeZone(),
+		StorageEngine:       pu.StorageEngine,
+		LastInsertID:        ses.GetLastInsertID(),
+		SqlHelper:           ses.GetSqlHelper(),
+		Buf:                 ses.GetBuffer(),
+		LogLevel:            zapcore.InfoLevel, //TODO: need set by session level config
+		SessionId:           ses.GetSessId(),
+		ApplySQLSelectLimit: !ses.GetIsInternal() && !ses.IsBackgroundSession() && !ses.IsDerivedStmt(),
 	}
 	proc.SetLastInsertID(ses.GetLastInsertID())
 	// Carry the previous statement's affected rows into this proc so the
@@ -5608,6 +5622,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG))
 	}
 }
 

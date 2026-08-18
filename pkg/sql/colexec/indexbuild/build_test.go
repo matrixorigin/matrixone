@@ -476,7 +476,7 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			spec := indexBuildRawSpec(111, 16, typ)
 			arg := NewArgument()
 			arg.RuntimeFilterSpec = spec
-			budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 			generation, err := budget.OpenGeneration(1)
 			require.NoError(t, err)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 16)
@@ -497,15 +497,15 @@ func TestIndexBuildRuntimeFilterBudgetErrorPolicy(t *testing.T) {
 			} else {
 				remaining := generation.Cap() - generation.Used()
 				filler, err = proc.Mp().AllocAccounted(
-					int(remaining), account, 63, 255)
+					int(remaining), account, mpool.AllocationOwnerDML, 255)
 				require.NoError(t, err)
 			}
 
 			err = arg.ctr.handleRuntimeFilter(arg, proc)
 			stats := arg.OpAnalyzer.GetOpStats().ExtraStats
 			if test.closed {
-				require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
-				require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+				require.ErrorIs(t, err, process.ErrExecutionResourceClosed)
+				require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 				require.False(t, arg.ctr.runtimeFilterDone)
 				require.Zero(t,
 					stats["IndexBuildRuntimeFilterBudgetFallbacks"])

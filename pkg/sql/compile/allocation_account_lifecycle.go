@@ -291,7 +291,7 @@ func collectAllocationAccountOwners(
 }
 
 // ensureAllocationAccountLifecycle installs one account whenever the physical
-// plan contains a HashBuild/join allocation owner. Implementing the owner
+// plan contains an activating allocation owner. Implementing the owner
 // contract is the boundary: there is no per-owner activation switch.
 func (c *Compile) ensureAllocationAccountLifecycle(
 	exporter func(mpool.AllocationAccountTerminalSnapshot),
@@ -320,7 +320,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 	if c.proc == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	budget, err := c.proc.GetHashBuildBudget()
+	budget, err := c.proc.GetExecutionResourceBudget()
 	if err != nil {
 		return err
 	}
@@ -336,7 +336,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 	c.allocationAccountLimit = limit
 	c.allocationControllerProvider = func() (mpool.AllocationCapacityController, error) {
 		if budget.Closed() {
-			return nil, process.ErrHashBuildBudgetClosed
+			return nil, process.ErrExecutionResourceClosed
 		}
 		return budget, nil
 	}

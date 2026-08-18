@@ -490,6 +490,15 @@ type mongoDBFeatureSession struct {
 func (s mongoDBFeatureSession) GetService() string   { return s.service }
 func (s mongoDBFeatureSession) GetAccountId() uint32 { return s.accountID }
 
+func TestMongoDBSystemVariablesDefaultEnablement(t *testing.T) {
+	parameters, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	require.True(t, parameters.MongoDB.Enable)
+
+	parameters.SetDefaultValues()
+	require.True(t, parameters.MongoDB.Enable)
+}
+
 func TestMongoDBFeatureGateAndRuntimeConfiguration(t *testing.T) {
 	require.ErrorContains(t, ensureMongoDBFeatureEnabledForSession(t.Context(), nil), "requires a session")
 
@@ -499,13 +508,18 @@ func TestMongoDBFeatureGateAndRuntimeConfiguration(t *testing.T) {
 	service := "mongodb-gate-" + t.Name()
 	InitServerLevelVars(service)
 	parameters := config.MongoDBParameters{}
+	parameters.SetDefaultValues()
 	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: parameters}})
+	require.NoError(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 0}))
+	require.NoError(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 7}))
+	require.NoError(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 8}))
+
+	parameters.Enable = false
+	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: parameters}})
+	require.ErrorContains(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 0}), "are disabled")
 	require.ErrorContains(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 7}), "are disabled")
 
 	parameters.Enable = true
-	setPu(service, &config.ParameterUnit{SV: &config.FrontendParameters{MongoDB: parameters}})
-	require.NoError(t, ensureMongoDBFeatureEnabledForSession(t.Context(), mongoDBFeatureSession{service: service, accountID: 7}))
-
 	parameters.EnablePerAccount = true
 	parameters.AllowedAccounts = []uint32{7}
 	parameters.AllowLoopback = true

@@ -689,3 +689,27 @@ json_extract('[0,1,2]', '$[last-8 to last-2]');
 json_extract([0,1,2], $[2 to 6])    json_extract([0,1,2], $[last-8 to last-2])
 [2]    [0]
 drop database test;
+create database test;
+use test;
+create table json_bool_compare_test(id int primary key, doc json);
+insert into json_bool_compare_test values
+(1, '{"enabled":true}'),
+(2, '{"enabled":false}'),
+(3, '{}'),
+(4, '{"enabled":null}');
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
+count(*)
+1
+select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
+count(*)
+1
+select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
+json_extract(json_array(cast(0.00 as decimal(10, 2))), $[0]) = true    json_extract(json_array(cast(1.20 as decimal(10, 2))), $[0]) = true
+0    1
+select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
+json_eq_bool    bool_eq_json    json_ne_bool    bool_ne_json
+1    1    1    1
+select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
+large_exponent    small_exponent    exponent_zero
+1    1    0
+drop database test;

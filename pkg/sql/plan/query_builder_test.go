@@ -812,7 +812,7 @@ func TestQueryBuilder_bindWhere(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select * from select_test.bind_select where a > 0 and b < 0 or c = 0", 1)
 	clause := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Where
 
-	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0)
+	newNodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, clause, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), newNodeID)
 	require.Equal(t, 1, len(boundFilterList))
@@ -2610,7 +2610,11 @@ func TestQueryBuilder_bindTimeWindowTruncatePreservesFractionalScale(t *testing.
 			require.NotNil(t, truncateFunc)
 			require.Equal(t, "mo_win_truncate", truncateFunc.GetFunc().GetObjName())
 			require.Len(t, truncateFunc.Args, 3)
-			require.Equal(t, int32(types.T_datetime), truncateExpr.Typ.Id)
+			wantRetType := int32(types.T_datetime)
+			if !tt.wantCast {
+				wantRetType = int32(types.T_timestamp)
+			}
+			require.Equal(t, wantRetType, truncateExpr.Typ.Id)
 			require.Equal(t, tt.wantScale, truncateExpr.Typ.Scale)
 
 			castExpr := truncateFunc.Args[0]
@@ -2706,7 +2710,7 @@ func TestQueryBuilder_bindTimeWindowRejectsUnsupportedUnitsBeforeCompile(t *test
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2778,7 +2782,7 @@ func TestQueryBuilder_bindTimeWindowRejectsNonPositiveValuesBeforeCompile(t *tes
 				},
 			}
 
-			_, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
+			_, _, _, _, _, _, _, _, _, _, err = builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -2837,10 +2841,105 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.Timestamp.Typ.Width)
 			require.Len(t, timeWindowNode.GroupBy, 1)
-			require.Equal(t, int32(types.T_datetime), timeWindowNode.GroupBy[0].Typ.Id)
+			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.GroupBy[0].Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
 		})
+	}
+}
+
+func TestInferGapFillBoundsNormalizesTemporalTypesToDatetime(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		oid   types.T
+		scale int32
+		make  func(int64) *plan.Expr
+	}{
+		{
+			name:  "time",
+			oid:   types.T_time,
+			scale: 6,
+			make: func(value int64) *plan.Expr {
+				return MakePlan2TimeConstExprWithType(value)
+			},
+		},
+		{
+			name:  "year",
+			oid:   types.T_year,
+			scale: 0,
+			make: func(value int64) *plan.Expr {
+				expr := makePlan2Int16ConstExprWithType(int16(value))
+				expr.Typ = plan.Type{Id: int32(types.T_year)}
+				return expr
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			timestamp := &plan.Expr{
+				Typ: plan.Type{Id: int32(tc.oid), Scale: tc.scale},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 0,
+				}},
+			}
+			boundFilter := func(op string, bound *plan.Expr) *plan.Expr {
+				return &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_bool)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: op},
+						Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+					}},
+				}
+			}
+
+			start, finish, err := inferGapFillBounds(
+				context.Background(),
+				[]*plan.Expr{
+					boundFilter(">=", tc.make(1)),
+					boundFilter("<", tc.make(2)),
+				},
+				timestamp,
+			)
+			require.NoError(t, err)
+			for _, bound := range []*plan.Expr{start, finish} {
+				require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+				require.Equal(t, timestamp.Typ.Scale, bound.Typ.Scale)
+				require.Equal(t, "cast", bound.GetF().Func.ObjName)
+				require.Equal(t, int32(tc.oid), bound.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
+}
+
+func TestInferGapFillBoundsPreservesTimestampInstantBounds(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	boundFilter := func(op string, value int64) *plan.Expr {
+		bound := makePlan2TimestampConstExprWithType(value)
+		bound.Typ.Scale = timestamp.Typ.Scale
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: op},
+				Args: []*plan.Expr{DeepCopyExpr(timestamp), bound},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		boundFilter(">=", 1),
+		boundFilter("<", 2),
+	}, timestamp)
+
+	require.NoError(t, err)
+	for _, bound := range []*plan.Expr{start, finish} {
+		require.Equal(t, int32(types.T_timestamp), bound.Typ.Id)
+		require.Equal(t, int32(types.T_timestamp), bound.GetF().Args[0].Typ.Id)
 	}
 }
 
@@ -2897,6 +2996,39 @@ func TestQueryBuilderTimeWindowLinearFillKeepsTimestampBoundaryTypes(t *testing.
 	assertBoundaryProjects(timeWindowNode)
 }
 
+func TestQueryBuilderTimeWindowOuterFilterKeepsBoundaryCarrier(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mockTimeWindowScaleTable(t, mock, types.T_timestamp.ToTypeWithScale(6))
+
+	logicPlan, err := runOneStmt(mock, t,
+		"select count(*) from ("+
+			"select _wstart, _wend, count(*) as n from tw_scale "+
+			"interval(ts, 1, hour) sliding(1, hour)"+
+			") q where _wend is null")
+	require.NoError(t, err)
+
+	var timeWindowNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_TIME_WINDOW {
+			timeWindowNode = node
+			break
+		}
+	}
+	require.NotNil(t, timeWindowNode)
+
+	layout := BuildTimeWindowLayout(timeWindowNode)
+	require.NotEqual(t, TimeWindowSlotNone, layout.WEndSlot)
+	for _, expr := range timeWindowNode.ProjectList {
+		col := expr.GetCol()
+		require.NotNil(t, col)
+		require.Less(t, col.ColPos, layout.ColCnt)
+	}
+	require.NotEmpty(t, timeWindowNode.FilterList)
+	wendFilterCol := timeWindowNode.FilterList[0].GetF().Args[0].GetCol()
+	require.NotNil(t, wendFilterCol)
+	require.Equal(t, layout.WEndSlot, wendFilterCol.ColPos)
+}
+
 func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type) {
 	t.Helper()
 	tableName := "tw_scale"
@@ -2908,6 +3040,60 @@ func mockTimeWindowScaleTable(t *testing.T, mock *MockOptimizer, typ types.Type)
 			{Name: "v", Typ: plan.Type{Id: int32(types.T_int32)}},
 		},
 	}
+}
+
+func TestGapFillBoundContainsColumnTraversesExpressionTrees(t *testing.T) {
+	timestamp := &plan.ColRef{RelPos: 1, ColPos: 2}
+	timestampExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: timestamp.RelPos, ColPos: timestamp.ColPos}},
+	}
+	otherColumn := &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 3, ColPos: 4}},
+	}
+
+	require.False(t, gapFillBoundContainsColumn(nil, timestamp))
+	require.True(t, gapFillBoundContainsColumn(timestampExpr, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.True(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn, timestampExpr}}},
+	}, timestamp))
+	require.False(t, gapFillBoundContainsColumn(&plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{otherColumn}}},
+	}, timestamp))
+}
+
+func TestInferGapFillBoundsAcceptsReversedHalfOpenEdges(t *testing.T) {
+	timestamp := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+	}
+	bound := func(value int64) *plan.Expr {
+		expr := makePlan2Int64ConstExprWithType(value)
+		expr.Typ = timestamp.Typ
+		return expr
+	}
+	filter := func(name string, left, right *plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: []*plan.Expr{left, right},
+			}},
+		}
+	}
+
+	start, finish, err := inferGapFillBounds(t.Context(), []*plan.Expr{
+		filter("<=", bound(1), DeepCopyExpr(timestamp)),
+		filter(">", bound(2), DeepCopyExpr(timestamp)),
+	}, timestamp)
+
+	require.NoError(t, err)
+	require.NotNil(t, start)
+	require.NotNil(t, finish)
+	require.Equal(t, int32(types.T_datetime), start.Typ.Id)
+	require.Equal(t, int32(types.T_datetime), finish.Typ.Id)
 }
 
 func TestValidateTimeWindowIntervalUnitRejectsInvalidUnit(t *testing.T) {
@@ -3051,7 +3237,7 @@ func TestQueryBuilder_bindTimeWindow(t *testing.T) {
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
 			// Call bindTimeWindow
-			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, interval, sliding, ts, wEnd, _, _, boundTimeWindowOrderBy, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -3142,7 +3328,7 @@ func TestQueryBuilder_bindTimeWindow_WithSliding(t *testing.T) {
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-	_, _, _, _, sliding, ts, wEnd, _, err := builder.bindTimeWindow(
+	_, _, _, _, sliding, ts, wEnd, _, _, _, err := builder.bindTimeWindow(
 		bindCtx,
 		projectionBinder,
 		astTimeWindow,
@@ -3236,7 +3422,7 @@ func TestQueryBuilder_bindTimeWindow_WithFill(t *testing.T) {
 			havingBinder := NewHavingBinder(builder, bindCtx)
 			projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 
-			fillType, fillVals, fillCols, _, _, _, _, _, err := builder.bindTimeWindow(
+			fillType, fillVals, fillCols, _, _, _, _, _, _, _, err := builder.bindTimeWindow(
 				bindCtx,
 				projectionBinder,
 				astTimeWindow,
@@ -4591,7 +4777,7 @@ func TestQueryBuilder_appendWhereNode(t *testing.T) {
 	require.Equal(t, int32(0), nodeID)
 
 	bindCtx.binder = NewWhereBinder(builder, bindCtx)
-	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID)
+	nodeID, boundFilterList, notCacheable, err := builder.bindWhere(bindCtx, selectClause.Where, nodeID, false)
 	require.NoError(t, err)
 
 	nodeID = builder.appendWhereNode(bindCtx, nodeID, boundFilterList, notCacheable)
@@ -4661,7 +4847,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -4714,7 +4900,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -4732,7 +4918,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -4799,7 +4985,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)

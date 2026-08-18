@@ -170,6 +170,9 @@ func NewConfig() *Config {
 		LogService:    logservice.DefaultConfig(),
 		CN: cnservice.Config{
 			AutomaticUpgrade: true,
+			Frontend: config.FrontendParameters{
+				MongoDB: *config.NewMongoDBParameters(),
+			},
 		},
 	}
 }
@@ -320,7 +323,9 @@ func (c *Config) createFileService(
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
+		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,

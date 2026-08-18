@@ -38,7 +38,8 @@ func TestMergeOrderSpillPayloadPreservesPrepareParamKinds(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 
 	var payload bytes.Buffer
-	require.NoError(t, appendSpillPayload(&payload, bat))
+	_, err := appendSpillPayload(&payload, bat)
+	require.NoError(t, err)
 	reuse := batch.NewWithSize(0)
 	defer reuse.Clean(proc.Mp())
 	got, err := readSpillPayload(proc, bufio.NewReader(bytes.NewReader(payload.Bytes())), reuse)
@@ -63,7 +64,8 @@ func TestMergeOrderSpillPayloadPreservesHeterogeneousPrepareParamKinds(t *testin
 	defer bat.Clean(proc.Mp())
 
 	var payload bytes.Buffer
-	require.NoError(t, appendSpillPayload(&payload, bat))
+	_, err := appendSpillPayload(&payload, bat)
+	require.NoError(t, err)
 	reuse := batch.NewWithSize(0)
 	defer reuse.Clean(proc.Mp())
 	got, err := readSpillPayload(proc, bufio.NewReader(bytes.NewReader(payload.Bytes())), reuse)

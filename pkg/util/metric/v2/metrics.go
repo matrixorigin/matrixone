@@ -58,6 +58,7 @@ func init() {
 	initShardingMetrics()
 	initGCMetrics()
 	initCCPRMetrics()
+	initExecutionResourceMetrics()
 	initHashBuildMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
@@ -107,6 +108,7 @@ func initTaskMetrics() {
 func initFileServiceMetrics() {
 	registry.MustRegister(fsReadCounter)
 	registry.MustRegister(fsCacheBytes)
+	registry.MustRegister(fsCacheAllocatorArenas)
 	registry.MustRegister(fsCachePressureCounter)
 	registry.MustRegister(fsCachePressureEvictDuration)
 
