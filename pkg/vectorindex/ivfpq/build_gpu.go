@@ -81,11 +81,17 @@ func NewIvfpqBuild[B, Q cuvs.VectorType](
 	tblcfg vectorindex.IndexTableConfig,
 	nthread uint32,
 	devices []int,
+	spillDir string,
 ) (*IvfpqBuild[B, Q], error) {
 	// One private directory per build. Tars land here instead of directly in
 	// $TMPDIR, so Destroy reclaims them with a single RemoveAll and a crash leaves
 	// files whose name identifies the owning process.
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("mo-ivfpq-%d-", os.Getpid()))
+	// spillDir is the LOCAL fileservice's scratch directory (vectorindex.LocalSpillDir):
+	// the packed tars are whole sub-indexes, GB-scale on a large build, and the LOCAL
+	// fileservice is the provisioned data volume rather than whatever /tmp happens to
+	// be mounted on. "" means no LOCAL fileservice was attached, and os.MkdirTemp
+	// already reads that as $TMPDIR -- the previous behaviour, unchanged.
+	tmpDir, err := os.MkdirTemp(spillDir, fmt.Sprintf("mo-ivfpq-%d-", os.Getpid()))
 	if err != nil {
 		return nil, err
 	}

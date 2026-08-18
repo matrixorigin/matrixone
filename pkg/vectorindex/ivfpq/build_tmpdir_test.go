@@ -31,8 +31,15 @@ import (
 // creates the temp directory and fills the struct.
 func newTestBuild(t *testing.T) *IvfpqBuild[float32, float32] {
 	t.Helper()
+	return newTestBuildIn(t, "")
+}
+
+// newTestBuildIn builds with an explicit spill directory. "" means "no LOCAL
+// fileservice", which os.MkdirTemp reads as $TMPDIR.
+func newTestBuildIn(t *testing.T, spillDir string) *IvfpqBuild[float32, float32] {
+	t.Helper()
 	b, err := NewIvfpqBuild[float32, float32]("uid:0:0", testIdxcfg(),
-		vectorindex.IndexTableConfig{DbName: "db", SrcTable: "t"}, 1, []int{0})
+		vectorindex.IndexTableConfig{DbName: "db", SrcTable: "t"}, 1, []int{0}, spillDir)
 	require.NoError(t, err)
 	return b
 }
@@ -51,7 +58,8 @@ func TestBuildTmpDirIsPrivateAndReclaimed(t *testing.T) {
 	fi, err := os.Stat(b.tmpDir)
 	require.NoError(t, err, "builder must create its temp directory up front")
 	require.True(t, fi.IsDir())
-	require.Equal(t, os.TempDir(), filepath.Dir(b.tmpDir))
+	require.Equal(t, os.TempDir(), filepath.Dir(b.tmpDir),
+		"an empty spill dir must fall back to $TMPDIR")
 	require.True(t, strings.HasPrefix(filepath.Base(b.tmpDir), fmt.Sprintf("mo-ivfpq-%d-", os.Getpid())),
 		"orphans must be attributable to a pid, got %q", filepath.Base(b.tmpDir))
 
@@ -123,4 +131,51 @@ func TestBuildTmpDirReachesTheModel(t *testing.T) {
 	require.NoError(t, m.saveToFile())
 	require.NotEmpty(t, m.Path)
 	require.Equal(t, b.tmpDir, filepath.Dir(m.Path), "tar written outside the build directory")
+}
+
+// TestBuildTmpDirHonoursSpillDir pins where the packed sub-index tars actually land.
+//
+// They used to go to $TMPDIR unconditionally. Each tar is a whole sub-index, so a
+// large build pushes GB through this directory, and /tmp is often a small or slow
+// mount while the LOCAL fileservice is the volume the operator provisioned for
+// exactly this. The builder must therefore put its private directory UNDER the
+// caller-supplied spill dir -- and still work when there is none, because unit
+// tests and one-shot tools have no fileservice attached.
+func TestBuildTmpDirHonoursSpillDir(t *testing.T) {
+	spill := t.TempDir()
+	b := newTestBuildIn(t, spill)
+	t.Cleanup(func() { _ = b.Destroy() })
+
+	require.Equal(t, spill, filepath.Dir(b.tmpDir),
+		"the build directory must be created inside the LOCAL spill dir, not $TMPDIR")
+	require.True(t, strings.HasPrefix(filepath.Base(b.tmpDir), fmt.Sprintf("mo-ivfpq-%d-", os.Getpid())),
+		"the pid-tagged naming must survive the move")
+
+	// And the tar itself follows, since saveToFile writes into b.tmpDir.
+	m, err := b.getOrCreateCurrent()
+	require.NoError(t, err)
+	require.Equal(t, b.tmpDir, m.TmpDir)
+
+	// Destroy still reclaims the whole thing, and must not touch the spill dir
+	// itself -- other builds are using it concurrently.
+	require.NoError(t, b.Destroy())
+	_, err = os.Stat(b.tmpDir)
+	require.True(t, os.IsNotExist(err), "Destroy must remove its own directory")
+	_, err = os.Stat(spill)
+	require.NoError(t, err, "Destroy must NOT remove the shared spill directory")
+}
+
+// Concurrent builds share one spill dir; MkdirTemp's random suffix is what keeps
+// them apart, exactly as it did under $TMPDIR.
+func TestBuildTmpDirsDistinctWithinOneSpillDir(t *testing.T) {
+	spill := t.TempDir()
+	seen := make(map[string]bool, 4)
+	for i := 0; i < 4; i++ {
+		b := newTestBuildIn(t, spill)
+		t.Cleanup(func() { _ = b.Destroy() })
+		require.Equal(t, spill, filepath.Dir(b.tmpDir))
+		require.False(t, seen[b.tmpDir], "two builders shared %q", b.tmpDir)
+		seen[b.tmpDir] = true
+	}
+	require.Len(t, seen, 4)
 }
