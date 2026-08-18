@@ -655,6 +655,63 @@ func TestTimeWinTimestampDSTBoundariesPreserveInstantIdentity(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimeWinTimestampSubHourFoldBoundariesAdvanceForward(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	halfHour := types.Datetime(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := &TimeWin{
+		WStart: true,
+		WEnd:   true,
+		Types:  []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(1)}, nil),
+		},
+		TsType:   plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Ts:       newExpression(0),
+		Interval: halfHour,
+		Sliding:  halfHour,
+	}
+	secondFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+	secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []types.Timestamp{secondFold}, nil, proc.Mp()))
+	bat.Vecs[0].SetLength(1)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+	require.NoError(t, arg.Prepare(proc))
+
+	var starts, ends []types.Timestamp
+	var sums []int64
+	for {
+		res, execErr := vm.Exec(arg, proc)
+		require.NoError(t, execErr)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		starts = append(starts, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[1])[:n]...)
+		ends = append(ends, vector.MustFixedColNoTypeCheck[types.Timestamp](res.Batch.Vecs[2])[:n]...)
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+
+	require.Equal(t, []int64{2}, sums)
+	require.Equal(t, []types.Timestamp{secondFold}, starts)
+	require.Equal(t, []types.Timestamp{secondFoldHalfHour}, ends)
+
+	arg.Free(proc, false, nil)
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestTimeWinTimestampDSTSpringGapKeepsCivilGridPhase(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	zone, err := time.LoadLocation("America/New_York")

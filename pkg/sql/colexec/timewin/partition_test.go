@@ -1114,6 +1114,29 @@ func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
 		}, ctr.wStart)
 	})
 
+	t.Run("sub-hour-second-fold-advances-forward", func(t *testing.T) {
+		halfHour := types.Datetime(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+		secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+		secondFoldTwoHours := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).UnixMicro())
+		arg := &TimeWin{GapFill: true, Interval: halfHour, Sliding: halfHour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(secondFold),
+			gapFillEnd: types.Datetime(secondFoldTwoHours),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(secondFold),
+			types.Datetime(secondFoldHalfHour),
+		}, ctr.wStart)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(secondFoldHalfHour),
+			types.Datetime(secondFoldTwoHours),
+		}, ctr.wEnd)
+	})
+
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }

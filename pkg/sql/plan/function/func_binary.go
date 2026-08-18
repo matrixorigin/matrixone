@@ -1862,8 +1862,10 @@ func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *
 				grid = -grid
 			}
 			if candidate != boundary && candidateCivil%types.Datetime(grid) == 0 &&
-				((interval > 0 && candidateCivil >= value.ToDatetime(loc) && candidateCivil <= civil && candidate < boundary) ||
-					(interval < 0 && candidateCivil <= value.ToDatetime(loc) && candidateCivil >= civil && candidate > boundary)) {
+				((interval > 0 && candidateCivil >= value.ToDatetime(loc) && candidateCivil <= civil &&
+					(candidate < boundary || candidateCivil == civil)) ||
+					(interval < 0 && candidateCivil <= value.ToDatetime(loc) && candidateCivil >= civil &&
+						(candidate > boundary || candidateCivil == civil))) {
 				return candidate
 			}
 		}

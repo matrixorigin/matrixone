@@ -62,6 +62,18 @@ func TestTimestampWindowBoundarySequenceSteps(t *testing.T) {
 		require.Equal(t, int64(1), TimestampWindowBoundarySteps(first, second, hour, zone))
 		require.Equal(t, second, AdvanceTimestampWindowBoundaryBy(first, 1, hour, zone))
 	})
+	t.Run("fall-back-sub-hour-repeated-instant", func(t *testing.T) {
+		halfHour := int64(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+		first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+		second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+		firstNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		secondNext := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+		require.Equal(t, firstNext, AdvanceTimestampWindowBoundary(first, halfHour, zone))
+		require.Equal(t, secondNext, AdvanceTimestampWindowBoundary(second, halfHour, zone))
+		require.Equal(t, secondNext, AdvanceTimestampWindowBoundaryBy(second, 1, halfHour, zone))
+		require.Greater(t, int64(secondNext), int64(second))
+	})
 	t.Run("civil-day-dst-grid", func(t *testing.T) {
 		springStart := parse("2026-03-08 00:00:00")
 		springEnd := parse("2026-03-09 00:00:00")
