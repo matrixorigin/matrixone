@@ -428,6 +428,144 @@ func TestApplyRemapDbDMLExpressionContainers(t *testing.T) {
 	}
 }
 
+func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
+	remap := remapDbContext{
+		databases:           map[string]string{"src": "dst"},
+		lowerCaseTableNames: 1,
+	}
+	qualifiedTable := func(name string) *tree.TableName {
+		return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{
+			SchemaName:     "src",
+			ExplicitSchema: true,
+		}, nil)
+	}
+	qualifiedObject := func(name string) *tree.UnresolvedObjectName {
+		return tree.NewUnresolvedObjectName("src", name)
+	}
+	qualifiedColumn := func(table, name string) *tree.UnresolvedName {
+		return tree.NewUnresolvedName(
+			tree.NewCStr("src", 1),
+			tree.NewCStr(table, 1),
+			tree.NewCStr(name, 1),
+		)
+	}
+	assertTable := func(t *testing.T, table *tree.TableName) {
+		t.Helper()
+		require.Equal(t, tree.Identifier("dst"), table.SchemaName)
+	}
+	assertObject := func(t *testing.T, object *tree.UnresolvedObjectName) {
+		t.Helper()
+		require.Equal(t, "dst", object.GetDBName())
+	}
+	assertColumn := func(t *testing.T, column *tree.UnresolvedName) {
+		t.Helper()
+		require.Equal(t, "dst", column.DbNameOrigin())
+	}
+
+	t.Run("do and merge", func(t *testing.T) {
+		doColumn := qualifiedColumn("do_table", "value")
+		remapDbInStmt(&tree.Do{Exprs: tree.Exprs{doColumn}}, remap)
+		assertColumn(t, doColumn)
+
+		target := qualifiedTable("merge_target")
+		source := qualifiedTable("merge_source")
+		onColumn := qualifiedColumn("merge_source", "id")
+		conditionColumn := qualifiedColumn("merge_target", "matched")
+		updateName := qualifiedColumn("merge_target", "value")
+		updateValue := qualifiedColumn("merge_source", "value")
+		insertValue := qualifiedColumn("merge_source", "new_value")
+		returningColumn := qualifiedColumn("merge_target", "value")
+		remapDbInStmt(&tree.Merge{
+			Target: target,
+			Source: source,
+			On:     onColumn,
+			Clauses: tree.MergeClauses{
+				nil,
+				{
+					Condition:    conditionColumn,
+					UpdateExprs:  tree.UpdateExprs{{Names: []*tree.UnresolvedName{updateName}, Expr: updateValue}},
+					InsertValues: tree.Exprs{insertValue},
+				},
+			},
+			Returning: tree.SelectExprs{{Expr: returningColumn}},
+		}, remap)
+		assertTable(t, target)
+		assertTable(t, source)
+		for _, column := range []*tree.UnresolvedName{
+			onColumn, conditionColumn, updateName, updateValue, insertValue, returningColumn,
+		} {
+			assertColumn(t, column)
+		}
+	})
+
+	t.Run("load dump and sequence statements", func(t *testing.T) {
+		loadTable := qualifiedTable("load_data")
+		dumpTable := qualifiedTable("dump_table")
+		attachTable := qualifiedTable("attach_table")
+		createSequence := qualifiedTable("new_sequence")
+		dropFirst := qualifiedTable("drop_first")
+		dropSecond := qualifiedTable("drop_second")
+		alterSequence := qualifiedTable("alter_sequence")
+		for _, statement := range []tree.Statement{
+			&tree.Load{Table: loadTable},
+			&tree.DumpTable{Table: dumpTable},
+			&tree.LoadTable{Table: attachTable},
+			&tree.CreateSequence{Name: createSequence},
+			&tree.DropSequence{Names: tree.TableNames{dropFirst, dropSecond}},
+			&tree.AlterSequence{Name: alterSequence},
+		} {
+			remapDbInStmt(statement, remap)
+		}
+		for _, table := range []*tree.TableName{
+			loadTable, dumpTable, attachTable, createSequence, dropFirst, dropSecond, alterSequence,
+		} {
+			assertTable(t, table)
+		}
+	})
+
+	t.Run("show statements", func(t *testing.T) {
+		showCreateTable := qualifiedObject("create_table")
+		showCreateView := qualifiedObject("create_view")
+		showColumnsTable := qualifiedObject("columns_table")
+		showColumnsLike := qualifiedColumn("columns_table", "name")
+		showColumnsWhere := qualifiedColumn("columns_table", "id")
+		showIndexTable := qualifiedObject("index_table")
+		showIndexWhere := qualifiedColumn("index_table", "id")
+		showColumnNumber := qualifiedObject("column_number")
+		showTableValues := qualifiedObject("table_values")
+		showTableSize := qualifiedObject("table_size")
+		for _, statement := range []tree.Statement{
+			&tree.ShowCreateTable{Name: showCreateTable},
+			&tree.ShowCreateView{Name: showCreateView},
+			&tree.ShowColumns{
+				Table:  showColumnsTable,
+				DBName: "src",
+				Like:   &tree.ComparisonExpr{Left: showColumnsLike},
+				Where:  &tree.Where{Expr: showColumnsWhere},
+			},
+			&tree.ShowIndex{
+				TableName: showIndexTable,
+				DbName:    "src",
+				Where:     &tree.Where{Expr: showIndexWhere},
+			},
+			&tree.ShowColumnNumber{Table: showColumnNumber, DbName: "src"},
+			&tree.ShowTableValues{Table: showTableValues, DbName: "src"},
+			&tree.ShowTableSize{Table: showTableSize, DbName: "src"},
+		} {
+			remapDbInStmt(statement, remap)
+		}
+		for _, object := range []*tree.UnresolvedObjectName{
+			showCreateTable, showCreateView, showColumnsTable, showIndexTable,
+			showColumnNumber, showTableValues, showTableSize,
+		} {
+			assertObject(t, object)
+		}
+		for _, column := range []*tree.UnresolvedName{showColumnsLike, showColumnsWhere, showIndexWhere} {
+			assertColumn(t, column)
+		}
+	})
+}
+
 func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {
 	ctx := context.Background()
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL,

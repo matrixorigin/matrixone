@@ -32,8 +32,10 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type accountRecordingBackgroundExec struct {
@@ -343,6 +345,68 @@ func TestCloneImportedUserDefinedFunctionPackagesHaveIndependentOwnership(t *tes
 	_, err = fileService.StatFile(ctx, stagedFiles[0])
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 	require.NoError(t, cleanupCloneUDFPackages(ctx, fileService, stagedFiles))
+}
+
+func TestRegisterCloneUDFPackageRollbackCleanup(t *testing.T) {
+	ctx := context.Background()
+	fileService, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	stagedPath := "shared:udf/clone/7/f_identity/package.zip"
+	require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
+		FilePath: stagedPath,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+	}))
+
+	t.Run("ignores incomplete and implicit transaction state", func(t *testing.T) {
+		registerCloneUDFPackageRollbackCleanup(nil, fileService, []string{stagedPath})
+		registerCloneUDFPackageRollbackCleanup(&Session{}, nil, []string{stagedPath})
+
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		ses.proc.Base.TxnOperator = txnOp
+		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: false})
+		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{stagedPath})
+		_, err := fileService.StatFile(ctx, stagedPath)
+		require.NoError(t, err)
+	})
+
+	t.Run("retains packages on commit and removes them on rollback", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		ses.proc.Base.TxnOperator = txnOp
+		rollbackPath := "shared:udf/clone/7/f_identity/rollback.zip"
+		require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
+			FilePath: rollbackPath,
+			Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		}))
+
+		var callbacks []client.TxnEventCallback
+		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).Times(2)
+		txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(2).DoAndReturn(
+			func(_ client.EventType, registered ...client.TxnEventCallback) {
+				callbacks = append(callbacks, registered...)
+			},
+		)
+		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{stagedPath})
+		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{rollbackPath})
+		require.Len(t, callbacks, 2)
+
+		require.NoError(t, callbacks[0].Func(ctx, txnOp, client.TxnEvent{
+			Txn: txn.TxnMeta{Status: txn.TxnStatus_Committed},
+		}, nil))
+		_, err := fileService.StatFile(ctx, stagedPath)
+		require.NoError(t, err)
+
+		require.NoError(t, callbacks[1].Func(ctx, txnOp, client.TxnEvent{
+			Txn: txn.TxnMeta{Status: txn.TxnStatus_Aborted},
+		}, nil))
+		_, err = fileService.StatFile(ctx, rollbackPath)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	})
 }
 
 func TestResolveCloneDatabaseRoutineTenantUsesTargetAdministrator(t *testing.T) {

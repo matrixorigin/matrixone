@@ -856,6 +856,34 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 		require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
 		require.Equal(t, checkSQL, bh.executedSQLs[2])
 	})
+
+	t.Run("rejects imported functions without a package file service", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		t.Cleanup(ses.Close)
+		pu := getPu(ses.GetService())
+		fileService := pu.FileService
+		pu.FileService = nil
+		t.Cleanup(func() {
+			pu.FileService = fileService
+		})
+
+		source := newSource()
+		source.userDefinedFuncs[0] = userDefinedFunctionDefinition{
+			name: "f_imported", args: "{}", retType: "int", lang: "python",
+			body:   `{"handler":"f_imported","import":true,"body":"shared:udf/source/f_imported.py"}`,
+			dbName: "source",
+		}
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		_, err := handleCloneDatabaseWithSource(
+			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
+			ses, bh, newStatement(), source,
+		)
+		require.EqualError(t, err, "internal error: file service is unavailable for imported function clone")
+		require.Equal(t, []string{"create database `destination`"}, bh.executedSQLs)
+	})
 }
 
 func TestCheckCloneDatabaseTargetSerializesConcurrentIfNotExistsDecisions(t *testing.T) {
