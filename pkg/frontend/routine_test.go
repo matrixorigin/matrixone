@@ -679,6 +679,38 @@ func TestMigrateConnectionFromMarksTypedSystemSnapshotTooLargeForLegacyReplay(t 
 	require.True(t, resp.SystemVariablesReplayable)
 }
 
+func TestCancelledNextTransactionIsolationRemainsReplayable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	nextSQL := "set transaction isolation level read committed"
+	nextStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, nextSQL, 1)
+	require.NoError(t, err)
+	nextExecCtx := newTestExecCtx(ctx, ctrl)
+	nextExecCtx.ses = ses
+	nextExecCtx.singleStatementQuery = true
+	nextExecCtx.sqlOfStmt = nextSQL
+	require.NoError(t, handleSetTransaction(ses, nextExecCtx, nextStmt.(*tree.SetTransaction)))
+	require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+	cancelSQL := "set @@session.transaction_isolation = 'REPEATABLE-READ'"
+	cancelStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, cancelSQL, 1)
+	require.NoError(t, err)
+	cancelExecCtx := newTestExecCtx(ctx, ctrl)
+	cancelExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(
+		ses, cancelExecCtx, cancelStmt.(*tree.SetVar), cancelSQL, false))
+	require.False(t, ses.hasUnreplayableMigrationSystemVars())
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.SystemVariablesReplayable)
+}
+
 func TestPreparedSystemAssignmentIsMarkedUnreplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

@@ -1605,6 +1605,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
 		}
 	}
 
