@@ -750,6 +750,8 @@ func TestStringHashIteratorAccountedGrowthCapacityBoundary(t *testing.T) {
 				mpool.AllocationSiteMin,
 			)
 			require.NoError(t, err)
+			iterator.keyBufferMP = mp
+			iterator.keyBufferAllocation = allocation
 			iterator.keyBuffer = iterator.keyBuffer[:0]
 			vec := vector.NewVec(types.T_varchar.ToType())
 			require.NoError(t, vector.AppendBytes(

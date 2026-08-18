@@ -75,7 +75,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
 			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
-				return nil, nil, nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "column '%s' does not exist", colName)
+				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}
 			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
