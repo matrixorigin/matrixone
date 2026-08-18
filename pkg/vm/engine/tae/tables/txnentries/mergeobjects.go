@@ -102,6 +102,7 @@ func NewMergeObjectsEntry(
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.collectTs = rt.Now()
+		objectio.WaitInjected(objectio.FJ_DataMergeAfterCollectTS)
 		if _, _, injected := fault.TriggerFault(objectio.FJ_TransferSlow); injected {
 			time.Sleep(time.Second)
 		}

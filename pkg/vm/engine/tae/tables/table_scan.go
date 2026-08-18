@@ -104,9 +104,15 @@ func TombstoneRangeScanByObject(
 	for ok := it.Last(); ok; ok = it.Prev() {
 		tombstone := it.Item()
 		if tombstone.IsCEntry() && tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
-			// The dropped counterpart owns the persisted appendable tombstone data.
-			// Scanning both versions duplicates the same committed delete rows.
-			continue
+			dropped := tombstone.GetNextVersion()
+			deleteAt := dropped.GetDeleteAt()
+			if tombstone.IsAppendable() || !deleteAt.GT(&end) {
+				// The dropped counterpart owns persisted appendable data. For a
+				// non-appendable object, its replacement owns the range only after
+				// the source object's delete commits within that range. A later
+				// tombstone merge must not hide the historical source object.
+				continue
+			}
 		}
 
 		if tombstone.IsAppendable() {

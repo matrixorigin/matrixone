@@ -12558,6 +12558,130 @@ func TestMergeBlocks4(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
+func TestMergeBlocksWithConcurrentTombstoneMergeCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	pkVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer pkVec.Close()
+	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer rowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowIDVec.Append(types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		), false)
+		pkVec.Append(pk, false)
+	}
+	stats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, rowIDVec, pkVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, stats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+	tombstoneTxn, tombstoneRel := tae.GetRelation()
+	tombstoneObj := testutil.GetOneTombstoneMeta(tombstoneRel)
+	require.False(t, tombstoneObj.IsAppendable())
+	tombstoneTask, err := jobs.NewMergeObjectsTask(
+		nil, tombstoneTxn, []*catalog.ObjectEntry{tombstoneObj}, tae.Runtime, 0, true,
+	)
+	require.NoError(t, err)
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+
+	addWaiterProbe := func(name, target string) {
+		t.Helper()
+		require.NoError(t, fault.AddFaultPoint(ctx, name, ":::", "getwaiters", 0, target, false))
+		t.Cleanup(func() {
+			_, _ = fault.RemoveFaultPoint(context.Background(), name)
+		})
+	}
+	waitForWaiter := func(probe string) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			waiters, _, ok := fault.TriggerFault(probe)
+			return ok && waiters == 1
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+	releaseWaiter := func(name string) {
+		t.Helper()
+		removed, err := fault.RemoveFaultPoint(ctx, name)
+		require.NoError(t, err)
+		require.True(t, removed)
+	}
+
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+	dataMergeWaiters := t.Name() + "/data-merge-waiters"
+	addWaiterProbe(dataMergeWaiters, objectio.FJ_DataMergeAfterCollectTS)
+
+	dataErrC := make(chan error, 1)
+	dataDone := false
+	go func() {
+		dataErrC <- dataTask.OnExec(ctx)
+	}()
+	defer func() {
+		if dataDone {
+			return
+		}
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		select {
+		case <-dataErrC:
+		case <-time.After(10 * time.Second):
+			t.Errorf("data merge did not terminate during cleanup")
+		}
+	}()
+	waitForWaiter(dataMergeWaiters)
+
+	// The data merge has captured its collection upper bound. Commit a
+	// tombstone merge after that bound, then let the data merge scan the
+	// historical range whose tombstones were just rewritten.
+	require.NoError(t, tombstoneTask.OnExec(ctx))
+	require.NoError(t, tombstoneTxn.Commit(ctx))
+	releaseWaiter(objectio.FJ_DataMergeAfterCollectTS)
+	select {
+	case err := <-dataErrC:
+		dataDone = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("data merge did not finish")
+	}
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	tae.CheckRowsByScan(0, true)
+}
+
 func TestDedup3(t *testing.T) {
 	ctx := context.Background()
 
