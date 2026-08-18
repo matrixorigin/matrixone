@@ -54,6 +54,17 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 			require.NoError(t, row.Scan(dest...), statement)
 			return values
 		}
+		queryNullablePair := func(statement string) [2]sql.NullInt64 {
+			var values [2]sql.NullInt64
+			require.NoError(t, conn.QueryRowContext(ctx, statement).Scan(&values[0], &values[1]), statement)
+			return values
+		}
+		assertSourcePair := func(values [2]sql.NullInt64) {
+			fromNullSource := !values[0].Valid && values[1] == (sql.NullInt64{Int64: 1, Valid: true})
+			fromNonNullSource := values[0] == (sql.NullInt64{Int64: 2, Valid: true}) &&
+				values[1] == (sql.NullInt64{Int64: 2, Valid: true})
+			require.True(t, fromNullSource || fromNonNullSource, values)
+		}
 		assertAffected := func(result sql.Result, expected int64) {
 			actual, rowsErr := result.RowsAffected()
 			require.NoError(t, rowsErr)
@@ -216,6 +227,55 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		require.Equal(t, []int64{1, 1, 100}, queryInts("select id,y,x from fanout_t where id=1", 3))
 		require.Equal(t, []int64{2, 12, 10}, queryInts("select id,y,x from fanout_t where id=2", 3))
 		require.Equal(t, []int64{3, 13, 10}, queryInts("select id,y,x from fanout_t where id=3", 3))
+
+		exec("create table nullable_source_target_t (id int primary key, x int, y int, z int)")
+		exec("create table nullable_source_t (target_id int, source_x int, source_y int)")
+		exec("insert into nullable_source_target_t values (1,0,0,0),(2,0,0,0)")
+		exec("insert into nullable_source_t values (1,null,1),(1,2,2),(2,null,1),(2,2,2)")
+		result = exec("update nullable_source_target_t a join nullable_source_target_t b on a.id=b.id join nullable_source_t s on s.target_id=a.id set a.x=s.source_x,a.y=s.source_y,b.z=b.z")
+		assertAffected(result, 4)
+		for _, id := range []int{1, 2} {
+			assertSourcePair(queryNullablePair(fmt.Sprintf(
+				"select x,y from nullable_source_target_t where id=%d", id)))
+		}
+		nullablePrepared, prepareErr := conn.PrepareContext(ctx,
+			"update nullable_source_target_t a join nullable_source_target_t b on a.id=b.id join nullable_source_t s on s.target_id=a.id set a.x=s.source_x,a.y=s.source_y,b.z=b.z")
+		require.NoError(t, prepareErr)
+		defer nullablePrepared.Close()
+		for range 2 {
+			exec("update nullable_source_target_t set x=0,y=0,z=0")
+			result, execErr := nullablePrepared.ExecContext(ctx)
+			require.NoError(t, execErr)
+			assertAffected(result, 4)
+			for _, id := range []int{1, 2} {
+				assertSourcePair(queryNullablePair(fmt.Sprintf(
+					"select x,y from nullable_source_target_t where id=%d", id)))
+			}
+		}
+
+		exec("truncate table nullable_source_t")
+		exec("insert into nullable_source_t values (1,3,3),(1,4,4),(2,3,3),(2,4,4)")
+		exec("update nullable_source_target_t set x=0,y=0,z=0")
+		result = exec("update nullable_source_target_t a join nullable_source_target_t b on a.id=b.id join nullable_source_t s on s.target_id=a.id set a.x=s.source_x,a.y=s.source_y,b.z=b.z")
+		assertAffected(result, 4)
+		for _, id := range []int{1, 2} {
+			values := queryNullablePair(fmt.Sprintf("select x,y from nullable_source_target_t where id=%d", id))
+			require.True(t,
+				values == ([2]sql.NullInt64{{Int64: 3, Valid: true}, {Int64: 3, Valid: true}}) ||
+					values == ([2]sql.NullInt64{{Int64: 4, Valid: true}, {Int64: 4, Valid: true}}),
+				values)
+		}
+		exec("truncate table nullable_source_t")
+		exec("insert into nullable_source_t values (1,null,1),(1,2,2),(2,null,1),(2,2,2)")
+
+		exec("create table nullable_check_target_t (id int primary key, x int, y int, z int, check (x is null or x=y))")
+		exec("insert into nullable_check_target_t values (1,null,0,0),(2,null,0,0)")
+		result = exec("update nullable_check_target_t a join nullable_check_target_t b on a.id=b.id join nullable_source_t s on s.target_id=a.id set a.x=s.source_x,a.y=s.source_y,b.z=b.z")
+		assertAffected(result, 4)
+		for _, id := range []int{1, 2} {
+			assertSourcePair(queryNullablePair(fmt.Sprintf(
+				"select x,y from nullable_check_target_t where id=%d", id)))
+		}
 
 		exec("create table released_null_t (id int primary key, u int unique, x int)")
 		exec("insert into released_null_t values (1,1,0),(2,2,0),(3,3,0)")

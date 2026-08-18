@@ -2529,6 +2529,7 @@ type physicalTargetContribution struct {
 	colName         string
 	valuePos        int32
 	markerPos       int32
+	nullPos         int32
 	outputValuePos  int32
 	outputMarkerPos int32
 }
@@ -3359,9 +3360,10 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 	}
 	sort.Strings(updatedCols)
 
-	// Canonical layout: old physical row, followed by a value and an explicit
-	// assignment marker for each alias/column contribution.
-	canonicalTypes := make([]plan.Type, 0, len(tableDef.Cols)+2*len(contributions))
+	// Canonical layout: old physical row, followed by value, assignment presence,
+	// and value-is-NULL for each alias/column contribution. The explicit NULL bit
+	// preserves a selected SQL NULL across any_value aggregation.
+	canonicalTypes := make([]plan.Type, 0, len(tableDef.Cols)+3*len(contributions))
 	for _, col := range tableDef.Cols {
 		canonicalTypes = append(canonicalTypes, col.Typ)
 	}
@@ -3370,6 +3372,8 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		contributions[i].valuePos = int32(len(canonicalTypes))
 		canonicalTypes = append(canonicalTypes, tableDef.Cols[colIdx].Typ)
 		contributions[i].markerPos = int32(len(canonicalTypes))
+		canonicalTypes = append(canonicalTypes, plan.Type{Id: int32(types.T_bool)})
+		contributions[i].nullPos = int32(len(canonicalTypes))
 		canonicalTypes = append(canonicalTypes, plan.Type{Id: int32(types.T_bool)})
 	}
 	currentTableID := tableDef.TblId
@@ -3498,16 +3502,43 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		}
 		for _, contribution := range contributions {
 			if contribution.targetIdx == sourceIdx {
+				contributionValue := branchColExpr(newColName2Idx[sourceAlias+"."+contribution.colName])
+				contributionIsNull, err := BindFuncExprImplByPlanExpr(
+					builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(contributionValue)})
+				if err != nil {
+					return 0, nil, err
+				}
+				contributionMarker := makePlan2BoolConstExprWithType(true)
+				// The greedy candidate source must retain every syntactic assignment;
+				// its separate accepted-target marker decides whether to apply it later.
+				// A final merge has no later eligibility stage, so an inactive tuple
+				// must expose NULL presence instead of reviving the assignment.
+				if candidateSource == nil {
+					contributionMarker, err = BindFuncExprImplByPlanExpr(
+						builder.GetContext(),
+						"if",
+						[]*plan.Expr{
+							branchColExpr(activePos),
+							contributionMarker,
+							nullUpdateProjectionExpr(plan.Type{Id: int32(types.T_bool)}),
+						},
+					)
+					if err != nil {
+						return 0, nil, err
+					}
+				}
 				branchProject = append(
 					branchProject,
-					branchColExpr(newColName2Idx[sourceAlias+"."+contribution.colName]),
-					makePlan2BoolConstExprWithType(true),
+					contributionValue,
+					contributionMarker,
+					contributionIsNull,
 				)
 			} else {
 				colIdx := tableDef.Name2ColIndex[contribution.colName]
 				branchProject = append(
 					branchProject,
 					nullUpdateProjectionExpr(tableDef.Cols[colIdx].Typ),
+					nullUpdateProjectionExpr(plan.Type{Id: int32(types.T_bool)}),
 					nullUpdateProjectionExpr(plan.Type{Id: int32(types.T_bool)}),
 				)
 			}
@@ -3654,12 +3685,24 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 				continue
 			}
 			var err error
+			contributionValue, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"if",
+				[]*plan.Expr{
+					canonicalResultExpr(contribution.nullPos),
+					nullUpdateProjectionExpr(canonicalTypes[contribution.valuePos]),
+					canonicalResultExpr(contribution.valuePos),
+				},
+			)
+			if buildErr != nil {
+				return 0, nil, buildErr
+			}
 			finalExpr, err = BindFuncExprImplByPlanExpr(
 				builder.GetContext(),
 				"if",
 				[]*plan.Expr{
 					canonicalResultExpr(contribution.markerPos),
-					canonicalResultExpr(contribution.valuePos),
+					contributionValue,
 					finalExpr,
 				},
 			)
@@ -3698,7 +3741,19 @@ func (builder *QueryBuilder) mergeSamePhysicalTargetAssignmentsAcrossTuples(
 		candidateSource.contributions = make([]physicalTargetContribution, len(contributions))
 		for i := range contributions {
 			contributions[i].outputValuePos = int32(len(finalProject))
-			finalProject = append(finalProject, canonicalResultExpr(contributions[i].valuePos))
+			outputValue, buildErr := BindFuncExprImplByPlanExpr(
+				builder.GetContext(),
+				"if",
+				[]*plan.Expr{
+					canonicalResultExpr(contributions[i].nullPos),
+					nullUpdateProjectionExpr(canonicalTypes[contributions[i].valuePos]),
+					canonicalResultExpr(contributions[i].valuePos),
+				},
+			)
+			if buildErr != nil {
+				return 0, nil, buildErr
+			}
+			finalProject = append(finalProject, outputValue)
 			contributions[i].outputMarkerPos = int32(len(finalProject))
 			finalProject = append(finalProject, canonicalResultExpr(contributions[i].markerPos))
 			candidateSource.contributions[i] = contributions[i]
