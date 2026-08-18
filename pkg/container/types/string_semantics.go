@@ -14,7 +14,7 @@
 
 package types
 
-import "fmt"
+import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 // StringDomain is the statically resolved SQL string domain. The Type remains
 // the owner of the concrete OID, width, charset, and collation identity.
@@ -147,42 +147,42 @@ func (s StringSemanticState) Validate() error {
 	if StaticStringDomain(s.staticType) > stringDomainMax || s.runtime > runtimeStringDomainMax ||
 		s.source > stringSourceMax || s.literal > stringLiteralFormMax ||
 		s.conversion > stringConversionKindMax || s.nullKind > stringNullKindMax {
-		return fmt.Errorf("invalid string semantic enum value")
+		return moerr.NewInvalidInputNoCtx("invalid string semantic enum value")
 	}
 
 	staticDomain := StaticStringDomain(s.staticType)
 	if staticDomain == StringDomainNone && s.staticType.Oid != T_any &&
 		s.runtime != RuntimeStringInherit {
-		return fmt.Errorf("runtime string domain requires a string or unresolved static type")
+		return moerr.NewInvalidInputNoCtx("runtime string domain requires a string or unresolved static type")
 	}
 	if s.source == StringSourceLiteral {
 		if s.literal == StringLiteralNone && s.nullKind == StringNotNull {
-			return fmt.Errorf("non-NULL literal requires an explicit literal form")
+			return moerr.NewInvalidInputNoCtx("non-NULL literal requires an explicit literal form")
 		}
 	} else if s.literal != StringLiteralNone {
-		return fmt.Errorf("literal form requires literal source")
+		return moerr.NewInvalidInputNoCtx("literal form requires literal source")
 	}
 	if (s.literal == StringLiteralText || s.literal == StringLiteralBinaryIntroducer) &&
 		staticDomain == StringDomainNone && s.staticType.Oid != T_any {
-		return fmt.Errorf("text literal form requires a string or unresolved static type")
+		return moerr.NewInvalidInputNoCtx("text literal form requires a string or unresolved static type")
 	}
 	if s.literal == StringLiteralBinaryIntroducer && s.EffectiveStringDomain() != StringDomainBinary {
-		return fmt.Errorf("binary introducer requires an effective binary domain")
+		return moerr.NewInvalidInputNoCtx("binary introducer requires an effective binary domain")
 	}
 	if s.conversion != StringConversionString &&
 		s.source != StringSourceUserVariable &&
 		s.source != StringSourceSQLPrepare &&
 		s.source != StringSourceCOMStmt {
-		return fmt.Errorf("dynamic conversion kind requires a dynamic value source")
+		return moerr.NewInvalidInputNoCtx("dynamic conversion kind requires a dynamic value source")
 	}
 	switch s.nullKind {
 	case StringUntypedNull:
 		if s.staticType.Oid != T_any {
-			return fmt.Errorf("untyped NULL requires T_any")
+			return moerr.NewInvalidInputNoCtx("untyped NULL requires T_any")
 		}
 	case StringTypedNull:
 		if s.staticType.Oid == T_any {
-			return fmt.Errorf("typed NULL requires a resolved type")
+			return moerr.NewInvalidInputNoCtx("typed NULL requires a resolved type")
 		}
 	}
 	return nil
@@ -229,21 +229,21 @@ func MergeStringSemanticStates(
 	states ...StringSemanticState,
 ) (StringSemanticState, error) {
 	if policy > stringMergePolicyMax {
-		return StringSemanticState{}, fmt.Errorf("invalid string merge policy %d", policy)
+		return StringSemanticState{}, moerr.NewInvalidInputNoCtxf("invalid string merge policy %d", policy)
 	}
 	for i := range states {
 		if err := states[i].Validate(); err != nil {
-			return StringSemanticState{}, fmt.Errorf("invalid string state %d: %w", i, err)
+			return StringSemanticState{}, moerr.NewInvalidInputNoCtxf("invalid string state %d: %v", i, err)
 		}
 	}
 	if len(states) == 0 {
-		return StringSemanticState{}, fmt.Errorf("string merge requires at least one state")
+		return StringSemanticState{}, moerr.NewInvalidInputNoCtx("string merge requires at least one state")
 	}
 
 	switch policy {
 	case StringMergeSelectedValue:
 		if len(states) != 1 {
-			return StringSemanticState{}, fmt.Errorf("selected-value merge requires exactly one selected state")
+			return StringSemanticState{}, moerr.NewInvalidInputNoCtx("selected-value merge requires exactly one selected state")
 		}
 		selected := states[0]
 		selectedDomain := selected.EffectiveStringDomain()

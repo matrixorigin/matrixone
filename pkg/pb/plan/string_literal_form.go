@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"fmt"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func isPlanMySQLStringType(id int32) bool {
@@ -48,21 +49,21 @@ func (m *Expr) validateOwnStringLiteralForm() error {
 func (m *Expr) validateStringLiteralForm(lit *Literal) error {
 	if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
 		lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
-		return fmt.Errorf("invalid string literal form %d", lit.LiteralForm)
+		return moerr.NewInvalidInputNoCtxf("invalid string literal form %d", lit.LiteralForm)
 	}
 	if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_NONE {
 		return nil
 	}
 	if lit.Isnull || lit.Value == nil {
-		return fmt.Errorf("string literal form requires a non-NULL literal value")
+		return moerr.NewInvalidInputNoCtx("string literal form requires a non-NULL literal value")
 	}
 	if _, ok := lit.Value.(*Literal_Sval); !ok || !isPlanMySQLStringType(m.Typ.Id) {
-		return fmt.Errorf("string literal form requires a string literal and string type")
+		return moerr.NewInvalidInputNoCtx("string literal form requires a string literal and string type")
 	}
 	binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
 		lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
 	if lit.IsBin != binarySyntax {
-		return fmt.Errorf("string literal form and isBin disagree")
+		return moerr.NewInvalidInputNoCtx("string literal form and isBin disagree")
 	}
 	return nil
 }
