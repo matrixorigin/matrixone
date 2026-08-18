@@ -5517,7 +5517,11 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 }
 
 func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
-	if !token.present || !token.trailingWhitespace || len(token.token) < 2 {
+	// The consumed TIME prefix remains the owner regardless of whether the
+	// signed numeric token is the final token or is followed by whitespace.
+	// In particular, `1:01:01: +1` and `1:01:01: +1 ` must have the same
+	// HOUR/MINUTE/SECOND result; the whitespace must not change ownership.
+	if !token.present || len(token.token) < 2 {
 		return false
 	}
 	if token.token[0] != '+' && token.token[0] != '-' {
