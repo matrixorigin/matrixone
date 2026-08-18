@@ -328,6 +328,7 @@ func (c *ServiceConfig) createFileService(
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
 	counterSetNames := make([]string, 0, len(c.FileServices)*2)
+	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	created := false
 	defer func() {
 		if created {
@@ -341,6 +342,7 @@ func (c *ServiceConfig) createFileService(
 		}
 	}()
 	for _, config := range c.FileServices {
+		config.Cache.MetricScope = metricScope
 		counterSet := new(perfcounter.CounterSet)
 		service, err := fileservice.NewFileService(
 			ctx,

@@ -83,11 +83,11 @@ func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
 	requireDirFilesClosed(t, local.dirFiles, func() { local.Close(ctx) })
 }
 
-func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	c.once.Do(func() { close(c.updateStarted) })
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	case <-c.releaseUpdate:
 	}
 	return c.DataCache.Set(ctx, key, data)
@@ -498,8 +498,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Nil(t, err)
 	vec.Release()
 
-	assert.Equal(t, int64(8), memCache1.cache.Used())
-	assert.Equal(t, int64(8), memCache2.cache.Used())
+	backingSize := int64(DefaultCacheDataAllocator().BackingSize(8))
+	assert.Equal(t, backingSize, memCache1.cache.Used())
+	assert.Equal(t, backingSize, memCache2.cache.Used())
 	memCache1.cache.Flush(ctx)
 	memCache2.cache.Flush(ctx)
 	fs.FlushCache(ctx)

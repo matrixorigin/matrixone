@@ -57,10 +57,11 @@ type rewriteHintPayload struct {
 // text is still rewritten one staged statement at a time, using the SQL mode
 // that is current when that statement is parsed.
 type rewritePolicySnapshot struct {
-	enabled        bool
-	roleRules      map[string]string
-	sessionRules   map[string]string
-	sessionRemapDb map[string]string
+	enabled             bool
+	roleRules           map[string]string
+	sessionRules        map[string]string
+	sessionRemapDb      map[string]string
+	lowerCaseTableNames int64
 }
 
 func cloneRewriteMap(src map[string]string) map[string]string {
@@ -74,8 +75,51 @@ func cloneRewriteMap(src map[string]string) map[string]string {
 	return dst
 }
 
+func normalizeRewriteRules(
+	ctx context.Context,
+	rules map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, error) {
+	normalized, _, err := normalizeRewriteRulesWithSelected(ctx, rules, lowerCaseTableNames)
+	return normalized, err
+}
+
+func normalizeRewriteRulesWithSelected(
+	ctx context.Context,
+	rules map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, map[string]string, error) {
+	if len(rules) == 0 {
+		return nil, nil, nil
+	}
+	normalized := make(map[string]string, len(rules))
+	originalKeys := make(map[string]string, len(rules))
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		rule := rules[key]
+		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+		if err != nil {
+			return nil, nil, err
+		}
+		if previous, ok := originalKeys[canonicalKey]; ok {
+			if key != canonicalKey || previous == canonicalKey {
+				continue
+			}
+		}
+		originalKeys[canonicalKey] = key
+		normalized[canonicalKey] = rule
+	}
+	return normalized, originalKeys, nil
+}
+
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
-	policy := &rewritePolicySnapshot{enabled: ses.rewriteEnabled.Load()}
+	policy := &rewritePolicySnapshot{
+		enabled: ses.rewriteEnabled.Load(), lowerCaseTableNames: parserLowerCaseTableNames(ses),
+	}
 	if !policy.enabled {
 		return policy, nil
 	}
@@ -112,45 +156,12 @@ func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnap
 // identifier, and the set of source databases is disjoint from the set of
 // target databases. The disjointness rule forbids chaining/ambiguity such as
 // {"x":"y","y":"z"} (y is both a target and a source) and self-maps {"x":"x"}.
-func validateRemapDb(ctx context.Context, remapDb map[string]string) error {
-	if len(remapDb) == 0 {
+func validateRemapDb(ctx context.Context, remapDb map[string]string, lowerCaseTableNames int64) error {
+	_, err := parsers.NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames)
+	if err == nil {
 		return nil
 	}
-	sources := make(map[string]struct{}, len(remapDb))
-	for src, dst := range remapDb {
-		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
-			return moerr.NewInvalidInputf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
-		}
-		if parsers.IsSystemDatabase(src) || parsers.IsSystemDatabase(dst) {
-			return moerr.NewInvalidInputf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
-		}
-		sources[src] = struct{}{}
-	}
-	for _, dst := range remapDb {
-		if _, ok := sources[dst]; ok {
-			return moerr.NewInvalidInputf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", dst)
-		}
-	}
-	return nil
-}
-
-// isValidDbIdentifier reports whether s is a usable (unquoted) database name:
-// non-empty and composed only of letters, digits, underscore or '$'. remapdb
-// only substitutes a name, so both sides must be plain identifiers.
-func isValidDbIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r == '_' || r == '$' ||
-			(r >= '0' && r <= '9') ||
-			(r >= 'a' && r <= 'z') ||
-			(r >= 'A' && r <= 'Z') {
-			continue
-		}
-		return false
-	}
-	return true
+	return moerr.NewInvalidInput(ctx, strings.TrimPrefix(err.Error(), "SQL parser error: "))
 }
 
 // formatRewriteHint serializes a rules map into the /*+ {"rewrites": {...}} */ hint format.
@@ -248,14 +259,16 @@ func (policy *rewritePolicySnapshot) rewrite(ctx context.Context, sql string, sq
 		if !parsers.FragmentHasStatement(sql) {
 			return sql, nil
 		}
-		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
+		return rewriteSingleSQL(ctx, sql, policy.roleRules, policy.sessionRules,
+			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
 	}
 
 	for i, fragment := range fragments {
 		if !parsers.FragmentHasStatement(fragment) {
 			continue
 		}
-		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules, policy.sessionRemapDb)
+		rewritten, err := rewriteSingleSQL(ctx, fragment, policy.roleRules, policy.sessionRules,
+			policy.sessionRemapDb, policy.lowerCaseTableNames, sqlMode)
 		if err != nil {
 			return sql, err
 		}
@@ -277,6 +290,8 @@ func rewriteSingleSQL(
 	cache map[string]string,
 	sessionRules map[string]string,
 	sessionRemapDb map[string]string,
+	lowerCaseTableNames int64,
+	sqlMode string,
 ) (string, error) {
 
 	// Inline /*+ {...} */ rewrites and database remaps. A user-provided rewrite
@@ -309,23 +324,56 @@ func rewriteSingleSQL(
 	// remapdb (database-name substitution) is applied before the table rewrites
 	// and does not stack: a database maps to one target, so the inline hint
 	// overrides the session variable for the same source database.
-	chains := make(map[string][]string, len(cache)+len(sessionRules)+len(inlineRules))
-	for k, v := range cache {
+	normalizedRoleRules, roleSelected, err := normalizeRewriteRulesWithSelected(ctx, cache, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	normalizedSessionRules, sessionSelected, err := normalizeRewriteRulesWithSelected(ctx, sessionRules, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, cache, roleSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, sessionRules, sessionSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return sql, err
+	}
+	chains := make(map[string][]string,
+		len(normalizedRoleRules)+len(normalizedSessionRules)+len(normalizedInlineRules))
+	for k, v := range normalizedRoleRules {
 		chains[k] = append(chains[k], v)
 	}
-	for k, v := range sessionRules {
+	for k, v := range normalizedSessionRules {
 		chains[k] = append(chains[k], v)
 	}
-	for k, v := range inlineRules {
+	for k, v := range normalizedInlineRules {
 		chains[k] = append(chains[k], v)
 	}
 
-	remapDb := make(map[string]string, len(sessionRemapDb)+len(inlineRemapDb))
-	for k, v := range sessionRemapDb {
+	normalizedSessionRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, sessionRemapDb, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	normalizedInlineRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, inlineRemapDb, lowerCaseTableNames)
+	if err != nil {
+		return sql, err
+	}
+	remapDb := make(map[string]string, len(normalizedSessionRemap)+len(normalizedInlineRemap))
+	for k, v := range normalizedSessionRemap {
 		remapDb[k] = v
 	}
-	for k, v := range inlineRemapDb {
+	for k, v := range normalizedInlineRemap {
 		remapDb[k] = v
+	}
+	if _, err = parsers.NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
+		return sql, err
 	}
 
 	hint, err := formatRewriteHintChains(ctx, chains, remapDb)
@@ -341,13 +389,30 @@ func rewriteSingleSQL(
 // nested SQL's own inline hint on top. It intentionally does not read session
 // or role state again: earlier statements in the same COM_QUERY may already
 // have changed that state after the request was parsed.
-func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL string) (string, error) {
+func rewriteSQLFromMaterializedPolicy(
+	ctx context.Context,
+	outerSQL, innerSQL string,
+	lowerCaseTableNamesArg ...int64,
+) (string, error) {
+	return rewriteSQLFromMaterializedPolicyWithSQLMode(ctx, outerSQL, innerSQL, "", lowerCaseTableNamesArg...)
+}
+
+func rewriteSQLFromMaterializedPolicyWithSQLMode(
+	ctx context.Context,
+	outerSQL, innerSQL, sqlMode string,
+	lowerCaseTableNamesArg ...int64,
+) (string, error) {
+	lowerCaseTableNames := int64(0)
+	if len(lowerCaseTableNamesArg) > 0 {
+		lowerCaseTableNames = lowerCaseTableNamesArg[0]
+	}
 	chains := make(map[string][]string)
 	remapDb := make(map[string]string)
 	if content, ok := leadingHintContent(outerSQL); ok {
 		content = strings.TrimSpace(content)
 		if content != "" && content[0] == '{' {
-			outerChains, outerRemapDb, err := parsers.DecodeRewriteHint(ctx, content)
+			outerChains, outerRemapDb, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(
+				ctx, content, lowerCaseTableNames)
 			if err != nil {
 				return innerSQL, err
 			}
@@ -364,11 +429,25 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 	if err != nil {
 		return innerSQL, err
 	}
-	for key, rule := range inlineRules {
+	normalizedInlineRules, inlineSelected, err := normalizeRewriteRulesWithSelected(ctx, inlineRules, lowerCaseTableNames)
+	if err != nil {
+		return innerSQL, err
+	}
+	if err = validateDiscardedRewriteRules(ctx, inlineRules, inlineSelected, lowerCaseTableNames, sqlMode); err != nil {
+		return innerSQL, err
+	}
+	for key, rule := range normalizedInlineRules {
 		chains[key] = append(chains[key], rule)
 	}
-	for src, dst := range inlineRemapDb {
+	normalizedInlineRemap, err := parsers.NormalizeAndValidateRemapDb(ctx, inlineRemapDb, lowerCaseTableNames)
+	if err != nil {
+		return innerSQL, err
+	}
+	for src, dst := range normalizedInlineRemap {
 		remapDb[src] = dst
+	}
+	if _, err = parsers.NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
+		return innerSQL, err
 	}
 	if len(chains) == 0 && len(remapDb) == 0 {
 		return innerSQL, nil
@@ -379,6 +458,41 @@ func rewriteSQLFromMaterializedPolicy(ctx context.Context, outerSQL, innerSQL st
 		return innerSQL, err
 	}
 	return hint + " " + innerSQL, nil
+}
+
+func validateDiscardedRewriteRules(ctx context.Context, rules, selected map[string]string, lowerCaseTableNames int64, sqlMode string) error {
+	keys := make([]string, 0, len(rules))
+	for key := range rules {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		canonicalKey, _, _, err := parsers.NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+		if err != nil {
+			return err
+		}
+		if selected[canonicalKey] == key {
+			continue
+		}
+		value := rules[key]
+		if value == "" {
+			return moerr.NewParseError(ctx, "statement")
+		}
+		stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, value, lowerCaseTableNames, sqlMode)
+		if err != nil {
+			return moerr.NewParseError(ctx, err.Error())
+		}
+		valid := false
+		switch stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+			valid = true
+		}
+		stmt.Free()
+		if !valid {
+			return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+		}
+	}
+	return nil
 }
 
 // extractInlineRewrites returns the per-table rewrite rules and database-remap
@@ -525,7 +639,11 @@ func validateRewriteTableKey(ctx context.Context, key string) error {
 // table key is non-empty and every rule value is a SELECT-like statement (the
 // same constraint as role rules). It is called at SET time so an invalid value
 // is rejected immediately and never stored.
-func validateRemapRewrites(ctx context.Context, val interface{}) error {
+func validateRemapRewrites(ctx context.Context, val interface{}, lowerCaseTableNamesArg ...int64) error {
+	lowerCaseTableNames := int64(0)
+	if len(lowerCaseTableNamesArg) > 0 {
+		lowerCaseTableNames = lowerCaseTableNamesArg[0]
+	}
 	raw, ok := val.(string)
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "remap_rewrites must be a string, got %T", val)
@@ -538,11 +656,14 @@ func validateRemapRewrites(ctx context.Context, val interface{}) error {
 		if err := validateRewriteTableKey(ctx, key); err != nil {
 			return err
 		}
-		if err := validateRewriteRuleSQL(ctx, rule); err != nil {
+		if err := validateRewriteRuleSQL(ctx, rule, lowerCaseTableNames); err != nil {
 			return err
 		}
 	}
-	if err := validateRemapDb(ctx, remapDb); err != nil {
+	if _, err := normalizeRewriteRules(ctx, rules, lowerCaseTableNames); err != nil {
+		return moerr.NewInvalidInput(ctx, strings.TrimPrefix(err.Error(), "SQL parser error: "))
+	}
+	if err := validateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
 		return err
 	}
 	return nil
@@ -1110,12 +1231,16 @@ func rewriteFuncExprName(fn *tree.FuncExpr) string {
 	return ""
 }
 
-func validateRewriteRuleSQL(ctx context.Context, rule string) error {
+func validateRewriteRuleSQL(ctx context.Context, rule string, lowerCaseTableNamesArg ...int64) error {
+	lowerCaseTableNames := int64(1)
+	if len(lowerCaseTableNamesArg) > 0 {
+		lowerCaseTableNames = lowerCaseTableNamesArg[0]
+	}
 	if strings.TrimSpace(rule) == "" {
 		return moerr.NewInvalidInput(ctx, "rewrite rule SQL is empty")
 	}
 
-	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, 1)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, rule, lowerCaseTableNames)
 	if err != nil {
 		return moerr.NewInvalidInputf(ctx, "invalid rewrite rule SQL %q: %v", rule, err)
 	}
@@ -1165,7 +1290,7 @@ func handleAlterRoleAddRule(ses *Session, execCtx *ExecCtx, stmt *tree.AlterRole
 	}
 	roleID := vr.id
 
-	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL); err != nil {
+	if err = validateRewriteRuleSQL(ctx, stmt.RuleSQL, parserLowerCaseTableNames(ses)); err != nil {
 		return err
 	}
 
