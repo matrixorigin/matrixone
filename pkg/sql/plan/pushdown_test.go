@@ -22,18 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
-
-type fixedProcessCompilerContext struct {
-	*MockCompilerContext
-	proc *process.Process
-}
-
-func (c *fixedProcessCompilerContext) GetProcess() *process.Process {
-	return c.proc
-}
 
 func TestAssertIsFilterPushdownBoundary(t *testing.T) {
 	ctx := NewMockCompilerContext(true)

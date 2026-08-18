@@ -186,8 +186,6 @@ func (builder *QueryBuilder) calculateAdaptiveNprobe(baseNprobe int64, stats *pl
 	return adaptiveNprobe
 }
 
-var ivfTreeEmptyLocale = ""
-
 func buildIvfSearchColDefs(includeColumns []string, originalTableDef *plan.TableDef) []*plan.ColDef {
 	colDefs := DeepCopyColDefList(ivfflatplan.IVFFLATScanColDefs)
 	if len(includeColumns) == 0 || originalTableDef == nil {

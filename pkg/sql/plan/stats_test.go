@@ -373,23 +373,6 @@ func makeQueryWithScan(tableType string, rowsize float64, blockNum int32) *planp
 	}
 }
 
-func makeQueryWithScanStats(tableType string, rowsize float64, tableCnt float64, blockNum int32, nodes ...*planpb.Node) *planpb.Query {
-	scan := &planpb.Node{
-		NodeType: planpb.Node_TABLE_SCAN,
-		TableDef: &planpb.TableDef{TableType: tableType},
-		Stats: &planpb.Stats{
-			Rowsize:  rowsize,
-			TableCnt: tableCnt,
-			BlockNum: blockNum,
-		},
-	}
-	qryNodes := append([]*planpb.Node{scan}, nodes...)
-	return &planpb.Query{
-		Nodes: qryNodes,
-		Steps: []int32{0},
-	}
-}
-
 func makeLimitExprForStatsTest() *planpb.Expr {
 	return &planpb.Expr{
 		Expr: &planpb.Expr_Lit{
@@ -397,54 +380,6 @@ func makeLimitExprForStatsTest() *planpb.Expr {
 				Value: &planpb.Literal_U64Val{U64Val: 10},
 			},
 		},
-	}
-}
-
-func makeShuffleJoinForStatsTest(exprBased bool) *planpb.Node {
-	right := &planpb.Expr{
-		Expr: &planpb.Expr_Col{
-			Col: &planpb.ColRef{ColPos: 1},
-		},
-	}
-	if exprBased {
-		right = &planpb.Expr{
-			Expr: &planpb.Expr_Lit{
-				Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}},
-			},
-		}
-	}
-	return &planpb.Node{
-		NodeType: planpb.Node_JOIN,
-		Stats: &planpb.Stats{
-			HashmapStats: &planpb.HashMapStats{
-				Shuffle:       true,
-				ShuffleColIdx: 0,
-			},
-		},
-		OnList: []*planpb.Expr{
-			{
-				Expr: &planpb.Expr_F{
-					F: &planpb.Function{
-						Args: []*planpb.Expr{
-							{
-								Expr: &planpb.Expr_Col{
-									Col: &planpb.ColRef{ColPos: 0},
-								},
-							},
-							right,
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func makeIvfEntriesOrderByLimitParamForStatsTest() *planpb.IndexReaderParam {
-	return &planpb.IndexReaderParam{
-		OrderBy:      []*planpb.OrderBySpec{{Expr: &planpb.Expr{}}},
-		Limit:        makeLimitExprForStatsTest(),
-		OrigFuncName: "l2_distance",
 	}
 }
 

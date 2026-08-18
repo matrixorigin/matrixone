@@ -59,13 +59,6 @@ func splitFiltersByVectorIndexCoverage(
 	return pushdownFilters, remainingFilters
 }
 
-func vectorIndexColumnNameFromColRef(col *plan.ColRef, scanNode *plan.Node, scanTag int32) (string, bool) {
-	if col == nil || scanNode == nil || scanNode.TableDef == nil {
-		return "", false
-	}
-	return vectorIndexColumnNameFromTableDef(col, scanNode.TableDef, scanTag)
-}
-
 func vectorIndexColumnNameFromTableDef(col *plan.ColRef, tableDef *plan.TableDef, scanTag int32) (string, bool) {
 	if col == nil || tableDef == nil {
 		return "", false

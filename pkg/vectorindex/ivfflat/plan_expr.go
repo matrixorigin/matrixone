@@ -53,13 +53,6 @@ func ivfUint64Expr(value uint64) *plan.Expr {
 	}
 }
 
-func ivfVectorExpr(raw []byte, typ plan.Type) *plan.Expr {
-	return &plan.Expr{
-		Typ:  typ,
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(raw)}}},
-	}
-}
-
 func ivfFuncExpr(ctx context.Context, name string, args ...*plan.Expr) (*plan.Expr, error) {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {
