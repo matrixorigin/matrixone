@@ -749,6 +749,39 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 	})
 }
 
+func TestConsumedNextTransactionAssignmentBecomesReplayable(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		sql := "set transaction isolation level read committed"
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.singleStatementQuery = true
+		execCtx.sqlOfStmt = sql
+		require.NoError(t, handleSetTransaction(ses, execCtx, stmt.(*tree.SetTransaction)))
+		require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+		handler := ses.GetTxnHandler()
+		handler.mu.Lock()
+		err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.NoError(t, op.Rollback(ctx))
+		require.False(t, ses.hasUnreplayableMigrationSystemVars())
+	})
+}
+
 func TestHandleSetGlobalTransaction(t *testing.T) {
 	ctx := context.Background()
 	bh := &backgroundExecTest{}

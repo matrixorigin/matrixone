@@ -646,6 +646,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if consumeNextTxnIsolation {
 		th.hasNextTxnIsolation = false
+		if ses, ok := execCtx.ses.(*Session); ok {
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 	return err
 }
