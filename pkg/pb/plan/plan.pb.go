@@ -38188,7 +38188,7 @@ func (m *Expr) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.validateOwnStringLiteralForm()
 }
 func (m *FoldVal) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)

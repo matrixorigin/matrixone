@@ -382,6 +382,32 @@ func TestMaxByEqualWinnerOrsBinaryStringProvenance(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMaxByEqualWinnerMergesExplicitTextCommutatively(t *testing.T) {
+	for _, textFirst := range []bool{false, true} {
+		mp := mpool.MustNewZero()
+		inputs := maxByInputs(t, mp, []string{"same", "same"}, nil, []int64{10, 10}, []string{"tie", "tie"})
+		inputs[0].SetType(types.T_varbinary.ToType())
+		textRow := 1
+		if textFirst {
+			textRow = 0
+		}
+		require.NoError(t, inputs[0].SetRuntimeStringDomainAtWithMP(textRow, types.RuntimeStringText, mp))
+		params := []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
+		exec := makeMaxByExec(mp, 7021, false, params).(*maxByExec)
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, inputs))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, types.RuntimeStringText, result[0].GetRuntimeStringDomainAt(0))
+		result[0].Free(mp)
+		exec.Free()
+		for _, input := range inputs {
+			input.Free(mp)
+		}
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
 func TestMaxByPreservesBinaryStringProvenanceAcrossGroups(t *testing.T) {
 	params := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_varchar.ToType()}
 	for _, binaryFirst := range []bool{false, true} {

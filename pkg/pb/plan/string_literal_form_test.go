@@ -28,13 +28,29 @@ func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	encoded, err := original.Marshal()
 	require.NoError(t, err)
 	decoded := &Expr{}
-	require.NoError(t, decoded.Unmarshal(encoded), "protobuf preserves unknown enum integers")
-	require.ErrorContains(t, decoded.ValidateStringLiteralForms(), "invalid string literal form 99")
+	require.ErrorContains(t, decoded.Unmarshal(encoded), "invalid string literal form 99")
 
 	generated := &GeneratedCol{Expr: original}
 	encoded, err = generated.MarshalBinary()
 	require.NoError(t, err)
 	require.ErrorContains(t, (&GeneratedCol{}).UnmarshalBinary(encoded), "invalid string literal form 99")
+}
+
+func TestValidateStringLiteralFormsTraversesSubqueryChild(t *testing.T) {
+	expr := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: &Expr{
+		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: "x"}, LiteralForm: StringLiteralForm(99),
+		}},
+	}}}}
+	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "invalid string literal form 99")
+}
+
+func TestValidateStringLiteralFormsSkipsBytePayloads(t *testing.T) {
+	owner := struct {
+		Payload []byte
+		Expr    *Expr
+	}{Payload: make([]byte, 8<<20), Expr: &Expr{}}
+	require.NoError(t, ValidateStringLiteralFormsInOwner(&owner))
 }
 
 func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {

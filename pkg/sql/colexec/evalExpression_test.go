@@ -158,6 +158,22 @@ func TestFlowControlPreservesSelectedBinaryStringRows(t *testing.T) {
 	require.False(t, result.GetBinaryStringMetadataAt(1))
 }
 
+func TestFlowControlPromotesSelectedStaticTextUnderBinaryResult(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := vector.NewVec(types.T_varchar.ToType())
+	result := vector.NewVec(types.T_varbinary.ToType())
+	defer text.Free(proc.Mp())
+	defer result.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(text, []byte("text"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(result, []byte("text"), false, proc.Mp()))
+
+	expr := &FunctionExpressionExecutor{}
+	expr.resetFlowControlPrepareParamKind()
+	expr.observeFlowControlPrepareParamKind(text, []bool{true})
+	require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 1, proc.Mp()))
+	require.Equal(t, types.RuntimeStringText, result.GetRuntimeStringDomainAt(0))
+}
+
 func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bat := batch.New(nil)

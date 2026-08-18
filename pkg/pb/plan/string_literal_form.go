@@ -34,25 +34,37 @@ func isPlanMySQLStringType(id int32) bool {
 // executable state.
 func (m *Expr) ValidateStringLiteralForms() error {
 	return m.walkStringLiterals(func(expr *Expr, lit *Literal) error {
-		if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
-			lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
-			return fmt.Errorf("invalid string literal form %d", lit.LiteralForm)
-		}
-		if lit.LiteralForm != StringLiteralForm_STRING_LITERAL_NONE {
-			if lit.Isnull || lit.Value == nil {
-				return fmt.Errorf("string literal form requires a non-NULL literal value")
-			}
-			if _, ok := lit.Value.(*Literal_Sval); !ok || !isPlanMySQLStringType(expr.Typ.Id) {
-				return fmt.Errorf("string literal form requires a string literal and string type")
-			}
-			binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
-				lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
-			if lit.IsBin != binarySyntax {
-				return fmt.Errorf("string literal form and isBin disagree")
-			}
-		}
-		return nil
+		return expr.validateStringLiteralForm(lit)
 	})
+}
+
+func (m *Expr) validateOwnStringLiteralForm() error {
+	if m == nil || m.GetLit() == nil {
+		return nil
+	}
+	return m.validateStringLiteralForm(m.GetLit())
+}
+
+func (m *Expr) validateStringLiteralForm(lit *Literal) error {
+	if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
+		lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
+		return fmt.Errorf("invalid string literal form %d", lit.LiteralForm)
+	}
+	if lit.LiteralForm == StringLiteralForm_STRING_LITERAL_NONE {
+		return nil
+	}
+	if lit.Isnull || lit.Value == nil {
+		return fmt.Errorf("string literal form requires a non-NULL literal value")
+	}
+	if _, ok := lit.Value.(*Literal_Sval); !ok || !isPlanMySQLStringType(m.Typ.Id) {
+		return fmt.Errorf("string literal form requires a string literal and string type")
+	}
+	binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
+		lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
+	if lit.IsBin != binarySyntax {
+		return fmt.Errorf("string literal form and isBin disagree")
+	}
+	return nil
 }
 
 // NormalizeTextLiteralFormsForCompatibility maps the explicit ordinary TEXT
@@ -92,6 +104,11 @@ func (m *Expr) walkStringLiterals(visitor func(*Expr, *Literal) error) error {
 			if err := item.walkStringLiterals(visitor); err != nil {
 				return err
 			}
+		}
+	}
+	if subquery := m.GetSub(); subquery != nil {
+		if err := subquery.Child.walkStringLiterals(visitor); err != nil {
+			return err
 		}
 	}
 	if window := m.GetW(); window != nil {
@@ -171,6 +188,9 @@ func validateStringLiteralFormsInOwner(owner any) error {
 				}
 			}
 		case reflect.Slice, reflect.Array:
+			if value.Type().Elem().Kind() == reflect.Uint8 {
+				return nil
+			}
 			for item := 0; item < value.Len(); item++ {
 				if err := walk(value.Index(item)); err != nil {
 					return err

@@ -368,6 +368,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKindSeen      bool
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
+	flowControlStaticText    []bool
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -839,6 +840,22 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringDomains != nil {
 		expr.flowControlStringDomains = expr.flowControlStringDomains[:0]
 	}
+	if expr.flowControlStaticText != nil {
+		expr.flowControlStaticText = expr.flowControlStaticText[:0]
+	}
+}
+
+func (expr *FunctionExpressionExecutor) ensureFlowControlStaticTextRows(rows int) {
+	if rows <= len(expr.flowControlStaticText) {
+		return
+	}
+	old := len(expr.flowControlStaticText)
+	if rows <= cap(expr.flowControlStaticText) {
+		expr.flowControlStaticText = expr.flowControlStaticText[:rows]
+		clear(expr.flowControlStaticText[old:])
+		return
+	}
+	expr.flowControlStaticText = append(expr.flowControlStaticText, make([]bool, rows-old)...)
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -882,6 +899,11 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		if selected && (value.IsConst() || row < value.Length()) &&
 			!value.IsNull(uint64(row)) {
 			domain := value.GetRuntimeStringDomainAt(row)
+			if domain == types.RuntimeStringInherit &&
+				types.StaticStringDomain(*value.GetType()) == types.StringDomainText {
+				expr.ensureFlowControlStaticTextRows(len(selection))
+				expr.flowControlStaticText[row] = true
+			}
 			if domain != types.RuntimeStringInherit || len(expr.flowControlStringDomains) != 0 {
 				expr.ensureFlowControlBinaryStringRows(len(selection))
 				expr.flowControlStringDomains[row] = domain
@@ -914,6 +936,25 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 	}
 	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
+		if types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary {
+			for row := 0; row < rows && row < len(expr.flowControlStaticText); row++ {
+				if expr.flowControlStaticText[row] &&
+					expr.flowControlStringDomains[row] == types.RuntimeStringInherit {
+					expr.flowControlStringDomains[row] = types.RuntimeStringText
+				}
+			}
+		}
+		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
+			return err
+		}
+	} else if len(expr.flowControlStaticText) != 0 &&
+		types.StaticStringDomain(*result.GetType()) == types.StringDomainBinary {
+		expr.ensureFlowControlBinaryStringRows(rows)
+		for row := 0; row < rows && row < len(expr.flowControlStaticText); row++ {
+			if expr.flowControlStaticText[row] {
+				expr.flowControlStringDomains[row] = types.RuntimeStringText
+			}
+		}
 		if err := result.SetRuntimeStringDomainsWithMP(expr.flowControlStringDomains[:rows], mp); err != nil {
 			return err
 		}

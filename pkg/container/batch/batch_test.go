@@ -837,6 +837,9 @@ func TestPrepareParamKindTransportPreservesUniformExplicitText(t *testing.T) {
 		[]bool{false, false}, mp))
 	source.SetRowCount(2)
 	defer source.Clean(mp)
+	metadataSize, err := source.PrepareParamKindMetadataSize()
+	require.NoError(t, err)
+	require.Equal(t, 21, metadataSize, "uniform text metadata must be constant-sized")
 
 	var wire bytes.Buffer
 	encoded, err := source.MarshalBinaryWithPrepareParamKinds(&wire, true)
@@ -848,6 +851,20 @@ func TestPrepareParamKindTransportPreservesUniformExplicitText(t *testing.T) {
 		require.Equal(t, types.RuntimeStringText, decoded.Vecs[0].GetRuntimeStringDomainAt(row))
 		require.False(t, decoded.Vecs[0].GetIsBinaryStringAt(row))
 	}
+}
+
+func TestPrepareParamKindUniformExplicitTextMetadataDoesNotScaleWithRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("text"), 65536, mp)
+	require.NoError(t, err)
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	bat := NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(65536)
+	defer bat.Clean(mp)
+	size, err := bat.PrepareParamKindMetadataSize()
+	require.NoError(t, err)
+	require.Equal(t, 21, size)
 }
 
 func TestPrepareParamKindMetadataSizeMatchesTrailer(t *testing.T) {

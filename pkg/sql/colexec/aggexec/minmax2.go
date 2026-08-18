@@ -344,9 +344,8 @@ func (exec *minMaxExecBytes) BatchFill(offset int, groups []uint64, vectors []*v
 						return err
 					}
 				case cmp == 0:
-					if err := exec.state[x].vecs[0].SetIsBinaryStringAt(
-						int(y), exec.state[x].vecs[0].GetBinaryStringMetadataAt(int(y)) ||
-							vectors[0].GetBinaryStringMetadataAt(int(idx)), exec.mp); err != nil {
+					if err := mergeEqualRuntimeStringDomain(
+						exec.state[x].vecs[0], int(y), vectors[0], int(idx), exec.mp); err != nil {
 						return err
 					}
 					if err := mergeMinMaxPrepareParamKind(exec.state[x].vecs[0], int(y), kind, exec.mp); err != nil {
@@ -400,9 +399,8 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 					return err
 				}
 			case cmp == 0:
-				if err := exec.state[x1].vecs[0].SetIsBinaryStringAt(
-					int(y1), exec.state[x1].vecs[0].GetBinaryStringMetadataAt(int(y1)) ||
-						other.state[x2].vecs[0].GetBinaryStringMetadataAt(int(y2)), exec.mp); err != nil {
+				if err := mergeEqualRuntimeStringDomain(
+					exec.state[x1].vecs[0], int(y1), other.state[x2].vecs[0], int(y2), exec.mp); err != nil {
 					return err
 				}
 				if err := mergeMinMaxPrepareParamKind(

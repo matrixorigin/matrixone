@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -400,6 +401,51 @@ func TestMinPreservesExplicitTextFromNullSlot(t *testing.T) {
 	results[0].Free(mp)
 	agg.Free()
 	input.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMinMaxEqualValuesPreserveExplicitText(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprintf("agg_%d", id), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(types.T_varbinary.ToType())
+			require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+			require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+			require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+			agg := makeMinMaxExec(mp, id, id == AggIdOfMin, types.T_varbinary.ToType())
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{input}))
+			results, err := agg.Flush()
+			require.NoError(t, err)
+			require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+			results[0].Free(mp)
+			agg.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMinEqualMergePreservesExplicitText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeState := func() AggFuncExec {
+		input := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(input, []byte("same"), false, mp))
+		require.NoError(t, input.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+		agg := makeMinMaxExec(mp, AggIdOfMin, true, types.T_varbinary.ToType())
+		require.NoError(t, agg.GroupGrow(1))
+		require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+		input.Free(mp)
+		return agg
+	}
+	left, right := makeState(), makeState()
+	require.NoError(t, left.Merge(right, 0, 0))
+	results, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, types.RuntimeStringText, results[0].GetRuntimeStringDomainAt(0))
+	results[0].Free(mp)
+	left.Free()
+	right.Free()
 	require.Zero(t, mp.CurrNB())
 }
 

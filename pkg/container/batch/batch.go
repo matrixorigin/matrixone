@@ -211,6 +211,23 @@ func (bat *Batch) HasExplicitTextStringMetadata() bool {
 	return false
 }
 
+func hasUniformExplicitTextStringMetadata(vec *vector.Vector) bool {
+	if vec == nil || !vec.HasExplicitTextStringMetadata() {
+		return false
+	}
+	seen := false
+	for row := 0; row < vec.Length(); row++ {
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		seen = true
+		if vec.GetRuntimeStringDomainAt(row) != types.RuntimeStringText {
+			return false
+		}
+	}
+	return seen
+}
+
 // PrepareParamKindMetadataSize validates the transient trailer and returns its
 // exact wire size. Zero means that no trailer is required.
 func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
@@ -224,7 +241,7 @@ func (bat *Batch) PrepareParamKindMetadataSize() (int, error) {
 			return 0, moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
 		}
 		kinds := vec.GetPrepareParamKinds()
-		mixedBinaryString := vec.HasBinaryStringRows()
+		mixedBinaryString := vec.HasBinaryStringRows() && !hasUniformExplicitTextStringMetadata(vec)
 		switch {
 		case len(kinds) != 0 || mixedBinaryString:
 			if (len(kinds) != 0 && len(kinds) != vec.Length()) ||
@@ -277,10 +294,14 @@ func (bat *Batch) AppendPrepareParamKindMetadataTo(w io.Writer) error {
 	}
 	for _, vec := range bat.Vecs {
 		kinds := vec.GetPrepareParamKinds()
-		mixedBinaryString := vec.HasBinaryStringRows()
+		uniformText := hasUniformExplicitTextStringMetadata(vec)
+		mixedBinaryString := vec.HasBinaryStringRows() && !uniformText
 		binaryFlag := byte(0)
 		if vec.GetIsBinaryString() && !mixedBinaryString {
 			binaryFlag = prepareParamKindBatchBinaryFlag
+		}
+		if uniformText {
+			binaryFlag = prepareParamKindBatchTextFlag
 		}
 		switch {
 		case len(kinds) != 0 || mixedBinaryString:
