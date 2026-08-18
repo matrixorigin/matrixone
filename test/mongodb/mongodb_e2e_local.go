@@ -482,7 +482,12 @@ func expectQueryFailure(ctx context.Context, db *sql.DB, query, contains string)
 func expectStatementRejected(ctx context.Context, db *sql.DB, query, contains string) error {
 	rows, err := db.QueryContext(ctx, query)
 	if err == nil {
-		_ = rows.Close()
+		defer rows.Close()
+		for rows.Next() {
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("query %s failed while reading rows: %w", redact(query), err)
+		}
 		return fmt.Errorf("query %s unexpectedly succeeded", redact(query))
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(contains)) {

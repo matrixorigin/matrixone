@@ -209,6 +209,39 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("show connections validation", func(t *testing.T) {
+		columns := []string{
+			"name", "discovery_mode", "auth_mechanism", "tls_mode",
+			"read_preference", "read_concern", "version", "disabled",
+		}
+		tests := []struct {
+			name string
+			rows *sqlmock.Rows
+			err  error
+			want string
+		}{
+			{name: "query error", err: errors.New("catalog offline"), want: "catalog offline"},
+			{name: "unexpected columns", rows: sqlmock.NewRows([]string{"name"}).AddRow("mongodb_ci"), want: "unexpected columns"},
+			{name: "metadata mismatch", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "srv", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0), want: "metadata mismatch"},
+			{name: "invalid version", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 0, 0), want: "invalid version"},
+			{name: "row error", rows: sqlmock.NewRows(columns).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0).RowError(0, errors.New("getMore failed")), want: "getMore failed"},
+			{name: "connection omitted", rows: sqlmock.NewRows(columns).AddRow("existing", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 1, 0), want: "omitted mongodb_ci"},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock := newMongoDBE2ESQLMock(t)
+				expectation := mock.ExpectQuery("show mongodb connections")
+				if tc.err != nil {
+					expectation.WillReturnError(tc.err)
+				} else {
+					expectation.WillReturnRows(tc.rows)
+				}
+				require.ErrorContains(t, verifyShowMongoDBConnections(t.Context(), db), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("scalar and expected failure", func(t *testing.T) {
 		db, mock := newMongoDBE2ESQLMock(t)
 		mock.ExpectQuery("scalar-error").WillReturnError(errors.New("query failed"))
@@ -223,6 +256,8 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, expectQueryFailure(t.Context(), db, "expected-error", "DISABLED"))
 		mock.ExpectQuery("unexpected-statement-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
 		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "unexpected-statement-success", "privilege"), "unexpectedly succeeded")
+		mock.ExpectQuery("statement-row-error").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1").RowError(0, errors.New("read failed")))
+		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "statement-row-error", "privilege"), "failed while reading rows")
 		mock.ExpectQuery("wrong-statement-error").WillReturnError(errors.New("network offline"))
 		require.ErrorContains(t, expectStatementRejected(t.Context(), db, "wrong-statement-error", "privilege"), "without")
 		mock.ExpectQuery("denied-statement").WillReturnError(errors.New("do not have privilege to execute the statement"))
