@@ -42,12 +42,14 @@ import (
 // positional query, and emits (doc_id, score) rows; the top-k is bounded by the
 // pushed LIMIT, and a pushed-down WHERE prefilter is applied inside the walk.
 type fulltext2SearchState struct {
-	inited      bool
-	tblcfg      fulltext2.TableConfig
-	limit       uint64
-	offset      int
-	filterBytes []byte // serialized docfilter membership (WHERE-clause prefilter), if any
-	batch       *batch.Batch
+	inited       bool
+	tblcfg       fulltext2.TableConfig
+	limit        uint64
+	plannedLimit uint64
+	offset       int
+	filterBytes  []byte // serialized docfilter membership (WHERE-clause prefilter), if any
+	dropFilter   bool   // runtime filter DROP: the build side is empty
+	batch        *batch.Batch
 
 	// LIMIT (non-streaming) path: SearchInto fills this caller-owned, box-free result — pk
 	// (out.Keys), scores (out.Dists), covered INCLUDE cols (out.Include). Held on the state
@@ -98,6 +100,26 @@ type ft2IncludeOut struct {
 
 func (u *fulltext2SearchState) end(tf *TableFunction, proc *process.Process) error { return nil }
 
+func (u *fulltext2SearchState) applyMembershipFilterResult(res *fulltextMembershipFilterResult) {
+	if res == nil {
+		// A configured prefilter without a terminal payload is fail-open. The
+		// filter-dependent candidate bound must not survive that fallback.
+		u.limit = 0
+		return
+	}
+	switch res.status {
+	case fulltextMembershipFilterReady:
+		u.filterBytes = res.membershipFilterBytes
+	case fulltextMembershipFilterDrop:
+		u.dropFilter = true
+	case fulltextMembershipFilterPass:
+		// The candidate bound is only sound when the exact membership filter
+		// reaches the search. PASS means the producer failed open, so stream
+		// all matches and let the final join apply the residual predicate.
+		u.limit = 0
+	}
+}
+
 func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.stopStream()
 	if u.batch != nil {
@@ -105,6 +127,8 @@ func (u *fulltext2SearchState) reset(tf *TableFunction, proc *process.Process) {
 	}
 	u.offset = 0
 	u.filterBytes = nil
+	u.limit = u.plannedLimit
+	u.dropFilter = false
 	u.streaming = false
 	u.errCh = nil
 	u.done = false
@@ -260,6 +284,7 @@ func fulltext2SearchPrepare(proc *process.Process, arg *TableFunction) (tvfState
 	if st.limit, err = evalLimitExpression(proc, arg.Limit, 0); err != nil {
 		return nil, err
 	}
+	st.plannedLimit = st.limit
 	return st, nil
 }
 
@@ -316,6 +341,8 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 
 	u.stopStream()
 	u.offset = 0
+	u.limit = u.plannedLimit
+	u.dropFilter = false
 	u.streaming = false
 	u.done = false
 	// u.out is kept and REUSED across queries (SearchInto Resets it per query), but EMPTY it
@@ -343,13 +370,14 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	// mechanism bm25_search / fulltext_index_scan use. Applied INSIDE the WAND walk so
 	// the returned top-K is already filtered (no over-fetch).
 	if u.filterBytes == nil && len(tf.RuntimeFilterSpecs) > 0 {
-		res, ferr := waitFulltextMembershipFilter(proc, tf.RuntimeFilterSpecs)
+		res, ferr := waitFulltext2MembershipFilter(proc, tf.RuntimeFilterSpecs)
 		if ferr != nil {
 			return ferr
 		}
-		if res != nil {
-			u.filterBytes = res.membershipFilterBytes
-		}
+		u.applyMembershipFilterResult(res)
+	}
+	if u.dropFilter {
+		return nil
 	}
 
 	// Run the query through the shared VectorIndexCache: the index (base + CDC tail)

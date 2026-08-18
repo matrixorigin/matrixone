@@ -481,11 +481,11 @@ func ParseBoolean(query []byte, tok tokenizer.Tokenizer) (BoolQuery, error) {
 // clauses. Planner optimizations use the same parser/tokenizer boundary as the
 // executor instead of reinterpreting Boolean syntax.
 func IsConjunctiveTermQuery(query []byte, parser string) (bool, error) {
-	tok, err := DocTokenizer(parser)
-	if err != nil {
+	parser = normalizeParser(parser)
+	if _, err := DocTokenizer(parser); err != nil {
 		return false, err
 	}
-	q, err := ParseBoolean(query, tok)
+	q, err := buildBooleanQuery(string(query), parser)
 	if err != nil {
 		return false, err
 	}
