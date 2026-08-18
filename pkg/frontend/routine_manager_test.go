@@ -1008,6 +1008,8 @@ func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("request did not write its terminal response")
 	}
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
 
 	oldProc := oldSession.GetProc()
 	oldTxnHandler := oldSession.GetTxnHandler()
@@ -1024,7 +1026,9 @@ func TestRoutineManagerResetSessionWaitsForRequestAfterResponseWrite(t *testing.
 	select {
 	case err := <-resetResult:
 		t.Fatalf("reset returned before the request finished: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
 	}
 	require.Same(t, oldSession, routine.getSession())
 	require.Same(t, oldProc, oldSession.GetProc())

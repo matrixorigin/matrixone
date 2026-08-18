@@ -386,6 +386,8 @@ func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
 	oldProc := oldSession.GetProc()
 	oldTxnHandler := oldSession.GetTxnHandler()
 	require.True(t, routine.mc.tryBeginRequest())
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	resetResult := make(chan error, 1)
@@ -395,7 +397,9 @@ func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
 	select {
 	case err := <-resetResult:
 		t.Fatalf("reset returned before the request was canceled: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter the request-only admission wait")
 	}
 
 	cancel()
@@ -409,6 +413,49 @@ func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
 	require.Same(t, oldProc, oldSession.GetProc())
 	require.Same(t, oldTxnHandler, oldSession.GetTxnHandler())
 	routine.mc.endRequest()
+}
+
+func TestResetAdmissionRejectsConcurrentLifecycleOperation(t *testing.T) {
+	for _, owner := range []string{"reset", "migration"} {
+		t.Run(owner, func(t *testing.T) {
+			routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+			t.Cleanup(routine.cancelRoutineFunc)
+			require.True(t, routine.mc.tryBeginOperation())
+			defer routine.mc.endOperation()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, ok := routine.mc.beginOperationAfterRequestWithContext(ctx)
+			require.False(t, ok, "reset admission must not queue behind concurrent %s", owner)
+		})
+	}
+}
+
+func TestResetAdmissionStopsWhenRoutineClosesDuringRequestWait(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+	defer routine.mc.endRequest()
+
+	waitEntered := make(chan struct{})
+	routine.mc.requestWaitHook = func() { close(waitEntered) }
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(context.Background())
+		result <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not enter the request-only wait")
+	}
+	routine.mc.startClose()
+	select {
+	case ok := <-result:
+		require.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("reset admission did not stop after routine close")
+	}
 }
 
 func TestRoutineCloseCancelsResetRollback(t *testing.T) {

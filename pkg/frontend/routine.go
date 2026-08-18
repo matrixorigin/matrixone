@@ -689,7 +689,7 @@ func (rt *Routine) resetSessionWithAdmission(
 		// waiting here lets an already-running request finish before the old
 		// session is replaced. The QueryService caller supplies the bounded
 		// context; the no-context helper above intentionally remains fail-fast.
-		operationCtx, ok = rt.mc.beginOperationWithContext(ctx)
+		operationCtx, ok = rt.mc.beginOperationAfterRequestWithContext(ctx)
 	}
 	if !ok {
 		if ctx != nil {

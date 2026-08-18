@@ -52,6 +52,25 @@ func runTestWithQueryServiceHandler(
 	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
 	fn func(cc *clientConn, addr string),
 ) {
+	runTestWithQueryServiceHandlers(t, cn, migrateConnToHandler, nil, fn)
+}
+
+func runTestWithQueryServiceResetHandler(
+	t *testing.T,
+	cn metadata.CNService,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
+	runTestWithQueryServiceHandlers(t, cn, nil, resetSessionHandler, fn)
+}
+
+func runTestWithQueryServiceHandlers(
+	t *testing.T,
+	cn metadata.CNService,
+	migrateConnToHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	resetSessionHandler func(context.Context, *pb.Request, *pb.Response, *morpc.Buffer) error,
+	fn func(cc *clientConn, addr string),
+) {
 	sid := ""
 	runtime.RunTest(
 		sid,
@@ -111,7 +130,10 @@ func runTestWithQueryServiceHandler(
 				}
 			}
 			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, migrateConnToHandler, false)
-			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+			qs.AddHandleFunc(pb.CmdMethod_ResetSession, func(ctx context.Context, req *pb.Request, resp *pb.Response, buf *morpc.Buffer) error {
+				if resetSessionHandler != nil {
+					return resetSessionHandler(ctx, req, resp, buf)
+				}
 				if req.ResetSessionRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
 				}

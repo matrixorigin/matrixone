@@ -37,6 +37,10 @@ type migrateController struct {
 	operationCancel context.CancelFunc
 	// cond coordinates lifecycle operations and routine cleanup.
 	cond *sync.Cond
+	// requestWaitHook is test-only. Production leaves it nil; tests use it to
+	// prove a reset reached the request-only admission wait before changing the
+	// request or its context.
+	requestWaitHook func()
 	// the id of goroutine that executes the migration
 	goroutineID uint64
 }
@@ -97,6 +101,34 @@ func (mc *migrateController) beginOperationWithContext(ctx context.Context) (con
 	mc.Lock()
 	defer mc.Unlock()
 	for (mc.inProgress || mc.requestInProgress) && !mc.closed && ctx.Err() == nil {
+		mc.cond.Wait()
+	}
+	return mc.startOperationLocked(ctx)
+}
+
+// beginOperationAfterRequestWithContext starts a lifecycle operation after an
+// already-running request finishes. Unlike beginOperationWithContext, it does
+// not queue behind another lifecycle operation: reset-session must preserve
+// the existing lifecycle-conflict fail-fast behavior.
+func (mc *migrateController) beginOperationAfterRequestWithContext(ctx context.Context) (context.Context, bool) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stopWakeup := context.AfterFunc(ctx, func() {
+		mc.Lock()
+		mc.cond.Broadcast()
+		mc.Unlock()
+	})
+	defer stopWakeup()
+
+	mc.Lock()
+	defer mc.Unlock()
+	waitNotified := false
+	for mc.requestInProgress && !mc.inProgress && !mc.closed && ctx.Err() == nil {
+		if !waitNotified && mc.requestWaitHook != nil {
+			waitNotified = true
+			mc.requestWaitHook()
+		}
 		mc.cond.Wait()
 	}
 	return mc.startOperationLocked(ctx)
