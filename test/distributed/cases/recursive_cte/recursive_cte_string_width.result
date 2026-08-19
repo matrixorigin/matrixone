@@ -11,6 +11,7 @@ select n + 1, concat(s, 'b') from r where n < 4
 select * from r order by n;
 Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 select 1;
+➤ 1[-5,64,0]  𝄀
 1
 set session sql_mode = '';
 with recursive r(n, s) as (
@@ -29,6 +30,7 @@ set session sql_mode = 'STRICT_TRANS_TABLES';
 execute recursive_cte_string_width_stmt;
 Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 select 1;
+➤ 1[-5,64,0]  𝄀
 1
 set session sql_mode = '';
 execute recursive_cte_string_width_stmt;
