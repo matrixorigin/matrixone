@@ -11262,6 +11262,11 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 		{input: "1:01::56 x ", want: "1/1/0"},
 		{input: "1:01::56 +", want: "1/1/0"},
 		{input: "1:01::56 + ", want: "1/1/0"},
+		{input: "1:01::56 xy ", want: "NULL"},
+		{input: "1:01::56 abc ", want: "NULL"},
+		{input: "1:01::56 é ", want: "NULL"},
+		{input: "12:34::56 x ", want: "NULL"},
+		{input: "12:34::56 + ", want: "NULL"},
 		{input: "12:34::56 +1", want: "NULL"},
 		{input: "12:34::56 +1 x", want: "12/34/0"},
 		{input: "12:34::56 abc", want: "NULL"},
@@ -11564,6 +11569,11 @@ func TestStringTimeExtractOracleOwnershipMatrix(t *testing.T) {
 		{input: "1:01::56 x ", want: want{hour: 1, minute: 1}},
 		{input: "1:01::56 +", want: want{hour: 1, minute: 1}},
 		{input: "1:01::56 + ", want: want{hour: 1, minute: 1}},
+		{input: "1:01::56 xy ", want: want{null: true}},
+		{input: "1:01::56 abc ", want: want{null: true}},
+		{input: "1:01::56 é ", want: want{null: true}},
+		{input: "12:34::56 x ", want: want{null: true}},
+		{input: "12:34::56 + ", want: want{null: true}},
 	}
 
 	inputs := make([]string, 0, len(cases))
