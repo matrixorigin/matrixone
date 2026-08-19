@@ -150,7 +150,7 @@ func (l Lock) tryHold(
 	beforeAddHolder func() error,
 ) (bool, bool, error) {
 	if l.isEmpty() {
-		panic("BUG: try hold on empty lock")
+		return false, false, errEmptyLock
 	}
 
 	// txn already hold the lock
