@@ -239,11 +239,18 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 			if fstr == "datalink" {
 				return plan.Type{Id: int32(types.T_datalink)}, nil
 			}
-			if fstr == "tinytext" {
+			switch fstr {
+			case "tinytext":
 				// TEXT-family limits are byte limits in MySQL. Preserve TINYTEXT's
 				// 255-byte bound in the plan so DML assignment casts can enforce it
 				// without changing the externally visible TEXT type family.
 				return plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}, nil
+			case "mediumtext":
+				return plan.Type{Id: int32(types.T_text), Width: types.MaxMediumTextLen}, nil
+			case "longtext":
+				// The protocol column-length field is a uint32, but Connector/J
+				// exposes LONGTEXT's effective signed maximum as its precision.
+				return plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}, nil
 			}
 
 			return plan.Type{Id: int32(types.T_text)}, nil

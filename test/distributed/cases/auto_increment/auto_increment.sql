@@ -219,6 +219,17 @@ select * from auto_increment15;
 Drop table auto_increment15;
 
 
+-- LAST_INSERT_ID() for a multi-row insert is the first generated value.
+drop table if exists auto_increment_first_generated;
+create table auto_increment_first_generated(
+    id int auto_increment primary key,
+    v int
+) auto_increment = 100;
+insert into auto_increment_first_generated(v) values (1), (2), (3);
+select last_insert_id();
+select * from auto_increment_first_generated order by id;
+drop table auto_increment_first_generated;
+
 -- abnormal test:auto_increment < 0
 Drop table if exists auto_increment16;
 Create table auto_increment16(col1 int auto_increment)auto_increment < 0;

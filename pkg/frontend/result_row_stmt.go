@@ -294,6 +294,16 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	//defer execCtx.proto.EnableAutoFlush()
 
 	mrs := ses.GetMysqlResultSet()
+	if execCtx.input != nil && execCtx.input.isCursorExecute && execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		if execCtx.prepareStmt.cursor.result == nil {
+			execCtx.prepareStmt.cursor.result = &MysqlResultSet{}
+		}
+		cursorColumns := make([]Column, 0, len(columns))
+		for _, column := range columns {
+			cursorColumns = append(cursorColumns, column.(Column))
+		}
+		execCtx.prepareStmt.cursor.result.Columns = cursorColumns
+	}
 	/*
 		Step 1 : send column count and column definition.
 	*/
@@ -354,7 +364,23 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
+		if execCtx.input != nil && execCtx.input.isCursorExecute {
+			status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+			rows := uint64(0)
+			if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil && execCtx.prepareStmt.cursor.result != nil {
+				rows = execCtx.prepareStmt.cursor.result.GetRowCount()
+			}
+			if rows == 0 {
+				status |= SERVER_STATUS_LAST_ROW_SENT
+				if execCtx.prepareStmt != nil {
+					execCtx.prepareStmt.closeCursor()
+				}
+			} else {
+				status |= SERVER_STATUS_CURSOR_EXISTS
+			}
+		}
+		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, status)
 		if err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)

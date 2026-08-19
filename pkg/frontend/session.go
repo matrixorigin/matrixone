@@ -1466,6 +1466,9 @@ func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perf
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
+		if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute {
+			return capturePreparedCursorBatch(ses, execCtx, bat)
+		}
 		return ses.outputCallback(ses, execCtx, bat, crs)
 	}
 }

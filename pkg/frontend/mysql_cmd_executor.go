@@ -778,6 +778,28 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	return nil
 }
 
+// capturePreparedCursorBatch materializes a binary prepared-statement result
+// for COM_STMT_FETCH. The ordinary output callback sends each batch directly
+// to the client; a read-only server cursor must retain those rows until the
+// client asks for them. The result metadata is installed by
+// respColumnDefsWithoutFlush before the pipeline starts.
+func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch) error {
+	if bat == nil {
+		return nil
+	}
+	if execCtx == nil {
+		return moerr.NewInternalErrorNoCtx("prepared cursor execution context is missing")
+	}
+	if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor state is missing")
+	}
+	cursor := execCtx.prepareStmt.cursor
+	if cursor.result == nil {
+		cursor.result = &MysqlResultSet{}
+	}
+	return fillResultSet(execCtx.reqCtx, bat, ses, cursor.result)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -5421,14 +5443,43 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		cursorRequested := prepareStmt.cursorRequested
+		// A new execute invalidates any rows retained by the previous cursor,
+		// including a normal (non-cursor) execute of the same statement.
+		prepareStmt.closeCursor()
+		if cursorRequested {
+			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				prepareStmt.clearBinaryParamState(ses.GetProc())
+				markRowCountFailed(ses, ses.GetProc())
+				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),
+					moerr.NewNotSupported(execCtx.reqCtx, "server-side cursors require a SELECT statement")), nil
+			}
+		}
+		if cursorRequested {
+			prepareStmt.cursor = &preparedStmtCursor{result: &MysqlResultSet{}}
+		}
+		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
-		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, remapDb: prepareStmt.remapDb})
+		err = doComQuery(ses, execCtx, &UserInput{sql: sql, stmtName: prepareStmt.Name, stmt: prepareStmt.PrepareStmt, preparePlan: prepareStmt.PreparePlan, isBinaryProtExecute: true, isCursorExecute: cursorRequested, remapDb: prepareStmt.remapDb})
 		if err != nil {
+			prepareStmt.closeCursor()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(), err)
+		} else if cursorRequested && (prepareStmt.cursor == nil || prepareStmt.cursor.result == nil || prepareStmt.cursor.result.GetColumnCount() == 0) {
+			// Defensive cleanup for a statement shape that does not use the
+			// streaming result-row response path.
+			prepareStmt.closeCursor()
 		}
 		prepareStmt.clearBinaryParamState(ses.GetProc())
 		return resp, nil
+
+	case COM_STMT_FETCH:
+		ses.SetCmd(COM_STMT_FETCH)
+		resp, err = executeStmtFetch(execCtx.reqCtx, ses, req.GetData().([]byte))
+		if err != nil || resp != nil && resp.category == ErrorResponse {
+			markRowCountFailed(ses, ses.GetProc())
+		}
+		return resp, err
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
@@ -5457,6 +5508,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5492,6 +5544,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			markRowCountFailed(ses, ses.GetProc())
 			return NewGeneralErrorResponse(COM_STMT_RESET, ses.GetTxnHandler().GetServerStatus(), err), nil
 		}
+		preStmt.closeCursor()
 		prefix := ""
 		if preStmt.IsCloudNonuser {
 			prefix = "/* cloud_nonuser */"
@@ -5555,6 +5608,61 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 		return "", preStmt, err
 	}
 	return sql, preStmt, nil
+}
+
+// executeStmtFetch sends the next batch from a read-only prepared cursor.
+// COM_STMT_FETCH carries only the statement id and requested row count; result
+// metadata was sent by the preceding COM_STMT_EXECUTE response.
+func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response, error) {
+	if len(data) < 8 {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidInput(ctx, "invalid COM_STMT_FETCH packet")), nil
+	}
+	stmtID := binary.LittleEndian.Uint32(data[:4])
+	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
+	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
+	if err != nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
+	}
+	if stmt.cursor == nil || stmt.cursor.result == nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(),
+			moerr.NewInvalidState(ctx, "prepared statement has no active cursor")), nil
+	}
+
+	cursor := stmt.cursor
+	total := cursor.result.GetRowCount()
+	start := cursor.offset
+	if start > total {
+		start = total
+	}
+	end := total
+	if fetchRows < total-start {
+		end = start + fetchRows
+	}
+	rows := &MysqlResultSet{
+		Columns: cursor.result.Columns,
+		Data:    cursor.result.Data[start:end],
+	}
+	if end > start {
+		if err = ses.GetResponser().MysqlRrWr().WriteResultSetRow(rows, end-start); err != nil {
+			return nil, err
+		}
+	}
+	cursor.offset = end
+
+	status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), true)
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	if end >= total {
+		status |= SERVER_STATUS_LAST_ROW_SENT
+		stmt.closeCursor()
+	} else {
+		status |= SERVER_STATUS_CURSOR_EXISTS
+	}
+	if err = ses.GetResponser().MysqlRrWr().WriteEOFOrOK(0, status); err != nil {
+		return nil, err
+	}
+	setRowCount(ses, ses.GetProc(), -1)
+	return nil, nil
 }
 
 func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
@@ -5686,7 +5794,19 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 
 func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
 	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
-		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		// MySQL sends the TEXT family using the corresponding BLOB protocol
+		// type while retaining the text charset. The length determines which
+		// family member the client should expose.
+		switch {
+		case col.Length() <= types.MaxTinyTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+		case col.Length() <= types.MaxStringSize:
+			col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		case col.Length() <= types.MaxMediumTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+		default:
+			col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+		}
 		col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG))
 	}
 }

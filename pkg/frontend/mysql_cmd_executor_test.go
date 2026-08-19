@@ -3699,6 +3699,38 @@ func Test_ExecRequestStmtExecuteErrorClearsPreparedBinaryState(t *testing.T) {
 	require.Zero(t, ses.diagnosticsSnapshot().length())
 }
 
+func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(271),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Data: [][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}},
+		}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 271)
+	binary.LittleEndian.PutUint32(data[4:8], 2)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.NotNil(t, stmt.cursor)
+	require.Equal(t, uint64(2), stmt.cursor.offset)
+
+	resp, err = executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+}
+
 func Test_CMD_FIELD_LIST(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {

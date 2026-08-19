@@ -312,6 +312,11 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
+	// materialized cursor is kept on the prepared statement because a later
+	// COM_STMT_FETCH only carries the statement id.
+	cursorRequested bool
+	cursor          *preparedStmtCursor
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
@@ -334,6 +339,32 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+}
+
+// preparedStmtCursor is the server-side result retained between
+// COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
+// the cursor does not need an additional lock.
+type preparedStmtCursor struct {
+	result *MysqlResultSet
+	offset uint64
+}
+
+func (cursor *preparedStmtCursor) close() {
+	if cursor == nil {
+		return
+	}
+	cursor.result = nil
+	cursor.offset = 0
+}
+
+func (prepareStmt *PrepareStmt) closeCursor() {
+	if prepareStmt == nil {
+		return
+	}
+	if prepareStmt.cursor != nil {
+		prepareStmt.cursor.close()
+		prepareStmt.cursor = nil
+	}
 }
 
 /*
@@ -675,6 +706,7 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 //}
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.closeCursor()
 	if prepareStmt.params != nil {
 		prepareStmt.params.Free(prepareStmt.proc.Mp())
 	}
@@ -720,6 +752,7 @@ func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	for k := range prepareStmt.getFromSendLongData {
 		delete(prepareStmt.getFromSendLongData, k)
 	}
+	prepareStmt.cursorRequested = false
 }
 
 type Allocator interface {

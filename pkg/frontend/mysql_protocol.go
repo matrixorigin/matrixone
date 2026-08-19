@@ -814,8 +814,13 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		return moerr.NewInternalError(ctx, "malform packet")
 
 	}
-	if flag != 0 {
-		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
+	switch flag {
+	case 0: // CURSOR_TYPE_NO_CURSOR
+		stmt.cursorRequested = false
+	case 1: // CURSOR_TYPE_READ_ONLY
+		stmt.cursorRequested = true
+	default:
+		stmt.cursorRequested = false
 		return moerr.NewInvalidInputf(ctx, "unsupported Prepare flag '%v'", flag)
 	}
 
@@ -3518,7 +3523,7 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
@@ -3561,7 +3566,7 @@ func (mp *MysqlProtocolImpl) writeResultSetRow2(
 	var err error = nil
 
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	useBinaryRow := cmd == COM_STMT_EXECUTE
+	useBinaryRow := cmd == COM_STMT_EXECUTE || cmd == COM_STMT_FETCH
 
 	writeRows := func() error {
 		//make rows into the batch
@@ -3833,7 +3838,7 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	// COM_QUERY returns text rows, while COM_STMT_EXECUTE returns binary rows.
 	// Metadata and row encoding must describe the same command response.
-	if CommandType(cmd) == COM_STMT_EXECUTE {
+	if CommandType(cmd) == COM_STMT_EXECUTE || CommandType(cmd) == COM_STMT_FETCH {
 		for i := uint64(0); i < mysqlRS.GetRowCount(); i++ {
 			if err = mp.sendResultSetBinaryRow(mysqlRS, i); err != nil {
 				return err
