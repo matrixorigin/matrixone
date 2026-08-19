@@ -413,7 +413,17 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// `capacity < threshold` guards compare against, so bump it by 1 to
 		// route any `srcRowCount % capacity == graphDegree` tail to the CDC path.
 		threshold := int64(graphDegree) + 1
-		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
+
+		// SHARDED distributes ONE sub-index across N devices; the aggregate VRAM
+		// budget is N × per-device. planCapacity treats `capacity` as "per-sub-
+		// index build rows" and its SHARDED-can't-split guard needs to see the
+		// aggregate — otherwise a comfortable N-way shard (each shard fits on
+		// its device) gets rejected as if it had to fit on one card.
+		effectiveRowsFit := rowsFit
+		if u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) && len(devices) > 1 {
+			effectiveRowsFit = rowsFit * int64(len(devices))
+		}
+		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"cagra", "max_index_capacity")
 		if err != nil {

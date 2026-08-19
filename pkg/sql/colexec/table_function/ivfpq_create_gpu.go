@@ -464,7 +464,15 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if threshold <= 0 {
 			threshold = int64(cuvs.DefaultIvfPqBuildParams().NLists)
 		}
-		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
+
+		// SHARDED distributes ONE sub-index across N devices; see the matching
+		// note in cagra_create_gpu.go — planCapacity's split guard needs the
+		// aggregate rowsFit for SHARDED or it rejects legitimate N-way shards.
+		effectiveRowsFit := rowsFit
+		if u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) && len(devices) > 1 {
+			effectiveRowsFit = rowsFit * int64(len(devices))
+		}
+		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"ivfpq", "max_index_capacity")
 		if err != nil {
