@@ -5696,7 +5696,6 @@ func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
 			{name: "MYSQL_TYPE_MEDIUM_BLOB", typ: defines.MYSQL_TYPE_MEDIUM_BLOB},
 			{name: "MYSQL_TYPE_LONG_BLOB", typ: defines.MYSQL_TYPE_LONG_BLOB},
 		} {
-			tc := tc
 			convey.Convey(tc.name, func() {
 				rs := &MysqlResultSet{}
 				mysqlCol := new(MysqlColumn)
