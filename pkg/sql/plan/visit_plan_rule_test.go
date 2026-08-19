@@ -1165,7 +1165,7 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
 	require.Nil(t, stringResult.GetF().Args[0].GetF())
-	require.Equal(t, "-1.5", stringResult.GetF().Args[0].GetLit().GetSval())
+	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
 
 	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)
@@ -1227,6 +1227,39 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal128), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Id)
 	require.Equal(t, int32(29), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Width)
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
+}
+
+func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{param(0)})
+	require.NoError(t, err)
+	eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(1),
+		param(1),
+	})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{absExpr, eqExpr},
+		}},
+	}}}
+
+	filled, err := FillValuesOfParamsInPlan(ctx, query, []any{
+		ParamValue{Value: "-1.5", RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "1"},
+	})
+	require.NoError(t, err)
+	bound := filled.GetQuery().Nodes[0].ProjectList[1].GetF().Args[1]
+	require.Equal(t, int64(1), bound.GetLit().GetI64Val())
 }
 
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {

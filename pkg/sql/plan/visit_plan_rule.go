@@ -475,7 +475,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// was encoded as an integer. For casts to other numeric domains, use
 				// the execute-time type so functions such as ABS can specialize a
 				// decimal parameter instead of retaining a prepare-time BIGINT cast.
-				if unwrapped, ok := unwrapImplicitPreparedParamCast(rewrittenArg, rule.inferTextParamTypes); ok {
+				if unwrapped, ok := unwrapImplicitPreparedParamCast(rule.ctx, rewrittenArg, rule.inferTextParamTypes); ok {
 					boundArgs[i] = unwrapped
 				}
 			}
@@ -548,7 +548,7 @@ func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 // the execute-time value has a numeric type that can safely drive rebinding.
 // Decimal and YEAR casts are retained because their executors require the
 // target physical representation for arithmetic and index serialization.
-func unwrapImplicitPreparedParamCast(rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
+func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
 	fn := rewritten.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return nil, false
@@ -566,8 +566,10 @@ func unwrapImplicitPreparedParamCast(rewritten *plan.Expr, inferText bool) (*pla
 		if !ok {
 			return nil, false
 		}
-		bound := DeepCopyExpr(arg)
-		bound.Typ = makePlan2Type(&typ)
+		bound, err := preparedRuntimeParamExpr(ctx, literal.GetSval(), literal.IsBin, typ)
+		if err != nil {
+			return nil, false
+		}
 		arg = bound
 	}
 	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)

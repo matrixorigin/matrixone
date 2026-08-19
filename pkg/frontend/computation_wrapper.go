@@ -1188,8 +1188,13 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 				paramValue.RuntimeType = types.T_bool.ToType()
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
-				paramValue.RuntimeType = runtimeType
-				paramValue.HasRuntimeType = true
+				// Text-typed protocol values keep the cached TEXT/implicit-cast path.
+				// A TEXT runtime marker would otherwise enable overload rebinding for
+				// every string predicate in a mixed-parameter statement.
+				if runtimeType.Oid != types.T_text {
+					paramValue.RuntimeType = runtimeType
+					paramValue.HasRuntimeType = true
+				}
 			}
 		}
 		values[i] = paramValue
