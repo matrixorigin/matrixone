@@ -24521,7 +24521,7 @@ yydefault:
 				io = tree.NewIndexOption()
 				io.IType = tree.INDEX_TYPE_INVALID
 			}
-			var Name = tree.Identifier(yyDollar[4].cstrUnion().Compare())
+			var Name = tree.Identifier(yyDollar[4].cstrUnion().Origin())
 			var Table = yyDollar[7].tableNameUnion()
 			var ifNotExists = false
 			var IndexCat = yyDollar[2].indexCategoryUnion()

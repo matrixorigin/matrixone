@@ -8977,7 +8977,7 @@ create_index_stmt:
             io = tree.NewIndexOption()
             io.IType = tree.INDEX_TYPE_INVALID
 	    }
-        var Name = tree.Identifier($4.Compare())
+        var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
         var IndexCat = $2

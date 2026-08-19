@@ -562,6 +562,15 @@ func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
 		return mock
 	}
 
+	t.Run("standalone create", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+			"CREATE INDEX MixedCaseIdx ON t1(b)")
+		require.NoError(t, err)
+		indexes := logicPlan.GetDdl().GetCreateIndex().GetIndex().GetTableDef().GetIndexes()
+		require.Len(t, indexes, 1)
+		require.Equal(t, "MixedCaseIdx", indexes[0].IndexName)
+	})
+
 	t.Run("alter visibility", func(t *testing.T) {
 		logicPlan, err := buildSingleStmt(newMock(), t,
 			"ALTER TABLE t1 ALTER INDEX mixedcaseidx INVISIBLE")

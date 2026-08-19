@@ -94,6 +94,16 @@ func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
 	require.Equal(t, "TypeOptionIdx", index.Name)
 }
 
+func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create index MixedCaseIdx on t(v)", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateIndex)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
+}
+
 func TestSetNamesAssignmentKind(t *testing.T) {
 	tests := []struct {
 		name     string

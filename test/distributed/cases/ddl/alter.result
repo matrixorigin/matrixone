@@ -185,6 +185,16 @@ show index from index02;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 index02    1    Key1    1    col1    A    0    NULL    NULL    YES                    NO    col1
 drop table index02;
+drop table if exists index_case;
+create table index_case(v varchar(20));
+create index StandAloneIdx on index_case(v);
+show index from index_case;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+index_case    1    StandAloneIdx    1    v    A    0    NULL    NULL    YES                    YES    v
+drop index standaloneidx on index_case;
+show index from index_case;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+drop table index_case;
 drop table if exists index03;
 create table index03(col1 int, col2 int, col3 int);
 alter table index03 add unique key(col1,col2) comment 'abcTest';
