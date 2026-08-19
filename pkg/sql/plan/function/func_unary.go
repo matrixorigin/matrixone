@@ -5223,7 +5223,12 @@ func mysqlDatetimeClockCandidateForExtract(str string, end int) mysqlTimePrefixC
 	return mysqlTimePrefixCandidateForExtract(str[:end])
 }
 
-func mysqlDatetimeBareSignSuffixForExtract(candidate mysqlTimePrefixCandidate, postDaySeparators int, bareSign bool, suffix string) bool {
+func mysqlDatetimeBareSignSuffixForExtract(
+	candidate mysqlTimePrefixCandidate,
+	postDaySeparators int,
+	bareSign bool,
+	suffix string,
+) bool {
 	if !bareSign || mysqlTrimLeftWhitespaceForExtract(suffix) != "" {
 		return false
 	}
@@ -5231,9 +5236,9 @@ func mysqlDatetimeBareSignSuffixForExtract(candidate mysqlTimePrefixCandidate, p
 		return true
 	}
 	// A single trailing separator is ambiguous only while the sign is the
-	// terminal byte. Once whitespace terminates that sign, the complete
-	// H:M:S candidate belongs to the DATETIME owner. The caller's length gate
-	// keeps short one-digit TIME spellings on the TIME path.
+	// terminal byte of a short candidate. Once the length-gated path has
+	// established the complete date-shaped candidate, the DATETIME owner keeps
+	// the same H:M:S fields even when the sign is followed by whitespace.
 	return candidate.fieldCount >= 3 && candidate.trailingSeparatorCount == 1
 }
 
