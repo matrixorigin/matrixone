@@ -450,7 +450,19 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 }
 
 // loadIndexes loads each model's index data from the database.
+//
+// Auto-rotation at build time can commit N sub-indexes, each sized to fit 60%
+// of build-time free VRAM. But at search all N must be resident simultaneously
+// (the fan-out reads every sub-index per query), so the sum can exceed the
+// current free VRAM even though each individual model fit at build time.
+// Without an admission gate the first query would OOM after committing. Sum
+// the persisted tar sizes (idx.FileSize, includes every eagerly-resident
+// payload — PQ codes + graph + ids + bitset + INCLUDE filter blobs) and
+// refuse the load loudly if it will not fit 60% of currently-free VRAM.
 func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q]) ([]*IvfpqModel[B, Q], error) {
+	if err := s.admitLoad(indexes); err != nil {
+		return nil, err
+	}
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -461,6 +473,22 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 	}
 	return indexes, nil
+}
+
+func (s *IvfpqSearch[B, Q]) admitLoad(indexes []*IvfpqModel[B, Q]) error {
+	if len(indexes) == 0 || len(s.Devices) == 0 {
+		return nil
+	}
+	var totalBytes uint64
+	for _, idx := range indexes {
+		if idx.FileSize > 0 {
+			totalBytes += uint64(idx.FileSize)
+		}
+	}
+	return vectorindex.AdmitLoadFits(totalBytes, func() (uint64, error) {
+		_, freeBytes, err := cuvs.RowsFittingFreeMem(s.Devices[0], 1)
+		return freeBytes, err
+	}, "IvfpqSearch.loadIndexes")
 }
 
 // Destroy implements cache.VectorIndexSearchIf.

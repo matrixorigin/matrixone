@@ -18,9 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/shirou/gopsutil/v3/mem"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -324,19 +323,27 @@ const hostBudgetNumerator, hostBudgetDenominator = 6, 10
 // build buffer holds is dim * sizeof(Q) of storage-typed vector, whatever the index
 // ends up costing on the GPU.
 //
-// Unlike the GPU query, a failure here is NOT fatal. cudaMemGetInfo failing means the
-// device is unusable and guessing would reintroduce the OOM being prevented; a
-// gopsutil failure just means this one extra bound cannot be applied on this platform,
-// and the device bound plus the srcRowCount clamp still hold. Returning 0 disables the
-// bound rather than failing a build that would have worked.
+// Uses system.MemoryAvailable() which is cgroup-aware — in a container the plain
+// /proc/meminfo reading (gopsutil) reports HOST memory, not this process's cgroup
+// limit, so on a 512 GiB node with a 64 GiB CN cgroup the plain path would allow
+// pre-allocations sized against 512 GiB and trip the cgroup OOM killer despite the
+// claimed bound. system.MemoryAvailable handles both host and container modes.
+//
+// Unlike the GPU query, an unavailable measurement here is NOT fatal. cudaMemGetInfo
+// failing means the device is unusable and guessing would reintroduce the OOM being
+// prevented; a memory-query miss just means this one extra bound cannot be applied on
+// this platform, and the device bound plus the srcRowCount clamp still hold. Returning
+// (0, 0, nil) with availBytes == 0 signals "unmeasured" to the caller; returning a
+// positive availBytes with rows == 0 signals "measured but fits zero rows", which the
+// caller should treat as a hard error rather than silently disabling the bound.
 func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err error) {
 	if perRowBytes == 0 {
 		return 0, 0, nil
 	}
-	vm, err := mem.VirtualMemory()
-	if err != nil || vm == nil {
-		return 0, 0, err
+	avail := system.MemoryAvailable()
+	if avail == 0 {
+		return 0, 0, nil
 	}
-	budget := vm.Available / hostBudgetDenominator * hostBudgetNumerator
-	return int64(budget / perRowBytes), vm.Available, nil
+	budget := avail / hostBudgetDenominator * hostBudgetNumerator
+	return int64(budget / perRowBytes), avail, nil
 }

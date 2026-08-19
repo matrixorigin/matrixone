@@ -473,7 +473,18 @@ func (s *CagraSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuCagra[B, Q], error)
 
 // loadIndexes loads each model's index data from the database.
 // On any error it destroys all partially-loaded indexes and returns the error.
+//
+// Auto-rotation at build time can commit N sub-indexes each sized to fit 60%
+// of build-time free VRAM. At search all N must be resident simultaneously
+// (fan-out reads every sub-index per query), so the sum can exceed the current
+// free VRAM even when each individual model fit at build. Refuse the load
+// loudly before it OOMs at first query — sum the persisted tar sizes
+// (idx.FileSize includes dataset + graph + ids + bitset + INCLUDE filter
+// blobs) and check against 60% of currently-free VRAM.
 func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*CagraModel[B, Q]) ([]*CagraModel[B, Q], error) {
+	if err := s.admitLoad(indexes); err != nil {
+		return nil, err
+	}
 	for _, idx := range indexes {
 		idx.Devices = s.Devices
 		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
@@ -484,6 +495,22 @@ func (s *CagraSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		}
 	}
 	return indexes, nil
+}
+
+func (s *CagraSearch[B, Q]) admitLoad(indexes []*CagraModel[B, Q]) error {
+	if len(indexes) == 0 || len(s.Devices) == 0 {
+		return nil
+	}
+	var totalBytes uint64
+	for _, idx := range indexes {
+		if idx.FileSize > 0 {
+			totalBytes += uint64(idx.FileSize)
+		}
+	}
+	return vectorindex.AdmitLoadFits(totalBytes, func() (uint64, error) {
+		_, freeBytes, err := cuvs.RowsFittingFreeMem(s.Devices[0], 1)
+		return freeBytes, err
+	}, "CagraSearch.loadIndexes")
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
