@@ -343,7 +343,15 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
+	metadataStatus := ses.GetTxnHandler().GetServerStatus()
+	if execCtx.input != nil && execCtx.input.isCursorExecute {
+		// Connector/J inspects the legacy metadata terminator (when
+		// CLIENT_DEPRECATE_EOF is disabled) before it decides whether to create
+		// a ResultsetRowsCursor. Advertise the server cursor on this packet too;
+		// the final terminator below describes the same still-open cursor.
+		metadataStatus = cursorExecuteStatus(metadataStatus)
+	}
+	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, metadataStatus)
 	if err != nil {
 		return
 	}
@@ -366,19 +374,10 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		ses.SetSeqLastValue(execCtx.proc)
 		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
 		if execCtx.input != nil && execCtx.input.isCursorExecute {
-			status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
-			rows := uint64(0)
-			if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil && execCtx.prepareStmt.cursor.result != nil {
-				rows = execCtx.prepareStmt.cursor.result.GetRowCount()
-			}
-			if rows == 0 {
-				status |= SERVER_STATUS_LAST_ROW_SENT
-				if execCtx.prepareStmt != nil {
-					execCtx.prepareStmt.closeCursor()
-				}
-			} else {
-				status |= SERVER_STATUS_CURSOR_EXISTS
-			}
+			// An empty result still has a live server cursor. The required
+			// COM_STMT_FETCH after EXECUTE returns LAST_ROW_SENT and closes it.
+			// Closing it here makes that fetch fail with "no active cursor".
+			status = cursorExecuteStatus(status)
 		}
 		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, status)
 		if err2 != nil {
@@ -467,6 +466,11 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 	}
 
 	return
+}
+
+func cursorExecuteStatus(status uint16) uint16 {
+	status &^= SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT
+	return status | SERVER_STATUS_CURSOR_EXISTS
 }
 
 func schedulingTraceFromComputationWrapper(cw ComputationWrapper) schedule.Trace {

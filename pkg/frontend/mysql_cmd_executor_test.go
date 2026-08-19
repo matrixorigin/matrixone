@@ -3785,6 +3785,109 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
+func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
+	var status uint16
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {
+		status = got
+		return nil
+	}}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name:   getPrepareStmtName(272),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 272)
+	binary.LittleEndian.PutUint32(data[4:8], 32)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, status&SERVER_STATUS_CURSOR_EXISTS)
+	require.NotZero(t, status&SERVER_STATUS_LAST_ROW_SENT)
+}
+
+func TestNewPreparedStmtCursorUsesSessionBudget(t *testing.T) {
+	noSession := newPreparedStmtCursor(nil)
+	require.Equal(t, preparedCursorDefaultMaxBytes, noSession.maxBytes)
+	require.Equal(t, preparedCursorMaxRows, noSession.maxRows)
+
+	ses := &Session{}
+	ses.preparedCursorLimit.Store(8 * preparedCursorBytesPerMegabyte)
+	withSession := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), withSession.maxBytes)
+	require.Same(t, ses, withSession.owner)
+}
+
+func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {
+	require.NoError(t, func() error {
+		_, err := estimatePreparedCursorBatchBytes(nil)
+		return err
+	}())
+	require.True(t, (&Session{}).tryReservePreparedCursorBytes(0, 0))
+	fallbackSession := &Session{}
+	require.True(t, fallbackSession.tryReservePreparedCursorBytes(1, 2))
+	fallbackSession.releasePreparedCursorBytes(1)
+	var nilSession *Session
+	require.True(t, nilSession.tryReservePreparedCursorBytes(1, 1))
+	nilSession.releasePreparedCursorBytes(1)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	require.NoError(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, nil))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, nil, bat))
+	require.Error(t, capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background()}, bat))
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Same(t, ses, stmt.cursor.owner)
+	stmt.closeCursor()
+
+	ses.preparedCursorBytes.Store(3)
+	ses.releasePreparedCursorBytes(5)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	ses.releasePreparedCursorBytes(1)
+}
+
+func TestCapturePreparedCursorBatchEnforcesRowAndCursorLimits(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 2)
+	defer bat.Clean(mp)
+
+	rowLimited := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{int64(1)}}},
+		maxRows:  1,
+		maxBytes: preparedCursorDefaultMaxBytes,
+	}}
+	err := capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: rowLimited}, bat)
+	require.ErrorContains(t, err, "row limit")
+
+	sized := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxRows:  preparedCursorMaxRows,
+		maxBytes: 1,
+	}}
+	err = capturePreparedCursorBatch(&Session{}, &ExecCtx{reqCtx: context.Background(), prepareStmt: sized}, bat)
+	require.ErrorContains(t, err, "memory limit")
+}
+
 func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

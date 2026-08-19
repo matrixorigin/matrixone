@@ -35,6 +35,7 @@ const maxLegacyTinyTextLineageDepth = 64
 type legacyTinyTextColumn struct {
 	ordinal int
 	name    string
+	width   int32
 }
 
 type legacyTinyTextCreateEvidence struct {
@@ -102,7 +103,7 @@ func recoverLegacyTinyText(
 	}
 
 	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
-	if !strings.Contains(lowerCreateSQL, "tinytext") && !strings.Contains(lowerCreateSQL, "like") {
+	if !containsLegacyTextFamily(lowerCreateSQL) && !strings.Contains(lowerCreateSQL, "like") {
 		return nil
 	}
 	evidence, err := parseLegacyTinyTextEvidence(ctx, tableDef.Createsql)
@@ -162,8 +163,14 @@ func LegacyTinyTextCreateSQLNeedsRebuild(tableDef *planpb.TableDef) bool {
 		return false
 	}
 	lowerCreateSQL := strings.ToLower(tableDef.Createsql)
-	return strings.Contains(lowerCreateSQL, "tinytext") ||
+	return containsLegacyTextFamily(lowerCreateSQL) ||
 		strings.Contains(lowerCreateSQL, "like")
+}
+
+func containsLegacyTextFamily(createSQL string) bool {
+	return strings.Contains(createSQL, "tinytext") ||
+		strings.Contains(createSQL, "mediumtext") ||
+		strings.Contains(createSQL, "longtext")
 }
 
 func hasLegacyUnboundedText(tableDef *planpb.TableDef) bool {
@@ -198,7 +205,7 @@ func recoverLegacyTinyTextColumns(tableDef *planpb.TableDef, columns []legacyTin
 			continue
 		}
 		cloned := *candidate
-		cloned.Typ.Width = types.MaxTinyTextLen
+		cloned.Typ.Width = historical.width
 		tableDef.Cols[candidateIndex] = &cloned
 	}
 }
@@ -217,14 +224,14 @@ func recoverLegacyTinyTextFromLike(target, source *planpb.TableDef) {
 	for index, sourceColumn := range sourceColumns {
 		targetColumn := targetColumns[index]
 		if types.T(sourceColumn.Typ.Id) != types.T_text ||
-			sourceColumn.Typ.Width != types.MaxTinyTextLen ||
+			!isLegacyTextWidth(sourceColumn.Typ.Width) ||
 			types.T(targetColumn.Typ.Id) != types.T_text || targetColumn.Typ.Width != 0 {
 			continue
 		}
 		for tableIndex, column := range target.Cols {
 			if column == targetColumn {
 				cloned := *column
-				cloned.Typ.Width = types.MaxTinyTextLen
+				cloned.Typ.Width = sourceColumn.Typ.Width
 				target.Cols[tableIndex] = &cloned
 				break
 			}
@@ -261,7 +268,7 @@ func legacyLikeColumnsCompatible(target, source *planpb.ColDef) bool {
 		}
 	}
 	if types.T(targetClone.Typ.Id) == types.T_text && targetClone.Typ.Width == 0 &&
-		types.T(sourceClone.Typ.Id) == types.T_text && sourceClone.Typ.Width == types.MaxTinyTextLen {
+		types.T(sourceClone.Typ.Id) == types.T_text && isLegacyTextWidth(sourceClone.Typ.Width) {
 		sourceClone.Typ.Width = 0
 	}
 	return proto.Equal(targetClone, sourceClone)
@@ -274,6 +281,12 @@ func isLegacyTinyTextTableKind(tableType string) bool {
 	default:
 		return false
 	}
+}
+
+func isLegacyTextWidth(width int32) bool {
+	return width == types.MaxTinyTextLen ||
+		width == types.MaxMediumTextLen ||
+		width == types.MaxLongTextLen
 }
 
 func parseLegacyTinyTextEvidence(ctx context.Context, createSQL string) (legacyTinyTextCreateEvidence, error) {
@@ -330,13 +343,24 @@ func tinyTextColumnsFromLegacyCreate(stmt *tree.CreateTable) []legacyTinyTextCol
 		}
 		ordinal++
 		typ, ok := column.Type.(*tree.T)
-		if !ok || defines.MysqlType(typ.InternalType.Oid) != defines.MYSQL_TYPE_TEXT ||
-			!strings.EqualFold(typ.InternalType.FamilyString, "tinytext") {
+		if !ok || defines.MysqlType(typ.InternalType.Oid) != defines.MYSQL_TYPE_TEXT {
+			continue
+		}
+		var width int32
+		switch strings.ToLower(typ.InternalType.FamilyString) {
+		case "tinytext":
+			width = types.MaxTinyTextLen
+		case "mediumtext":
+			width = types.MaxMediumTextLen
+		case "longtext":
+			width = types.MaxLongTextLen
+		default:
 			continue
 		}
 		columns = append(columns, legacyTinyTextColumn{
 			ordinal: ordinal,
 			name:    column.Name.ColName(),
+			width:   width,
 		})
 	}
 	return columns
@@ -350,7 +374,8 @@ func equalLegacyTinyTextEvidence(left, right legacyTinyTextCreateEvidence) bool 
 	}
 	for index := range left.columns {
 		if left.columns[index].ordinal != right.columns[index].ordinal ||
-			!strings.EqualFold(left.columns[index].name, right.columns[index].name) {
+			!strings.EqualFold(left.columns[index].name, right.columns[index].name) ||
+			left.columns[index].width != right.columns[index].width {
 			return false
 		}
 	}

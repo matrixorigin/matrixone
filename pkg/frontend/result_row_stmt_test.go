@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestPrebuiltResultRowsFollowRequestProtocol(t *testing.T) {
@@ -75,6 +76,66 @@ func TestPrebuiltResultRowsFollowRequestProtocol(t *testing.T) {
 			require.Equal(t, tc.wantRow, packets[3])
 		})
 	}
+}
+
+type cursorMetadataProtocolWriter struct {
+	testMysqlWriter
+	metadataStatus uint16
+	resultStatus   uint16
+}
+
+func (w *cursorMetadataProtocolWriter) WriteLengthEncodedNumber(uint64) error { return nil }
+func (w *cursorMetadataProtocolWriter) WriteColumnDef(context.Context, Column, int) error {
+	return nil
+}
+func (w *cursorMetadataProtocolWriter) WriteEOFIFAndNoFlush(_, status uint16) error {
+	w.metadataStatus = status
+	return nil
+}
+func (w *cursorMetadataProtocolWriter) WriteEOFOrOK(_, status uint16) error {
+	w.resultStatus = status
+	return nil
+}
+
+func TestPreparedCursorAdvertisedOnMetadataAndEmptyResultTerminators(t *testing.T) {
+	writer := &cursorMetadataProtocolWriter{}
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().SeqLastValue = []string{""}
+	ses := &Session{feSessionImpl: feSessionImpl{
+		respr:      NewMysqlResp(writer),
+		txnHandler: &TxnHandler{},
+		mrs:        &MysqlResultSet{},
+	}, proc: proc, seqLastValue: new(string)}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:      context.Background(),
+		ses:         ses,
+		proc:        proc,
+		stmt:        &tree.Select{},
+		prepareStmt: stmt,
+		input:       &UserInput{isCursorExecute: true},
+	}
+	column := &MysqlColumn{}
+	column.SetName("v")
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	require.NoError(t, NewMysqlResp(writer).respColumnDefsWithoutFlush(ses, execCtx, []any{column}))
+	require.NotNil(t, stmt.cursor.result)
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.metadataStatus&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, writer.metadataStatus&SERVER_STATUS_LAST_ROW_SENT)
+
+	// The final EXECUTE response keeps the empty cursor open. The first FETCH
+	// then observes the zero-row result and emits LAST_ROW_SENT itself.
+	require.NoError(t, NewMysqlResp(writer).respStreamResultRow(ses, execCtx))
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.resultStatus&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, writer.resultStatus&SERVER_STATUS_LAST_ROW_SENT)
+}
+
+func TestCursorExecuteStatusClearsTerminalFlags(t *testing.T) {
+	status := uint16(SERVER_STATUS_CURSOR_EXISTS | SERVER_STATUS_LAST_ROW_SENT | SERVER_STATUS_AUTOCOMMIT)
+	got := cursorExecuteStatus(status)
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), got&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, got&SERVER_STATUS_LAST_ROW_SENT)
+	require.Equal(t, uint16(SERVER_STATUS_AUTOCOMMIT), got&SERVER_STATUS_AUTOCOMMIT)
 }
 
 var (
