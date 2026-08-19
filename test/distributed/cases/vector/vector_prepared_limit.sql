@@ -15,6 +15,9 @@ use ivf_prepared_limit;
 create table t(id bigint primary key, v vecf32(3));
 insert into t values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]'),(4,'[3,3,3]'),(5,'[4,4,4]'),(6,'[5,5,5]'),(7,'[6,6,6]'),(8,'[7,7,7]'),(9,'[8,8,8]');
 create index ix using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
+-- @separator:table
+-- @regex("Vector Index Scan", true)
+explain select id from t where id >= 4 order by l2_distance(v,'[2.1,2.1,2.1]') limit 2;
 select id from t where id >= 4 order by l2_distance(v,'[2.1,2.1,2.1]') limit 2;
 prepare s from 'select id from t where id >= ? order by l2_distance(v, cast(? as vecf32(3))) limit ?';
 set @lo = 4;

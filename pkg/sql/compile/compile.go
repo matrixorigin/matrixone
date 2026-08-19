@@ -306,6 +306,12 @@ func (c *Compile) bindPlanSnapshotForCompile() {
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
+	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if applyOp, ok := op.(*apply.Apply); ok {
+			applyOp.TxnOffset = txnOffset
+		}
+		return nil
+	})
 	for i := range scope.PreScopes {
 		UpdateScopeTxnOffset(scope.PreScopes[i], txnOffset)
 	}
@@ -3948,7 +3954,10 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		s := newScope(Remote)
 		s.NodeInfo = nodes[i]
 		s.TxnOffset = c.TxnOffset
-		s.DataSource = &Source{node: nodeCopy}
+		s.DataSource = &Source{
+			node:                    nodeCopy,
+			vectorIndexScanTemplate: plan2.DeepCopyVectorIndexScan(nodeCopy.VectorIndexScan),
+		}
 		op := constructTableScan(nodeCopy)
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		s.setRootOperator(op)
@@ -4023,6 +4032,17 @@ func normalizeVectorIndexScanSnapshot(node *plan.Node) {
 	}
 	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
 	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+}
+
+func resetVectorIndexScanForExecution(source *Source) *plan.VectorIndexScan {
+	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
+		return nil
+	}
+	if source.vectorIndexScanTemplate == nil {
+		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
+	}
+	source.node.VectorIndexScan = plan2.DeepCopyVectorIndexScan(source.vectorIndexScanTemplate)
+	return source.node.VectorIndexScan
 }
 
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
@@ -4113,12 +4133,12 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
+	spec := resetVectorIndexScanForExecution(s.DataSource)
 	normalizeVectorIndexScanSnapshot(node)
 	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err
 	}
-	spec := node.VectorIndexScan
 	fold := func(expr **plan.Expr) error {
 		if expr == nil || *expr == nil {
 			return nil

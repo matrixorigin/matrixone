@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -540,6 +541,45 @@ func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
 	require.Equal(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
 	require.NotSame(t, topLevelSnapshot, node.ScanSnapshot)
 	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+}
+
+func TestResetVectorIndexScanForExecutionKeepsPreparedTemplateImmutable(t *testing.T) {
+	queryParam := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	limitParam := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 2}}}
+	source := &Source{node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+		QueryVector:    queryParam,
+		CandidateLimit: limitParam,
+	}}}
+
+	first := resetVectorIndexScanForExecution(source)
+	require.NotNil(t, first.QueryVector.GetP())
+	require.NotNil(t, first.CandidateLimit.GetP())
+	first.QueryVector = plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
+	first.CandidateLimit = plan2.MakePlan2Uint64ConstExprWithType(2)
+
+	second := resetVectorIndexScanForExecution(source)
+	require.NotSame(t, first, second)
+	require.Equal(t, int32(1), second.QueryVector.GetP().GetPos())
+	require.Equal(t, int32(2), second.CandidateLimit.GetP().GetPos())
+	require.NotSame(t, source.vectorIndexScanTemplate, second)
+	require.NotNil(t, source.vectorIndexScanTemplate.QueryVector.GetP())
+	require.NotNil(t, source.vectorIndexScanTemplate.CandidateLimit.GetP())
+}
+
+func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
+	rootApply := &apply.Apply{TxnOffset: 3}
+	preScopeApply := &apply.Apply{TxnOffset: 3}
+	scope := &Scope{
+		TxnOffset: 3,
+		RootOp:    rootApply,
+		PreScopes: []*Scope{{TxnOffset: 3, RootOp: preScopeApply}},
+	}
+
+	UpdateScopeTxnOffset(scope, 9)
+	require.Equal(t, 9, scope.TxnOffset)
+	require.Equal(t, 9, rootApply.TxnOffset)
+	require.Equal(t, 9, scope.PreScopes[0].TxnOffset)
+	require.Equal(t, 9, preScopeApply.TxnOffset)
 }
 
 func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {

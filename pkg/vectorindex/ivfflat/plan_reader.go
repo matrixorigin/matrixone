@@ -79,14 +79,14 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		txnOffset:      req.TxnOffset,
 		snapshot:       cloneIvfSnapshot(spec.ScanSnapshot),
 	}
-	if spec.ScanSnapshot != nil && spec.ScanSnapshot.Tenant != nil {
-		accountID := spec.ScanSnapshot.Tenant.TenantID
-		r.scanner.accountID = &accountID
-	} else if source := spec.SourceTable; source != nil && source.PubInfo != nil {
+	if source := spec.SourceTable; source != nil && source.PubInfo != nil {
 		if source.PubInfo.TenantId < 0 {
 			return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan has an invalid publisher tenant")
 		}
 		accountID := uint32(source.PubInfo.TenantId)
+		r.scanner.accountID = &accountID
+	} else if spec.ScanSnapshot != nil && spec.ScanSnapshot.Tenant != nil {
+		accountID := spec.ScanSnapshot.Tenant.TenantID
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
@@ -447,12 +447,12 @@ func searchPlanReader[T types.RealNumbers](
 			r.includeNulls[name] = append(r.includeNulls[name], includeResult.Nulls[name]...)
 		}
 
-		if !multiRound || cursor == nil || cursor.Exhausted || uint64(len(r.keys)) >= r.req.CandidateLimit {
+		if !multiRound || cursor == nil || cursor.Exhausted || uint64(len(r.keys)) >= uint64(limit) {
 			break
 		}
 		advancePlanCursor(cursor)
 	}
-	r.sortAndLimit()
+	r.sortAndLimit(uint64(limit))
 	return nil
 }
 
@@ -483,7 +483,7 @@ func advancePlanCursor(cursor *vectorindex.IvfSearchCursor) {
 	cursor.CurrentBucketCount = count
 }
 
-func (r *planReader) sortAndLimit() {
+func (r *planReader) sortAndLimit(candidateLimit uint64) {
 	order := make([]int, len(r.keys))
 	for i := range order {
 		order[i] = i
@@ -499,7 +499,10 @@ func (r *planReader) sortAndLimit() {
 		}
 		return left < right
 	})
-	limit := min(len(order), int(r.req.CandidateLimit))
+	limit := len(order)
+	if candidateLimit < uint64(limit) {
+		limit = int(candidateLimit)
+	}
 	keys := make([]any, 0, limit)
 	distances := make([]float64, 0, limit)
 	includeData := make(map[string][]any, len(r.includeData))
@@ -543,9 +546,12 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	txn := s.proc.GetTxnOperator()
 	if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) {
-		if clone := s.proc.GetCloneTxnOperator(); clone != nil {
-			txn = clone
+		clone := s.proc.GetCloneTxnOperator()
+		if clone == nil {
+			clone = txn.CloneSnapshotOp(*s.snapshot.TS)
+			s.proc.SetCloneTxnOperator(clone)
 		}
+		txn = clone
 	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {

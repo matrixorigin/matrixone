@@ -5,6 +5,15 @@ use ivf_prepared_limit;
 create table t(id bigint primary key, v vecf32(3));
 insert into t values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]'),(4,'[3,3,3]'),(5,'[4,4,4]'),(6,'[5,5,5]'),(7,'[6,6,6]'),(8,'[7,7,7]'),(9,'[8,8,8]');
 create index ix using ivfflat on t(v) lists=1 op_type 'vector_l2_ops';
+explain select id from t where id >= 4 order by l2_distance(v,'[2.1,2.1,2.1]') limit 2;
+-- @regex("Vector Index Scan", true)
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Vector Index Scan on ix [l2_distance]  𝄀
+              Vector Index: ix, Metric: l2_distance, Candidate Limit: 2, NProbe: 5, Index Filter: (__mo_index_pri_col >= 4)
 select id from t where id >= 4 order by l2_distance(v,'[2.1,2.1,2.1]') limit 2;
 id
 4

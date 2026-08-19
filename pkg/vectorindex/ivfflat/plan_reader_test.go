@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -191,10 +192,22 @@ func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
 		includeData:  map[string][]any{"payload": {int32(30), int32(10), int32(20)}},
 		includeNulls: map[string][]bool{"payload": {false, false, false}},
 	}
-	r.sortAndLimit()
+	r.sortAndLimit(2)
 	require.Equal(t, []any{int64(1), int64(2)}, r.keys)
 	require.Equal(t, []float64{1, 2}, r.distances)
 	require.Equal(t, []any{int32(10), int32(20)}, r.includeData["payload"])
+}
+
+func TestPlanReaderSortAndLimitHandlesMaxUint64(t *testing.T) {
+	r := &planReader{
+		spec:         &plan.VectorIndexScan{},
+		keys:         []any{int64(1)},
+		distances:    []float64{1},
+		includeData:  map[string][]any{},
+		includeNulls: map[string][]bool{},
+	}
+	require.NotPanics(t, func() { r.sortAndLimit(math.MaxUint64) })
+	require.Equal(t, []any{int64(1)}, r.keys)
 }
 
 func TestAdvancePlanCursorExpandsDisjointCentroidWindows(t *testing.T) {
@@ -686,25 +699,34 @@ func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 	require.Empty(t, res.Batches)
 }
 
-func TestRelationScannerUsesSnapshotCloneTransaction(t *testing.T) {
+func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProc(t)
 	t.Cleanup(proc.Free)
 	original := mock_frontend.NewMockTxnOperator(ctrl)
 	clone := mock_frontend.NewMockTxnOperator(ctrl)
 	proc.Base.TxnOperator = original
-	proc.Base.CloneTxnOperator = clone
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 8}
+	original.EXPECT().CloneSnapshotOp(snapshotTS).Return(clone)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	proc.Base.SessionInfo.StorageEngine = eng
-	eng.EXPECT().Database(gomock.Any(), "db", clone).Return(db, nil)
+	eng.EXPECT().Database(gomock.Any(), "db", clone).DoAndReturn(
+		func(ctx context.Context, _ string, _ any) (engine.Database, error) {
+			accountID, err := defines.GetAccountId(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint32(42), accountID)
+			return db, nil
+		})
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(nil, errors.New("snapshot relation unavailable"))
 
 	_, err := (&relationScanner{
-		proc:     proc,
-		snapshot: &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 8}},
+		proc:      proc,
+		accountID: func() *uint32 { value := uint32(42); return &value }(),
+		snapshot:  &plan.Snapshot{TS: &snapshotTS},
 	}).ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
+	require.Same(t, clone, proc.GetCloneTxnOperator())
 }
 
 func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
@@ -980,14 +1002,14 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 			for _, row := range []struct {
 				pk  int64
 				vec []float32
-			}{{1, []float32{0, 0}}, {2, []float32{1, 0}}} {
+			}{{1, []float32{0, 0}}, {2, []float32{1, 0}}, {3, []float32{2, 0}}, {4, []float32{3, 0}}, {5, []float32{4, 0}}} {
 				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(77), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(0), false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[2], row.pk, false, mp))
 				require.NoError(t, vector.AppendArray(bat.Vecs[3], row.vec, false, mp))
 				require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(row.pk*10), false, mp))
 			}
-			bat.SetRowCount(2)
+			bat.SetRowCount(5)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 		default:
 			t.Fatalf("unexpected relation scan of %q", req.Table)
@@ -1026,9 +1048,9 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 	}
 
 	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}))
-	require.Equal(t, []any{int64(1), int64(2)}, r.keys)
-	require.Equal(t, []float64{0, 1}, r.distances)
-	require.Equal(t, []any{int32(10), int32(20)}, r.includeData["payload"])
+	require.Equal(t, []any{int64(1), int64(2), int64(3), int64(4), int64(5)}, r.keys)
+	require.Equal(t, []float64{0, 1, 2, 3, 4}, r.distances)
+	require.Equal(t, []any{int32(10), int32(20), int32(30), int32(40), int32(50)}, r.includeData["payload"])
 	require.Len(t, scanner.requests, 2)
 }
 
@@ -1243,6 +1265,6 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	}, searchplugin.Request{})
 	require.NoError(t, err)
 	snapshotPlanReader := snapshotReader.(*planReader)
-	require.Equal(t, uint32(99), *snapshotPlanReader.scanner.accountID)
+	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)
 	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
 }
