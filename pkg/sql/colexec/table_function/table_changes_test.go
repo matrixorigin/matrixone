@@ -18,12 +18,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -144,6 +146,52 @@ func TestTableChangesStartRejectsInvalidArguments(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+func TestChangeWatermarkStartAndTableChangesPrepare(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(42, 7).ToTimestamp()).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	tf := &TableFunction{
+		Attrs: []string{"watermark"},
+		ctr:   container{retSchema: []types.Type{types.T_varchar.ToType()}},
+	}
+	state := &changeWatermarkState{}
+	require.NoError(t, state.start(tf, proc, 0, nil))
+	require.Equal(t, 1, state.batch.RowCount())
+	require.Equal(t, types.BuildTS(42, 7).ToString(), state.batch.Vecs[0].GetStringAt(0))
+	state.free(tf, proc, false, nil)
+
+	prepared, err := tableChangesPrepare(proc, &TableFunction{})
+	require.NoError(t, err)
+	require.IsType(t, &tableChangesState{}, prepared)
+}
+
+func TestTableChangesStartStopsBeforeEngineLookup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(100, 0).ToTimestamp()).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	args := make([]*vector.Vector, 4)
+	for i, value := range []string{"db", "table", "", "100-0"} {
+		args[i] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(args[i], []byte(value), false, proc.Mp()))
+		defer args[i].Free(proc.Mp())
+	}
+	tf := &TableFunction{
+		Attrs: []string{"value"},
+		ctr:   container{argVecs: args, retSchema: []types.Type{types.T_varchar.ToType()}},
+	}
+	err := (&tableChangesState{accountColumnIdx: -1}).start(tf, proc, 0, nil)
+	require.EqualError(t, err, "internal error: engine is missing from table_changes context")
 }
 
 func TestValidateTableChangesWindow(t *testing.T) {
@@ -312,6 +360,30 @@ func TestTableChangesDeleteKeyNamesAreCaseInsensitive(t *testing.T) {
 
 	require.NoError(t, state.appendDeleteRows(attrs, deletes, proc))
 	require.Equal(t, []int64{7}, vector.MustFixedColWithTypeCheck[int64](state.batch.Vecs[0]))
+}
+
+func TestTableChangesDeleteKeyValuesCompositeAndMalformed(t *testing.T) {
+	state := &tableChangesState{tableDef: &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"PartA", "PartB"}},
+	}}
+	packer := types.NewPacker()
+	packer.EncodeInt64(11)
+	packer.EncodeStringType([]byte("value"))
+	keyVec := vector.NewVec(types.T_varbinary.ToType())
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	defer keyVec.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(keyVec, packer.GetBuf(), false, proc.Mp()))
+	values, err := state.deleteKeyValues(keyVec, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(11), values["parta"])
+	require.Equal(t, "value", string(values["partb"].([]byte)))
+
+	bad := vector.NewVec(types.T_varbinary.ToType())
+	defer bad.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(bad, []byte{1, 2, 3}, false, proc.Mp()))
+	_, err = state.deleteKeyValues(bad, 0)
+	require.Error(t, err)
 }
 
 func TestValidateRuntimeTableChangesSourceRejectsMetadataColumnNames(t *testing.T) {
