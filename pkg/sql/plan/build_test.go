@@ -2111,6 +2111,12 @@ func TestOnlyFullGroupByAllowsQualifiedHavingProjectedColumn(t *testing.T) {
 		`SELECT n_regionkey AS region_key
 		 FROM nation
 		 HAVING nation.n_regionkey > 0`,
+		`SELECT nation.n_regionkey
+		 FROM tpch.nation
+		 HAVING tpch.nation.n_regionkey > 0`,
+		`SELECT tpch.nation.n_regionkey
+		 FROM tpch.nation
+		 HAVING nation.n_regionkey > 0`,
 	} {
 		mock := NewMockOptimizer(false)
 		mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")

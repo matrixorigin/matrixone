@@ -765,7 +765,7 @@ func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree
 	var selected tree.Expr
 	for _, field := range bc.projectByAst {
 		column, ok := unwrapParenExpr(field.ast).(*tree.UnresolvedName)
-		if !ok || column.Star || !sameHavingColumnReference(column, ref) {
+		if !ok || column.Star || !sameHavingColumnReference(bc, column, ref) {
 			continue
 		}
 		if selected == nil {
@@ -779,10 +779,55 @@ func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree
 	return selected, selected != nil, false
 }
 
-func sameHavingColumnReference(left, right *tree.UnresolvedName) bool {
-	return strings.EqualFold(left.DbName(), right.DbName()) &&
-		strings.EqualFold(left.TblName(), right.TblName()) &&
-		strings.EqualFold(left.ColName(), right.ColName())
+// sameHavingColumnReference compares source-column identity rather than the
+// spelling of optional qualifiers. A projected column may be qualified by the
+// planner with its table name while HAVING repeats it with the database name
+// (or vice versa); both references must resolve to the same binding and column.
+func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedName) bool {
+	if ctx != nil {
+		leftBinding, leftPos, leftOK := resolveHavingColumnIdentity(ctx, left)
+		rightBinding, rightPos, rightOK := resolveHavingColumnIdentity(ctx, right)
+		if leftOK && rightOK {
+			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
+		}
+	}
+
+	// Keep a conservative spelling fallback for contexts where a source
+	// binding is unavailable (for example a partially built UNION context).
+	// An omitted qualifier is optional, but two explicit, different qualifiers
+	// must not be treated as the same column.
+	return strings.EqualFold(left.ColName(), right.ColName()) &&
+		(left.TblName() == "" || right.TblName() == "" ||
+			strings.EqualFold(left.TblName(), right.TblName())) &&
+		(left.DbName() == "" || right.DbName() == "" ||
+			strings.EqualFold(left.DbName(), right.DbName()))
+}
+
+func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
+	if ctx == nil || ref == nil || ref.Star || ref.NumParts == 0 {
+		return nil, 0, false
+	}
+
+	var binding *Binding
+	if ref.TblName() == "" {
+		binding = ctx.bindingByCol[ref.ColName()]
+	} else {
+		// Match baseBindColRef: a table name is the primary lookup key, while
+		// the database-qualified key is used by remapped contexts.
+		binding = ctx.bindingByTable[ref.TblName()]
+		if binding == nil && ref.DbName() != "" {
+			binding = ctx.bindingByTable[ref.DbName()+"."+ref.TblName()]
+		}
+	}
+	if binding == nil {
+		return nil, 0, false
+	}
+
+	colPos := binding.FindColumn(ref.ColName())
+	if colPos < 0 {
+		return nil, 0, false
+	}
+	return binding, colPos, true
 }
 
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)
