@@ -9,7 +9,9 @@
 # CI assembles this context from the shared build artifact produced by
 # matrixorigin/CI .github/workflows/build-mo.yaml; the resulting image is
 # equivalent to the runtime stage of optools/images/Dockerfile.
-FROM matrixorigin/ubuntu:22.04
+ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
+
+FROM ${RUNTIME_IMAGE}
 
 COPY --chmod=0755 mo-service /mo-service
 COPY etc /etc
