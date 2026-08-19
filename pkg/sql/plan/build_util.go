@@ -448,12 +448,15 @@ func collationForName(name string) (uint32, bool) {
 		return uint32(types.CharsetBinary), true
 	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci",
+	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
 		"latin1_swedish_ci", "ascii_general_ci":
+		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
+		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
+		// general-ci identity instead of claiming native UCA 9.0 semantics.
 		return uint32(types.CharsetUTF8), true
 	default:
-		// Do not silently alias advertised UCA/0900 collations to either legacy
-		// general_ci or byte ordering. Their weight and padding contracts differ.
+		// Do not silently alias other advertised UCA/0900 collations to either
+		// legacy general_ci or byte ordering. Their weight and padding contracts differ.
 		return 0, false
 	}
 }
@@ -467,7 +470,7 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	switch strings.ToLower(name) {
 	case "utf8_unicode_ci", "utf8mb3_unicode_ci":
 		replacement = "utf8_general_ci"
-	case "utf8mb4_unicode_ci", "utf8mb4_0900_ai_ci",
+	case "utf8mb4_unicode_ci",
 		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
 	case "utf8mb4_0900_bin":
