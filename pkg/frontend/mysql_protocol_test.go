@@ -5686,6 +5686,31 @@ func Test_appendResultSetTextRow_DateTimeCoverage(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 		})
 
+		// TEXT-family result metadata can use the corresponding BLOB protocol
+		// type. All of those variants carry the same length-encoded bytes.
+		for _, tc := range []struct {
+			name string
+			typ  defines.MysqlType
+		}{
+			{name: "MYSQL_TYPE_TINY_BLOB", typ: defines.MYSQL_TYPE_TINY_BLOB},
+			{name: "MYSQL_TYPE_MEDIUM_BLOB", typ: defines.MYSQL_TYPE_MEDIUM_BLOB},
+			{name: "MYSQL_TYPE_LONG_BLOB", typ: defines.MYSQL_TYPE_LONG_BLOB},
+		} {
+			tc := tc
+			convey.Convey(tc.name, func() {
+				rs := &MysqlResultSet{}
+				mysqlCol := new(MysqlColumn)
+				mysqlCol.SetName("text_col")
+				mysqlCol.SetColumnType(tc.typ)
+				rs.AddColumn(mysqlCol)
+
+				rs.AddRow([]interface{}{[]byte("text-family value")})
+
+				err := proto.appendResultSetTextRow(rs, 0)
+				convey.So(err, convey.ShouldBeNil)
+			})
+		}
+
 		// Test NULL value
 		convey.Convey("NULL value", func() {
 			rs := &MysqlResultSet{}
