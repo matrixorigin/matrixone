@@ -105,8 +105,14 @@ const (
 	ErrViewSelectTmpTable   uint16 = 20324
 	ErrCantChangeTxn        uint16 = 20325
 	ErrInvalidGroupFuncUse  uint16 = 20326
-	// Keep ErrCantChangeTxn stable for clients; this code is newly allocated.
-	ErrTooManyRows uint16 = 20327
+	// ErrFtMatchingKeyNotFound: a MATCH() AGAINST() that no FULLTEXT index can serve.
+	// Its own code, not a bare ErrInvalidInput, so callers can identify it precisely --
+	// snapshot restore / PITR / CLONE must skip a view refused for this reason instead of
+	// aborting, and matching on message text there would be fragile.
+	ErrFtMatchingKeyNotFound uint16 = 20327
+	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
+	// allocated separately for SELECT ... INTO statements returning multiple rows.
+	ErrTooManyRows uint16 = 20328
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -444,6 +450,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
 	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
+	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
+	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1043,6 +1052,20 @@ func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
+}
+
+// NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
+// Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
+// by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
+func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrFtMatchingKeyNotFound)
 }
 
 func NewWrongArguments(ctx context.Context, function string) *Error {
