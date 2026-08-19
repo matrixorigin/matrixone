@@ -4417,7 +4417,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			returnType.Scale = fsp
 		}
 
-	case "current_timestamp", "now", "localtime", "sysdate", "current_time", "curtime":
+	case "current_timestamp", "now", "localtime", "localtimestamp", "sysdate", "current_time", "curtime":
 		// The overloads use the default FSP because their return-type callback
 		// receives only argument types. A literal FSP is nevertheless known at
 		// bind time and must be reflected in the plan metadata; otherwise the

@@ -794,3 +794,14 @@ new_id    v
 100    1
 commit;
 drop table auto_increment_alter_create_txn;
+drop table if exists auto_increment_multi_batch;
+create table auto_increment_multi_batch(id bigint auto_increment primary key, v bigint);
+insert into auto_increment_multi_batch(v)
+select result from generate_series(1, 20000) g;
+select last_insert_id();
+last_insert_id()
+1
+select min(id), max(id), count(*) from auto_increment_multi_batch;
+min(id)    max(id)    count(*)
+1    20000    20000
+drop table auto_increment_multi_batch;

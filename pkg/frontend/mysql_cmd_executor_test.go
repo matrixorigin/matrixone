@@ -3827,6 +3827,39 @@ func TestNewPreparedStmtCursorUsesSessionBudget(t *testing.T) {
 	require.Same(t, ses, withSession.owner)
 }
 
+func TestPreparedCursorLimitFollowsDynamicSessionValue(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(8),
+			}},
+		},
+	}
+
+	first := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(8*preparedCursorBytesPerMegabyte), first.maxBytes)
+
+	// Closing a cursor must not freeze the session budget. A subsequent
+	// cursor observes both decreases and increases to the dynamic variable.
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(1))
+	first.close()
+	second := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(preparedCursorBytesPerMegabyte), second.maxBytes)
+
+	// Lowering the limit while another cursor owns bytes rejects additional
+	// retention; raising it permits the next batch without losing accounting.
+	ses.preparedCursorBytes.Store(2 * preparedCursorBytesPerMegabyte)
+	require.False(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.sesSysVars.Set(QueryResultMaxsize, uint64(4))
+	require.True(t, ses.tryReservePreparedCursorBytes(preparedCursorBytesPerMegabyte, second.maxBytes))
+	ses.releasePreparedCursorBytes(3 * preparedCursorBytesPerMegabyte)
+	second.close()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	third := newPreparedStmtCursor(ses)
+	require.Equal(t, uint64(4*preparedCursorBytesPerMegabyte), third.maxBytes)
+	third.close()
+}
+
 func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {
 	require.NoError(t, func() error {
 		_, err := estimatePreparedCursorBatchBytes(nil)

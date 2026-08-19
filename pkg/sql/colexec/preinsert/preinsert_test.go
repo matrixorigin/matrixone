@@ -833,6 +833,55 @@ func TestGenAutoIncrColKeepsTemporaryTableBehavior(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 }
 
+func TestGenAutoIncrColKeepsFirstGeneratedIDAcrossBatches(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Return(uint64(1), nil)
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Return(uint64(8193), nil)
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	preInsert := &PreInsert{
+		HasAutoCol: true,
+		TableDef: &plan.TableDef{
+			Name:        "temp_idx_tbl",
+			TblId:       100,
+			IsTemporary: true,
+			Cols: []*plan.ColDef{{
+				Name: catalog.FakePrimaryKeyColName,
+				Typ:  i32typ,
+			}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+	}
+	preInsert.ctr.tblId = preInsert.TableDef.TblId
+
+	makeBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	first := makeBatch()
+	defer first.Clean(proc.Mp())
+	require.NoError(t, genAutoIncrCol(first, proc, preInsert))
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
+
+	second := makeBatch()
+	defer second.Clean(proc.Mp())
+	require.NoError(t, genAutoIncrCol(second, proc, preInsert))
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
+}
+
 func resetChildren(arg *PreInsert, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchsWithNullVec(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

@@ -49,6 +49,10 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
+	// A PreInsert can be reused by the VM for another statement.  Reset the
+	// statement-local LAST_INSERT_ID marker before that statement starts, while
+	// leaving it untouched between input batches in the current execution.
+	preInsert.ctr.firstGeneratedValueSet = false
 	if preInsert.OpAnalyzer == nil {
 		preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
 	} else {
@@ -572,6 +576,9 @@ retryInsertValues:
 		}
 	}
 
-	proc.SetLastInsertID(lastInsertValue)
+	if lastInsertValue != 0 && !preInsert.ctr.firstGeneratedValueSet {
+		proc.SetLastInsertID(lastInsertValue)
+		preInsert.ctr.firstGeneratedValueSet = true
+	}
 	return nil
 }

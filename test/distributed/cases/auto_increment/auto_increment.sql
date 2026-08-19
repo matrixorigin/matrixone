@@ -546,3 +546,13 @@ insert into auto_increment_alter_create_txn(v) values (1);
 select * from auto_increment_alter_create_txn order by new_id;
 commit;
 drop table auto_increment_alter_create_txn;
+
+-- LAST_INSERT_ID reports the first generated value even when one INSERT ...
+-- SELECT is split into multiple execution batches.
+drop table if exists auto_increment_multi_batch;
+create table auto_increment_multi_batch(id bigint auto_increment primary key, v bigint);
+insert into auto_increment_multi_batch(v)
+select result from generate_series(1, 20000) g;
+select last_insert_id();
+select min(id), max(id), count(*) from auto_increment_multi_batch;
+drop table auto_increment_multi_batch;

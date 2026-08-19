@@ -791,8 +791,28 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 // a second session variable; the hard cap prevents an accidentally huge value
 // from turning the prepared-statement quota into an unbounded heap multiplier.
 func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
-	limit := preparedCursorDefaultMaxBytes
-	if ses != nil {
+	limit := currentPreparedCursorLimit(ses, preparedCursorDefaultMaxBytes)
+	return &preparedStmtCursor{
+		result:   &MysqlResultSet{},
+		maxBytes: limit,
+		maxRows:  preparedCursorMaxRows,
+		owner:    ses,
+	}
+}
+
+func currentPreparedCursorLimit(ses *Session, fallback uint64) uint64 {
+	limit := fallback
+	if limit == 0 {
+		limit = preparedCursorDefaultMaxBytes
+	}
+	if ses == nil {
+		return limit
+	}
+
+	// A live session owns the dynamic query_result_maxsize value. Do not cache
+	// it in preparedCursorLimit: clients can lower or raise the variable after
+	// closing a cursor, and the next cursor must observe the new budget.
+	if ses.sesSysVars != nil {
 		if value, err := ses.GetSessionSysVar(QueryResultMaxsize); err == nil {
 			var megabytes uint64
 			switch v := value.(type) {
@@ -802,45 +822,38 @@ func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
 				if v > 0 {
 					megabytes = uint64(v)
 				}
+			case uint32:
+				megabytes = uint64(v)
+			case int32:
+				if v > 0 {
+					megabytes = uint64(v)
+				}
 			}
 			if megabytes > 0 {
 				maxMegabytes := preparedCursorHardMaxBytes / preparedCursorBytesPerMegabyte
 				if megabytes > maxMegabytes {
 					megabytes = maxMegabytes
 				}
-				limit = megabytes * preparedCursorBytesPerMegabyte
+				return megabytes * preparedCursorBytesPerMegabyte
 			}
 		}
-		if existing := ses.preparedCursorLimit.Load(); existing != 0 {
-			limit = existing
-		} else {
-			ses.preparedCursorLimit.CompareAndSwap(0, limit)
-			if existing := ses.preparedCursorLimit.Load(); existing != 0 {
-				limit = existing
-			}
-		}
+		return limit
 	}
-	return &preparedStmtCursor{
-		result:   &MysqlResultSet{},
-		maxBytes: limit,
-		maxRows:  preparedCursorMaxRows,
-		owner:    ses,
+
+	// Partially initialized sessions in unit tests do not have a sysvar map.
+	// Keep the atomic field as a compatibility fallback for those callers; it
+	// is never populated by a live session anymore.
+	if existing := ses.preparedCursorLimit.Load(); existing != 0 {
+		return existing
 	}
+	return limit
 }
 
 func (ses *Session) tryReservePreparedCursorBytes(bytes, fallbackLimit uint64) bool {
 	if ses == nil || bytes == 0 {
 		return true
 	}
-	limit := ses.preparedCursorLimit.Load()
-	if limit == 0 {
-		limit = fallbackLimit
-		if limit == 0 {
-			limit = preparedCursorDefaultMaxBytes
-		}
-		ses.preparedCursorLimit.CompareAndSwap(0, limit)
-		limit = ses.preparedCursorLimit.Load()
-	}
+	limit := currentPreparedCursorLimit(ses, fallbackLimit)
 	for {
 		current := ses.preparedCursorBytes.Load()
 		if current > limit || bytes > limit-current {
@@ -935,13 +948,18 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	if err != nil {
 		return err
 	}
-	if cursor.bytes > cursor.maxBytes || estimated > cursor.maxBytes-cursor.bytes {
+	// query_result_maxsize is dynamic. Apply its current value to an active
+	// cursor as well as to newly created cursors: a decrease takes effect
+	// before more rows are retained, and an increase is not stranded behind a
+	// stale per-cursor snapshot.
+	effectiveLimit := currentPreparedCursorLimit(ses, cursor.maxBytes)
+	if cursor.bytes > effectiveLimit || estimated > effectiveLimit-cursor.bytes {
 		return moerr.NewInvalidInputf(execCtx.reqCtx,
-			"prepared cursor result exceeds the %d MB memory limit", cursor.maxBytes/preparedCursorBytesPerMegabyte)
+			"prepared cursor result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
 	}
-	if !ses.tryReservePreparedCursorBytes(estimated, cursor.maxBytes) {
+	if !ses.tryReservePreparedCursorBytes(estimated, effectiveLimit) {
 		return moerr.NewInvalidInputf(execCtx.reqCtx,
-			"prepared cursor session result exceeds the %d MB memory limit", cursor.maxBytes/preparedCursorBytesPerMegabyte)
+			"prepared cursor session result exceeds the %d MB memory limit", effectiveLimit/preparedCursorBytesPerMegabyte)
 	}
 	startRows := len(cursor.result.Data)
 	committed := false

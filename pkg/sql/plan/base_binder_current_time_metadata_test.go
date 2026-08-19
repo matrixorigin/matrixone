@@ -31,6 +31,7 @@ func TestBindCurrentTimeFamilyPreservesLiteralFSP(t *testing.T) {
 		{"now", types.T_timestamp.ToTypeWithScale(6), 0},
 		{"current_timestamp", types.T_timestamp.ToTypeWithScale(6), 3},
 		{"localtime", types.T_timestamp.ToTypeWithScale(6), 6},
+		{"localtimestamp", types.T_timestamp.ToTypeWithScale(6), 5},
 		{"sysdate", types.T_timestamp.ToTypeWithScale(6), 2},
 		{"current_time", types.T_time.ToType(), 4},
 		{"curtime", types.T_time.ToType(), 1},

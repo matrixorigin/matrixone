@@ -27,3 +27,14 @@ create table jdbc_result_metadata (
 -- @meta_cmp(true)
 select * from jdbc_result_metadata where 1 = 0;
 drop table jdbc_result_metadata;
+
+-- Conditional expressions must retain MEDIUMTEXT/LONGTEXT protocol lengths
+-- instead of collapsing their TEXT-family markers to ordinary TEXT.
+drop table if exists jdbc_conditional_text_metadata;
+create table jdbc_conditional_text_metadata (mt mediumtext, lt longtext);
+-- @meta_cmp(true)
+select case when true then mt else mt end as case_mt,
+       if(true, lt, lt) as if_lt,
+       coalesce(mt, mt) as coalesce_mt
+from jdbc_conditional_text_metadata where 1 = 0;
+drop table jdbc_conditional_text_metadata;
