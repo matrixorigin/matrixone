@@ -370,9 +370,9 @@ func (l *ObjectList) dropObjectByID(
 		logutil.Error("DropObjectByID IsCreating", zap.String("obj", objectID.ShortStringEx()), zap.String("table", tableDesc))
 		return nil, false, moerr.NewNYINoCtx("DropObjectByID creating obj.")
 	}
-	if deleteByCN {
-		objectio.SetObjectStatsCNDeleted(&droppedObj.ObjectStats, true)
-	}
+	// CNDeleted belongs to this D-entry transition. Set both values explicitly
+	// so a new TN drop cannot inherit provenance from older object state.
+	objectio.SetObjectStatsCNDeleted(&droppedObj.ObjectStats, deleteByCN)
 	// insert the D Entry and update the C Entry
 	l.modify(nil, droppedObj, updatedCEntry)
 	return
