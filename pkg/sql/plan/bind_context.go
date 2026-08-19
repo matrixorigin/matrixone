@@ -734,30 +734,64 @@ func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool, bool) {
 			found = true
 			continue
 		}
-		if semanticAstKey(selected) != semanticAstKey(field.ast) {
+		if !bc.sameHavingOutputExpr(selected, field.ast) {
 			return nil, true, true
 		}
 	}
 	return selected, found, false
 }
 
+// unwrapHavingNoopExpr removes the wrappers that do not change a projected
+// output's direct-column identity. Keep this narrower than a general AST
+// simplifier: only parentheses and unary plus are no-ops here. In particular,
+// an expression such as a+1 must remain anonymous to HAVING.
+func unwrapHavingNoopExpr(ast tree.Expr) tree.Expr {
+	for {
+		switch expr := ast.(type) {
+		case *tree.ParenExpr:
+			ast = expr.Expr
+		case *tree.UnaryExpr:
+			if expr.Op != tree.UNARY_PLUS {
+				return ast
+			}
+			ast = expr.Expr
+		default:
+			return ast
+		}
+	}
+}
+
+func havingDirectColumnExpr(ast tree.Expr) (*tree.UnresolvedName, bool) {
+	column, ok := unwrapHavingNoopExpr(ast).(*tree.UnresolvedName)
+	if !ok || column.Star {
+		return nil, false
+	}
+	return column, true
+}
+
 // havingImplicitOutputName returns the name exposed by a SELECT field when it
 // has no explicit alias. MySQL treats unary plus as a no-op for this purpose,
-// so SELECT +column retains column's implicit output name. Other expressions
-// remain anonymous and must not make their input columns visible to HAVING.
+// so SELECT +column and SELECT ++column retain column's implicit output name.
+// Other expressions remain anonymous and must not make their source columns
+// visible to HAVING.
 func havingImplicitOutputName(field SelectField) (string, bool) {
 	if field.aliasName != "" {
 		return field.aliasName, true
 	}
-	ast := unwrapParenExpr(field.ast)
-	if unary, ok := ast.(*tree.UnaryExpr); ok && unary.Op == tree.UNARY_PLUS {
-		ast = unwrapParenExpr(unary.Expr)
-	}
-	column, ok := ast.(*tree.UnresolvedName)
-	if !ok || column.Star {
+	column, ok := havingDirectColumnExpr(field.ast)
+	if !ok {
 		return "", false
 	}
 	return column.ColName(), true
+}
+
+func (bc *BindContext) sameHavingOutputExpr(left, right tree.Expr) bool {
+	leftColumn, leftIsColumn := havingDirectColumnExpr(left)
+	rightColumn, rightIsColumn := havingDirectColumnExpr(right)
+	if leftIsColumn && rightIsColumn {
+		return sameHavingColumnReference(bc, leftColumn, rightColumn)
+	}
+	return semanticAstKey(unwrapHavingNoopExpr(left)) == semanticAstKey(unwrapHavingNoopExpr(right))
 }
 
 // havingProjectedColumnExpr resolves a qualified HAVING column only when the
@@ -765,20 +799,24 @@ func havingImplicitOutputName(field SelectField) (string, bool) {
 // "a + 1 AS x" does not make the qualified source reference "t.a" visible.
 func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree.Expr, bool, bool) {
 	var selected tree.Expr
+	var selectedColumn *tree.UnresolvedName
+	found := false
 	for _, field := range bc.projectByAst {
-		column, ok := unwrapParenExpr(field.ast).(*tree.UnresolvedName)
-		if !ok || column.Star || !sameHavingColumnReference(bc, column, ref) {
+		column, ok := havingDirectColumnExpr(field.ast)
+		if !ok || !sameHavingColumnReference(bc, column, ref) {
 			continue
 		}
-		if selected == nil {
+		if !found {
 			selected = field.ast
+			selectedColumn = column
+			found = true
 			continue
 		}
-		if semanticAstKey(selected) != semanticAstKey(field.ast) {
+		if !sameHavingColumnReference(bc, selectedColumn, column) {
 			return nil, true, true
 		}
 	}
-	return selected, selected != nil, false
+	return selected, found, false
 }
 
 // sameHavingColumnReference compares source-column identity rather than the

@@ -2143,6 +2143,36 @@ func TestOnlyFullGroupByAllowsUnaryPlusImplicitHavingName(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestOnlyFullGroupByAllowsNestedUnaryPlusImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT ++n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsUnaryPlusQualifiedHavingProjectedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +nation.n_regionkey
+		FROM nation
+		HAVING nation.n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsEquivalentUnaryPlusHavingOutputs(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +n_regionkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
 func TestOnlyFullGroupByAllowsQualifiedHavingProjectedColumn(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT nation.n_regionkey
