@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -493,9 +494,62 @@ var RequestSnapshotRead = func(ctx context.Context, tbl *txnTable, snapshot *typ
 		return nil, err
 	}
 	if len(result.Data.([]any)) == 0 {
-		return cmd_util.SnapshotReadResp{Succeed: false}, nil
+		return &cmd_util.SnapshotReadResp{Succeed: false}, nil
 	}
 	return result.Data.([]any)[0], nil
+}
+
+const (
+	snapshotReadRetryInterval = time.Second
+	snapshotReadRetryTimeout  = 30 * time.Second
+)
+
+// requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
+// from a checkpoint set that cannot cover the requested snapshot. TN reports
+// the former as Succeed=false, so retry it with a bounded, context-aware wait.
+// Once TN reports success, getOrCreateSnapPartBy still validates the returned
+// checkpoint range before using it.
+func requestSnapshotReadUntilReady(
+	ctx context.Context,
+	tbl *txnTable,
+	snapshot *types.TS,
+	retryInterval time.Duration,
+	retryTimeout time.Duration,
+) (*cmd_util.SnapshotReadResp, error) {
+	retryCtx, cancel := context.WithTimeoutCause(
+		ctx,
+		retryTimeout,
+		moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
+	)
+	defer cancel()
+
+	var resp *cmd_util.SnapshotReadResp
+	err := common.RetryWithInterval(
+		retryCtx,
+		func() (bool, error) {
+			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
+			if err != nil {
+				if retryCtx.Err() != nil {
+					return true, context.Cause(retryCtx)
+				}
+				return true, err
+			}
+
+			var ok bool
+			resp, ok = response.(*cmd_util.SnapshotReadResp)
+			if !ok || resp == nil {
+				return true, moerr.NewInternalErrorNoCtxf(
+					"invalid snapshot read response type %T", response,
+				)
+			}
+			return resp.Succeed, nil
+		},
+		retryInterval,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // getOrCreateSnapPartBy is used to get or create a snapshot partition state by the given timestamp.
@@ -503,16 +557,26 @@ func (e *Engine) getOrCreateSnapPartBy(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
-	response, err := RequestSnapshotRead(ctx, tbl, &ts)
+	resp, err := requestSnapshotReadUntilReady(
+		ctx,
+		tbl,
+		&ts,
+		snapshotReadRetryInterval,
+		snapshotReadRetryTimeout,
+	)
 	if err != nil {
 		return nil, err
 	}
-	resp, ok := response.(*cmd_util.SnapshotReadResp)
 	var checkpointEntries []*checkpoint.CheckpointEntry
-	if ok && resp.Succeed && len(resp.Entries) > 0 {
+	if len(resp.Entries) > 0 {
 		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
 		entries := resp.Entries
 		for _, entry := range entries {
+			if entry == nil || entry.Start == nil || entry.End == nil {
+				return nil, moerr.NewInternalErrorNoCtx(
+					"invalid checkpoint entry in snapshot read response",
+				)
+			}
 			start := types.TimestampToTS(*entry.Start)
 			end := types.TimestampToTS(*entry.End)
 			entryType := entry.EntryType
@@ -523,13 +587,14 @@ func (e *Engine) getOrCreateSnapPartBy(
 	}
 
 	ckpsCanServe := func() bool {
-		// The checkpoint entry required by SnapshotRead must meet two or more checkpoints,
-		// otherwise the latest partition can meet this SnapshotRead request
+		// Succeed=false was handled as temporary checkpoint lag above. A successful
+		// response must contain physical checkpoint coverage for the snapshot; do
+		// not turn an empty or gapped response into an incomplete partition.
 		if len(checkpointEntries) < 1 {
 			return false
 		}
 
-		// The end time of the penultimate checkpoint must not be less than the ts of the snapshot,
+		// The end time of the last checkpoint must not be less than the ts of the snapshot,
 		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
 		end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
 		return !end.LT(&ts)

@@ -17,13 +17,16 @@ package disttae
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/stretchr/testify/require"
 )
 
 // minimal mock cluster for tn handler wiring
@@ -59,10 +62,135 @@ func Test_requestSnapshotRead_Smoke(t *testing.T) {
 	tbl := &txnTable{}
 	tbl.proc.Store(proc)
 
-	// a zero ts is acceptable for smoke test
+	// A zero ts is acceptable for this no-TN response test.
 	ts := types.BuildTS(0, 0)
-	// ensure compatibility with requestSnapshotRead API which uses timestamp.Timestamp
-	_ = timestamp.Timestamp{}
+	response, err := RequestSnapshotRead(ctx, tbl, &ts)
+	require.NoError(t, err)
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	require.True(t, ok)
+	require.False(t, resp.Succeed)
+}
 
-	_, _ = RequestSnapshotRead(ctx, tbl, &ts)
+func TestRequestSnapshotReadUntilReadyRetriesTemporaryCheckpointLag(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	calls := 0
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		calls++
+		return &cmd_util.SnapshotReadResp{Succeed: calls > 1}, nil
+	}
+
+	ts := types.BuildTS(10, 0)
+	resp, err := requestSnapshotReadUntilReady(
+		context.Background(),
+		&txnTable{},
+		&ts,
+		time.Nanosecond,
+		time.Second,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.Succeed)
+	require.Equal(t, 2, calls)
+}
+
+func TestRequestSnapshotReadUntilReadyBoundsCheckpointLag(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		return &cmd_util.SnapshotReadResp{Succeed: false}, nil
+	}
+
+	ts := types.BuildTS(10, 0)
+	_, err := requestSnapshotReadUntilReady(
+		context.Background(),
+		&txnTable{},
+		&ts,
+		time.Millisecond,
+		20*time.Millisecond,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), err)
+}
+
+func TestRequestSnapshotReadUntilReadyPreservesRetryTimeoutCause(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	RequestSnapshotRead = func(
+		ctx context.Context,
+		_ *txnTable,
+		_ *types.TS,
+	) (any, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ts := types.BuildTS(10, 0)
+	_, err := requestSnapshotReadUntilReady(
+		context.Background(),
+		&txnTable{},
+		&ts,
+		time.Hour,
+		20*time.Millisecond,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable), err)
+}
+
+func TestRequestSnapshotReadUntilReadyHonorsCallerCancellation(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		return &cmd_util.SnapshotReadResp{Succeed: false}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ts := types.BuildTS(10, 0)
+	_, err := requestSnapshotReadUntilReady(
+		ctx,
+		&txnTable{},
+		&ts,
+		time.Hour,
+		time.Hour,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGetOrCreateSnapPartRejectsSuccessfulCheckpointGap(t *testing.T) {
+	oldRequestSnapshotRead := RequestSnapshotRead
+	defer func() { RequestSnapshotRead = oldRequestSnapshotRead }()
+
+	calls := 0
+	RequestSnapshotRead = func(
+		context.Context,
+		*txnTable,
+		*types.TS,
+	) (any, error) {
+		calls++
+		return &cmd_util.SnapshotReadResp{Succeed: true}, nil
+	}
+
+	tbl := newTxnTableForTest()
+	tbl.tableId = 42
+	tbl.tableName = "t"
+	ts := types.BuildTS(10, 0)
+	_, err := tbl.eng.(*Engine).getOrCreateSnapPartBy(context.Background(), tbl, ts)
+	require.ErrorContains(t, err, "No available checkpoints for snapshot read")
+	require.Equal(t, 1, calls, "a successful but incomplete response is not temporary lag")
 }
