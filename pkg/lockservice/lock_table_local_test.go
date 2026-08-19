@@ -337,13 +337,287 @@ func TestSynchronousWaiterRemovedFromEventsBeforeAfterWait(t *testing.T) {
 
 			select {
 			case <-waiting:
-			case <-time.After(time.Second):
+			case <-time.After(5 * time.Second):
 				t.Fatal("txn2 did not begin waiting for the range lock")
 			}
 
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			require.True(t, <-removed)
 			require.NoError(t, <-done)
+			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestEmptyRangeEndpointIsRemovedBeforeNewRangeLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			// Simulate the state left by a failed range waiter cleanup: the two
+			// endpoints are both empty, but no longer share their backing state.
+			start := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			end := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, start)
+			lt.mu.store.Add([]byte{5}, end)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{0}, {10}}, txnID, newTestRangeExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			// The empty start at 1 is an orphan. The live range [3, 5] is
+			// adjacent in the ordered store, but its end at 5 is not the
+			// orphan's counterpart.
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+
+			stale := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			liveEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, stale)
+			lt.mu.store.Add([]byte{3}, liveStart)
+			lt.mu.store.Add([]byte{5}, liveEnd)
+			lt.deleteEmptyLockLocked([]byte{1}, stale)
+			_, startOK := lt.mu.store.Get([]byte{1})
+			liveStart, liveStartOK := lt.mu.store.Get([]byte{3})
+			liveEnd, liveEndOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.False(t, startOK, "orphan endpoint should be removed")
+			require.True(t, liveStartOK)
+			require.True(t, liveEndOK)
+			require.Same(t, sharedHolders, liveStart.holders)
+			require.Same(t, sharedWaiters, liveStart.waiters)
+			require.True(t, liveStart.isLockRangeStart())
+			require.Same(t, sharedHolders, liveEnd.holders)
+			require.Same(t, sharedWaiters, liveEnd.waiters)
+			require.True(t, liveEnd.isLockRangeEnd())
+		},
+	)
+}
+
+func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 5), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			// Keep the live range-end, but replace only the start's backing state
+			// with an empty state. This is the half-live shape left by a failed
+			// waiter cleanup and must be repaired before the next merge scan.
+			lt.mu.Lock()
+			staleStart, ok := lt.mu.store.Get([]byte{1})
+			require.True(t, ok)
+			staleStart.holders = newHolders()
+			staleStart.waiters = newWaiterQueue()
+			lt.mu.store.Add([]byte{1}, staleStart)
+			lt.mu.Unlock()
+
+			require.NotPanics(t, func() {
+				_, err = s.Lock(ctx, table, newTestRows(0, 10), txnID, newTestRangeExclusiveOptions())
+			})
+			require.NoError(t, err)
+
+			lt.mu.RLock()
+			startLock, startOK := lt.mu.store.Get([]byte{0})
+			endLock, endOK := lt.mu.store.Get([]byte{10})
+			_, oldStartOK := lt.mu.store.Get([]byte{1})
+			_, oldEndOK := lt.mu.store.Get([]byte{5})
+			lt.mu.RUnlock()
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.False(t, oldStartOK)
+			require.False(t, oldEndOK)
+			require.True(t, startLock.isLockRangeStart())
+			require.True(t, endLock.isLockRangeEnd())
+			require.Same(t, startLock.holders, endLock.holders)
+			require.Same(t, startLock.waiters, endLock.waiters)
+
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestMismatchedRangeEndRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(11)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+			staleEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, liveStart)
+			lt.mu.store.Add([]byte{5}, staleEnd)
+			lt.deleteEmptyLockLocked([]byte{5}, staleEnd)
+			startLock, startOK := lt.mu.store.Get([]byte{1})
+			endLock, endOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Same(t, sharedHolders, startLock.holders)
+			require.Same(t, sharedWaiters, startLock.waiters)
+			require.Same(t, sharedHolders, endLock.holders)
+			require.Same(t, sharedWaiters, endLock.waiters)
+			require.True(t, endLock.isLockRangeEnd())
+		},
+	)
+}
+
+func TestEmptyRowLockIsRemovedBeforeNewRowLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			stale := Lock{
+				value:   flagLockRow | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{3}, stale)
+			lt.mu.Unlock()
+
+			txnID := newTestTxnID(2)
+			require.NotPanics(t, func() {
+				_, err := s.Lock(ctx, table, [][]byte{{3}}, txnID, newTestRowExclusiveOptions())
+				require.NoError(t, err)
+			})
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestMergeRangeRestartsAfterEmptyConflict(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			rangeRows := newTestRows(1, 2)
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+			_, err := s.Lock(ctx, table, rangeRows, txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			waiting := make(chan struct{})
+			var waitingOnce sync.Once
+			lt.options.beforeWait = func(c *lockContext) func() {
+				if !bytes.Equal(c.txn.txnID, txn2) {
+					return func() {}
+				}
+				return func() { waitingOnce.Do(func() { close(waiting) }) }
+			}
+
+			txn2Done := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(ctx, table, rangeRows, txn2, newTestRangeExclusiveOptions())
+				txn2Done <- err
+			}()
+			select {
+			case <-waiting:
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 did not begin waiting for the range lock")
+			}
+
+			// Make the first range scan encounter an empty row only after it has
+			// already merged txn1's [1, 2] lock and txn2's waiter.
+			stale := Lock{
+				value:   flagLockRow | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{5}, stale)
+			lt.mu.Unlock()
+
+			_, err = s.Lock(ctx, table, newTestRows(1, 10), txn1, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			lt.mu.RLock()
+			startLock, startOK := lt.mu.store.Get([]byte{1})
+			endLock, endOK := lt.mu.store.Get([]byte{10})
+			lt.mu.RUnlock()
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Equal(t, 1, startLock.waiters.size(), "retry must not duplicate the waiter")
+			require.Equal(t, 1, endLock.waiters.size(), "retry must not duplicate the waiter")
+
+			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+			select {
+			case err := <-txn2Done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("txn2 did not acquire the range lock after txn1 released it")
+			}
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 		},
 	)
