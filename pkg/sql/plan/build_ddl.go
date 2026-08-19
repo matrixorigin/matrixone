@@ -4673,9 +4673,14 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	} else {
 		if tableDef.ViewSql == nil {
-			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			if !dropTable.IfExists {
+				return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			}
+			// DROP VIEW IF EXISTS must not target a same-named base table.
+			// An empty table name is the established DropTable executor no-op.
+			dropTable.Table = ""
 		}
-		if obj.PubInfo != nil {
+		if tableDef.ViewSql != nil && obj.PubInfo != nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop view in subscription database")
 		}
 	}
