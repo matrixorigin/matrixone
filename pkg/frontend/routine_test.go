@@ -406,6 +406,7 @@ func TestCanceledResetWaitingForRequestKeepsSession(t *testing.T) {
 	select {
 	case err := <-resetResult:
 		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, routine.mc.resetWaiterPending)
 	case <-time.After(time.Second):
 		t.Fatal("reset did not honor cancellation while waiting for request")
 	}
@@ -453,8 +454,72 @@ func TestResetAdmissionStopsWhenRoutineClosesDuringRequestWait(t *testing.T) {
 	select {
 	case ok := <-result:
 		require.False(t, ok)
+		require.False(t, routine.mc.resetWaiterPending)
 	case <-time.After(time.Second):
 		t.Fatal("reset admission did not stop after routine close")
+	}
+}
+
+func TestResetAdmissionAllowsOnlyOnePendingRequestWaiter(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	require.True(t, routine.mc.tryBeginRequest())
+
+	waitEntered := make(chan struct{})
+	var waitOnce sync.Once
+	routine.mc.requestWaitHook = func() {
+		waitOnce.Do(func() { close(waitEntered) })
+	}
+
+	firstCtx, cancelFirst := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFirst()
+	firstResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(firstCtx)
+		firstResult <- ok
+	}()
+	select {
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not enter the request-only admission wait")
+	}
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), time.Second)
+	defer cancelSecond()
+	secondResult := make(chan bool, 1)
+	go func() {
+		_, ok := routine.mc.beginOperationAfterRequestWithContext(secondCtx)
+		secondResult <- ok
+	}()
+	select {
+	case ok := <-secondResult:
+		require.False(t, ok, "a second reset must not reserve another request waiter")
+	case <-time.After(100 * time.Millisecond):
+		routine.mc.endRequest()
+		select {
+		case ok := <-firstResult:
+			if ok {
+				routine.mc.endOperation()
+			}
+		case <-time.After(time.Second):
+			t.Fatal("first reset did not finish after request release")
+		}
+		select {
+		case ok := <-secondResult:
+			require.False(t, ok, "second reset waiter must not be admitted after the first completes")
+		case <-time.After(time.Second):
+			t.Fatal("second reset waiter did not finish after request release")
+		}
+		t.Fatal("second reset incorrectly waited behind the same request")
+	}
+
+	routine.mc.endRequest()
+	select {
+	case ok := <-firstResult:
+		require.True(t, ok)
+		routine.mc.endOperation()
+	case <-time.After(time.Second):
+		t.Fatal("first reset did not finish after request release")
 	}
 }
 

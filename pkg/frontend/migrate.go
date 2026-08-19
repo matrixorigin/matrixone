@@ -32,6 +32,9 @@ type migrateController struct {
 	inProgress bool
 	// requestInProgress indicates if a SQL request owns the routine session.
 	requestInProgress bool
+	// resetWaiterPending reserves the single reset caller allowed to wait for
+	// the current request to finish.
+	resetWaiterPending bool
 	// operationCancel cancels the active lifecycle operation. It is published
 	// together with inProgress while holding the controller lock.
 	operationCancel context.CancelFunc
@@ -123,6 +126,18 @@ func (mc *migrateController) beginOperationAfterRequestWithContext(ctx context.C
 
 	mc.Lock()
 	defer mc.Unlock()
+	if mc.requestInProgress && !mc.inProgress {
+		if mc.resetWaiterPending {
+			return nil, false
+		}
+		mc.resetWaiterPending = true
+		defer func() {
+			if mc.resetWaiterPending {
+				mc.resetWaiterPending = false
+				mc.cond.Broadcast()
+			}
+		}()
+	}
 	waitNotified := false
 	for mc.requestInProgress && !mc.inProgress && !mc.closed && ctx.Err() == nil {
 		if !waitNotified && mc.requestWaitHook != nil {
@@ -131,7 +146,11 @@ func (mc *migrateController) beginOperationAfterRequestWithContext(ctx context.C
 		}
 		mc.cond.Wait()
 	}
-	return mc.startOperationLocked(ctx)
+	operationCtx, ok := mc.startOperationLocked(ctx)
+	if ok {
+		mc.resetWaiterPending = false
+	}
+	return operationCtx, ok
 }
 
 // tryBeginOperation starts a lifecycle operation only if it can proceed
