@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -87,62 +88,172 @@ type regularIndexTopSortContext struct {
 	pushOrderedLimit bool
 }
 
-// calculatePostFilterOverFetchFactor returns the over-fetch multiplier based on limit size
-// for vector index queries with post-filtering (filters applied after index search).
-// Smaller limits need more over-fetching due to higher variance in filtering results.
-func calculatePostFilterOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 10 {
-		return 5.0 // Small limits: 5x
-	} else if originalLimit < 50 {
-		return 2.0 // Medium limits: 2x
-	} else if originalLimit < 100 {
-		return 1.5 // Large limits: 1.5x
-	} else if originalLimit < 200 {
-		return 1.3 // Very large limits: 1.3x
-	} else {
-		return 1.2 // Huge limits: 1.2x
-	}
-}
-
-// calculateFilteredPostModeOverFetchFactor returns a fixed, more conservative
-// multiplier for filtered post mode. It intentionally avoids statistics-based
-// heuristics so the behavior is predictable across plans.
-func calculateFilteredPostModeOverFetchFactor(originalLimit uint64) float64 {
-	if originalLimit < 50 {
-		return 5.0
-	} else if originalLimit < 100 {
-		return 2.0
-	} else if originalLimit < 200 {
-		return 1.5
-	} else {
-		return 1.3
-	}
-}
-
-func calculateOverFetchLimit(originalLimit uint64, factor float64) uint64 {
-	if originalLimit == 0 {
+// overFetchDisplayLimit returns the plan-time over-fetched candidate budget for a
+// LITERAL limit, for EXPLAIN display only (IndexReaderParam.OverFetchLimit) — 0
+// for a prepared LIMIT ? (unknown at plan time) or when no over-fetch applies.
+// It calls the same overfetch functions the TVF uses at EXECUTE, so the displayed
+// value equals the runtime budget. filteredPostMode selects ivfflat's factor.
+func overFetchDisplayLimit(limit *plan.Expr, overFetch bool, filteredPostMode bool) uint64 {
+	if !overFetch || limit == nil {
 		return 0
 	}
-	if factor < 1 {
-		factor = 1
+	lit := limit.GetLit()
+	if lit == nil {
+		return 0
 	}
-	multiplied := originalLimit
-	if factor > 1 {
-		product := float64(originalLimit) * factor
-		if product >= float64(math.MaxUint64) {
-			multiplied = math.MaxUint64
-		} else {
-			multiplied = uint64(product)
+	k := lit.GetU64Val()
+	if filteredPostMode {
+		return overfetch.FilteredPostModeLimit(k)
+	}
+	return overfetch.PostFilterLimit(k)
+}
+
+// BuildOverFetchLimitExpr returns an expression evaluating to the over-fetched
+// candidate budget k' = overfetch.PostFilterLimit(k), for a k that may only be known
+// at EXECUTE (a prepared LIMIT ?). A literal k is folded here; a parameterized one
+// becomes an expression computing the same step function at runtime.
+//
+// Why the budget travels on node.Limit rather than on IndexReaderParam.Limit alone:
+// node.Limit is the ONLY candidate-budget channel a pre-change CN understands. A
+// vector provider child gives the FUNCTION_SCAN a child, so compileTableFunction
+// attaches the search operator to already-compiled child scopes, which may be Remote
+// — a new coordinator can therefore ship this operator to an old CN during a rolling
+// upgrade. That CN's Prepare reads arg.Limit alone, so a nil there makes it default
+// to one candidate and silently under-return before the post-filter JOIN.
+//
+// Carrying k' here needs no protocol capability and no low-version fallback, because
+// every function used (case, greatest, cast, *, +) long predates any CN this can be
+// mixed with, and evalLimitExpression has always evaluated a non-literal arg.Limit
+// through a general expression executor. Old and new CNs compute the same k'.
+//
+// The formula mirrors overfetch.PostFilterLimit exactly:
+//
+//	greatest(cast(k * factor(k) as uint64), k + 10)
+//
+// so the two implementations cannot drift into disagreeing about the budget.
+// TestOverFetchLimitExprMatchesGoFormula pins them together.
+func BuildOverFetchLimitExpr(ctx context.Context, limit *plan.Expr, filteredPostMode bool) (*plan.Expr, error) {
+	if limit == nil {
+		return nil, nil
+	}
+	if lit := limit.GetLit(); lit != nil {
+		k := lit.GetU64Val()
+		if filteredPostMode {
+			return makePlan2Uint64ConstExprWithType(overfetch.FilteredPostModeLimit(k)), nil
 		}
+		return makePlan2Uint64ConstExprWithType(overfetch.PostFilterLimit(k)), nil
 	}
 
-	withFloor := originalLimit
-	if originalLimit > math.MaxUint64-10 {
-		withFloor = math.MaxUint64
-	} else {
-		withFloor += 10
+	// factor(k): the same bucketed step function the Go helpers use.
+	bounds := overfetch.PostFilterFactorSteps()
+	if filteredPostMode {
+		bounds = overfetch.FilteredPostModeFactorSteps()
 	}
-	return max(multiplied, withFloor)
+	caseArgs := make([]*plan.Expr, 0, len(bounds)*2+1)
+	for _, step := range bounds {
+		cond, err := BindFuncExprImplByPlanExpr(ctx, "<", []*plan.Expr{
+			DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(step.Below)})
+		if err != nil {
+			return nil, err
+		}
+		caseArgs = append(caseArgs, cond, makePlan2Float64ConstExprWithType(step.Factor))
+	}
+	caseArgs = append(caseArgs, makePlan2Float64ConstExprWithType(overfetch.DefaultFactor(filteredPostMode)))
+	factor, err := BindFuncExprImplByPlanExpr(ctx, "case", caseArgs)
+	if err != nil {
+		return nil, err
+	}
+
+	scaled, err := BindFuncExprImplByPlanExpr(ctx, "*", []*plan.Expr{DeepCopyExpr(limit), factor})
+	if err != nil {
+		return nil, err
+	}
+	// floor() before the cast is required, not cosmetic: Go's uint64(product)
+	// truncates while SQL CAST(... AS UNSIGNED) rounds half away from zero, so
+	// k=51 would give 76 in overfetch.Limit and 77 here. Truncating explicitly
+	// keeps the two definitions equal for every k.
+	truncated, err := BindFuncExprImplByPlanExpr(ctx, "floor", []*plan.Expr{scaled})
+	if err != nil {
+		return nil, err
+	}
+	// SATURATION, HALF ONE: the product.
+	//
+	// overfetch.Limit clamps the product at MaxUint64 rather than overflowing.
+	// The cast below cannot express that on its own -- CAST(... AS UNSIGNED)
+	// raises "data out of range" for anything at or above 2^64, so a perfectly
+	// valid large LIMIT would fail as a bound parameter while succeeding as a
+	// literal.
+	//
+	// The clamp is applied with least() in FLOAT space, before the cast, rather
+	// than by branching around the cast. A CASE cannot be relied on here: the
+	// vectorized evaluator may evaluate both arms and only then select, so an
+	// unguarded cast in the untaken arm would still raise. least() is
+	// branch-free, so the cast never sees an out-of-range input.
+	//
+	// maxU64AsFloat is the largest float64 strictly below 2^64 (2^64 - 2048;
+	// the ULP at that magnitude is 2^11). Clamping there is a no-op for every
+	// value Go would truncate -- float64 cannot represent anything between it
+	// and 2^64 -- so it only ever guards the cast.
+	const maxU64AsFloat = 18446744073709549568.0 // 2^64 - 2048
+	const twoPow64 = 18446744073709551616.0      // == float64(math.MaxUint64) in Go
+	castable, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
+		truncated, makePlan2Float64ConstExprWithType(maxU64AsFloat)})
+	if err != nil {
+		return nil, err
+	}
+	scaledU64, err := appendCastBeforeExpr(ctx, castable, plan.Type{
+		Id: int32(types.T_uint64), NotNullable: true})
+	if err != nil {
+		return nil, err
+	}
+	// Go compares `product >= float64(math.MaxUint64)`, and that conversion
+	// yields 2^64 exactly (MaxUint64 itself is not representable). Compare
+	// against the same 2^64 so the two agree on which k saturates.
+	overflows, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{
+		DeepCopyExpr(scaled), makePlan2Float64ConstExprWithType(twoPow64)})
+	if err != nil {
+		return nil, err
+	}
+	scaledU64, err = BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		overflows, makePlan2Uint64ConstExprWithType(math.MaxUint64), scaledU64})
+	if err != nil {
+		return nil, err
+	}
+
+	// SATURATION, HALF TWO: the additive floor.
+	//
+	// The +10 floor keeps a small k from over-fetching too little to survive the
+	// filter, but k+10 wraps for k > MaxUint64-10, and unsigned addition raises
+	// rather than wrapping silently. overfetch.Limit clamps to MaxUint64 there.
+	//
+	// Clamping the ADDEND instead of guarding the sum keeps this branch-free for
+	// the same reason as above: least(k, MaxUint64-10) + 10 is at most MaxUint64
+	// by construction, so no evaluation order can overflow it.
+	clampedK, err := BindFuncExprImplByPlanExpr(ctx, "least", []*plan.Expr{
+		DeepCopyExpr(limit),
+		makePlan2Uint64ConstExprWithType(math.MaxUint64 - overfetch.MinExtraCandidates)})
+	if err != nil {
+		return nil, err
+	}
+	minCandidates, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		clampedK, makePlan2Uint64ConstExprWithType(overfetch.MinExtraCandidates)})
+	if err != nil {
+		return nil, err
+	}
+	budget, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*plan.Expr{scaledU64, minCandidates})
+	if err != nil {
+		return nil, err
+	}
+
+	// overfetch.Limit short-circuits k == 0 to 0; without the same guard the floor
+	// above would turn `LIMIT 0` into a 10-candidate search.
+	isZero, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+		DeepCopyExpr(limit), makePlan2Uint64ConstExprWithType(0)})
+	if err != nil {
+		return nil, err
+	}
+	return BindFuncExprImplByPlanExpr(ctx, "case", []*plan.Expr{
+		isZero, makePlan2Uint64ConstExprWithType(0), budget})
 }
 
 func containsDynamicParam(expr *plan.Expr) bool {
@@ -644,10 +755,15 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// a MATCH wrapped in a larger expression drives the aggregate rewrite too:
+			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				nil, path.scanNode, filterids, nil)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 {
+			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, path.aggNode, path.scanNode,
-					filterids, filterFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		} else if path != nil {
 			// get the list of project that is fulltext_match func
@@ -656,11 +772,28 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// MATCHes nested inside a larger expression drive the rewrite too. Without this a
+			// query whose ONLY match is wrapped -- `where match(...) > 0.5`, or a projected
+			// `round(match(...),3)` -- never enters the rewrite at all and throws 20105.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				projNode, path.scanNode, filterids, projids)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 || len(projids) > 0 {
+			if len(filterids) > 0 || len(projids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
-					filterids, filterFTIdxs, projids, projFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
+		} else {
+			// No single scan under this project: a JOIN in between takes the per-child route,
+			// which has no project node and so never replaced a MATCH in the select list.
+			// The children were rewritten before this node was visited, so resolve against the
+			// scans they built.
+			//
+			// Deliberately does NOT return: this only rewrites expressions in place, it builds
+			// no node, so the vector-index section below must still get its turn. Returning
+			// here cost a query that both projects a MATCH over a join and orders by a vector
+			// distance its vector index, silently falling back to brute force.
+			builder.resolveProjectMatchesOverJoin(projNode, builder.resolveSortNode(projNode, 1))
 		}
 	}
 
@@ -1622,6 +1755,18 @@ func isPositiveLiteralLimit(limit *plan.Expr) bool {
 	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
+// detectFullTextGuard reserves the scan that the fulltext rewrite is going to consume, so
+// applyIndicesForFilters leaves it alone instead of turning it into a secondary-index scan
+// first.
+//
+// Its predicate must stay identical to the one applyIndicesForProject rewrites on, wrapped
+// MATCHes included. A scan whose only MATCH is wrapped -- a projected `round(match(...),3)`
+// -- is just as much a fulltext scan as one with a bare MATCH, but it is invisible to
+// getFullTextMatchFromProject. Left out, such a scan goes unprotected: with any ordinary
+// index on a filtered column the regular-index rule rewrites it away, and by the time this
+// project is visited resolveFullTextIndexPath no longer finds a base scan to serve the
+// MATCH from -- so the MATCH survives into the executed plan and throws 20105. The bare
+// form of the same query is protected and works, which is what makes the gap easy to miss.
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 	path := builder.resolveFullTextIndexPath(projNode)
 	if path == nil {
@@ -1630,7 +1775,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	if path.aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-		if len(filterids) > 0 {
+		wrappedExprs, _ := builder.getWrappedFullTextMatches(nil, path.scanNode, filterids, nil)
+		if len(filterids) > 0 || len(wrappedExprs) > 0 {
 			return []int32{path.scanNode.NodeId}
 		}
 		return nil
@@ -1638,7 +1784,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	projids, _ := builder.getFullTextMatchFromProject(projNode, path.scanNode)
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-	if len(filterids) > 0 || len(projids) > 0 {
+	wrappedExprs, _ := builder.getWrappedFullTextMatches(projNode, path.scanNode, filterids, projids)
+	if len(filterids) > 0 || len(projids) > 0 || len(wrappedExprs) > 0 {
 		return []int32{path.scanNode.NodeId}
 	}
 	return nil
