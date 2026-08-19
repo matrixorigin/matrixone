@@ -77,6 +77,52 @@ func TestGpuIvfPq(t *testing.T) {
 	}
 }
 
+// ivfPqRoundTripK is the neighbour count the serialization round-trip tests
+// compare on. It is >1 so that a PQ tie between adjacent rows shows up as an
+// ordering detail instead of deciding the entire assertion.
+const ivfPqRoundTripK = 5
+
+// assertSameIvfPqResults requires a reloaded index to answer a query exactly as
+// the index it was serialized from.
+//
+// The obvious assertion -- "top-1 must be row 0" -- is NOT sound for IVF-PQ on
+// the dataset these tests build. Every coordinate of row i is i*10, so the data
+// is perfectly collinear: all M PQ subspaces see the same residual value and the
+// joint code space collapses from 256^M down to one 256-entry partition. 1000
+// rows cannot be separated by 256 codes, so adjacent rows share a code and come
+// back with *exactly equal* approximate distances, leaving top-1 to arbitrary
+// tie-breaking. Measured over 30 rebuilds: 7-13 wrong at M=2, still 1 wrong at
+// M=4 -- so no parameter choice rescues an exact top-1 assertion here.
+//
+// Round-trip equality is both sound and a stronger oracle for what these tests
+// exist to verify: the reloaded index must reproduce the source index exactly,
+// ties included. A serialization defect that perturbed codes, centroids or ids
+// fails this check, where an exact-top-1 check could pass by luck.
+func assertSameIvfPqResults(t *testing.T, want, got SearchResultIvfPq) {
+	t.Helper()
+	if len(got.Neighbors) != len(want.Neighbors) || len(got.Distances) != len(want.Distances) {
+		t.Fatalf("round-trip result shape: want %d/%d neighbors/distances, got %d/%d",
+			len(want.Neighbors), len(want.Distances), len(got.Neighbors), len(got.Distances))
+	}
+	for i := range want.Neighbors {
+		if got.Neighbors[i] != want.Neighbors[i] || got.Distances[i] != want.Distances[i] {
+			t.Errorf("round-trip mismatch at rank %d: want id=%d dist=%v, got id=%d dist=%v\n  want ids=%v dists=%v\n  got  ids=%v dists=%v",
+				i, want.Neighbors[i], want.Distances[i], got.Neighbors[i], got.Distances[i],
+				want.Neighbors, want.Distances, got.Neighbors, got.Distances)
+			return
+		}
+	}
+	// Sanity floor: if both indexes were equally broken, equality alone would not
+	// notice. The exact match for the all-zeros query must still be in the top-k.
+	for _, id := range got.Neighbors {
+		if id == 0 {
+			return
+		}
+	}
+	t.Errorf("row 0 (the exact match) absent from top-%d: ids=%v dists=%v",
+		len(got.Neighbors), got.Neighbors, got.Distances)
+}
+
 func TestGpuIvfPqSaveLoad(t *testing.T) {
 	dimension := uint32(4)
 	n_vectors := uint64(1000)
@@ -98,6 +144,16 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 	}
 	index.Start()
 	index.Build()
+
+	// Capture the source index's answer before serializing; the reloaded index
+	// must reproduce it exactly. See assertSameIvfPqResults.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before save failed: %v", err)
+	}
 
 	filename := "test_ivf_pq.idx"
 	err = index.Save(filename)
@@ -123,16 +179,11 @@ func TestGpuIvfPqSaveLoad(t *testing.T) {
 		t.Fatalf("Load from file failed: %v", err)
 	}
 
-	query := make([]float32, dimension) // all zeros
-	sp := DefaultIvfPqSearchParams()
-	sp.NProbes = 10
-	result, err := index2.Search(query, 1, dimension, 1, sp)
+	got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if result.Neighbors[0] != 0 {
-		t.Errorf("Expected 0, got %d", result.Neighbors[0])
-	}
+	assertSameIvfPqResults(t, want, got)
 }
 
 func TestGpuIvfPqPackUnpack(t *testing.T) {
@@ -159,6 +210,15 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	// Source-index answer that every unpacked copy must reproduce exactly.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before pack failed: %v", err)
+	}
+
 	for _, filename := range []string{"test_ivf_pq_pack.tar", "test_ivf_pq_pack.tar.gz"} {
 		t.Run(filename, func(t *testing.T) {
 			if err := index.Pack(filename, ""); err != nil {
@@ -178,16 +238,11 @@ func TestGpuIvfPqPackUnpack(t *testing.T) {
 				t.Fatalf("Unpack failed: %v", err)
 			}
 
-			query := make([]float32, dimension)
-			sp := DefaultIvfPqSearchParams()
-			sp.NProbes = 10
-			result, err := index2.Search(query, 1, dimension, 1, sp)
+			got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 			if err != nil {
 				t.Fatalf("Search failed: %v", err)
 			}
-			if result.Neighbors[0] != 0 {
-				t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
-			}
+			assertSameIvfPqResults(t, want, got)
 		})
 	}
 	index.Destroy()
@@ -217,6 +272,16 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 
+	// Source-index answer, captured before Destroy; the directory-loaded index
+	// must reproduce it exactly.
+	query := make([]float32, dimension) // all zeros: exact match for row 0
+	sp := DefaultIvfPqSearchParams()
+	sp.NProbes = 10
+	want, err := index.Search(query, 1, dimension, ivfPqRoundTripK, sp)
+	if err != nil {
+		t.Fatalf("Search before pack failed: %v", err)
+	}
+
 	tarFile := "test_ivf_pq_dir.tar"
 	if err := index.Pack(tarFile, ""); err != nil {
 		t.Fatalf("Pack failed: %v", err)
@@ -240,16 +305,11 @@ func TestGpuIvfPqFromDataDirectory(t *testing.T) {
 	}
 	defer index2.Destroy()
 
-	query := make([]float32, dimension)
-	sp := DefaultIvfPqSearchParams()
-	sp.NProbes = 10
-	result, err := index2.Search(query, 1, dimension, 1, sp)
+	got, err := index2.Search(query, 1, dimension, ivfPqRoundTripK, sp)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
-	if result.Neighbors[0] != 0 {
-		t.Errorf("Expected neighbor 0, got %d", result.Neighbors[0])
-	}
+	assertSameIvfPqResults(t, want, got)
 }
 
 func TestGpuIvfPqChunked(t *testing.T) {
