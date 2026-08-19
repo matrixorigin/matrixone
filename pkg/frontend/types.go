@@ -934,6 +934,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	returning         *returningState
+	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -982,6 +983,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
 
