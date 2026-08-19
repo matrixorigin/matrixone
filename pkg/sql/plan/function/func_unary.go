@@ -5119,6 +5119,7 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 		str[pos] != '+' && str[pos] != '-' {
 		pos++
 	}
+	signStart := pos
 	mysqlConsumeDatetimeClockSignsForExtract(str, &pos)
 	// A bare sign after the date is not a valid DATETIME clock. Let the TIME
 	// scanner own the original candidate instead (the boundary is observable
@@ -5126,8 +5127,13 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 	if pos > clockStart && (pos == len(str) || str[pos] < '0' || str[pos] > '9') {
 		// A sign terminating a complete date candidate is a zero-time DATETIME
 		// suffix unless the candidate's single post-day separator identifies the
-		// ambiguous TIME spelling (for example, "1:01:01: +").
-		if postDayPunctuationCount != 1 && mysqlTrimLeftWhitespaceForExtract(str[pos:]) == "" {
+		// ambiguous TIME spelling (for example, "1:01:01: +"). Keep the sign,
+		// separator count, and token-termination boundary together so a trailing
+		// space cannot make the same consumed candidate invalid.
+		candidate := mysqlDatetimeClockCandidateForExtract(str, clockStart)
+		bareSign := signStart < pos && pos-signStart == 1 &&
+			(str[signStart] == '+' || str[signStart] == '-')
+		if mysqlDatetimeBareSignSuffixForExtract(candidate, postDayPunctuationCount, bareSign, str[pos:]) {
 			return timeExtractParseResult{matched: true, valid: true}
 		}
 		return timeExtractParseResult{}
@@ -5208,6 +5214,27 @@ func mysqlConsumeDatetimeClockSignsForExtract(str string, pos *int) {
 
 func mysqlDatetimeClockSuffixIsCompactTimeForExtract(str string, pos int) bool {
 	return pos == len(str) || str[pos] == '+' || str[pos] == '-'
+}
+
+func mysqlDatetimeClockCandidateForExtract(str string, end int) mysqlTimePrefixCandidate {
+	for end > 0 && mysqlWhitespaceForExtract(str[end-1]) {
+		end--
+	}
+	return mysqlTimePrefixCandidateForExtract(str[:end])
+}
+
+func mysqlDatetimeBareSignSuffixForExtract(candidate mysqlTimePrefixCandidate, postDaySeparators int, bareSign bool, suffix string) bool {
+	if !bareSign || mysqlTrimLeftWhitespaceForExtract(suffix) != "" {
+		return false
+	}
+	if postDaySeparators != 1 {
+		return true
+	}
+	// A single trailing separator is ambiguous only while the sign is the
+	// terminal byte. Once whitespace terminates that sign, the complete
+	// H:M:S candidate belongs to the DATETIME owner. The caller's length gate
+	// keeps short one-digit TIME spellings on the TIME path.
+	return candidate.fieldCount >= 3 && candidate.trailingSeparatorCount == 1
 }
 
 func mysqlDatetimeClockSuffixForExtract(str string, pos int, clockFields int) bool {
@@ -5524,11 +5551,11 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		trimmed := mysqlTrimLeftWhitespaceForExtract(suffix)
 		return strings.Contains(trimmed, ":")
 	}
-	// A bare sign after one trailing separator is part of the punctuation
-	// suffix, not an invalid clock token. This is the same consumed boundary as
-	// the ordinary H:M:S: form and is accepted by MySQL.
-	if !candidate.repeatedAfterSeconds && token.byteLen == 1 &&
-		(token.token == "+" || token.token == "-") {
+	// A bare sign after a trailing separator belongs to the already consumed
+	// TIME candidate when its boundary is still unambiguous. Keep this decision
+	// in the shared candidate state; the DATETIME owner handles the same sign
+	// when its length gate has established a complete date-shaped candidate.
+	if mysqlBareSignTimeSuffixBelongsToClock(candidate, token) {
 		return false
 	}
 	// MySQL's full-DATETIME attempt is length based. Numeric tokens followed by
@@ -5541,6 +5568,18 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		return len(clock)+mysqlConsumedSuffixLengthForExtract(suffix) >= 12
 	}
 	return len(clock)+len(suffix) >= 12
+}
+
+func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
+	if candidate.fieldCount != 3 || candidate.trailingSeparatorCount == 0 ||
+		token.byteLen != 1 || (token.token != "+" && token.token != "-") {
+		return false
+	}
+	// A one-digit leading field remains a TIME prefix for short inputs even
+	// when the sign is whitespace-terminated. For the length-gated two-digit
+	// date candidate, the DATETIME scanner owns that same boundary instead.
+	return candidate.leadingDigits == 1 &&
+		(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace)
 }
 
 // mysqlConsumedSuffixLengthForExtract reports the suffix bytes consumed by

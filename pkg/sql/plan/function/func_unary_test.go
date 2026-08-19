@@ -11344,6 +11344,21 @@ func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.
 		"2024-12-20 :1",
 		"1:01:01: +1",
 		"1:01:01: +1 ",
+		"12:12:12: +",
+		"12:12:12: + ",
+		"12:12:12: -",
+		"12:12:12: - ",
+		"12:12:12:: +",
+		"12:12:12:: + ",
+		"1:01:01: + ",
+		"1:01:01:: +",
+		"1:01:01:: + ",
+		"1:1:1: + ",
+		"1:1:1:: + ",
+		"123:12:12: +",
+		"123:12:12: + ",
+		"12:001:001: +",
+		"12:001:001: + ",
 	}
 	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {
@@ -11357,17 +11372,17 @@ func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.
 				{
 					name: "hour", fn: StringToHour,
 					expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-						[]uint32{0, 0, 0, 1, 1, 1}, nil),
+						[]uint32{0, 0, 0, 1, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
 				},
 				{
 					name: "minute", fn: StringToMinute,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 0, 1, 1}, nil),
+						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
 				},
 				{
 					name: "second", fn: StringToSecond,
 					expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-						[]uint8{0, 0, 0, 0, 1, 1}, nil),
+						[]uint8{0, 0, 0, 0, 1, 1, 12, 0, 12, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0}, nil),
 				},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
