@@ -21,10 +21,13 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -118,6 +121,38 @@ func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
 	require.Equal(t, typ, restored["amount"].Type)
 }
 
+func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
+	jsonValue, err := types.ParseStringToByteJson(`{"k":[1,true,null]}`)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "document"}})
+	encodedJSON, err := jsonValue.Marshal()
+	require.NoError(t, err)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], encodedJSON, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+	require.NoError(t, collector.capture(context.Background(), source, bat))
+	require.NoError(t, collector.apply(context.Background(), source, "select json_array(1, true, null) into @document"))
+	variable, err := source.GetUserDefinedVar("document")
+	require.NoError(t, err)
+	require.Equal(t, jsonValue, variable.Value)
+	require.Equal(t, int32(types.T_json), variable.Type.Id)
+	require.Equal(t, int32(types.T_json), inferUserDefinedVarType(jsonValue).Id)
+
+	snapshot, err := source.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_json), snapshot[0].Value.Typ.Id)
+
+	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, jsonValue, restored["document"].Value)
+}
+
 func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {
 	_, err := encodeUserDefinedVarValue(context.Background(), struct{}{}, false)
 	require.ErrorContains(t, err, "unsupported user variable type")
@@ -203,6 +238,17 @@ func TestDecodeUserDefinedVarValueRejectsMalformedRepresentations(t *testing.T) 
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}},
 	})
 	require.ErrorContains(t, err, "invalid")
+
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_json)},
+		Expr: &plan.Expr_Lit{Lit: wrongLiteral},
+	})
+	require.ErrorContains(t, err, "invalid")
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_json)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: "{"}}},
+	})
+	require.ErrorContains(t, err, "invalid JSON")
 
 	for _, typ := range []types.T{
 		types.T_array_float32,

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -354,6 +355,12 @@ func encodeUserDefinedVarValue(ctx context.Context, value any, isBin bool) (*pla
 		return plan2.MakePlan2Float64ConstExprWithType(v), nil
 	case string:
 		return plan2.MakePlan2StringConstExprWithType(v, isBin), nil
+	case bytejson.ByteJson:
+		jsonValue, err := v.MarshalJSON()
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "cannot encode JSON user variable in connection migration: %v", err)
+		}
+		return makeUserVarLiteral(types.T_json, &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: string(jsonValue)}}, 0), nil
 	case types.Enum:
 		return makeUserVarLiteral(types.T_enum, &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: uint32(v)}}, 0), nil
 	case types.Decimal64:
@@ -511,6 +518,16 @@ func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error
 			return invalid()
 		}
 		return v.Sval, nil
+	case types.T_json:
+		v, ok := lit.Value.(*plan.Literal_Jsonval)
+		if !ok {
+			return invalid()
+		}
+		value, err := types.ParseStringToByteJson(v.Jsonval)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(ctx, "invalid JSON user variable value in connection migration: %v", err)
+		}
+		return value, nil
 	case types.T_enum:
 		v, ok := lit.Value.(*plan.Literal_EnumVal)
 		if !ok {

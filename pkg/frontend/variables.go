@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -4354,6 +4355,8 @@ func inferUserDefinedVarType(value interface{}) planpb.Type {
 		oid = types.T_datetime
 	case types.Timestamp:
 		oid = types.T_timestamp
+	case bytejson.ByteJson:
+		oid = types.T_json
 	case types.Decimal64:
 		oid = types.T_decimal64
 	case types.Decimal128:
