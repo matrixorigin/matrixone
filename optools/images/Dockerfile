@@ -20,7 +20,7 @@ FROM build-base AS builder
 # GOPROXY affects Go modules, not native dependencies. Keeping it out of the
 # native stage preserves that expensive cache when build environments differ.
 ARG GOPROXY="https://proxy.golang.org,direct"
-RUN go env -w GOPROXY=${GOPROXY}
+RUN go env -w GOPROXY="${GOPROXY}"
 
 # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
 # Default: 0 (disabled), set to 1 to enable
