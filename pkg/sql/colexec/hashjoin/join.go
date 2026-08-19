@@ -897,6 +897,7 @@ func (ctr *container) findAsofPredecessor(
 	if ok && len(ordered) != len(candidates) {
 		// A build bucket with a changed row set cannot reuse the previous
 		// ordering. This also protects prepared/test reuse from stale ordinals.
+		mpool.FreeSlice(proc.Mp(), ordered)
 		delete(ctr.asofIndexes, groupKey)
 		ok = false
 	}
