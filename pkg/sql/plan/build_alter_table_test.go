@@ -550,6 +550,48 @@ func TestAlterTableInplaceRejectsDuplicateIndexBeforeDrop(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIndexNameLookupIsCaseInsensitiveAndPreservesCatalogCase(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Indexes = []*plan.IndexDef{{
+			IndexName:  "MixedCaseIdx",
+			Parts:      []string{"a"},
+			IndexAlgo:  catalog.MoIndexDefaultAlgo.ToString(),
+			TableExist: true,
+		}}
+		return mock
+	}
+
+	t.Run("alter visibility", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"ALTER TABLE t1 ALTER INDEX mixedcaseidx INVISIBLE")
+		require.NoError(t, err)
+		action := logicPlan.GetDdl().GetAlterTable().Actions[0].GetAlterIndex()
+		require.Equal(t, "MixedCaseIdx", action.IndexName)
+	})
+
+	t.Run("alter drop", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"ALTER TABLE t1 DROP INDEX MIXEDCASEIDX")
+		require.NoError(t, err)
+		action := logicPlan.GetDdl().GetAlterTable().Actions[0].GetDrop()
+		require.Equal(t, "MixedCaseIdx", action.Name)
+	})
+
+	t.Run("standalone drop", func(t *testing.T) {
+		logicPlan, err := buildSingleStmt(newMock(), t,
+			"DROP INDEX mixedcaseidx ON t1")
+		require.NoError(t, err)
+		require.Equal(t, "MixedCaseIdx", logicPlan.GetDdl().GetDropIndex().IndexName)
+	})
+
+	t.Run("create rejects case-only duplicate", func(t *testing.T) {
+		_, err := buildSingleStmt(newMock(), t,
+			"CREATE INDEX mixedcaseidx ON t1(b)")
+		require.Error(t, err)
+	})
+}
+
 func TestAlterTableInplaceUsesOrderedIndexState(t *testing.T) {
 	newMock := func() *MockOptimizer {
 		mock := NewMockOptimizer(false)

@@ -23,8 +23,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// resolveIndexName matches index identifiers using MySQL's case-insensitive
+// lookup semantics while returning the catalog spelling for later execution
+// and metadata updates.
+func resolveIndexName(indexes []*planpb.IndexDef, name string) (string, bool) {
+	for _, index := range indexes {
+		if index != nil && strings.EqualFold(index.IndexName, name) {
+			return index.IndexName, true
+		}
+	}
+	return "", false
+}
 
 // checkConstraintNames Check whether the name of the constraint(index,unqiue etc) is legal, and handle constraints without a name
 func checkConstraintNames(uniqueConstraints []*tree.UniqueIndex, indexConstraints []*tree.Index, ctx context.Context) error {

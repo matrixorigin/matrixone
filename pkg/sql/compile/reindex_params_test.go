@@ -80,6 +80,17 @@ func TestReindexSpecifiedParams_SkipsUnset(t *testing.T) {
 	require.Equal(t, map[string]string{catalog.IndexAlgoParamLists: "4"}, got)
 }
 
+func TestReindexSpecifiedParamsMatchesIndexNameCaseInsensitively(t *testing.T) {
+	ro := &tree.AlterOptionAlterReIndex{
+		Name:          tree.Identifier("MixedCaseIdx"),
+		AlgoParamList: 4,
+	}
+	at := &tree.AlterTable{Options: tree.AlterTableOptions{ro}}
+
+	got := reindexSpecifiedParams(at, "mixedcaseidx")
+	require.Equal(t, map[string]string{catalog.IndexAlgoParamLists: "4"}, got)
+}
+
 // TestReindexSpecifiedParams_NoMatch covers the defensive paths: a statement
 // that is not an ALTER TABLE, and an ALTER TABLE whose REINDEX option targets a
 // different index name, both yield nil.

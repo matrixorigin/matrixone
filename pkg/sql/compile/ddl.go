@@ -487,7 +487,7 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	}
 	var opt *tree.AlterOptionAlterReIndex
 	for _, o := range at.Options {
-		if ro, ok := o.(*tree.AlterOptionAlterReIndex); ok && string(ro.Name) == indexName {
+		if ro, ok := o.(*tree.AlterOptionAlterReIndex); ok && strings.EqualFold(string(ro.Name), indexName) {
 			opt = ro
 			break
 		}

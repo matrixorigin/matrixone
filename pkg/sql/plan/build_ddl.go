@@ -4713,7 +4713,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	// check index
 	indexName := string(stmt.Name)
 	for _, def := range tableDef.Indexes {
-		if def.IndexName == indexName {
+		if strings.EqualFold(def.IndexName, indexName) {
 			return nil, moerr.NewDuplicateKey(ctx.GetContext(), indexName)
 		}
 	}
@@ -4956,22 +4956,16 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// check index
-	dropIndex.IndexName = string(stmt.Name)
-	found := false
-
-	for _, indexdef := range tableDef.Indexes {
-		if dropIndex.IndexName == indexdef.IndexName {
-			found = true
-			break
-		}
-	}
+	requestedIndexName := string(stmt.Name)
+	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
+	dropIndex.IndexName = resolvedIndexName
 
 	if !found {
 		if stmt.IfExists {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", dropIndex.IndexName)
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
 		}
 	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
 		return nil, err
@@ -5285,7 +5279,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
-			// lower case
 			constraintName := string(opt.Name)
 			if constraintNameAreWhiteSpaces(constraintName) {
 				return nil, moerr.NewInternalErrorf(
@@ -5294,29 +5287,27 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					constraintName,
 				)
 			}
-			alterTableDrop.Name = constraintName
 			name_not_found := true
 			sequentiallyDropped := false
 			switch opt.Typ {
 			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
-				for _, indexdef := range currentTableDef.Indexes {
-					if constraintName == indexdef.IndexName {
-						if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
-							return nil, err
-						}
-						name_not_found = false
-						break
+				resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+				if found {
+					constraintName = resolvedName
+					if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
+						return nil, err
 					}
+					name_not_found = false
 				}
 				if !name_not_found {
 					delete(currentIndexNames, strings.ToLower(constraintName))
-					droppedIndexNames[constraintName] = true
+					droppedIndexNames[strings.ToLower(constraintName)] = true
 					currentTableDef.Indexes = RemoveIf(currentTableDef.Indexes, func(indexDef *plan.IndexDef) bool {
 						return indexDef.IndexName == constraintName
 					})
 				} else {
-					sequentiallyDropped = droppedIndexNames[constraintName]
+					sequentiallyDropped = droppedIndexNames[strings.ToLower(constraintName)]
 				}
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
@@ -5350,6 +5341,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					formatTreeNode(opt),
 				)
 			}
+			alterTableDrop.Name = constraintName
 			if name_not_found {
 				if sequentiallyDropped {
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), constraintName)
@@ -5616,24 +5608,17 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterIndex:
 			alterTableIndex := new(plan.AlterTableAlterIndex)
 			constraintName := string(opt.Name)
-			alterTableIndex.IndexName = constraintName
 			alterTableIndex.Visible = opt.Visibility == tree.VISIBLE_TYPE_VISIBLE
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't ALTER '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableIndex.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterIndex{
 					AlterIndex: alterTableIndex,
@@ -5643,7 +5628,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterReIndex:
 			alterTableReIndex := new(plan.AlterTableAlterReIndex)
 			constraintName := string(opt.Name)
-			alterTableReIndex.IndexName = constraintName
 			// ForceSync (sync vs async rebuild) is the only build-time flag the
 			// plan node carries. The shared index_option_list grammar already
 			// restricts the algo (REINDEX rules cover only ivfflat/hnsw/ivfpq/
@@ -5653,21 +5637,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTableReIndex.ForceSync = opt.ForceSync
 			alterTableReIndex.Merge = opt.Merge
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't REINDEX '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableReIndex.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterReindex{
 					AlterReindex: alterTableReIndex,
@@ -5677,7 +5655,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionAlterAutoUpdate:
 			alterTableAutoUpdate := new(plan.AlterTableAlterAutoUpdate)
 			constraintName := string(opt.Name)
-			alterTableAutoUpdate.IndexName = constraintName
 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
@@ -5704,21 +5681,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				)
 			}
 
-			name_not_found := true
-			// check index
-			for _, indexdef := range currentTableDef.Indexes {
-				if constraintName == indexdef.IndexName {
-					name_not_found = false
-					break
-				}
-			}
-			if name_not_found {
+			resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
+			if !found {
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					"Can't REINDEX '%s'; check that column/key exists",
 					constraintName,
 				)
 			}
+			alterTableAutoUpdate.IndexName = resolvedName
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterAutoUpdate{
 					AlterAutoUpdate: alterTableAutoUpdate,
