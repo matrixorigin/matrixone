@@ -74,3 +74,48 @@ func AdmitLoadFits(newBytes uint64, freeBytesGetter func() (uint64, error), who 
 	}
 	return nil
 }
+
+// AdmitLoadFitsPerDevice is the multi-GPU counterpart to AdmitLoadFits: given a
+// per-device byte demand (device ID → bytes that will land on that device once
+// every sub-index in the batch is loaded), verify each individual device has
+// enough free VRAM. Single-GPU aggregate accounting over-rejects real N-GPU
+// SHARDED loads by ~N× (each device only holds tar/N, but the aggregate check
+// compares the sum against one card's free bytes); mirroring the check
+// per-device avoids that false reject while still catching a real OOM on ANY
+// participating card.
+//
+// The `perDeviceBytes` map already encodes the topology decided by the caller:
+//
+//   - SINGLE: {devices[0]: totalBytes}
+//   - REPLICATED: {each device: totalBytes} (every device holds a full copy)
+//   - SHARDED with real N-GPU: {devN: shardBytes} — one entry per device
+//   - SHARDED under gpu_multi_simulation on 1 physical GPU: the aliased device
+//     (usually 0) accumulates all shards, which correctly matches physical
+//     residency
+//
+// A device with 0 demand is skipped. `freeBytesGetter(dev)` returns current
+// free bytes on that specific device; on error the whole admission fails
+// (same fail-loud policy as the single-device path).
+func AdmitLoadFitsPerDevice(perDeviceBytes map[int]uint64, freeBytesGetter func(int) (uint64, error), who string) error {
+	for dev, want := range perDeviceBytes {
+		if want == 0 {
+			continue
+		}
+		free, err := freeBytesGetter(dev)
+		if err != nil {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"%s: cannot query free VRAM on device %d to admit %d bytes of index load: %v",
+				who, dev, want, err))
+		}
+		budget := free / LoadBudgetDenominator * LoadBudgetNumerator
+		if want > budget {
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"%s: device %d needs %d bytes of VRAM for the index load but only %d bytes "+
+					"available (60%% of %d free); "+
+					"either evict cached indexes, drop and rebuild at a smaller max_index_capacity, "+
+					"or run this query on a larger GPU / more GPUs",
+				who, dev, want, budget, free))
+		}
+	}
+	return nil
+}

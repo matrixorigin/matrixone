@@ -203,6 +203,31 @@ func MemoryAvailable() uint64 {
 	return mem.Free
 }
 
+// MemoryAvailableIncludingCache returns memory that could be allocated on this
+// node without evicting live pages, i.e. MemFree plus reclaimable page cache
+// and buffers. On bare-metal this is gosigar ActualFree (= Linux
+// /proc/meminfo:MemAvailable). In a container it falls back to MemoryAvailable
+// (the cgroup limit minus current cgroup usage) — cgroup accounting already
+// counts reclaimable cache against usage, so the two paths agree in intent.
+//
+// This is the number you want for sizing bulk allocations (index build
+// buffers, ANN staging arrays): MemoryAvailable on bare-metal returns raw
+// MemFree, which drops to a few GiB the moment the page cache warms up and
+// false-aborts anything sized against it, even when the kernel can reclaim
+// hundreds of GiB on demand.
+func MemoryAvailableIncludingCache() uint64 {
+	if InContainer() {
+		return MemoryAvailable()
+	}
+	s := gosigar.ConcreteSigar{}
+	mem, err := s.GetMem()
+	if err != nil {
+		logutil.Errorf("failed to get memory stats: %v", err)
+		return 0
+	}
+	return mem.ActualFree
+}
+
 func MemoryUsed() uint64 {
 	if InContainer() {
 		used, err := cgroup.GetMemUsage(pid)

@@ -308,6 +308,24 @@ func planTrainFraction(capacity, maxTrainRows, nLists int64, requested float64) 
 	return p
 }
 
+// distinctDeviceCount is len(devices) minus duplicates. Under
+// gpu_multi_simulation SimulateDevices aliases every simulated GPU to the same
+// physical ID (typically [0,0,...]), so len(devices)==N but there is still only
+// ONE physical card. SHARDED capacity scaling and any per-device budget
+// arithmetic must use the DISTINCT count — inflating "aggregate VRAM budget"
+// by len(devices) in sim mode over-commits a single card by N× and OOMs at
+// extend time.
+func distinctDeviceCount(devices []int) int {
+	if len(devices) == 0 {
+		return 0
+	}
+	seen := make(map[int]struct{}, len(devices))
+	for _, d := range devices {
+		seen[d] = struct{}{}
+	}
+	return len(seen)
+}
+
 // hostBudgetNumerator/Denominator mirror the GPU rule in cap_train_rows_to_gpu_mem:
 // take 60% of what is actually available, not all of it. The reasoning carries over
 // unchanged — the buffer is a single contiguous allocation, the allocator needs room
@@ -323,11 +341,11 @@ const hostBudgetNumerator, hostBudgetDenominator = 6, 10
 // build buffer holds is dim * sizeof(Q) of storage-typed vector, whatever the index
 // ends up costing on the GPU.
 //
-// Uses system.MemoryAvailable() which is cgroup-aware — in a container the plain
-// /proc/meminfo reading (gopsutil) reports HOST memory, not this process's cgroup
-// limit, so on a 512 GiB node with a 64 GiB CN cgroup the plain path would allow
-// pre-allocations sized against 512 GiB and trip the cgroup OOM killer despite the
-// claimed bound. system.MemoryAvailable handles both host and container modes.
+// Uses system.MemoryAvailableIncludingCache() — MemFree + reclaimable buffers/cache
+// (= /proc/meminfo:MemAvailable) on bare-metal, and cgroup-limit-minus-cgroup-used
+// in a container. A plain MemFree reading false-aborts on any warm-cache host, and
+// a plain /proc/meminfo reading inside a container reports HOST memory not the
+// cgroup limit and would allow pre-allocations sized against the whole node.
 //
 // Unlike the GPU query, an unavailable measurement here is NOT fatal. cudaMemGetInfo
 // failing means the device is unusable and guessing would reintroduce the OOM being
@@ -340,7 +358,7 @@ func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err 
 	if perRowBytes == 0 {
 		return 0, 0, nil
 	}
-	avail := system.MemoryAvailable()
+	avail := system.MemoryAvailableIncludingCache()
 	if avail == 0 {
 		return 0, 0, nil
 	}

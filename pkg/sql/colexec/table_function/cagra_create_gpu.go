@@ -418,10 +418,15 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// budget is N × per-device. planCapacity treats `capacity` as "per-sub-
 		// index build rows" and its SHARDED-can't-split guard needs to see the
 		// aggregate — otherwise a comfortable N-way shard (each shard fits on
-		// its device) gets rejected as if it had to fit on one card.
+		// its device) gets rejected as if it had to fit on one card. Scale by
+		// the DISTINCT physical device count: under gpu_multi_simulation devices
+		// may be [0,0,...] (all sim GPUs aliased to physical device 0) and
+		// scaling by len(devices) would over-commit that single card by N×.
 		effectiveRowsFit := rowsFit
-		if u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) && len(devices) > 1 {
-			effectiveRowsFit = rowsFit * int64(len(devices))
+		if u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) {
+			if physN := distinctDeviceCount(devices); physN > 1 {
+				effectiveRowsFit = rowsFit * int64(physN)
+			}
 		}
 		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),

@@ -475,18 +475,47 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 	return indexes, nil
 }
 
+// admitLoad checks that every device participating in this search has enough
+// free VRAM to host the fraction of the load that will land on it — see the
+// matching comment on cagra/search_gpu.go admitLoad for the aggregate-vs-
+// per-device reasoning.
 func (s *IvfpqSearch[B, Q]) admitLoad(indexes []*IvfpqModel[B, Q]) error {
 	if len(indexes) == 0 || len(s.Devices) == 0 {
 		return nil
 	}
-	var totalBytes uint64
+	mode := vectorindex.DistributionMode(s.Idxcfg.CuvsIvfpq.DistributionMode)
+	perDev := make(map[int]uint64, len(s.Devices))
 	for _, idx := range indexes {
-		if idx.FileSize > 0 {
-			totalBytes += uint64(idx.FileSize)
+		if idx.FileSize <= 0 {
+			continue
+		}
+		bytes := uint64(idx.FileSize)
+		switch mode {
+		case vectorindex.DistributionMode_SHARDED:
+			resolved, shardCount, err := cuvs.ResolveDevicesForTarLoad(s.Devices, idx.Path)
+			if err != nil {
+				return err
+			}
+			if shardCount == 0 || len(resolved) == 0 {
+				for _, d := range s.Devices {
+					perDev[d] += bytes
+				}
+				continue
+			}
+			per := bytes / uint64(shardCount)
+			for _, d := range resolved {
+				perDev[d] += per
+			}
+		case vectorindex.DistributionMode_REPLICATED:
+			for _, d := range s.Devices {
+				perDev[d] += bytes
+			}
+		default:
+			perDev[s.Devices[0]] += bytes
 		}
 	}
-	return vectorindex.AdmitLoadFits(totalBytes, func() (uint64, error) {
-		_, freeBytes, err := cuvs.RowsFittingFreeMem(s.Devices[0], 1)
+	return vectorindex.AdmitLoadFitsPerDevice(perDev, func(d int) (uint64, error) {
+		_, freeBytes, err := cuvs.RowsFittingFreeMem(d, 1)
 		return freeBytes, err
 	}, "IvfpqSearch.loadIndexes")
 }

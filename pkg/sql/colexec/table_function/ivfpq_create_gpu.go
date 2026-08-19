@@ -468,9 +468,13 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// SHARDED distributes ONE sub-index across N devices; see the matching
 		// note in cagra_create_gpu.go — planCapacity's split guard needs the
 		// aggregate rowsFit for SHARDED or it rejects legitimate N-way shards.
+		// Scale by the DISTINCT physical device count so gpu_multi_simulation
+		// (devices aliased to one physical GPU) does not over-commit that card.
 		effectiveRowsFit := rowsFit
-		if u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) && len(devices) > 1 {
-			effectiveRowsFit = rowsFit * int64(len(devices))
+		if u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED) {
+			if physN := distinctDeviceCount(devices); physN > 1 {
+				effectiveRowsFit = rowsFit * int64(physN)
+			}
 		}
 		plan, err := planCapacity(srcRowCount, requestedCapacity, effectiveRowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
