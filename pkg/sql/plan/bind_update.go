@@ -2145,11 +2145,21 @@ func validateRepeatedPhysicalTargetPrimaryKeyUpdate(ctx context.Context, dmlCtx 
 		}
 		for _, targetIdx := range targets {
 			tableDef := dmlCtx.tableDefs[targetIdx]
-			if tableDef.Pkey == nil {
-				continue
+			protectedCols := make(map[string]struct{})
+			if tableDef.Pkey != nil {
+				for _, pkName := range tableDef.Pkey.Names {
+					protectedCols[pkName] = struct{}{}
+				}
 			}
-			for _, pkName := range tableDef.Pkey.Names {
-				if _, updated := dmlCtx.updateCol2Expr[targetIdx][pkName]; updated {
+			if tableDef.Partition != nil {
+				for _, partitionDef := range tableDef.Partition.PartitionDefs {
+					if partitionDef != nil {
+						collectPartitionExprColumnNames(partitionDef.Def, tableDef, protectedCols)
+					}
+				}
+			}
+			for colName := range protectedCols {
+				if _, updated := dmlCtx.updateCol2Expr[targetIdx][colName]; updated {
 					return moerr.NewMultiUpdateKeyConflict(
 						ctx,
 						dmlCtx.aliases[targets[0]],
@@ -2160,6 +2170,34 @@ func validateRepeatedPhysicalTargetPrimaryKeyUpdate(ctx context.Context, dmlCtx 
 		}
 	}
 	return nil
+}
+
+func collectPartitionExprColumnNames(expr *plan.Expr, tableDef *plan.TableDef, names map[string]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		colName := e.Col.Name
+		if dot := strings.LastIndexByte(colName, '.'); dot >= 0 {
+			colName = colName[dot+1:]
+		}
+		if _, ok := tableDef.Name2ColIndex[colName]; ok {
+			names[colName] = struct{}{}
+			return
+		}
+		if e.Col.ColPos >= 0 && int(e.Col.ColPos) < len(tableDef.Cols) {
+			names[tableDef.Cols[e.Col.ColPos].Name] = struct{}{}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			collectPartitionExprColumnNames(arg, tableDef, names)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			collectPartitionExprColumnNames(item, tableDef, names)
+		}
+	}
 }
 
 func hasRepeatedPhysicalUpdateTarget(dmlCtx *DMLContext) bool {
