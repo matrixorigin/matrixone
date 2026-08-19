@@ -683,13 +683,16 @@ func (rt *Routine) resetSessionWithAdmission(
 	resp *query.ResetSessionResponse,
 	waitForRequest bool,
 ) error {
-	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
-	if !ok && waitForRequest {
+	var operationCtx context.Context
+	var ok bool
+	if waitForRequest {
 		// ResetSession is sent after Proxy has sealed the client generation, so
 		// waiting here lets an already-running request finish before the old
 		// session is replaced. The QueryService caller supplies the bounded
 		// context; the no-context helper above intentionally remains fail-fast.
 		operationCtx, ok = rt.mc.beginOperationAfterRequestWithContext(ctx)
+	} else {
+		operationCtx, ok = rt.mc.tryBeginOperationWithContext(ctx)
 	}
 	if !ok {
 		if ctx != nil {

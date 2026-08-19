@@ -44,6 +44,9 @@ type migrateController struct {
 	// prove a reset reached the request-only admission wait before changing the
 	// request or its context.
 	requestWaitHook func()
+	// tryBeginOperationHook is test-only. Production leaves it nil; tests use
+	// it to pause a failed optimistic admission attempt.
+	tryBeginOperationHook func()
 	// the id of goroutine that executes the migration
 	goroutineID uint64
 }
@@ -165,8 +168,13 @@ func (mc *migrateController) tryBeginOperationWithContext(ctx context.Context) (
 		ctx = context.Background()
 	}
 	mc.Lock()
-	defer mc.Unlock()
-	return mc.startOperationLocked(ctx)
+	operationCtx, ok := mc.startOperationLocked(ctx)
+	hook := mc.tryBeginOperationHook
+	mc.Unlock()
+	if !ok && hook != nil {
+		hook()
+	}
+	return operationCtx, ok
 }
 
 func (mc *migrateController) startOperationLocked(ctx context.Context) (context.Context, bool) {
