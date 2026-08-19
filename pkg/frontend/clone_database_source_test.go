@@ -552,7 +552,7 @@ func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.
 			show tables from source_db;
 			show triggers from source_db;
 			show create database source_db;
-			show table number from source_db;
+			show table_number from source_db;
 			show databases;
 			show variables;
 			show status;
@@ -574,7 +574,7 @@ func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.
 		"show tables from target_db",
 		"show triggers from target_db",
 		"show create database target_db",
-		"show table number from target_db",
+		"show table_number from target_db",
 		"show databases",
 		"show variables",
 		"show status",

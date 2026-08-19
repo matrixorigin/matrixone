@@ -1082,6 +1082,13 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	// Source collection validates public clone requests. Keep the persistence
+	// boundary defensive too: resolved sources can come from data-branch flow,
+	// and no path may create a target database for an imported package UDF whose
+	// external lifecycle is unsupported by database clone.
+	if err = validateCloneUserDefinedFunctions(source.userDefinedFuncs); err != nil {
+		return
+	}
 	fromAccountID := source.opAccountId
 	if source.snapshot != nil && source.snapshot.Tenant != nil {
 		fromAccountID = source.snapshot.Tenant.TenantID

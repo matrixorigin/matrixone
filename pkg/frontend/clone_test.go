@@ -857,16 +857,10 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 		require.Equal(t, checkSQL, bh.executedSQLs[2])
 	})
 
-	t.Run("rejects imported functions without a package file service", func(t *testing.T) {
+	t.Run("rejects imported functions before target database creation", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		ses := newTestSession(t, ctrl)
 		t.Cleanup(ses.Close)
-		pu := getPu(ses.GetService())
-		fileService := pu.FileService
-		pu.FileService = nil
-		t.Cleanup(func() {
-			pu.FileService = fileService
-		})
 
 		source := newSource()
 		source.userDefinedFuncs[0] = userDefinedFunctionDefinition{
@@ -881,8 +875,8 @@ func TestHandleCloneDatabaseWithSourceRestoresRoutines(t *testing.T) {
 			newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl),
 			ses, bh, newStatement(), source,
 		)
-		require.EqualError(t, err, "internal error: file service is unavailable for imported function clone")
-		require.Equal(t, []string{"create database `destination`"}, bh.executedSQLs)
+		require.ErrorContains(t, err, "imported python function f_imported is not supported")
+		require.Empty(t, bh.executedSQLs)
 	})
 }
 

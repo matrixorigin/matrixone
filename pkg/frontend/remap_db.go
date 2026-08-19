@@ -286,7 +286,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 			remapDbInExpr(s.AtTsExpr.Expr, remap)
 		}
 	case *tree.ShowDatabases:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 		if s.AtTsExpr != nil {
 			remapDbInExpr(s.AtTsExpr.Expr, remap)
@@ -294,7 +294,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.ShowColumns:
 		remapObjectName(s.Table, remap)
 		remapDatabaseName(&s.DBName, remap)
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowIndex:
 		remapObjectName(s.TableName, remap)
@@ -311,18 +311,18 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDatabaseName(&s.DbName, remap)
 	case *tree.ShowTarget:
 		remapDatabaseName(&s.DbName, remap)
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowTableStatus:
 		remapDatabaseName(&s.DbName, remap)
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowSequences:
 		remapDatabaseName(&s.DBName, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowTables:
 		remapDatabaseName(&s.DBName, remap)
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 		if s.AtTsExpr != nil {
 			remapDbInExpr(s.AtTsExpr.Expr, remap)
@@ -330,25 +330,25 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.ShowTableNumber:
 		remapDatabaseName(&s.DbName, remap)
 	case *tree.ShowCollation:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowVariables:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowStatus:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowFunctionOrProcedureStatus:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 		remapDbInWhere(s.Where, remap)
 	case *tree.ShowAccounts:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 	case *tree.ShowPublications:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 	case *tree.ShowSubscriptions:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 	case *tree.ShowRolesStmt:
-		remapDbInExpr(s.Like, remap)
+		remapDbInOptionalComparisonExpr(s.Like, remap)
 	case *tree.ShowGrants, *tree.ShowProcessList, *tree.ShowErrors,
 		*tree.ShowWarnings, *tree.ShowNodeList, *tree.ShowLocks,
 		*tree.ShowAccountUpgrade, *tree.ShowCreatePublications,
@@ -530,6 +530,14 @@ func remapDbInTableExpr(te tree.TableExpr, remap remapDbContext) {
 func remapDbInExprs(exprs tree.Exprs, remap remapDbContext) {
 	for _, e := range exprs {
 		remapDbInExpr(e, remap)
+	}
+}
+
+// SHOW nodes store LIKE as a pointer, which becomes a non-nil tree.Expr
+// interface when it is nil. Do not send that typed nil to the generic walker.
+func remapDbInOptionalComparisonExpr(expr *tree.ComparisonExpr, remap remapDbContext) {
+	if expr != nil {
+		remapDbInExpr(expr, remap)
 	}
 }
 
