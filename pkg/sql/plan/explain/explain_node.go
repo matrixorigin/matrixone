@@ -1226,6 +1226,15 @@ func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, opti
 			}
 		}
 
+		// OverFetchLimit is the plan-time over-fetched candidate budget for a
+		// literal LIMIT (the TVF fetches this many so k rows survive the
+		// post-filter). It is 0 for a prepared LIMIT ? (over-fetch computed at
+		// EXECUTE); shown only when known so EXPLAIN reflects the real budget
+		// rather than the raw k on Limit.
+		if param.OverFetchLimit != 0 {
+			fmt.Fprintf(buf, "  OverFetchLimit: %d", param.OverFetchLimit)
+		}
+
 		if param.DistRange != nil {
 			if param.DistRange.LowerBoundType != plan.BoundType_UNBOUNDED || param.DistRange.UpperBoundType != plan.BoundType_UNBOUNDED {
 				buf.WriteString("  DistRange: ")
