@@ -51,6 +51,7 @@ type ivfSearchState struct {
 	keys           []any
 	distances      []float64
 	includeColumns []string
+	slots          vectorSearchSlots
 	// includeData stays keyed by column name for round-merge lookups and test
 	// assertions; output order still comes from includeColumns, not map iteration.
 	includeData          map[string][]any
@@ -159,16 +160,24 @@ func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.Call
 			}
 		}
 
-		vector.AppendAny(u.batch.Vecs[0], u.keys[u.offset], false, proc.Mp())
-		vector.AppendFixed(u.batch.Vecs[1], u.distances[u.offset], false, proc.Mp())
+		if u.slots.pk >= 0 {
+			vector.AppendAny(u.batch.Vecs[u.slots.pk], u.keys[u.offset], false, proc.Mp())
+		}
+		if u.slots.score >= 0 {
+			vector.AppendFixed(u.batch.Vecs[u.slots.score], u.distances[u.offset], false, proc.Mp())
+		}
 		for i, col := range u.includeColumns {
+			pos := u.slots.include[i]
+			if pos < 0 {
+				continue
+			}
 			isNull := false
 			if u.includeNulls != nil {
 				if nulls, ok := u.includeNulls[col]; ok && u.offset < len(nulls) {
 					isNull = nulls[u.offset]
 				}
 			}
-			vector.AppendAny(u.batch.Vecs[2+i], u.includeData[col][u.offset], isNull, proc.Mp())
+			vector.AppendAny(u.batch.Vecs[pos], u.includeData[col][u.offset], isNull, proc.Mp())
 		}
 		u.offset++
 		u.emittedCandidates++
@@ -427,6 +436,8 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		u.batch = tf.createResultBatch()
 		u.includeColumns = requestedIvfIncludeColumns(tf.Attrs)
+		u.slots = resolveVectorSearchSlots(
+			u.batch.Attrs, u.includeColumns, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
 		if u.limit == 0 && (!u.multiRoundEnabled || len(u.includeColumns) == 0) {
 			u.limit = 1
 		}
@@ -470,15 +481,14 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 }
 
 func requestedIvfIncludeColumns(attrs []string) []string {
-	if len(attrs) <= 2 {
-		return nil
-	}
-
-	cols := make([]string, 0, len(attrs)-2)
-	for _, attr := range attrs[2:] {
+	cols := make([]string, 0, len(attrs))
+	for _, attr := range attrs {
 		if strings.HasPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix) {
 			cols = append(cols, strings.TrimPrefix(attr, catalog.SystemSI_IVFFLAT_IncludeColPrefix))
 		}
+	}
+	if len(cols) == 0 {
+		return nil
 	}
 	return cols
 }

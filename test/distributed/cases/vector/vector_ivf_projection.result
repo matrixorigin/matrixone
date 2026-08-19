@@ -1,0 +1,34 @@
+drop database if exists vector_ivf_projection;
+create database vector_ivf_projection;
+use vector_ivf_projection;
+create table t(id bigint, v vecf32(4));
+insert into t values
+(1, '[1,1,1,1]'),
+(2, '[2,2,2,2]'),
+(3, '[3,3,3,3]'),
+(4, '[10,10,10,10]');
+create index idx_v using ivfflat on t(v) lists=2 op_type 'vector_l2_ops';
+explain select l2_distance(v, '[1,1,1,1]') as distance
+from t order by distance limit 3;
+-- @regex("Table Function on ivf_search", true)
+➤ AP QUERY PLAN ON MULTICN(10 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3
+select id, l2_distance(v, '[1,1,1,1]') as distance
+from t order by distance limit 3;
+➤ id[-5,64,0]  ¦  distance[8,9,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  2.0  𝄀
+3  ¦  4.0
+select l2_distance(v, '[1,1,1,1]') as distance
+from t order by distance limit 3;
+➤ distance[8,9,0]  𝄀
+0.0  𝄀
+2.0  𝄀
+4.0
+drop database vector_ivf_projection;

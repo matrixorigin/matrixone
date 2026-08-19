@@ -231,6 +231,41 @@ func TestIvfSearch(t *testing.T) {
 	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
 }
 
+func TestIvfSearchScoreOnlyProjection(t *testing.T) {
+	oldNewIvfAlgo := newIvfAlgo
+	oldGetVersion := getVersion
+	newIvfAlgo = newMockIvfAlgoFn
+	getVersion = mockVersion
+	t.Cleanup(func() {
+		newIvfAlgo = oldNewIvfAlgo
+		getVersion = oldGetVersion
+	})
+
+	param := `{"op_type": "vector_l2_ops", "lists": "3"}`
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), []string{"score"}, param)
+	ut.arg.Args = makeConstInputExprsIvfSearch()
+	inbat := makeBatchIvfSearch(ut.proc)
+
+	require.NoError(t, ut.arg.Prepare(ut.proc))
+	for i := range ut.arg.ctr.executorsForArgs {
+		var err error
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(
+			ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil))
+	t.Cleanup(func() {
+		ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
+	})
+
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, result.Status)
+	require.Equal(t, []string{"score"}, result.Batch.Attrs)
+	require.Equal(t, []float64{2}, vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[0]))
+}
+
 var failedivfsearchparam []string = []string{"{",
 	"{\"op_type\": \"vector_xxx_ops\"}",
 	"{\"op_type\": \"vector_l2_ops\", \"lists\":\"\"}",
