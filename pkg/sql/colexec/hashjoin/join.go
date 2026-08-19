@@ -233,6 +233,14 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 
+			if hashJoin.canEmitMatchCountOnly() {
+				err = ctr.probeMatchCountOnly(hashJoin, proc, &result)
+				if err != nil {
+					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+				}
+				return result, nil
+			}
+
 			if ctr.skipProbe {
 				rowCount := ctr.leftBat.RowCount()
 				var srcVec *vector.Vector
@@ -321,6 +329,63 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		}
 	}
+}
+
+// canEmitMatchCountOnly identifies an inner equi-join whose parent pruned all
+// result columns.  This is the physical shape produced for COUNT(*) over an
+// inner join: the consumer needs the number of matches, not one materialized
+// row per match.
+func (hashJoin *HashJoin) canEmitMatchCountOnly() bool {
+	return hashJoin.IsInner() && hashJoin.NonEqCond == nil &&
+		len(hashJoin.ResultCols) == 0
+}
+
+// probeMatchCountOnly emits one zero-column batch for the complete probe
+// batch.  In particular, duplicate build keys no longer force one operator
+// call per DefaultBatchSize matches.  A zero-column batch is the existing
+// row-count carrier used after projection pruning.
+func (ctr *container) probeMatchCountOnly(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	result *vm.CallResult,
+) error {
+	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+		return err
+	}
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+
+	matchCount := 0
+	rowCount := ctr.leftBat.RowCount()
+	maxInt := int(^uint(0) >> 1)
+	for offset := 0; offset < rowCount; offset += hashmap.UnitLimit {
+		count := min(rowCount-offset, hashmap.UnitLimit)
+		values, zValues, err := ctr.itr.Find(offset, count, ctr.eqCondVecs)
+		if err != nil {
+			return err
+		}
+		for i, value := range values {
+			if zValues[i] == 0 || value == 0 {
+				continue
+			}
+			matches := 1
+			if !ctr.probeHashOnPK {
+				matches = len(ctr.mp.GetSels(value - 1))
+			}
+			if matches > maxInt-matchCount {
+				return moerr.NewInternalErrorNoCtx("hash join match count overflows int")
+			}
+			matchCount += matches
+		}
+	}
+
+	ctr.resBat.SetRowCount(matchCount)
+	result.Batch = ctr.resBat
+	ctr.leftBat = nil
+	ctr.lastIdx = 0
+	ctr.probeState = psNextBatch
+	return nil
 }
 
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {

@@ -227,6 +227,53 @@ func TestJoin(t *testing.T) {
 	}
 }
 
+func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{
+		{newExpr(0, typ)},
+		{newExpr(0, typ)},
+	}
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc.arg.JoinType = plan.Node_INNER
+	tc.arg.NonEqCond = nil
+	tc.barg.NeedBatches = false
+
+	const duplicateRows = colexec.DefaultBatchSize*2 + 17
+	buildValues := make([]int32, duplicateRows+7)
+	for i := range duplicateRows {
+		buildValues[i] = 1
+	}
+	for i := duplicateRows; i < len(buildValues); i++ {
+		buildValues[i] = 2
+	}
+	build := makeInt32Batch(tc.proc, buildValues)
+	probe := makeInt32Batch(tc.proc, []int32{1, 2, 3})
+	resetHashBuildChildrenWithBatch(tc.barg, build)
+	resetChildrenWithBatch(tc.arg, probe)
+
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Empty(t, res.Batch.Vecs)
+	require.Equal(t, duplicateRows+7, res.Batch.RowCount())
+
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+}
+
 type recursiveHashJoinProbe struct {
 	*colexec.MockOperator
 }
