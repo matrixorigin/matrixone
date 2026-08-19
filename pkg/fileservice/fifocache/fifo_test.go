@@ -297,6 +297,37 @@ func TestReplaceAccountsPendingEnqueueJob(t *testing.T) {
 	assert.Equal(t, int64(8), cache.used())
 }
 
+func TestPendingEnqueueCountsTowardsUsed(t *testing.T) {
+	cache := New[int, int](
+		fscache.ConstCapacity(20),
+		ShardInt[int],
+		nil, nil, nil,
+	)
+	ctx := t.Context()
+
+	cache.queueLock.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.Set(ctx, 1, 1, 4)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending enqueue job")
+	}
+	cache.queueLock.Unlock()
+
+	// Set has accepted the item, so its already-allocated backing must be
+	// visible to capacity users before another goroutine can reserve space.
+	assert.Equal(t, int64(4), cache.used())
+	assert.Equal(t, int64(4), cache.pendingBytes.Load())
+
+	cache.Evict(ctx, nil, 0)
+	assert.Equal(t, int64(4), cache.used())
+	assert.Zero(t, cache.pendingBytes.Load())
+}
+
 func TestEvictAccountsPendingEnqueueJob(t *testing.T) {
 	cache := New[int, int](
 		fscache.ConstCapacity(4),

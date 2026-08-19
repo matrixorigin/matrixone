@@ -14,10 +14,45 @@
 
 package malloc
 
-import "testing"
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
 
 type cappedTestAllocator struct {
 	capacity int
+}
+
+type blockingGauge struct {
+	prometheus.Gauge
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+}
+
+func (g *blockingGauge) blockNextAdd() (<-chan struct{}, func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.started = make(chan struct{})
+	g.release = make(chan struct{})
+	release := g.release
+	return g.started, func() { close(release) }
+}
+
+func (g *blockingGauge) Add(v float64) {
+	g.mu.Lock()
+	started, release := g.started, g.release
+	g.started, g.release = nil, nil
+	g.mu.Unlock()
+	if started != nil {
+		close(started)
+		<-release
+	}
+	g.Gauge.Add(v)
 }
 
 func (a cappedTestAllocator) Allocate(size uint64, _ Hints) ([]byte, Deallocator, error) {
@@ -42,14 +77,88 @@ func TestMetricsAllocatorAccountsBackingCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := allocator.currentInuse.Load(); got != 1024 {
-		t.Fatalf("in-use bytes = %d, want physical capacity 1024", got)
-	}
-
 	dec.Deallocate()
-	if got := allocator.currentInuse.Load(); got != 0 {
-		t.Fatalf("in-use bytes after release = %d, want 0", got)
+}
+
+func TestMetricsAllocatorAggregatesAbsoluteInuseGauge(t *testing.T) {
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_absolute_inuse"})
+	first := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, nil, nil, nil, gauge)
+	second := NewMetricsAllocator(cappedTestAllocator{capacity: 200}, nil, nil, nil, nil, gauge)
+
+	_, firstDec, err := first.Allocate(1, NoHints)
+	if err != nil {
+		t.Fatal(err)
 	}
+	_, secondDec, err := second.Allocate(1, NoHints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGaugeValue(t, gauge, 300)
+
+	firstDec.Deallocate()
+	assertGaugeValue(t, gauge, 200)
+
+	secondDec.Deallocate()
+	assertGaugeValue(t, gauge, 0)
+}
+
+func TestMetricsAllocatorRefreshRearmsAfterAllocateDuringPublish(t *testing.T) {
+	base := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_allocate_during_publish"})
+	gauge := &blockingGauge{Gauge: base}
+	allocator := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, gauge, nil, nil, nil)
+
+	started, release := gauge.blockNextAdd()
+	_, first, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	<-started
+	_, second, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	release()
+
+	assertGaugeValue(t, base, 200)
+	first.Deallocate()
+	second.Deallocate()
+	assertGaugeValue(t, base, 0)
+}
+
+func TestMetricsAllocatorRefreshRearmsAfterReleaseDuringPublish(t *testing.T) {
+	base := prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_metrics_allocator_release_during_publish"})
+	gauge := &blockingGauge{Gauge: base}
+	allocator := NewMetricsAllocator(cappedTestAllocator{capacity: 100}, nil, gauge, nil, nil, nil)
+
+	_, first, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	assertGaugeValue(t, base, 100)
+
+	started, release := gauge.blockNextAdd()
+	_, second, err := allocator.Allocate(1, NoHints)
+	requireNoError(t, err)
+	<-started
+	first.Deallocate()
+	release()
+
+	assertGaugeValue(t, base, 100)
+	second.Deallocate()
+	assertGaugeValue(t, base, 0)
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertGaugeValue(t *testing.T, gauge prometheus.Gauge, want float64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if testutil.ToFloat64(gauge) == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("gauge = %v, want %v", testutil.ToFloat64(gauge), want)
 }
 
 func BenchmarkMetricsAllocator(b *testing.B) {

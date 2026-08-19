@@ -101,6 +101,9 @@
 # pkg/frontend
 /pkg/frontend @XuPeng-SH
 
+# pkg/fulltext2
+/pkg/fulltext2 @epegeric @fengttt @XuPeng-SH
+
 # pkg/hakeeper
 /pkg/hakeeper @XuPeng-SH @LeftHandCold
 

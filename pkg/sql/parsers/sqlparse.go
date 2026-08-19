@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -391,6 +392,27 @@ func SplitRewriteKey(key string) (db, table string, ok bool) {
 	return db, table, true
 }
 
+// NormalizeRewriteKey returns the database.table execution key used by the
+// planner under the active lower_case_table_names comparison mode. The returned
+// db/table retain execution spelling for mode 2, while the map key uses the
+// case-insensitive comparison identity shared by modes 1 and 2.
+func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames int64) (string, string, string, error) {
+	db, table, ok := SplitRewriteKey(key)
+	if !ok {
+		if len(strings.Split(strings.TrimSpace(key), ".")) != 2 {
+			return "", "", "", moerr.NewParseError(ctx, "the mapping name needs to include database name")
+		}
+		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
+	}
+	compareDB := tree.NewCStr(db, lowerCaseTableNames).Compare()
+	compareTable := tree.NewCStr(table, lowerCaseTableNames).Compare()
+	if lowerCaseTableNames == 1 {
+		db = compareDB
+		table = compareTable
+	}
+	return compareDB + "." + compareTable, db, table, nil
+}
+
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
 // valid (unquoted) database identifier, and the source and destination sets must
 // be disjoint (forbidding chaining such as {"x":"y","y":"z"} and self-maps). It
@@ -413,23 +435,66 @@ func IsSystemDatabase(name string) bool {
 }
 
 func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
+	_, err := NormalizeAndValidateRemapDb(ctx, remapDb, 0)
+	return err
+}
+
+// NormalizeAndValidateRemapDb validates a remapdb policy using the same
+// identifier comparison mode as the parser and returns its execution form.
+// Source keys always use their comparison form. Targets are lowercased only in
+// lower_case_table_names=1; modes 0 and 2 preserve the configured spelling.
+func NormalizeAndValidateRemapDb(
+	ctx context.Context,
+	remapDb map[string]string,
+	lowerCaseTableNames int64,
+) (map[string]string, error) {
 	if len(remapDb) == 0 {
-		return nil
+		return nil, nil
 	}
-	for src, dst := range remapDb {
-		if !isValidDbIdentifier(strings.TrimSpace(src)) || !isValidDbIdentifier(strings.TrimSpace(dst)) {
-			return moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
+	normalized := make(map[string]string, len(remapDb))
+	sources := make(map[string]string, len(remapDb))
+	sourceNames := make([]string, 0, len(remapDb))
+	for src := range remapDb {
+		sourceNames = append(sourceNames, src)
+	}
+	slices.Sort(sourceNames)
+	for _, src := range sourceNames {
+		dst := remapDb[src]
+		src = strings.TrimSpace(src)
+		dst = strings.TrimSpace(dst)
+		if !isValidDbIdentifier(src) || !isValidDbIdentifier(dst) {
+			return nil, moerr.NewParseErrorf(ctx, "remapdb names must be valid identifiers, got %q -> %q", src, dst)
 		}
 		if IsSystemDatabase(src) || IsSystemDatabase(dst) {
-			return moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+			return nil, moerr.NewParseErrorf(ctx, "remapdb must not remap a system database, got %q -> %q", src, dst)
+		}
+		sourceKey := tree.NewCStr(src, lowerCaseTableNames).Compare()
+		if previous, ok := sources[sourceKey]; ok {
+			return nil, moerr.NewParseErrorf(ctx,
+				"remapdb source databases %q and %q are equivalent under lower_case_table_names=%d",
+				previous, src, lowerCaseTableNames)
+		}
+		sources[sourceKey] = src
+		target := dst
+		if lowerCaseTableNames == 1 {
+			target = tree.NewCStr(dst, lowerCaseTableNames).Compare()
+		}
+		normalized[sourceKey] = target
+	}
+	normalizedSources := make([]string, 0, len(normalized))
+	for src := range normalized {
+		normalizedSources = append(normalizedSources, src)
+	}
+	slices.Sort(normalizedSources)
+	for _, src := range normalizedSources {
+		dst := normalized[src]
+		targetKey := tree.NewCStr(dst, lowerCaseTableNames).Compare()
+		if _, ok := sources[targetKey]; ok {
+			return nil, moerr.NewParseErrorf(ctx,
+				"remapdb: database %q must not be both a source and a destination (chaining is not allowed)", dst)
 		}
 	}
-	for _, dst := range remapDb {
-		if _, ok := remapDb[strings.TrimSpace(dst)]; ok {
-			return moerr.NewParseErrorf(ctx, "remapdb: database %q must not be both a source and a destination (chaining is not allowed)", strings.TrimSpace(dst))
-		}
-	}
-	return nil
+	return normalized, nil
 }
 
 // DecodeRewriteHint decodes a leading-hint JSON object into per-table rewrite
@@ -440,6 +505,23 @@ func ValidateRemapDb(ctx context.Context, remapDb map[string]string) error {
 // uses this to merge inline hints exactly the way the parser reads them, so the
 // inline array-form (chain) syntax stays usable when hints are merged.
 func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string][]string, remapDb map[string]string, err error) {
+	return DecodeRewriteHintWithLowerCaseTableNames(ctx, content, 0)
+}
+
+func DecodeRewriteHintWithLowerCaseTableNames(
+	ctx context.Context,
+	content string,
+	lowerCaseTableNames int64,
+) (rewrites map[string][]string, remapDb map[string]string, err error) {
+	return decodeRewriteHintWithLowerCaseTableNames(ctx, content, lowerCaseTableNames, nil)
+}
+
+func decodeRewriteHintWithLowerCaseTableNames(
+	ctx context.Context,
+	content string,
+	lowerCaseTableNames int64,
+	validateRewriteChain func([]string) error,
+) (rewrites map[string][]string, remapDb map[string]string, err error) {
 	content = strings.TrimSpace(content)
 	if content == "" || content[0] != '{' {
 		return nil, nil, nil
@@ -453,13 +535,22 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 		for src, dst := range rm.RemapDb {
 			remapDb[strings.TrimSpace(src)] = strings.TrimSpace(dst)
 		}
-		if err := ValidateRemapDb(ctx, remapDb); err != nil {
+		if remapDb, err = NormalizeAndValidateRemapDb(ctx, remapDb, lowerCaseTableNames); err != nil {
 			return nil, nil, err
 		}
 	}
 	if len(rm.RawRewrites) > 0 {
 		rewrites = make(map[string][]string, len(rm.RawRewrites))
-		for k, raw := range rm.RawRewrites {
+		originalKeys := make(map[string]string, len(rm.RawRewrites))
+		decodedChains := make(map[string][]string, len(rm.RawRewrites))
+		canonicalKeys := make(map[string]string, len(rm.RawRewrites))
+		keys := make([]string, 0, len(rm.RawRewrites))
+		for key := range rm.RawRewrites {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, k := range keys {
+			raw := rm.RawRewrites[k]
 			if strings.TrimSpace(k) == "" {
 				return nil, nil, moerr.NewParseError(ctx, "empty table and database")
 			}
@@ -475,7 +566,34 @@ func DecodeRewriteHint(ctx context.Context, content string) (rewrites map[string
 			if derr != nil {
 				return nil, nil, derr
 			}
-			rewrites[db+"."+table] = sqls
+			canonicalKey, _, _, derr := NormalizeRewriteKey(ctx, db+"."+table, lowerCaseTableNames)
+			if derr != nil {
+				return nil, nil, derr
+			}
+			decodedChains[k] = sqls
+			canonicalKeys[k] = canonicalKey
+			if previous, exists := originalKeys[canonicalKey]; exists {
+				// Preserve the historical exact execution-key rule when equivalent
+				// mode-1 spellings coexist. Otherwise the sorted first key wins.
+				if k != canonicalKey || previous == canonicalKey {
+					continue
+				}
+			}
+			originalKeys[canonicalKey] = k
+			rewrites[canonicalKey] = sqls
+		}
+		// Winners are parsed once below while constructing their AST. Parse only
+		// discarded equivalent values here so every raw input is still validated
+		// exactly once before it can be ignored.
+		if validateRewriteChain != nil {
+			for _, k := range keys {
+				if originalKeys[canonicalKeys[k]] == k {
+					continue
+				}
+				if err = validateRewriteChain(decodedChains[k]); err != nil {
+					return nil, nil, err
+				}
+			}
 		}
 	}
 	return rewrites, remapDb, nil
@@ -486,6 +604,18 @@ func AddRewriteHints(ctx context.Context, stmts []tree.Statement, sql string) er
 }
 
 func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql string, sqlMode string) error {
+	// Preserve the historical mode-1 behavior for callers that do not provide
+	// session semantics. Production frontend paths use the mode-aware entrypoint.
+	return AddRewriteHintsWithSQLModeAndLowerCaseTableNames(ctx, stmts, sql, sqlMode, 1)
+}
+
+func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+	ctx context.Context,
+	stmts []tree.Statement,
+	sql string,
+	sqlMode string,
+	lowerCaseTableNames int64,
+) error {
 	hints, err := extractLeadingHintsWithSQLMode(ctx, sql, sqlMode)
 	if err != nil {
 		return err
@@ -502,22 +632,37 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 		return moerr.NewParseError(ctx, "parse hints bug")
 	}
 	for i, stmt := range stmts {
-		switch stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.Insert, *tree.Update, *tree.Delete:
-			// SELECT and INSERT...SELECT carry the rewrite option for the planner
-			// (INSERT propagates it to its inner SELECT read-source, see below).
-			// UPDATE/DELETE are decoded only to validate the inline hint; their
-			// remapdb is applied at the AST level and table rewrites on their
-			// read-sources are not yet implemented.
-		default:
-			continue
-		}
 		hint := strings.TrimSpace(hints[i])
 		if hint == "" || hint[0] != '{' {
 			continue
 		}
 
-		rawChains, remapDb, err := DecodeRewriteHint(ctx, hint)
+		validateRewriteChain := func(sqls []string) error {
+			if len(sqls) == 0 {
+				return moerr.NewParseError(ctx, "statement")
+			}
+			for _, v := range sqls {
+				if v == "" {
+					return moerr.NewParseError(ctx, "statement")
+				}
+				st, parseErr := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
+				if parseErr != nil {
+					return moerr.NewParseError(ctx, parseErr.Error())
+				}
+				valid := false
+				switch st.(type) {
+				case *tree.Select, *tree.ParenSelect:
+					valid = true
+				}
+				st.Free()
+				if !valid {
+					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
+				}
+			}
+			return nil
+		}
+		rawChains, remapDb, err := decodeRewriteHintWithLowerCaseTableNames(
+			ctx, hint, lowerCaseTableNames, validateRewriteChain)
 		if err != nil {
 			return err
 		}
@@ -525,34 +670,62 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 			continue
 		}
 		rewriteOption := &tree.RewriteOption{Rewrites: make(map[string][]*tree.Rewrite)}
+		freeRewriteChain := func(chain []*tree.Rewrite) {
+			for _, rewrite := range chain {
+				if rewrite != nil && rewrite.Stmt != nil {
+					rewrite.Stmt.Free()
+				}
+			}
+		}
+		freeRewriteOption := func() {
+			for _, chain := range rewriteOption.Rewrites {
+				freeRewriteChain(chain)
+			}
+		}
 		if len(remapDb) > 0 {
 			rewriteOption.RemapDb = remapDb
 		}
 		for key, sqls := range rawChains {
-			db, table, _ := SplitRewriteKey(key)
+			_, db, table, err := NormalizeRewriteKey(ctx, key, lowerCaseTableNames)
+			if err != nil {
+				freeRewriteOption()
+				return err
+			}
 			if len(sqls) == 0 {
+				freeRewriteOption()
 				return moerr.NewParseError(ctx, "statement")
 			}
 			chain := make([]*tree.Rewrite, 0, len(sqls))
 			for _, v := range sqls {
 				if v == "" {
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, "statement")
 				}
-				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, 1, sqlMode)
+				st, err := ParseOneWithSQLMode(ctx, dialect.MYSQL, v, lowerCaseTableNames, sqlMode)
 				if err != nil {
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, err.Error())
 				}
 				switch st.(type) {
 				case *tree.Select, *tree.ParenSelect:
 					// ok
 				default:
+					st.Free()
+					freeRewriteChain(chain)
+					freeRewriteOption()
 					return moerr.NewParseError(ctx, "only accept SELECT-like statements as rewrites")
 				}
 				chain = append(chain, &tree.Rewrite{TableName: table, DbName: db, Stmt: st})
 			}
 			rewriteOption.Rewrites[key] = chain
 		}
-		switch s := stmt.(type) {
+		attachStmt := stmt
+		if prepare, ok := stmt.(*tree.PrepareStmt); ok && prepare.Stmt != nil {
+			attachStmt = prepare.Stmt
+		}
+		switch s := attachStmt.(type) {
 		case *tree.Select:
 			s.RewriteOption = rewriteOption
 		case *tree.ParenSelect:
@@ -571,6 +744,10 @@ func AddRewriteHintsWithSQLMode(ctx context.Context, stmts []tree.Statement, sql
 					ps.Select.RewriteOption = rewriteOption
 				}
 			}
+		default:
+			// Every policy value must be valid even when this statement kind does
+			// not consume table rewrites. Release validation-only ASTs immediately.
+			freeRewriteOption()
 		}
 	}
 	return nil

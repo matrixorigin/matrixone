@@ -247,9 +247,11 @@ func TestBuildIvfpqSecondaryIndexDef_BadIncludeColumn(t *testing.T) {
 
 func TestBuildIvfpqSecondaryIndexDef_OK(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
+	// IVF-PQ requires lists > 0 (ParamsFromTree); the shared fixture leaves it 0.
+	idx := vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ, "price")
+	idx.IndexOption.AlgoParamList = 10
 	idxDefs, tblDefs, err := buildIvfpqSecondaryIndexDef(ctx,
-		vectorIndexInfoFixture("v", tree.INDEX_TYPE_IVFPQ, "price"),
-		vectorColMap(), nil, "id")
+		idx, vectorColMap(), nil, "id")
 	require.NoError(t, err)
 	require.Len(t, idxDefs, 2)
 	require.Len(t, tblDefs, 2)

@@ -38,3 +38,6 @@ source.decoded_budget.insertOne({
   _id: ObjectId("64b000000000000000000201"),
   payload: "x".repeat(192 * 1024)
 });
+
+source.json_scalar.drop();
+source.json_scalar.insertOne({_id: 1, value: "text"});

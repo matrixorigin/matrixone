@@ -4247,7 +4247,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	if ctx.bindingNonRecurCte() {
+	// CTE reuse currently rewrites consumers reachable from the main query
+	// root. A CTE referenced while another CTE is being bound can also have
+	// consumers in separately appended steps, especially recursive anchor and
+	// member steps. Keep such nested references inline until reuse can rewrite
+	// the complete step graph; otherwise the added producer and an unreplaced
+	// consumer share one mutable subtree and column remapping visits it twice.
+	if ctx.bindingCte() {
 		cteRef.hasNestedUse = true
 		if ctx.cteState.cte != nil {
 			ctx.cteState.cte.hasNestedRef = true
@@ -10714,7 +10720,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if len(schema) == 0 {
 				schema = builder.compCtx.DefaultDatabase()
 			}
-			key := schema + "." + table
+			lower := builder.compCtx.GetLowerCaseTableNames()
+			key := tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
@@ -10745,7 +10752,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					lower := builder.compCtx.GetLowerCaseTableNames()
+					builder.ctxByNode[nodeID].cteName =
+						tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 				}
 				ctx.remapOption = m
 				return
