@@ -5525,14 +5525,13 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		// token. The complete candidate length is the boundary used by MySQL's
 		// full-DATETIME attempt: a short suffix still terminates the H:M prefix,
 		// while a longer nonnumeric suffix belongs to the failed candidate.
-		if token.trailingWhitespace && mysqlSignedNumericTimeSuffixForExtract(token) {
-			return false
-		}
-		if token.allDigits && token.trailingWhitespace {
-			return false
-		}
+		// Whitespace terminates the later token. It is therefore outside the
+		// already consumed H:M candidate, regardless of whether the token is
+		// numeric, signed, or textual. Keep the consumed prefix; the same token
+		// without trailing whitespace remains subject to the ownership checks
+		// below.
 		if token.trailingWhitespace {
-			return true
+			return false
 		}
 		return len(clock)+len(suffix) >= 12
 	}
