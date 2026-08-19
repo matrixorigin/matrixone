@@ -356,11 +356,7 @@ func encodeUserDefinedVarValue(ctx context.Context, value any, isBin bool) (*pla
 	case string:
 		return plan2.MakePlan2StringConstExprWithType(v, isBin), nil
 	case bytejson.ByteJson:
-		jsonValue, err := v.MarshalJSON()
-		if err != nil {
-			return nil, moerr.NewInternalErrorf(ctx, "cannot encode JSON user variable in connection migration: %v", err)
-		}
-		return makeUserVarLiteral(types.T_json, &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: string(jsonValue)}}, 0), nil
+		return makeUserVarByteJSONLiteral(v), nil
 	case types.Enum:
 		return makeUserVarLiteral(types.T_enum, &plan.Literal{Value: &plan.Literal_EnumVal{EnumVal: uint32(v)}}, 0), nil
 	case types.Decimal64:
@@ -404,11 +400,24 @@ func makeUserVarFixedVectorLiteral(typ types.T, value []byte) *plan.Expr {
 	}
 }
 
+func makeUserVarByteJSONLiteral(value bytejson.ByteJson) *plan.Expr {
+	data := make([]byte, len(value.Data)+1)
+	data[0] = value.Type
+	copy(data[1:], value.Data)
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_json), NotNullable: true},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: data}},
+	}
+}
+
 func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error) {
 	if expr == nil {
 		return nil, moerr.NewInternalError(ctx, "invalid user variable value in connection migration")
 	}
 	if expr.GetVec() != nil {
+		if types.T(expr.Typ.Id) == types.T_json {
+			return decodeUserVarByteJSONValue(ctx, expr)
+		}
 		return decodeUserDefinedVarFixedValue(ctx, expr)
 	}
 	if expr.GetLit() == nil {
@@ -573,6 +582,27 @@ func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "unsupported user variable type %s in connection migration", types.T(expr.Typ.Id).String())
 	}
+}
+
+func decodeUserVarByteJSONValue(ctx context.Context, expr *plan.Expr) (value any, err error) {
+	vec := expr.GetVec()
+	if vec.Len != 1 || len(vec.Data) < 1 {
+		return nil, moerr.NewInternalError(ctx, "invalid JSON user variable value in connection migration")
+	}
+	decoded := bytejson.ByteJson{
+		Type: vec.Data[0],
+		Data: append([]byte(nil), vec.Data[1:]...),
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			value = nil
+			err = moerr.NewInternalErrorf(ctx, "invalid JSON user variable value in connection migration: %v", recovered)
+		}
+	}()
+	if _, err := decoded.MarshalJSON(); err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "invalid JSON user variable value in connection migration: %v", err)
+	}
+	return decoded, nil
 }
 
 func decodeUserDefinedVarFixedValue(ctx context.Context, expr *plan.Expr) (any, error) {

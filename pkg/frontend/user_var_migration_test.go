@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -153,6 +155,36 @@ func TestUserDefinedVarMigrationRoundTripsJSON(t *testing.T) {
 	require.Equal(t, jsonValue, restored["document"].Value)
 }
 
+func TestUserDefinedVarMigrationPreservesJSONSubtypes(t *testing.T) {
+	stringData := func(value string) []byte {
+		data := make([]byte, binary.MaxVarintLen64)
+		n := binary.PutUvarint(data, uint64(len(value)))
+		return append(data[:n], value...)
+	}
+
+	values := []bytejson.ByteJson{
+		{Type: bytejson.TpCodeDecimal, Data: stringData("1.20")},
+		{Type: bytejson.TpCodeDate, Data: stringData("2026-08-19")},
+		{Type: bytejson.TpCodeTime, Data: stringData("04:05:06.123456")},
+		{Type: bytejson.TpCodeDatetime, Data: stringData("2026-08-19 04:05:06.123456")},
+		{Type: bytejson.TpCodeOpaque, Data: stringData(string([]byte{0x00, 0x01, 0xfe}))},
+		{Type: bytejson.TpCodeBit, Data: stringData(string([]byte{0x01, 0x02}))},
+	}
+
+	for _, want := range values {
+		encoded, err := encodeUserDefinedVarValue(context.Background(), want, false)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_json), encoded.Typ.Id)
+		require.NotNil(t, encoded.GetVec())
+
+		got, err := decodeUserDefinedVarValue(context.Background(), encoded)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+		encoded.GetVec().Data[len(encoded.GetVec().Data)-1]++
+		require.Equal(t, want, got)
+	}
+}
+
 func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {
 	_, err := encodeUserDefinedVarValue(context.Background(), struct{}{}, false)
 	require.ErrorContains(t, err, "unsupported user variable type")
@@ -247,6 +279,11 @@ func TestDecodeUserDefinedVarValueRejectsMalformedRepresentations(t *testing.T) 
 	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_json)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: "{"}}},
+	})
+	require.ErrorContains(t, err, "invalid JSON")
+	_, err = decodeUserDefinedVarValue(context.Background(), &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_json)},
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1}},
 	})
 	require.ErrorContains(t, err, "invalid JSON")
 

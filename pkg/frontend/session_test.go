@@ -800,10 +800,13 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:                  88,
-			DB:                      exported.DB,
-			SetVarStmts:             []string{"set sql_mode = @mode"},
-			PrepareStmts:            exported.PrepareStmts,
+			ConnID:      88,
+			DB:          exported.DB,
+			SetVarStmts: []string{"set sql_mode = @mode"},
+			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
+				Name: "pending_isolation_prepare",
+				SQL:  "select ?",
+			}),
 			LastAffectedRows:        exported.LastAffectedRows,
 			UserDefinedVars:         exported.UserDefinedVars,
 			UserDefinedVarsExported: exported.UserDefinedVarsExported,
