@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -481,8 +482,17 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 				{Name: "score", Typ: plan.Type{Id: 31}},
 			},
 		},
-		Stats:           &plan.Stats{Outcnt: 10},
-		VectorIndexScan: &plan.VectorIndexScan{},
+		Stats: &plan.Stats{Outcnt: 10},
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 123},
+			Tenant: &plan.SnapshotTenant{TenantID: 7},
+		},
+		VectorIndexScan: &plan.VectorIndexScan{
+			ScanSnapshot: &plan.Snapshot{
+				TS:     &timestamp.Timestamp{PhysicalTime: 123},
+				Tenant: &plan.SnapshotTenant{TenantID: 7},
+			},
+		},
 	}
 
 	scopes, err := c.compileVectorIndexScan(node)
@@ -492,6 +502,9 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 		require.Equal(t, int32(2), scope.NodeInfo.CNCNT)
 		require.Equal(t, int32(i), scope.NodeInfo.CNIDX)
 		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.Equal(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
+		require.Equal(t, node.VectorIndexScan.ScanSnapshot, scope.DataSource.node.VectorIndexScan.ScanSnapshot)
+		require.NotSame(t, node.ScanSnapshot, scope.DataSource.node.ScanSnapshot)
 	}
 
 	node.Stats.ForceOneCN = true
@@ -500,6 +513,33 @@ func TestCompileVectorIndexScanUsesAllQueryCNs(t *testing.T) {
 	require.Len(t, scopes, 1)
 	require.Equal(t, "cn-local:6001", scopes[0].NodeInfo.Addr)
 	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
+}
+
+func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
+	nestedSnapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 10},
+		Tenant: &plan.SnapshotTenant{TenantID: 11},
+	}
+	node := &plan.Node{
+		VectorIndexScan: &plan.VectorIndexScan{ScanSnapshot: nestedSnapshot},
+	}
+
+	normalizeVectorIndexScanSnapshot(node)
+	require.Equal(t, nestedSnapshot, node.ScanSnapshot)
+	require.Equal(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, nestedSnapshot, node.ScanSnapshot)
+	require.NotSame(t, nestedSnapshot, node.VectorIndexScan.ScanSnapshot)
+
+	topLevelSnapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 20},
+		Tenant: &plan.SnapshotTenant{TenantID: 22},
+	}
+	node.ScanSnapshot = topLevelSnapshot
+	normalizeVectorIndexScanSnapshot(node)
+	require.Equal(t, topLevelSnapshot, node.ScanSnapshot)
+	require.Equal(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
+	require.NotSame(t, topLevelSnapshot, node.ScanSnapshot)
+	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
 }
 
 func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {

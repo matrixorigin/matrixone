@@ -4003,6 +4003,28 @@ func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator
 	return txnOp, ctx, nil
 }
 
+// normalizeVectorIndexScanSnapshot closes the two representations of a
+// vector scan's snapshot before the generic datasource transaction selection
+// runs.  The node-level snapshot is the compiler contract; the nested copy is
+// the self-contained identity consumed by the index reader.  Keep a fallback
+// from the nested field for plans produced before the node-level field was
+// populated, then make independent copies so later expression folding or
+// remote-scope cloning cannot mutate either representation.
+func normalizeVectorIndexScanSnapshot(node *plan.Node) {
+	if node == nil || node.VectorIndexScan == nil {
+		return
+	}
+	snapshot := node.ScanSnapshot
+	if snapshot == nil {
+		snapshot = node.VectorIndexScan.ScanSnapshot
+	}
+	if snapshot == nil {
+		return
+	}
+	node.ScanSnapshot = plan2.DeepCopySnapshot(snapshot)
+	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -4091,12 +4113,12 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
+	normalizeVectorIndexScanSnapshot(node)
 	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err
 	}
 	spec := node.VectorIndexScan
-	spec.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
 	fold := func(expr **plan.Expr) error {
 		if expr == nil || *expr == nil {
 			return nil

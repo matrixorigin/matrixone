@@ -699,6 +699,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// until the async path provides a global visibility watermark.
 		Stats:  &plan.Stats{ForceOneCN: asyncIndex},
 		ObjRef: DeepCopyObjectRef(scanNode.ObjRef),
+		// Keep the generic node snapshot in sync with the vector-specific
+		// specification.  The compiler uses the node-level field to choose the
+		// transaction and context for every scan datasource.
+		ScanSnapshot: DeepCopySnapshot(scanNode.ScanSnapshot),
 		TableDef: &plan.TableDef{
 			Name:      scanNode.TableDef.Name,
 			TableType: "vector_index_scan",

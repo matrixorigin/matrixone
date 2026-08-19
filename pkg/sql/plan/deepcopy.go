@@ -287,6 +287,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		UpdateCtxList:          DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:           DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:       DeepCopyIndexReaderParam(node.IndexReaderParam),
+		ScanSnapshot:           DeepCopySnapshot(node.ScanSnapshot),
 		VectorIndexScan:        DeepCopyVectorIndexScan(node.VectorIndexScan),
 		OriginViews:            slices.Clone(node.OriginViews),
 		DirectView:             node.DirectView,
