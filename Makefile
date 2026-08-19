@@ -39,11 +39,9 @@
 # make proto-vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 12.0, 13.0, or above)
+# 1. install CUDA toolkit (version 13.3 or above)
 # 2. install cuVS Go bindings with conda
-#  % git clone git@github.com:rapidsai/cuvs.git
-#  % cd cuvs
-#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
 #  % conda activate go
 # 3. compile matrixone
 #  % cd matrixone

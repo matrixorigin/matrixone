@@ -24,6 +24,9 @@
 #include <rmm/mr/cuda_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 #include <rmm/mr/per_device_resource.hpp>
+#include <rmm/resource_ref.hpp>
+#include <cuda/memory_resource>
+#include <optional>
 #include <rmm/cuda_device.hpp>
 #include <rmm/device_uvector.hpp>
 #include <raft/core/resource/cuda_stream.hpp>
@@ -87,7 +90,10 @@ inline constexpr int kMaxDevices = 16;
 // — plain cudaMalloc/cudaFree, never stream-ordered, so a dying stream can't
 // poison anything.
 inline rmm::mr::cuda_memory_resource* raw_device_mr();           // defined below
-inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id);
+// RMM 26.06+ removed the abstract device_memory_resource base class; use
+// device_async_resource_ref (type-erased handle from cuda::mr::resource_ref)
+// as the polymorphic return type instead. Value type, cheap to copy.
+inline rmm::device_async_resource_ref worker_pool_mr(int device_id);
 
 inline void ensure_rmm_pool_for_device(int device_id) {
     (void)device_id;
@@ -102,12 +108,15 @@ inline void ensure_rmm_pool_for_device(int device_id) {
 // fails, so callers always get a valid MR. The pool/base shared_ptrs are kept
 // alive for the whole process in `keepalives` (never torn down) — same lifetime
 // guarantee as before.
-inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
+inline rmm::device_async_resource_ref worker_pool_mr(int device_id) {
     static std::once_flag flags[kMaxDevices];
-    static rmm::mr::device_memory_resource* pools[kMaxDevices] = {};
+    // RMM 26.06+ removed the abstract device_memory_resource base; store the
+    // type-erased device_async_resource_ref (defined only after successful
+    // pool creation) so we can hand it back cheaply.
+    static std::optional<rmm::device_async_resource_ref> pools[kMaxDevices];
     static std::mutex keepalive_mu;
     static std::vector<std::shared_ptr<void>> keepalives;
-    if (device_id < 0 || device_id >= kMaxDevices) return raw_device_mr();
+    if (device_id < 0 || device_id >= kMaxDevices) return *raw_device_mr();
     std::call_once(flags[device_id], [device_id] {
         try {
             cudaSetDevice(device_id);
@@ -120,14 +129,15 @@ inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
             // is not relocatable, so an allocation larger than the pool must
             // be satisfied by a fresh upstream cudaMalloc, which only succeeds
             // if (1 − initial_pct) of VRAM is still free.
-            auto pool = std::make_shared<
-                rmm::mr::pool_memory_resource<rmm::mr::cuda_memory_resource>>(
-                    base.get(),
-                    rmm::percent_of_free_device_memory(2));
+            // RMM 26.06+ pool_memory_resource is no longer templated; it takes
+            // a type-erased cuda::mr::any_resource<device_accessible> upstream.
+            auto pool = std::make_shared<rmm::mr::pool_memory_resource>(
+                cuda::mr::any_resource<cuda::mr::device_accessible>(*base),
+                rmm::percent_of_free_device_memory(2));
             std::lock_guard<std::mutex> lk(keepalive_mu);
             keepalives.push_back(pool);   // pool outlives every device_uvector
             keepalives.push_back(base);   // base outlives the pool
-            pools[device_id] = pool.get();
+            pools[device_id] = rmm::device_async_resource_ref(*pool);
         } catch (const std::exception& e) {
             std::cerr << "[worker_pool_mr] device=" << device_id
                       << " failed to create pool MR: " << e.what()
@@ -138,8 +148,7 @@ inline rmm::mr::device_memory_resource* worker_pool_mr(int device_id) {
                       << std::endl;
         }
     });
-    return pools[device_id] ? pools[device_id]
-                            : static_cast<rmm::mr::device_memory_resource*>(raw_device_mr());
+    return pools[device_id].value_or(rmm::device_async_resource_ref(*raw_device_mr()));
 }
 
 // Per-physical-device serialization of index-mutating cuVS calls (build AND
@@ -182,6 +191,13 @@ inline std::mutex& device_build_mutex(int device_id) {
 inline rmm::mr::cuda_memory_resource* raw_device_mr() {
     static rmm::mr::cuda_memory_resource mr;
     return &mr;
+}
+
+// RMM 26.06+ device_uvector no longer accepts device_memory_resource*; it takes
+// a type-erased device_async_resource_ref (aka cuda::mr::resource_ref<device_accessible>).
+// Wrap raw_device_mr() in the new ref type for call sites that construct device_uvectors.
+inline rmm::device_async_resource_ref raw_device_mr_ref() {
+    return rmm::device_async_resource_ref(*raw_device_mr());
 }
 
 // =============================================================================

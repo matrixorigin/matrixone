@@ -2210,7 +2210,7 @@ protected:
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         raft::copy(*res, device_view,
@@ -2229,7 +2229,7 @@ protected:
         auto res    = handle.get_raft_resources();
         auto stream = raft::resource::get_cuda_stream(*res);
         rmm::device_uvector<T> storage(
-            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+            static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
         auto device_view = raft::make_device_matrix_view<T, int64_t>(
             storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
         if constexpr (std::is_same_v<T, float>) {
@@ -2238,7 +2238,7 @@ protected:
                            host_data, n_rows, this->dimension));
         } else {
             rmm::device_uvector<float> float_storage(
-                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
             auto float_view = raft::make_device_matrix_view<float, int64_t>(
                 float_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
             raft::copy(*res, float_view,
@@ -2256,7 +2256,7 @@ protected:
                     // B == half: quantizer is half-source. Cast the f32 input to
                     // half on-device, then transform half -> T.
                     rmm::device_uvector<B> b_storage(
-                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr());
+                        static_cast<size_t>(n_rows) * this->dimension, stream, matrixone::raw_device_mr_ref());
                     auto b_view = raft::make_device_matrix_view<B, int64_t>(
                         b_storage.data(), (int64_t)n_rows, (int64_t)this->dimension);
                     raft::copy(*res, b_view, float_view);

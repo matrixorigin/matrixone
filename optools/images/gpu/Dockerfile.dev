@@ -1,4 +1,4 @@
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04 AS builder
+FROM nvidia/cuda:13.3.1-cudnn-devel-ubuntu24.04 AS builder
 RUN apt-get update
 RUN apt-get install -y locales
 RUN localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
@@ -33,7 +33,7 @@ RUN rm miniconda.sh
 ENV PATH="/root/miniconda/bin:${PATH}"
 RUN /root/miniconda/bin/conda init bash
 
-RUN /root/miniconda/bin/conda env create --name go -f /app/matrixone/optools/images/gpu/go_cuda-130_arch-x86_64.yaml
+RUN /root/miniconda/bin/conda env create --name go -f /app/matrixone/optools/images/gpu/go_cuda-133_arch-x86_64.yaml
 RUN echo "source activate go" >> ~/.bashrc
 
 ENV CONDA_PREFIX=/root/miniconda/envs/go
@@ -55,11 +55,11 @@ RUN cd matrixone && \
     fi
 
 ENV MO_CL_CUDA=1
-RUN cd matrixone && make clean && make
+RUN cd matrixone && make clean && make -j8
 
 #ENTRYPOINT ["bash"]
 
-FROM nvidia/cuda:13.0.2-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu24.04
 
 COPY --from=builder /app/matrixone/mo-service /mo-service
 COPY --from=builder /app/matrixone/etc /etc
