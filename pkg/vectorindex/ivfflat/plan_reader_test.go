@@ -720,11 +720,16 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 		})
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(nil, errors.New("snapshot relation unavailable"))
 
-	_, err := (&relationScanner{
-		proc:      proc,
-		accountID: func() *uint32 { value := uint32(42); return &value }(),
-		snapshot:  &plan.Snapshot{TS: &snapshotTS},
-	}).ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+	reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &snapshotTS,
+			Tenant: &plan.SnapshotTenant{TenantID: 99},
+		},
+	}, searchplugin.Request{})
+	require.NoError(t, err)
+	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
 	require.Same(t, clone, proc.GetCloneTxnOperator())
 }
