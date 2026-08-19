@@ -92,6 +92,60 @@ func TestTableChangesSpillConfigUsesExecutionResourceBudget(t *testing.T) {
 	require.True(t, files.Release())
 }
 
+func TestTableChangesStartRejectsInvalidArguments(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	makeString := func(value string) *vector.Vector {
+		v := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(v, []byte(value), false, proc.Mp()))
+		return v
+	}
+	valid := []*vector.Vector{makeString("db"), makeString("table"), makeString(""), makeString("1-0")}
+	defer func() {
+		for _, v := range valid {
+			v.Free(proc.Mp())
+		}
+	}()
+
+	for _, tc := range []struct {
+		name  string
+		index int
+		make  func() *vector.Vector
+		want  string
+	}{
+		{name: "database null", index: 0, make: func() *vector.Vector {
+			v := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(v, nil, true, proc.Mp()))
+			return v
+		}, want: "database name cannot be NULL"},
+		{name: "table type", index: 1, make: func() *vector.Vector {
+			v := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(v, int64(1), false, proc.Mp()))
+			return v
+		}, want: "table name must be a string"},
+		{name: "after format", index: 2, make: func() *vector.Vector {
+			return makeString("not-a-watermark")
+		}, want: "invalid table_changes after"},
+		{name: "until format", index: 3, make: func() *vector.Vector {
+			return makeString("not-a-watermark")
+		}, want: "invalid table_changes until"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]*vector.Vector(nil), valid...)
+			args[tc.index] = tc.make()
+			defer args[tc.index].Free(proc.Mp())
+			tf := &TableFunction{
+				Attrs: []string{"value"},
+				ctr:   container{argVecs: args, retSchema: []types.Type{types.T_varchar.ToType()}},
+			}
+			state := &tableChangesState{accountColumnIdx: -1}
+			err := state.start(tf, proc, 0, nil)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 func TestValidateTableChangesWindow(t *testing.T) {
 	snapshot := types.BuildTS(100, 5)
 

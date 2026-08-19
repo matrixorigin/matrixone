@@ -123,6 +123,12 @@ func TestDecompressObjectColumnExtentNoneClonesData(t *testing.T) {
 	require.Equal(t, byte('u'), input[0])
 }
 
+func TestDecompressObjectColumnExtentRejectsMalformedCompressedData(t *testing.T) {
+	ext := objectio.NewExtent(compress.Lz4, 0, 3, 8)
+	_, err := decompressObjectColumnExtent(context.Background(), []byte{1, 2, 3}, ext, nil)
+	require.Error(t, err)
+}
+
 // ============================================================
 // Tests for rewriteTombstoneRowidsBatch (CN batch version)
 // ============================================================
