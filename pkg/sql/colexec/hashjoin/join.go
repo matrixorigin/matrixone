@@ -898,7 +898,7 @@ func (ctr *container) findAsofPredecessor(
 		var err error
 		ordered, err = mpool.MakeSliceAccounted[int32](
 			len(candidates), proc.Mp(), hashJoin.allocationAccount,
-			hashbuild.HashBuildAllocationOwner, hashJoinAllocationSiteAsofIndex,
+			mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex,
 		)
 		if err != nil {
 			return -1, false, err
