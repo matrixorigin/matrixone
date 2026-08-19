@@ -20,8 +20,10 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -394,6 +396,11 @@ type ResetParamRefRule struct {
 	params               []*Expr
 	exprMemo             map[*plan.Expr]*plan.Expr
 	validateFunctionArgs func(string, []*Expr) error
+	// inferTextParamTypes is enabled only for a binary-protocol execution
+	// copy.  SQL PREPARE/EXECUTE historically substitutes textual parameters
+	// without re-resolving overloads; binary protocol metadata is the explicit
+	// signal that a textual payload may need numeric overload resolution.
+	inferTextParamTypes bool
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -443,13 +450,31 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		needResetFunction := false
+		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
 		for i, arg := range exprImpl.F.Args {
+			implicitParamCast := isImplicitPreparedParamCast(arg)
 			if _, ok := arg.Expr.(*plan.Expr_P); ok {
 				needResetFunction = true
 			}
-			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
+			if implicitParamCast {
+				// The prepare-time TEXT marker may have been wrapped in an
+				// implicit numeric cast selected by overload resolution.  The
+				// cast is provisional; the execute-time value must participate in
+				// resolving the outer function again.
+				needResetFunction = true
+			}
+			rewrittenArg, applyErr := rule.ApplyExpr(arg)
+			err = applyErr
 			if err != nil {
 				return nil, err
+			}
+			exprImpl.F.Args[i] = rewrittenArg
+			boundArgs[i] = rewrittenArg
+			if implicitParamCast {
+				unwrapped, ok := unwrapImplicitPreparedParamCast(rewrittenArg, rule.inferTextParamTypes)
+				if ok {
+					boundArgs[i] = unwrapped
+				}
 			}
 		}
 
@@ -458,7 +483,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rewritten, err := BindFuncExprImplByPlanExpr(
 				rule.ctx,
 				exprImpl.F.Func.GetObjName(),
-				exprImpl.F.Args,
+				boundArgs,
 			)
 			if err != nil {
 				return nil, err
@@ -477,9 +502,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
 		}
+		param := rule.params[int(exprImpl.P.Pos)]
+		typ := e.Typ
+		// Most prepared parameters are intentionally replaced as TEXT to retain
+		// the historical SQL-EXECUTE behavior.  Binary protocol executions can
+		// carry an explicit numeric domain, represented by a non-text type on the
+		// replacement expression; preserve that domain for direct projections and
+		// for the function rebinding performed by the parent expression.
+		if param != nil && param.Typ.Id != int32(types.T_text) {
+			typ = param.Typ
+		}
 		return &plan.Expr{
-			Typ:  e.Typ,
-			Expr: rule.params[int(exprImpl.P.Pos)].Expr,
+			Typ:  typ,
+			Expr: param.Expr,
 		}, nil
 	case *plan.Expr_List:
 		for i, arg := range exprImpl.List.List {
@@ -492,6 +527,50 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+// isImplicitPreparedParamCast identifies the cast inserted by overload
+// resolution around a parameter marker. Explicit CAST(? AS ...) uses a
+// separate cast overload and must remain authoritative.
+func isImplicitPreparedParamCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 || fn.Args[0].GetP() == nil {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload == 0
+}
+
+// unwrapImplicitPreparedParamCast returns the execute-time literal used for
+// overload binding when an implicit cast surrounds a parameter. A textual
+// parameter is still kept as TEXT for direct projections, but numeric text is
+// offered to numeric overloads in its parsed decimal/integer domain.
+func unwrapImplicitPreparedParamCast(rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
+	fn := rewritten.GetF()
+	if fn == nil || len(fn.Args) == 0 {
+		return nil, false
+	}
+	arg := fn.Args[0]
+	if arg.Typ.Id != int32(types.T_text) {
+		if types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale).IsNumeric() {
+			return arg, true
+		}
+		return nil, false
+	}
+	if !inferText {
+		return nil, false
+	}
+	literal := arg.GetLit()
+	if literal == nil {
+		return nil, false
+	}
+	typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
+	if !ok {
+		return nil, false
+	}
+	bound := DeepCopyExpr(arg)
+	bound.Typ = makePlan2Type(&typ)
+	return bound, true
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

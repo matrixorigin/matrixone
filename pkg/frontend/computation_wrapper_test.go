@@ -323,6 +323,76 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	}
 }
 
+func TestBinaryProtocolPrepareParamType(t *testing.T) {
+	decimal, ok := binaryProtocolPrepareParamType(
+		defines.MYSQL_TYPE_NEWDECIMAL,
+		false,
+		[]byte("-12345678901234567890.123456789"),
+	)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal128, decimal.Oid)
+	require.Equal(t, int32(29), decimal.Width)
+	require.Equal(t, int32(9), decimal.Scale)
+
+	for _, test := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		isUnsigned bool
+		want       types.T
+	}{
+		{name: "signed integer", mysqlType: defines.MYSQL_TYPE_LONG, want: types.T_int32},
+		{name: "unsigned integer", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, want: types.T_uint64},
+		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
+		{name: "string", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := binaryProtocolPrepareParamType(test.mysqlType, test.isUnsigned, []byte("5"))
+			require.True(t, ok)
+			require.Equal(t, test.want, got.Oid)
+		})
+	}
+
+	_, ok = binaryProtocolPrepareParamType(defines.MYSQL_TYPE_NULL, false, nil)
+	require.False(t, ok)
+}
+
+func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 110, "select ?")
+	defer prepareStmt.Close()
+
+	originalPlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params,
+		[]byte("-12345678901234567890.123456789"),
+		false,
+		cw.proc.Mp(),
+	))
+	prepareStmt.params = params
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+
+	var resultColumns []*plan.ColDef
+	writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	writer.makeColumnDefDataFunc = func(_ context.Context, columns []*plan.ColDef) ([][]byte, error) {
+		resultColumns = columns
+		return [][]byte{[]byte("runtime-decimal")}, nil
+	}
+
+	_, runtimePlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, runtimePlan)
+	require.NotSame(t, originalPlan, runtimePlan)
+	projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_decimal128), projectNode.ProjectList[0].Typ.Id)
+	require.Equal(t, int32(29), projectNode.ProjectList[0].Typ.Width)
+	require.Equal(t, int32(9), projectNode.ProjectList[0].Typ.Scale)
+	require.Len(t, resultColumns, 1)
+	require.Equal(t, int32(types.T_decimal128), resultColumns[0].Typ.Id)
+	require.Equal(t, [][]byte{[]byte("runtime-decimal")}, execCtx.prepareColDef)
+	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
+	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
+}
+
 func TestSQLVariablePrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		oid  types.T

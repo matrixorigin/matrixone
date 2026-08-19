@@ -3157,6 +3157,141 @@ type ParamValue struct {
 	Value            any
 	IsBin            bool
 	PrepareParamKind vector.PrepareParamKind
+	// RuntimeType is the type advertised by the binary-protocol parameter
+	// binding.  Prepared plans deliberately keep parameter markers as TEXT
+	// while they are cached, so the execute-time copy can use this optional
+	// type to rebind overloaded functions and result metadata without mutating
+	// the cached plan.
+	RuntimeType    types.Type
+	HasRuntimeType bool
+}
+
+// PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
+// textual value when it is used as an argument to a numeric overload.  A
+// direct SELECT ? remains TEXT unless the protocol supplied an explicit
+// numeric type; this helper is only used while rebinding a function argument.
+func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, false
+	}
+	if strings.ContainsAny(value, ".eE") {
+		return preparedDecimalType(value)
+	}
+	negative := strings.HasPrefix(value, "-")
+	if strings.HasPrefix(value, "+") {
+		value = value[1:]
+	}
+	if negative {
+		value = value[1:]
+	}
+	if value == "" {
+		return types.Type{}, false
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return types.Type{}, false
+	}
+	if negative {
+		if parsed <= uint64(math.MaxInt64)+1 {
+			return types.T_int64.ToType(), true
+		}
+		return types.Type{}, false
+	}
+	if parsed <= uint64(math.MaxInt64) {
+		return types.T_int64.ToType(), true
+	}
+	return types.T_uint64.ToType(), true
+}
+
+func preparedDecimalType(value string) (types.Type, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return types.Type{}, false
+	}
+	if value[0] == '+' || value[0] == '-' {
+		value = value[1:]
+	}
+	if value == "" {
+		return types.Type{}, false
+	}
+	if strings.ContainsAny(value, "eE") {
+		// Exponent notation is accepted by the expression parser, but its
+		// textual precision is not available without evaluating it.  DECIMAL128
+		// is a safe overload domain and preserves the ordinary prepared values
+		// used by the protocol path.
+		parts := strings.FieldsFunc(value, func(r rune) bool { return r == 'e' || r == 'E' })
+		if len(parts) != 2 || !isDecimalMantissa(parts[0]) || !isDecimalExponent(parts[1]) {
+			return types.Type{}, false
+		}
+		return types.New(types.T_decimal128, 38, 18), true
+	}
+	parts := strings.SplitN(value, ".", 2)
+	if !isDecimalMantissa(value) {
+		return types.Type{}, false
+	}
+	integral := strings.TrimLeft(parts[0], "0")
+	if integral == "" {
+		integral = "0"
+	}
+	scale := int32(0)
+	if len(parts) == 2 {
+		scale = int32(len(parts[1]))
+	}
+	width := int32(len(integral)) + scale
+	if width < 1 {
+		width = 1
+	}
+	if width < scale {
+		width = scale
+	}
+	if width > types.T_decimal256.ToType().Width {
+		width = types.T_decimal256.ToType().Width
+	}
+	if scale > width {
+		scale = width
+	}
+	switch {
+	case width <= types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal64, width, scale), true
+	case width <= types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal128, width, scale), true
+	default:
+		return types.New(types.T_decimal256, width, scale), true
+	}
+}
+
+func isDecimalMantissa(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || len(parts) == 0 || (parts[0] == "" && (len(parts) == 1 || parts[1] == "")) {
+		return false
+	}
+	for _, part := range parts {
+		for i := 0; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '9' {
+				return false
+			}
+		}
+	}
+	return parts[0] != "" || (len(parts) == 2 && parts[1] != "")
+}
+
+func isDecimalExponent(value string) bool {
+	if value == "" {
+		return false
+	}
+	if value[0] == '+' || value[0] == '-' {
+		value = value[1:]
+	}
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func preparedNthValueParamPosition(expr *Expr) (int32, bool) {
@@ -3222,9 +3357,17 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
 		isBin := false
+		runtimeType := types.T_text.ToType()
+		hasRuntimeType := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			runtimeType = param.RuntimeType
+			hasRuntimeType = param.HasRuntimeType
+		}
+		paramType := plan.Type{Id: int32(types.T_text)}
+		if hasRuntimeType {
+			paramType = makePlan2Type(&runtimeType)
 		}
 		if val == nil {
 			pc := &plan.Literal{
@@ -3232,6 +3375,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 				Value:  &plan.Literal_Sval{Sval: ""},
 			}
 			params[i] = &plan.Expr{
+				Typ: paramType,
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
@@ -3240,6 +3384,7 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			pc := &plan.Literal{IsBin: isBin}
 			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
 			params[i] = &plan.Expr{
+				Typ: paramType,
 				Expr: &plan.Expr_Lit{
 					Lit: pc,
 				},
@@ -3247,6 +3392,12 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
+	for _, val := range paramVals {
+		if param, ok := val.(ParamValue); ok && param.HasRuntimeType {
+			paramRule.inferTextParamTypes = true
+			break
+		}
+	}
 	paramRule.validateFunctionArgs = func(name string, args []*Expr) error {
 		if name != "nth_value" || len(args) != 2 {
 			return nil
