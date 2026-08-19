@@ -1558,10 +1558,13 @@ func generateConstExpressionExecutor(
 				}
 				vec, err = newExpressionConstBytes(constBinType, []byte(sval), 1, proc.Mp(), selection)
 			} else if typ.Oid.IsMySQLString() {
-				// Keep the plan type's charset on the materialized Vector. Raw
-				// HEX/BIT literals use a VARCHAR-shaped binary charset, and their
-				// LiteralForm therefore needs no runtime override.
-				vec, err = newExpressionConstBytes(typ, []byte(sval), 1, proc.Mp(), selection)
+				// String literals use the executor's canonical VARCHAR container,
+				// but must retain the plan charset. Raw HEX/BIT literals are
+				// VARCHAR-shaped with CharsetBinary, while an empty SQL string is
+				// plan-typed CHAR and still materializes as VARCHAR for consumers.
+				constStringType := constSType
+				constStringType.Charset = typ.Charset
+				vec, err = newExpressionConstBytes(constStringType, []byte(sval), 1, proc.Mp(), selection)
 			} else {
 				vec, err = newExpressionConstBytes(constSType, []byte(sval), 1, proc.Mp(), selection)
 			}

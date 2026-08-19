@@ -182,13 +182,15 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 		form          plan.StringLiteralForm
 		want          types.RuntimeStringDomain
 		wantEffective types.StringDomain
+		wantVarchar   bool
 	}{
 		{name: "text on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText},
 		{name: "text on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringText, wantEffective: types.StringDomainText},
 		{name: "binary on text", typ: types.T_varchar.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringBinary, wantEffective: types.StringDomainBinary},
 		{name: "binary on binary", typ: types.T_varbinary.ToType(), form: plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
-		{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
-		{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary},
+		{name: "raw hex", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_HEX, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+		{name: "raw bit", typ: types.NewWithCharset(types.T_varchar, 0, 0, types.CharsetBinary), form: plan.StringLiteralForm_STRING_LITERAL_BIT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainBinary, wantVarchar: true},
+		{name: "empty text uses varchar container", typ: types.NewWithCharset(types.T_char, 0, 0, types.CharsetUTF8), form: plan.StringLiteralForm_STRING_LITERAL_TEXT, want: types.RuntimeStringInherit, wantEffective: types.StringDomainText, wantVarchar: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -206,6 +208,9 @@ func TestStringLiteralFormRestoresOnlyCrossDomainOverride(t *testing.T) {
 				effective = types.StringDomainBinary
 			}
 			require.Equal(t, test.wantEffective, effective)
+			if test.wantVarchar {
+				require.Equal(t, types.T_varchar, vec.GetType().Oid)
+			}
 		})
 	}
 }
