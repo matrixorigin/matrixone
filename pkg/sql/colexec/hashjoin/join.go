@@ -894,6 +894,12 @@ func (ctr *container) findAsofPredecessor(
 		ctr.asofIndexes = make(map[uint64][]int32)
 	}
 	ordered, ok := ctr.asofIndexes[groupKey]
+	if ok && len(ordered) != len(candidates) {
+		// A build bucket with a changed row set cannot reuse the previous
+		// ordering. This also protects prepared/test reuse from stale ordinals.
+		delete(ctr.asofIndexes, groupKey)
+		ok = false
+	}
 	if !ok {
 		var err error
 		ordered, err = mpool.MakeSliceAccounted[int32](
