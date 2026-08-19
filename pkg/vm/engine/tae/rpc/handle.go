@@ -1173,7 +1173,7 @@ func (h *Handle) HandleSoftDeleteObject(
 	// objectio.ObjectId is a type alias for types.Objectid, so we can use it directly
 	// But we need to convert the pointer type: *objectio.ObjectId -> *types.Objectid
 	objIDPtr := (*types.Objectid)(req.ObjectID)
-	err = tb.SoftDeleteObject(objIDPtr, req.IsTombstone)
+	err = tb.SoftDeleteObjectByCN(objIDPtr, req.IsTombstone)
 	if err != nil {
 		// If object is not found (ExpectedEOB), just log a warning and return nil
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {

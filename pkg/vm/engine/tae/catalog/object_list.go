@@ -333,6 +333,14 @@ func (l *ObjectList) Set(object *ObjectEntry) {
 func (l *ObjectList) DropObjectByID(
 	objectID *objectio.ObjectId,
 	txn txnif.TxnReader,
+) (*ObjectEntry, bool, error) {
+	return l.dropObjectByID(objectID, txn, false)
+}
+
+func (l *ObjectList) dropObjectByID(
+	objectID *objectio.ObjectId,
+	txn txnif.TxnReader,
+	deleteByCN bool,
 ) (
 	droppedObj *ObjectEntry,
 	isNew bool,
@@ -361,6 +369,9 @@ func (l *ObjectList) DropObjectByID(
 		tableDesc := fmt.Sprintf("%v-%s", obj.table.ID, obj.table.GetLastestSchema(false).Name)
 		logutil.Error("DropObjectByID IsCreating", zap.String("obj", objectID.ShortStringEx()), zap.String("table", tableDesc))
 		return nil, false, moerr.NewNYINoCtx("DropObjectByID creating obj.")
+	}
+	if deleteByCN {
+		objectio.SetObjectStatsCNDeleted(&droppedObj.ObjectStats, true)
 	}
 	// insert the D Entry and update the C Entry
 	l.modify(nil, droppedObj, updatedCEntry)

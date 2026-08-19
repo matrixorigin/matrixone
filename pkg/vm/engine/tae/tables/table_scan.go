@@ -135,6 +135,18 @@ func TombstoneRangeScanByObject(
 			if tombstone.HasDropIntent() {
 				continue
 			}
+			// A CN-side publication rewrite retains CN provenance on its output.
+			// Once the explicitly marked D counterpart commits within the scan
+			// range, this C entry no longer owns the rows; its CN replacement (if
+			// any) is the unique range-scan owner.
+			if tombstone.IsCEntry() && tombstone.HasDCounterpart() {
+				drop := tombstone.GetNextVersion()
+				deleteAt := drop.GetDeleteAt()
+				if drop.HasDropCommitted() && !deleteAt.GT(&end) &&
+					drop.ObjectStats.GetCNDeleted() {
+					continue
+				}
+			}
 			if !tombstone.ObjectStats.GetCNCreated() {
 				continue
 			}
