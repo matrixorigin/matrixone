@@ -1,5 +1,5 @@
 set experimental_ivf_index = 1;
-set probe_limit = 1;
+set probe_limit = 5;
 drop snapshot if exists vector_ivf_scan_snapshot;
 drop database if exists vector_ivf_snapshot;
 create database vector_ivf_snapshot;
@@ -21,7 +21,7 @@ Project  𝄀
         Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 1  𝄀
         ->  Vector Index Scan on idx_snapshot [l2_distance]  𝄀
-              Vector Index: idx_snapshot, Metric: l2_distance, Candidate Limit: 1, NProbe: 1
+              Vector Index: idx_snapshot, Metric: l2_distance, Candidate Limit: 1, NProbe: 5
 select id from t {snapshot = 'vector_ivf_scan_snapshot'}
 order by l2_distance(v, '[0,0]') limit 1;
 ➤ id[-5,64,0]  𝄀

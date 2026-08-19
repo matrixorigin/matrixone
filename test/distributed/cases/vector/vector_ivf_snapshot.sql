@@ -2,7 +2,7 @@
 -- table.  A post-snapshot insert is the counterexample: the current IVF entry
 -- is the nearest candidate, but the source table at the snapshot cannot join it.
 set experimental_ivf_index = 1;
-set probe_limit = 1;
+set probe_limit = 5;
 
 drop snapshot if exists vector_ivf_scan_snapshot;
 drop database if exists vector_ivf_snapshot;
