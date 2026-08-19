@@ -1152,7 +1152,7 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	result := filled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), result.Typ.Id)
 	boundArg := result.GetF().Args[0]
-	require.Equal(t, "-1.5", boundArg.GetLit().GetSval())
+	require.Equal(t, int64(-15), boundArg.GetLit().GetDecimal64Val().A)
 	require.Nil(t, boundArg.GetF())
 	require.Equal(t, int32(types.T_decimal64), boundArg.Typ.Id)
 

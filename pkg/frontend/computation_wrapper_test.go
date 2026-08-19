@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -389,6 +391,17 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	require.Len(t, resultColumns, 1)
 	require.Equal(t, int32(types.T_decimal128), resultColumns[0].Typ.Id)
 	require.Equal(t, [][]byte{[]byte("runtime-decimal")}, execCtx.prepareColDef)
+	value, parseErr := types.ParseDecimal128("-12345678901234567890.123456789", 29, 9)
+	require.NoError(t, parseErr)
+	executor, execErr := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+	require.NoError(t, execErr)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	vec, evalErr := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, evalErr)
+	require.Equal(t, types.T_decimal128, vec.GetType().Oid)
+	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
 }
