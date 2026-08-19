@@ -12877,6 +12877,148 @@ func TestMergeBlocksWithCNRewrittenTombstoneInsideTransferRange(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
+func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.Extra.BlockMaxRows = 8
+	schema.Extra.ObjectMaxBlocks = 5
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(true)
+
+	// Fix the data merge snapshot before either CN tombstone generation exists.
+	dataTxn, dataRel := tae.GetRelation()
+	dataObj := testutil.GetOneBlockMeta(dataRel)
+	dataTask, err := jobs.NewMergeObjectsTask(
+		nil, dataTxn, []*catalog.ObjectEntry{dataObj}, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+
+	deleteTxn, deleteRel := tae.GetRelation()
+	sourcePKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer sourcePKVec.Close()
+	sourceRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer sourceRowIDVec.Close()
+	replacementPKVec := containers.MakeVector(schema.GetPrimaryKey().Type, common.DebugAllocator)
+	defer replacementPKVec.Close()
+	replacementRowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DebugAllocator)
+	defer replacementRowIDVec.Close()
+	var dataID *common.ID
+	for i := 0; i < bat.Length(); i++ {
+		pk := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(i)
+		id, offset, err := deleteRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+		require.NoError(t, err)
+		if dataID == nil {
+			dataID = id
+		}
+		rowID := types.NewRowIDWithObjectIDBlkNumAndRowID(
+			*id.ObjectID(), id.BlockID.Sequence(), offset,
+		)
+		replacementRowIDVec.Append(rowID, false)
+		replacementPKVec.Append(pk, false)
+		if i < bat.Length()/2 {
+			sourceRowIDVec.Append(rowID, false)
+			sourcePKVec.Append(pk, false)
+		}
+	}
+	sourceStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, sourceRowIDVec, sourcePKVec, schema, deleteTxn,
+	)
+	require.NoError(t, err)
+	ok, err := deleteRel.AddPersistedTombstoneFile(dataID, sourceStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, deleteTxn.Commit(ctx))
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+	waiterProbe := t.Name() + "/data-merge-waiters"
+	require.NoError(t, fault.AddFaultPoint(
+		ctx, waiterProbe, ":::", "getwaiters", 0,
+		objectio.FJ_DataMergeAfterCollectTS, false,
+	))
+	defer fault.RemoveFaultPoint(context.Background(), waiterProbe)
+
+	dataErrC := make(chan error, 1)
+	dataDone := false
+	go func() {
+		dataErrC <- dataTask.OnExec(ctx)
+	}()
+	defer func() {
+		if dataDone {
+			return
+		}
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		select {
+		case <-dataErrC:
+		case <-time.After(10 * time.Second):
+			t.Errorf("data merge did not terminate during cleanup")
+		}
+	}()
+	require.Eventually(t, func() bool {
+		waiters, _, ok := fault.TriggerFault(waiterProbe)
+		return ok && waiters == 1
+	}, 10*time.Second, 10*time.Millisecond)
+
+	// The source generation is consumed by phase 1 because the rewrite commits
+	// after collectTs. Its CN replacement is consumed by phase 2 because it is
+	// created after collectTs. The replacement is a superset so the merge must
+	// skip the five already-transferred rows without losing the five new rows.
+	rewriteTxn, rewriteRel := tae.GetRelation()
+	source := testutil.GetOneTombstoneMeta(rewriteRel)
+	sourceID := *source.ID()
+	require.NoError(t, rewriteRel.SoftDeleteObjectByCN(&sourceID, true))
+	replacementStats, err := testutil.MockCNDeleteInS3(
+		tae.Runtime.Fs, replacementRowIDVec, replacementPKVec, schema, rewriteTxn,
+	)
+	require.NoError(t, err)
+	ok, err = rewriteRel.AddPersistedTombstoneFile(dataID, replacementStats)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, rewriteTxn.Commit(ctx))
+
+	removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_DataMergeAfterCollectTS)
+	require.NoError(t, err)
+	require.True(t, removed)
+	select {
+	case err := <-dataErrC:
+		dataDone = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("data merge did not finish")
+	}
+	require.NoError(t, dataTxn.Commit(ctx))
+
+	verifyTxn, verifyRel := tae.GetRelation()
+	newDataObj := testutil.GetOneBlockMeta(verifyRel)
+	transferred, err := tables.TombstoneRangeScanByObject(
+		ctx,
+		verifyRel.GetMeta().(*catalog.TableEntry),
+		*newDataObj.ID(),
+		types.TS{},
+		verifyTxn.GetStartTS(),
+		common.DefaultAllocator,
+		tae.Runtime.VectorPool.Small,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, transferred)
+	require.Equal(t, bat.Length(), transferred.Length())
+	transferred.Close()
+	require.NoError(t, verifyTxn.Commit(ctx))
+	tae.CheckRowsByScan(0, true)
+}
+
 func TestDedup3(t *testing.T) {
 	ctx := context.Background()
 
