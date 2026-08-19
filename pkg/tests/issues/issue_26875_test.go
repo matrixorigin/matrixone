@@ -265,12 +265,16 @@ func TestIssue26875MultipleUniqueSetNullActionsTerminate(t *testing.T) {
 			unique key uk_p1(p1), unique key uk_p2(p2),
 			foreign key(p1) references multi_unique_p(id) on delete set null,
 			foreign key(p2) references multi_unique_p(id) on delete set null)`)
-		mustExec(t, ctx, conn, "insert into multi_unique_p values(1),(2),(9)")
+		mustExec(t, ctx, conn, "insert into multi_unique_p values(1),(2),(3),(9)")
+		emptyExecCtx, emptyExecCancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err := conn.ExecContext(emptyExecCtx, "replace into multi_unique_p values(3)")
+		emptyExecCancel()
+		require.NoError(t, err)
 		mustExec(t, ctx, conn, "insert into multi_unique_c values(10,1,1),(20,2,2),(90,9,9)")
 
 		execCtx, execCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer execCancel()
-		_, err := conn.ExecContext(execCtx, "replace into multi_unique_p values(1)")
+		_, err = conn.ExecContext(execCtx, "replace into multi_unique_p values(1)")
 		require.NoError(t, err)
 
 		var count int
@@ -282,6 +286,75 @@ func TestIssue26875MultipleUniqueSetNullActionsTerminate(t *testing.T) {
 		require.Equal(t, 1, count)
 		require.NoError(t, conn.QueryRowContext(ctx,
 			"select count(*) from multi_unique_c force index(uk_p2) where p2=9").Scan(&count))
+		require.Equal(t, 1, count)
+
+		mustExec(t, ctx, conn, "create table multi_unique_mixed_p(id int primary key)")
+		mustExec(t, ctx, conn, `create table multi_unique_mixed_c(
+			id int primary key, p1 int, p2 int,
+			unique key uk_p1(p1), unique key uk_p2(p2),
+			foreign key(p1) references multi_unique_mixed_p(id) on delete set null,
+			foreign key(p2) references multi_unique_mixed_p(id) on delete set null)`)
+		mustExec(t, ctx, conn, "insert into multi_unique_mixed_p values(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13)")
+		mustExec(t, ctx, conn, `insert into multi_unique_mixed_c values
+			(10,1,8),(11,9,1),(20,2,2),
+			(30,3,6),(31,7,3),(40,4,10),(41,11,4),
+			(50,5,12),(51,13,5)`)
+
+		mixedExecCtx, mixedExecCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer mixedExecCancel()
+		_, err = conn.ExecContext(mixedExecCtx, "replace into multi_unique_mixed_p values(1)")
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c where id=10 and p1 is null and p2=8").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c where id=11 and p1=9 and p2 is null").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c force index(uk_p1) where p1=9").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c force index(uk_p2) where p2=8").Scan(&count))
+		require.Equal(t, 1, count)
+		_, err = conn.ExecContext(ctx, "insert into multi_unique_mixed_c values(12,null,8)")
+		require.Error(t, err)
+		_, err = conn.ExecContext(ctx, "insert into multi_unique_mixed_c values(13,9,null)")
+		require.Error(t, err)
+
+		prepared, err := conn.PrepareContext(ctx, "replace into multi_unique_mixed_p values(?)")
+		require.NoError(t, err)
+		defer prepared.Close()
+		preparedCtx, preparedCancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err = prepared.ExecContext(preparedCtx, 3)
+		require.NoError(t, err)
+		_, err = prepared.ExecContext(preparedCtx, 4)
+		preparedCancel()
+		require.NoError(t, err)
+		for _, check := range []struct {
+			index string
+			col   string
+			value int
+		}{
+			{index: "uk_p2", col: "p2", value: 6},
+			{index: "uk_p1", col: "p1", value: 7},
+			{index: "uk_p2", col: "p2", value: 10},
+			{index: "uk_p1", col: "p1", value: 11},
+		} {
+			require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+				"select count(*) from multi_unique_mixed_c force index(%s) where %s=?",
+				check.index, check.col), check.value).Scan(&count))
+			require.Equal(t, 1, count)
+		}
+
+		selectCtx, selectCancel := context.WithTimeout(ctx, 10*time.Second)
+		_, err = conn.ExecContext(selectCtx, "replace into multi_unique_mixed_p select 5")
+		selectCancel()
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c force index(uk_p2) where p2=12").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from multi_unique_mixed_c force index(uk_p1) where p1=13").Scan(&count))
 		require.Equal(t, 1, count)
 	})
 }

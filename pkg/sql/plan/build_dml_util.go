@@ -123,8 +123,13 @@ type dmlPlanCtx struct {
 	// fkSetNullColumns records columns that are unconditionally NULL in every
 	// row of this recursive FK update source. A UNIQUE hidden index containing
 	// one of these columns has no replacement row to insert.
-	fkSetNullColumns      map[string]struct{}
-	ignoreCheckConstraint bool
+	fkSetNullColumns map[string]struct{}
+	// isConditionalFkSetNullAction marks a combined FK SET NULL update whose
+	// columns are NULL only on matching rows. Its hidden UNIQUE-index insert
+	// stream only preserves existing non-NULL keys; it cannot introduce a new
+	// non-NULL key that needs a duplicate-key check.
+	isConditionalFkSetNullAction bool
+	ignoreCheckConstraint        bool
 }
 
 // information of deleteNode, which is about the deleted table
@@ -1494,10 +1499,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					upPlanCtx.isFkRecursionCall = true
 					upPlanCtx.updatePkCol = false
 					upPlanCtx.preserveUpdateSourceProjection = true
-					upPlanCtx.fkSetNullColumns = make(map[string]struct{}, len(updateMap))
-					for columnName := range updateMap {
-						upPlanCtx.fkSetNullColumns[columnName] = struct{}{}
-					}
+					upPlanCtx.isConditionalFkSetNullAction = true
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
@@ -6294,7 +6296,12 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 					insertUniqueTableDef.Cols = append(insertUniqueTableDef.Cols, col)
 				}
 			}
-			_checkPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
+			// SET NULL cannot create a new non-NULL UNIQUE key: each output key is
+			// either unchanged from the old row or omitted because a key part is
+			// NULL. Avoid building a redundant duplicate-check branch for this
+			// internal reinsertion stream; an empty stream can otherwise form a
+			// runtime-filter wait cycle with multiple UNIQUE indexes.
+			_checkPKDupForHiddenIndexTable := indexdef.Unique && !delCtx.isConditionalFkSetNullAction
 			updateColLength := 1
 			addAffectedRows := false
 			isFkRecursionCall := delCtx.isFkRecursionCall
