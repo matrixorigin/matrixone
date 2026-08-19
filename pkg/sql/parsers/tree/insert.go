@@ -20,11 +20,16 @@ import "strings"
 type Insert struct {
 	statementImpl
 	Table TableExpr
+	// TargetDatabaseName and TargetTableName preserve the user-visible target
+	// identity even when resolution rewrites Table to a temporary physical name.
+	TargetDatabaseName Identifier
+	TargetTableName    Identifier
 
 	Accounts          IdentifierList
 	PartitionNames    IdentifierList
 	PartitionValues   PartitionValues
 	Columns           IdentifierList
+	ColumnNames       []*UnresolvedName
 	Rows              *Select
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
@@ -60,7 +65,11 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(')')
 	}
 
-	if node.Columns != nil {
+	if node.ColumnNames != nil {
+		ctx.WriteString(" (")
+		formatUnresolvedNames(ctx, node.ColumnNames)
+		ctx.WriteByte(')')
+	} else if node.Columns != nil {
 		ctx.WriteString(" (")
 		node.Columns.Format(ctx)
 		ctx.WriteByte(')')
@@ -99,8 +108,23 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 }
 
 type Assignment struct {
-	Column Identifier
-	Expr   Expr
+	Column     Identifier
+	ColumnName *UnresolvedName
+	Expr       Expr
+}
+
+type InsertColumns struct {
+	Identifiers IdentifierList
+	Names       []*UnresolvedName
+}
+
+func formatUnresolvedNames(ctx *FmtCtx, names []*UnresolvedName) {
+	for i, name := range names {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		name.Format(ctx)
+	}
 }
 
 type InsertPartitionClause struct {

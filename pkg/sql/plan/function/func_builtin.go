@@ -1602,7 +1602,10 @@ func builtInRepeat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		// I'm not sure if this is the right thing to do, MySql can repeat string with the result length at least 1,000,000.
 		// and there is no documentation about the limit of the result length.
 		sourceLen := int64(len(base))
-		if sourceLen*n > types.MaxVarcharLen {
+		if sourceLen == 0 {
+			return "", false
+		}
+		if n > types.MaxVarcharLen/sourceLen {
 			return "", true
 		}
 		return strings.Repeat(base, int(n)), false

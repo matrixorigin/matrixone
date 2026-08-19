@@ -226,6 +226,11 @@ type tableInfo struct {
 	relKind   string
 	viewDef   string
 	createSql string
+	// unservable marks a view whose stored definition can never run -- the #27027 refusal,
+	// raised while the dependency sort plans it. Such a view is still visited by the restore
+	// loop so the object it would replace is DROPped; only the CREATE is skipped. Set by
+	// sortedViewInfos and the PITR sort, read by restoreViews and restoreViewsWithPitr.
+	unservable bool
 }
 
 type accountRecord struct {
@@ -1485,6 +1490,10 @@ func restoreViews(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, snapshotName, tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
@@ -1494,6 +1503,20 @@ func restoreViews(
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A view whose MATCH() no FULLTEXT index can serve cannot be re-created
+				// (ValidateViewDefinition refuses it), but such views could be
+				// created before that guard existed, so a snapshot may well contain one.
+				// The view has already been dropped above, and aborting here would leave
+				// the whole account unrestorable over a single object that never worked.
+				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
+				// false, so gating on that flag would not help the case that matters.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
+							"the view is NOT present in the restored account",
+						snapshotName, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
 					getLogger(ses.GetService()).Info(fmt.Sprintf(
 						"[%s] skip restore view %v because dependency is missing: %v",
@@ -1507,6 +1530,71 @@ func restoreViews(
 	}
 
 	return nil
+}
+
+// markUnservableViewInSort is the #27027 tolerance shared by every view-restore dependency
+// sort: restoreViews' sortedViewInfos, restoreViewsWithPitr, and restoreViewsFromTS.
+//
+// The sort plans every stored definition BEFORE the create loop, so the refusal lands here
+// first and would abort the whole restore. Returns true when err is that refusal, having
+// marked the view and KEPT its vertex — dropped from the graph, the restore loop would never
+// visit it, and dependents would lose their ordering against it. No edges are added: its plan
+// never built, so its dependencies are unknown; a view that depends on this one plans the same
+// definition through it and is marked here too.
+//
+// It exists as one function because it was three near-verbatim copies, and the third
+// (restoreViewsFromTS, the cluster-snapshot path) was missed entirely — that restore still
+// aborted on a view the other two paths tolerated.
+func markUnservableViewInSort(ses *Session, label string, viewEntry *tableInfo, g *toposort, key string, err error) bool {
+	if !isUnservableViewError(err) {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v will not be restored: its definition can never run (%v)",
+		label, viewEntry.dbName, viewEntry.tblName, err))
+	viewEntry.unservable = true
+	g.addVertex(key)
+	return true
+}
+
+// skipUnservableViewInRestore reports whether the create loop must leave this view alone.
+//
+// Alone means ALONE: not re-created, and NOT DROPPED either. The snapshot may hold an
+// unservable definition while the target holds a WORKING view of that name, because the
+// FULLTEXT index it needs was recreated after the snapshot was taken. Dropping what cannot be
+// re-created would delete a working view and put nothing back, reporting success. A stale
+// object is an inconsistency; deleting a working one is data loss.
+//
+// The same reasoning covers a false positive of isUnservableViewError, which must match on
+// message text because the background executor strips the moerr code: a misclassification now
+// costs a skipped view rather than a deleted one.
+func skipUnservableViewInRestore(ses *Session, label string, tblInfo *tableInfo) bool {
+	if !tblInfo.unservable {
+		return false
+	}
+	getLogger(ses.GetService()).Warn(fmt.Sprintf(
+		"[%s] view %v.%v left untouched and NOT restored: its stored definition can never run; "+
+			"any existing object of that name is kept", label, tblInfo.dbName, tblInfo.tblName))
+	return true
+}
+
+// isUnservableViewError reports whether err is the #27027 refusal: a view definition whose
+// MATCH() no FULLTEXT index can serve.
+//
+// Checks the code AND the text on purpose. Restore executes the stored CREATE VIEW through
+// the background executor, which reconstructs the error on the way back, so the moerr code
+// is lost and only the message survives -- verified end to end: a PITR restore aborted with
+// ERROR 1191 while an IsMoErrCode-only guard sat right there and did not fire. The unit
+// tests injected the error directly and could not see this. canSkipRestoreViewError pairs
+// its code checks with text checks for the same reason.
+func isUnservableViewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrFtMatchingKeyNotFound) {
+		return true
+	}
+	return strings.Contains(err.Error(), moerr.FtMatchingKeyNotFoundMsg)
 }
 
 func canSkipRestoreViewError(err error) bool {
@@ -1584,6 +1672,24 @@ func sortedViewInfos(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				// The dependency sort plans every view BEFORE the restore loop, so the
+				// #27027 refusal lands here first and would abort the whole restore -- the
+				// skip further down never gets a chance.
+				//
+				// KEEP the vertex and mark the view instead of dropping it from the graph.
+				// Dropping it meant the restore loop never visited it, so it never ran the
+				// DROP either: wherever the target database is not rebuilt (a table-level
+				// restore, a restore into a live account), the OLD view object stayed behind
+				// and the restore reported success over it. Marked, it is dropped like any
+				// other restored view and only its CREATE is skipped, so the target ends up
+				// without the view rather than with a stale one.
+				//
+				// No dependency edges are added: its plan never built, so its dependencies
+				// are unknown. A view that depends on THIS one plans the same definition
+				// through it and trips the same refusal, so it is marked here too.
+				if markUnservableViewInSort(ses, snapshotName, viewEntry, &g, key, err) {
+					continue
+				}
 				return nil, err
 			}
 		}

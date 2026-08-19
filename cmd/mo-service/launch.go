@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 var (
@@ -56,6 +57,9 @@ func startCluster(
 	if err := parseConfigFromFile(*launchFile, cfg); err != nil {
 		return err
 	}
+	if err := validateLaunchManifest(cfg); err != nil {
+		return err
+	}
 
 	if cfg.Dynamic.Enable {
 		return launchStartDynamic(ctx, cfg, stopper, shutdownC)
@@ -72,7 +76,8 @@ func startCluster(
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
+	tnGCDisabled, err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC)
+	if err != nil {
 		return err
 	}
 	proxyOwns6001 := false
@@ -83,7 +88,7 @@ func startCluster(
 			return err
 		}
 	}
-	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, proxyOwns6001); err != nil {
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, tnGCDisabled, proxyOwns6001); err != nil {
 		return err
 	}
 	if *withProxy {
@@ -108,12 +113,11 @@ func startLogServiceCluster(
 		return moerr.NewBadConfig(context.Background(), "Log service config not set")
 	}
 
-	var cfg *Config
-	for _, file := range files {
-		cfg = NewConfig()
-		if err := parseConfigFromFile(file, cfg); err != nil {
-			return err
-		}
+	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_LOG)
+	if err != nil {
+		return err
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
@@ -126,23 +130,27 @@ func startTNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
-) error {
+) (bool, error) {
 	if len(files) == 0 {
-		return moerr.NewBadConfig(context.Background(), "DN service config not set")
+		return false, moerr.NewBadConfig(context.Background(), "DN service config not set")
 	}
 
-	for _, file := range files {
-		cfg := NewConfig()
-		// mo boosting in standalone mode
+	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_TN)
+	if err != nil {
+		return false, err
+	}
+	gcDisabled := true
+	// mo boosting in standalone mode
+	for _, cfg := range configs {
 		cfg.IsStandalone = true
-		if err := parseConfigFromFile(file, cfg); err != nil {
-			return err
-		}
+		gcDisabled = gcDisabled && cfg.getTNServiceConfig().GCCfg.DisableGC
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return gcDisabled, nil
 }
 
 func startCNServiceCluster(
@@ -150,21 +158,23 @@ func startCNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
+	tnGCDisabled bool,
 	proxyOwns6001 ...bool,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "CN service config not set")
 	}
+	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_CN)
+	if err != nil {
+		return err
+	}
+	upstreams := make([]string, 0, len(files))
 
-	upstreams := []string{}
-
-	var cfg *Config
-	for _, file := range files {
-		cfg = NewConfig()
-		if err := parseConfigFromFile(file, cfg); err != nil {
-			return err
-		}
+	for _, cfg := range configs {
+		cfg.benchmarkTNNoGC = tnGCDisabled
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
@@ -178,6 +188,54 @@ func startCNServiceCluster(
 			cnProxy.AddUpStream(address, time.Second*10)
 		}
 		if err := cnProxy.Start(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateLaunchServiceConfigType(cfg *Config, file string, expected metadata.ServiceType) error {
+	actual, err := cfg.getServiceType()
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return moerr.NewBadConfigf(
+			context.Background(),
+			"%s service config %q has service-type=%s, expected %s",
+			expected.String(), file, actual.String(), expected.String())
+	}
+	return nil
+}
+
+func loadLaunchServiceConfigs(files []string, expected metadata.ServiceType) ([]*Config, error) {
+	configs := make([]*Config, 0, len(files))
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return nil, err
+		}
+		if err := validateLaunchServiceConfigType(cfg, file, expected); err != nil {
+			return nil, err
+		}
+		configs = append(configs, cfg)
+	}
+	return configs, nil
+}
+
+func validateLaunchManifest(cfg *LaunchConfig) error {
+	manifests := []struct {
+		files    []string
+		expected metadata.ServiceType
+	}{
+		{cfg.LogServiceConfigFiles, metadata.ServiceType_LOG},
+		{cfg.TNServiceConfigsFiles, metadata.ServiceType_TN},
+		{cfg.CNServiceConfigsFiles, metadata.ServiceType_CN},
+		{cfg.ProxyServiceConfigsFiles, metadata.ServiceType_PROXY},
+		{cfg.PythonUdfServiceConfigsFiles, metadata.ServiceType_PYTHON_UDF},
+	}
+	for _, manifest := range manifests {
+		if _, err := loadLaunchServiceConfigs(manifest.files, manifest.expected); err != nil {
 			return err
 		}
 	}
@@ -237,12 +295,11 @@ func startProxyServiceCluster(
 		return moerr.NewBadConfig(context.Background(), "Proxy service config not set")
 	}
 
-	var cfg *Config
-	for _, file := range files {
-		cfg = NewConfig()
-		if err := parseConfigFromFile(file, cfg); err != nil {
-			return err
-		}
+	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_PROXY)
+	if err != nil {
+		return err
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
@@ -261,11 +318,11 @@ func startPythonUdfServiceCluster(
 		return nil
 	}
 
-	for _, file := range files {
-		cfg := NewConfig()
-		if err := parseConfigFromFile(file, cfg); err != nil {
-			return err
-		}
+	configs, err := loadLaunchServiceConfigs(files, metadata.ServiceType_PYTHON_UDF)
+	if err != nil {
+		return err
+	}
+	for _, cfg := range configs {
 		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
