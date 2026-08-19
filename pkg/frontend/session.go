@@ -153,6 +153,10 @@ type Session struct {
 	ep              *ExportConfig
 	showStmtType    ShowStatementType
 	userDefinedVars map[string]*UserDefinedVar
+	// migrationSystemVarReplayable records whether the latest assignment for a
+	// session system variable is known to be captured by the proxy's raw SET
+	// replay stream. A prepared assignment is not visible to that stream.
+	migrationSystemVarReplayable map[string]bool
 	// tempTables records the relationship between the temporary table created by the session and the actual table.
 	// Key: dbName.alias, Value: realName
 	tempTables map[string]string
@@ -458,6 +462,18 @@ func (ses *Session) setUserDefinedVarWithKind(
 		name, value, sql, isBin, inferUserDefinedVarType(value), kind)
 }
 
+func (ses *Session) setUserDefinedVarWithKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, inferUserDefinedVarType(value), kind, replayable)
+}
+
 func (ses *Session) setUserDefinedVarWithTypeAndKind(
 	name string,
 	value interface{},
@@ -466,22 +482,85 @@ func (ses *Session) setUserDefinedVarWithTypeAndKind(
 	typ plan.Type,
 	kind vector.PrepareParamKind,
 ) error {
+	return ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+		name, value, sql, isBin, typ, kind, false)
+}
+
+func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	typ plan.Type,
+	kind vector.PrepareParamKind,
+	replayable bool,
+) error {
 	if typ.Id == 0 {
 		typ = inferUserDefinedVarType(value)
 	}
 	ses.mu.Lock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+	key := strings.ToLower(name)
+	if previous := ses.userDefinedVars[key]; previous != nil && !previous.Replayable {
+		replayable = false
+	}
+	ses.userDefinedVars[key] = &UserDefinedVar{
 		Value:            value,
 		Sql:              sql,
 		IsBin:            isBin,
 		Type:             typ,
 		PrepareParamKind: kind,
+		Replayable:       replayable,
 	}
 	ses.mu.Unlock()
 	// User-variable references are typed at bind time. A later assignment can
 	// change that type, so cached plans containing @vars must be rebound.
 	ses.cleanCache()
 	return nil
+}
+
+func (ses *Session) markMigrationSystemVarReplayable(name string, replayable bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) getMigrationSystemVarReplayability(name string) (bool, bool) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	replayable, tracked := ses.migrationSystemVarReplayable[name]
+	return replayable, tracked
+}
+
+func (ses *Session) restoreMigrationSystemVarReplayability(
+	name string, replayable, tracked bool,
+) {
+	name = canonicalSystemVariableName(name)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if !tracked {
+		delete(ses.migrationSystemVarReplayable, name)
+		return
+	}
+	if ses.migrationSystemVarReplayable == nil {
+		ses.migrationSystemVarReplayable = make(map[string]bool)
+	}
+	ses.migrationSystemVarReplayable[name] = replayable
+}
+
+func (ses *Session) hasUnreplayableMigrationSystemVars() bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, replayable := range ses.migrationSystemVarReplayable {
+		if !replayable {
+			return true
+		}
+	}
+	return false
 }
 
 // GetUserDefinedVar gets value of the user defined variable
@@ -1078,6 +1157,7 @@ func NewSession(
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
 
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
+	ses.migrationSystemVarReplayable = make(map[string]bool)
 	ses.tempTables = make(map[string]string)
 	ses.tempTablesRev = make(map[string]string)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
@@ -2715,6 +2795,109 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
 	}
+	if len(req.UserDefinedVars) > 0 && !req.UserDefinedVarsExported {
+		return moerr.NewInternalError(ctx, "user variables were provided without a typed migration snapshot")
+	}
+	var userVars map[string]*UserDefinedVar
+	if req.UserDefinedVarsExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed user-variable migration requires protocol version 22")
+		}
+		var err error
+		userVars, err = decodeUserDefinedVars(
+			migrationCtx, req.UserDefinedVars, req.UserDefinedVarsReplayable)
+		if err != nil {
+			return err
+		}
+	}
+	var systemVars []migratedSystemVariable
+	if req.SystemVariablesExported {
+		if currentProtocolVersion(ses.proc) < defines.MORPCVersion22 {
+			return moerr.NewInternalError(ctx, "typed system-variable migration requires protocol version 22")
+		}
+		var err error
+		systemVars, err = decodeSessionSystemVars(migrationCtx, req.SystemVariables)
+		if err != nil {
+			return err
+		}
+	}
+	if req.UserDefinedVarsExported {
+		ses.installUserDefinedVars(userVars)
+	}
+	if req.SystemVariablesExported {
+		migrationExecCtx := &ExecCtx{
+			reqCtx:      migrationCtx,
+			inMigration: true,
+			ses:         ses,
+		}
+		defer migrationExecCtx.Close()
+		for _, variable := range systemVars {
+			if variable.nextTransaction {
+				isolation, err := txnIsolationFromSystemValue(migrationCtx, variable.value)
+				if err != nil {
+					return err
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.setNextTxnIsolation(migrationCtx, isolation, false); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, req.SystemVariablesReplayable)
+				continue
+			}
+			var oldAutocommit interface{}
+			if variable.name == "autocommit" {
+				oldAutocommit, err = ses.GetSessionSysVar(variable.name)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if err := ses.SetSessionSysVar(migrationCtx, variable.name, variable.value); err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+			ses.markMigrationSystemVarReplayable(variable.name, req.SystemVariablesReplayable)
+			if variable.name == "autocommit" {
+				oldValue, err := valueIsBoolTrue(oldAutocommit)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				newValue, err := valueIsBoolTrue(variable.value)
+				if err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+				txnHandler := ses.GetTxnHandler()
+				if txnHandler == nil {
+					return moerr.NewInternalError(migrationCtx, "transaction handler is not initialized")
+				}
+				if err := txnHandler.SetAutocommit(migrationExecCtx, oldValue, newValue); err != nil {
+					return moerr.AttachCause(migrationCtx, err)
+				}
+			}
+			if variable.runtimeValuePresent {
+				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
+			} else {
+				ses.applySessionSysVarSideEffects(variable.name, variable.value)
+			}
+			// The typed snapshot carries only the final value. Invalidate for
+			// both cache-control variables so a source toggle (0->1 or 1->0)
+			// cannot leave stale target entries after migration.
+			if variable.name == "clear_privilege_cache" || variable.name == "enable_privilege_cache" {
+				ses.InvalidatePrivilegeCache()
+			}
+		}
+	} else {
+		for _, stmt := range req.SetVarStmts {
+			tempExecCtx := &ExecCtx{reqCtx: migrationCtx, inMigration: true, ses: ses}
+			err := doComQuery(ses, tempExecCtx, &UserInput{sql: stmt})
+			tempExecCtx.Close()
+			if err != nil {
+				return moerr.AttachCause(migrationCtx, err)
+			}
+		}
+	}
 
 	var maxStmtID uint32
 	for _, p := range req.PrepareStmts {
@@ -2737,6 +2920,30 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return cause
 	}
 	return nil
+}
+
+func (ses *Session) applySessionSysVarSideEffects(name string, value interface{}) {
+	switch strings.ToLower(name) {
+	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+		moruntime.ServiceRuntime(ses.service).SetGlobalVariables(strings.ToLower(name), value)
+	case "disable_agg_statement":
+		boolVal := InitSystemVariableBoolType("_")
+		ses.disableAgg = boolVal.IsTrue(value)
+	case "clear_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	case "enable_privilege_cache":
+		boolVal := InitSystemVariableBoolType("_")
+		if !boolVal.IsTrue(value) {
+			if cache := ses.GetPrivilegeCache(); cache != nil {
+				cache.invalidate()
+			}
+		}
+	}
 }
 
 func (ses *Session) GetLogger() SessionLogger {
