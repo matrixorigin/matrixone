@@ -26,8 +26,8 @@ drop table jdbc_result_metadata;
 drop table if exists jdbc_conditional_text_metadata;
 create table jdbc_conditional_text_metadata (mt mediumtext, lt longtext);
 select case when true then mt else mt end as case_mt,
-       if(true, lt, lt) as if_lt,
-       coalesce(mt, mt) as coalesce_mt
+if(true, lt, lt) as if_lt,
+coalesce(mt, mt) as coalesce_mt
 from jdbc_conditional_text_metadata where 1 = 0;
 ➤ case_mt[-1,4194303,0]  ¦  if_lt[-1,536870911,0]  ¦  coalesce_mt[-1,4194303,0]  𝄀
 drop table jdbc_conditional_text_metadata;
