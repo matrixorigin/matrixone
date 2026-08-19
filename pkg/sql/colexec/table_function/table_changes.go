@@ -248,14 +248,14 @@ func tableChangesSpillConfig(proc *process.Process) engine.ChangeRangeSpillConfi
 			return spillFS.CreateAndRemoveFile(ctx, name)
 		},
 		ReserveDisk: func(size uint64) (engine.ChangeRangeGrowingSpillReservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, err
 			}
 			return budget.ReserveSpillDisk(size)
 		},
 		ReserveFiles: func(size uint64) (engine.ChangeRangeSpillReservation, error) {
-			budget, err := proc.GetHashBuildBudget()
+			budget, err := proc.GetExecutionResourceBudget()
 			if err != nil {
 				return nil, err
 			}
