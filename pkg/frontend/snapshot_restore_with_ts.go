@@ -679,6 +679,9 @@ func restoreViewsFromTS(
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
+				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -710,12 +713,23 @@ func restoreViewsFromTS(
 				return err
 			}
 
+			if skipUnservableViewInRestore(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), tblInfo) {
+				continue
+			}
+
 			if err = bh.Exec(toCtx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
 				return err
 			}
 
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] start to create view: %v, create view sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
 			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
+				// A refusal can also surface here when the sort's plan happened to succeed.
+				if isUnservableViewError(err) {
+					getLogger(ses.GetService()).Warn(fmt.Sprintf(
+						"[%d:%d] skip restore view %v.%v: its definition can never run (%v)",
+						restoreAccount, snapshotTs, tblInfo.dbName, tblInfo.tblName, err))
+					continue
+				}
 				return err
 			}
 			getLogger(ses.GetService()).Info(fmt.Sprintf("[%d:%d] restore view: %v success", restoreAccount, snapshotTs, tblInfo.tblName))

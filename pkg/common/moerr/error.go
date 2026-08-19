@@ -78,34 +78,39 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 
 	// Group 3: invalid input
-	ErrBadConfig              uint16 = 20300
-	ErrInvalidInput           uint16 = 20301
-	ErrSyntaxError            uint16 = 20302
-	ErrParseError             uint16 = 20303
-	ErrConstraintViolation    uint16 = 20304
-	ErrDuplicate              uint16 = 20305
-	ErrRoleGrantedToSelf      uint16 = 20306
-	ErrDuplicateEntry         uint16 = 20307
-	ErrWrongValueCountOnRow   uint16 = 20308
-	ErrBadFieldError          uint16 = 20309
-	ErrWrongDatetimeSpec      uint16 = 20310
-	ErrUpgrateError           uint16 = 20311
-	ErrInvalidTz              uint16 = 20312
-	ErrUnsupportedDML         uint16 = 20313
-	ErrOperandColumns         uint16 = 20314
-	ErrSubqueryNo1Row         uint16 = 20315
-	ErrInvalidTypeForJSON     uint16 = 20316
-	ErrUnknownStmtHandler     uint16 = 20317
-	ErrViewWrongList          uint16 = 20318
-	ErrWrongArguments         uint16 = 20319
-	ErrDerivedMustHaveAlias   uint16 = 20320
-	ErrWrongUsage             uint16 = 20321
-	ErrUpdateTableUsed        uint16 = 20322
-	ErrWindowInvalidUse       uint16 = 20323
-	ErrViewSelectTmpTable     uint16 = 20324
-	ErrCantChangeTxn          uint16 = 20325
-	ErrInvalidGroupFuncUse    uint16 = 20326
-	ErrMultiUpdateKeyConflict uint16 = 20327
+	ErrBadConfig            uint16 = 20300
+	ErrInvalidInput         uint16 = 20301
+	ErrSyntaxError          uint16 = 20302
+	ErrParseError           uint16 = 20303
+	ErrConstraintViolation  uint16 = 20304
+	ErrDuplicate            uint16 = 20305
+	ErrRoleGrantedToSelf    uint16 = 20306
+	ErrDuplicateEntry       uint16 = 20307
+	ErrWrongValueCountOnRow uint16 = 20308
+	ErrBadFieldError        uint16 = 20309
+	ErrWrongDatetimeSpec    uint16 = 20310
+	ErrUpgrateError         uint16 = 20311
+	ErrInvalidTz            uint16 = 20312
+	ErrUnsupportedDML       uint16 = 20313
+	ErrOperandColumns       uint16 = 20314
+	ErrSubqueryNo1Row       uint16 = 20315
+	ErrInvalidTypeForJSON   uint16 = 20316
+	ErrUnknownStmtHandler   uint16 = 20317
+	ErrViewWrongList        uint16 = 20318
+	ErrWrongArguments       uint16 = 20319
+	ErrDerivedMustHaveAlias uint16 = 20320
+	ErrWrongUsage           uint16 = 20321
+	ErrUpdateTableUsed      uint16 = 20322
+	ErrWindowInvalidUse     uint16 = 20323
+	ErrViewSelectTmpTable   uint16 = 20324
+	ErrCantChangeTxn        uint16 = 20325
+	ErrInvalidGroupFuncUse  uint16 = 20326
+	// ErrFtMatchingKeyNotFound: a MATCH() AGAINST() that no FULLTEXT index can serve.
+	// Its own code, not a bare ErrInvalidInput, so callers can identify it precisely --
+	// snapshot restore / PITR / CLONE must skip a view refused for this reason instead of
+	// aborting, and matching on message text there would be fragile.
+	ErrFtMatchingKeyNotFound  uint16 = 20327
+	ErrMultiUpdateKeyConflict uint16 = 20328
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -413,32 +418,35 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 
 	// Group 3: invalid input
-	ErrBadConfig:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
-	ErrInvalidInput:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:            {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
-	ErrParseError:             {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
-	ErrConstraintViolation:    {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
-	ErrDuplicate:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
-	ErrRoleGrantedToSelf:      {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
-	ErrDuplicateEntry:         {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
-	ErrWrongValueCountOnRow:   {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
-	ErrBadFieldError:          {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
-	ErrWrongDatetimeSpec:      {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
-	ErrUpgrateError:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
-	ErrUnsupportedDML:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
-	ErrOperandColumns:         {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
-	ErrSubqueryNo1Row:         {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
-	ErrInvalidTypeForJSON:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
-	ErrUnknownStmtHandler:     {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
-	ErrViewWrongList:          {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
-	ErrWrongArguments:         {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
-	ErrDerivedMustHaveAlias:   {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
-	ErrWrongUsage:             {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
-	ErrUpdateTableUsed:        {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
-	ErrWindowInvalidUse:       {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
-	ErrViewSelectTmpTable:     {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
-	ErrCantChangeTxn:          {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
-	ErrInvalidGroupFuncUse:    {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
+	ErrInvalidInput:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
+	ErrSyntaxError:          {ER_SYNTAX_ERROR, []string{MySQLDefaultSqlState}, "SQL syntax error: %s"},
+	ErrParseError:           {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
+	ErrConstraintViolation:  {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicate:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
+	ErrRoleGrantedToSelf:    {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:       {ER_DUP_ENTRY, []string{MySQLDefaultSqlState}, "Duplicate entry '%s' for key '%s'"},
+	ErrWrongValueCountOnRow: {ER_WRONG_VALUE_COUNT_ON_ROW, []string{MySQLDefaultSqlState}, "Column count doesn't match value count at row %d"},
+	ErrBadFieldError:        {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
+	ErrWrongDatetimeSpec:    {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
+	ErrUpgrateError:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
+	ErrUnsupportedDML:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
+	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
+	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:        {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
+	ErrWrongArguments:       {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias: {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:           {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
+	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
+	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
+	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
+	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
@@ -1038,6 +1046,20 @@ func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
+}
+
+// NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
+// Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
+// by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
+func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrFtMatchingKeyNotFound)
 }
 
 func NewWrongArguments(ctx context.Context, function string) *Error {
