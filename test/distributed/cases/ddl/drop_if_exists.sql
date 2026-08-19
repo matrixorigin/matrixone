@@ -50,6 +50,21 @@ drop database db1;
 -- @session
 drop account acc101;
 
+-- @bvt:issue#27289
+drop database if exists drop_view_if_exists_test;
+create database drop_view_if_exists_test;
+use drop_view_if_exists_test;
+create table base_table(a int);
+insert into base_table values (1);
+drop view if exists base_table;
+select * from base_table;
+create view stale_view as select a from base_table;
+drop table if exists stale_view;
+select * from stale_view;
+drop view stale_view;
+drop database drop_view_if_exists_test;
+-- @bvt:issue
+
 
 drop database if exists test;
 create database test;
@@ -64,6 +79,5 @@ select disable_fault_injection();
 commit;
 
 drop database test;
-
 
 
