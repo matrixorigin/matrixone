@@ -463,7 +463,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(cwft.stmt, fill),
+				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
 				cwft.ses.GetSql(),
 			); err != nil {
 				return nil, err
@@ -1365,7 +1365,7 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
 		return
 	}
@@ -1397,6 +1397,8 @@ func siriusStatementSelected(sql string, stmt tree.Statement) bool {
 // callback. Apply the same rule both when compiling a fresh pipeline and when
 // resetting a cached prepared pipeline for another execution.
 func compileOutputCallback(
+	execCtx *ExecCtx,
+	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -1404,7 +1406,7 @@ func compileOutputCallback(
 	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
 	default:
-		return fill
+		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill)
 	}
 }
 
