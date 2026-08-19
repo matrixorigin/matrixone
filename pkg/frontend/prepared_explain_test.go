@@ -24,6 +24,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -444,13 +445,42 @@ func TestCompileOutputCallbackSuppressesExplainPipelineRows(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			execCtx := &ExecCtx{reqCtx: context.Background()}
 			called := false
 			fill := func(*batch.Batch, *perfcounter.CounterSet) error {
 				called = true
 				return nil
 			}
-			require.NoError(t, compileOutputCallback(tc.stmt, fill)(nil, nil))
+			require.NoError(t, compileOutputCallback(execCtx, nil, tc.stmt, fill)(nil, nil))
 			require.Equal(t, tc.wantCalled, called)
 		})
 	}
+}
+
+func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	execCtx := &ExecCtx{reqCtx: ctx}
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+	called := false
+	fill := func(*batch.Batch, *perfcounter.CounterSet) error {
+		called = true
+		return nil
+	}
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(5), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	require.NoError(t, compileOutputCallback(execCtx, ses, stmt, fill)(bat, nil))
+	require.False(t, called)
+	require.NotNil(t, execCtx.selectInto)
+	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out"))
+	variable, err := ses.GetUserDefinedVar("out")
+	require.NoError(t, err)
+	require.Equal(t, int64(5), variable.Value)
 }

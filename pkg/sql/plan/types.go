@@ -297,6 +297,16 @@ type CompilerContext interface {
 	GetLowerCaseTableNames() int64
 }
 
+// UserVariableTypeResolver is an optional extension implemented by session
+// compiler contexts. User variables are stored as text on the frontend wire
+// path, but their assignment type is part of the statement contract used by
+// numeric binding. Keeping this optional avoids widening CompilerContext for
+// callers that do not have session user variables (for example metadata
+// builders and lightweight test contexts).
+type UserVariableTypeResolver interface {
+	ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error)
+}
+
 type Optimizer interface {
 	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
