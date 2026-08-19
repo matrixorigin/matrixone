@@ -41,6 +41,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	ep := ses.GetExportConfig()
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
+		if st.IsPerform && len(st.IntoVars) > 0 {
+			return moerr.NewSyntaxError(execCtx.reqCtx, tree.PerformIntoClauseMessage)
+		}
 		if st.IsPerform {
 			queryResultFinalized := false
 			defer func() {
@@ -62,6 +65,26 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if execCtx.runResult != nil {
 				execCtx.runResult.AffectRows = 0
 			}
+			if time.Since(runBegin) > time.Second {
+				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+			return
+		}
+		if len(st.IntoVars) > 0 {
+			if err = validateSelectIntoArity(execCtx.reqCtx, execCtx.cw.Plan(), len(st.IntoVars)); err != nil {
+				return
+			}
+			runBegin := time.Now()
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+				return
+			}
+			if execCtx.selectInto == nil {
+				return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
+			}
+			if err = execCtx.selectInto.apply(execCtx.reqCtx, ses, execCtx.sqlOfStmt); err != nil {
+				return
+			}
+			appendSelectIntoDeprecatedWarning(ses, st.DeprecatedInto)
 			if time.Since(runBegin) > time.Second {
 				ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}

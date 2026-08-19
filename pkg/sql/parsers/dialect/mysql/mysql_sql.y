@@ -260,6 +260,7 @@ func sqlTaskInt64(v any) int64 {
     properties []tree.Property
     property tree.Property
     exportParm *tree.ExportParam
+    selectInto *tree.SelectInto
 
     explainOptions []tree.OptionElem
     explainOption tree.OptionElem
@@ -349,7 +350,9 @@ func sqlTaskInt64(v any) int64 {
 %token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
-%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
+%token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC
+%nonassoc <str> INTO
+%token <str> DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
 %token <str> INSTANT INPLACE COPY DISABLE ENABLE UNDEFINED MERGE TEMPTABLE DEFINER INVOKER SQL SECURITY CASCADED
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
@@ -645,7 +648,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> create_cdc_stmt show_cdc_stmt pause_cdc_stmt drop_cdc_stmt resume_cdc_stmt restart_cdc_stmt
 %type <rowsExprs> row_constructor_list grouping_sets 
 %type <exprs>  row_constructor
-%type <exportParm> export_data_param_opt
+%type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
 %type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
@@ -901,7 +904,7 @@ func sqlTaskInt64(v any) int64 {
 %type <uint64Val> export_splitsize_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
-%type <varExprs> variable_list
+%type <varExprs> variable_list user_variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
 %type <updateExpr> load_set_item
@@ -2064,6 +2067,16 @@ variable_list:
         $$ = []*tree.VarExpr{$1}
     }
 |   variable_list ',' variable
+    {
+        $$ = append($1, $3)
+    }
+
+user_variable_list:
+    user_variable
+    {
+        $$ = []*tree.VarExpr{$1}
+    }
+|   user_variable_list ',' user_variable
     {
         $$ = append($1, $3)
     }
@@ -3285,9 +3298,20 @@ use_stmt:
 
 update_stmt:
     update_no_with_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause update_no_with_stmt
     {
         $2.(*tree.Update).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -3500,10 +3524,18 @@ explain_stmt:
 explain_plan_stmt:
     explain_sym explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewExplainStmt($2, "text")
     }
 |   explain_sym VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
         }
@@ -3511,6 +3543,10 @@ explain_plan_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
         }
@@ -3518,6 +3554,10 @@ explain_plan_stmt:
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3526,6 +3566,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($3); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
         }
@@ -3533,6 +3577,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN VERBOSE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
          options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.VerboseOption, "NULL"),
@@ -3541,6 +3589,10 @@ explain_plan_stmt:
     }
 |   explain_sym PHYPLAN ANALYZE explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($4); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         options := []tree.OptionElem{
             tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
             tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
@@ -3549,6 +3601,10 @@ explain_plan_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.MakeExplainStmt($5, $3)
     }
 |   explain_sym FORCE execute_stmt
@@ -5627,15 +5683,37 @@ drop_procedure_stmt:
 
 delete_stmt:
     delete_without_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    delete_with_using_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($1); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        $$ = $1
+    }
 |    with_clause delete_with_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 |    with_clause delete_without_using_stmt
     {
         $2.(*tree.Delete).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -5755,6 +5833,10 @@ replace_stmt:
     REPLACE replace_priority_opt into_table_name partition_clause_opt replace_data returning_clause_opt
     {
         rep := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(rep.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         rep.Table = $3
 		target := $3.(*tree.TableName)
 		rep.TargetDatabaseName = target.SchemaName
@@ -5852,6 +5934,10 @@ insert_stmt:
 |   with_clause insert_no_with_stmt
     {
         $2.(*tree.Insert).With = $1
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = $2
     }
 
@@ -5859,6 +5945,10 @@ insert_no_with_stmt:
     INSERT into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update_opt returning_clause_opt
     {
         ins := $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $2
 		target := $2.(*tree.TableName)
 		ins.TargetDatabaseName = target.SchemaName
@@ -5874,6 +5964,10 @@ insert_no_with_stmt:
 |   INSERT OVERWRITE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $3
 		target := $3.(*tree.TableName)
 		ins.TargetDatabaseName = target.SchemaName
@@ -5889,6 +5983,10 @@ insert_no_with_stmt:
 |   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data returning_clause_opt
     {
         ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         ins.Table = $3
 		target := $3.(*tree.TableName)
 		ins.TargetDatabaseName = target.SchemaName
@@ -6262,13 +6360,14 @@ into_table_name:
         $$ = $1
     }
 
-export_data_param_opt:
+select_into_param_opt:
+    %prec EMPTY
     {
-        $$ = nil
+        $$ = &tree.SelectInto{}
     }
 |   INTO OUTFILE STRING export_format_opt export_splitsize_opt export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
     {
-        $$ = &tree.ExportParam{
+        $$ = &tree.SelectInto{Export: &tree.ExportParam{
             Outfile:      true,
             FilePath:     $3,
             ExportFormat: $4,
@@ -6278,7 +6377,11 @@ export_data_param_opt:
             Header:       $8,
             MaxFileSize:  uint64($9)*1024,
             ForceQuote:   $10,
-        }
+        }}
+    }
+|   INTO user_variable_list
+    {
+        $$ = &tree.SelectInto{UserVars: $2}
     }
 
 export_format_opt:
@@ -6443,53 +6546,205 @@ select_stmt:
     select_no_parens
 |   select_with_parens
     {
-        $$ = &tree.Select{Select: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, IntoVars: intoVars, DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo: $7}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window_opt order_by_clause export_data_param_opt
+|   select_with_parens time_window_opt order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: $4}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt export_data_param_opt
+|   select_with_parens time_window_opt order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens offset_clause rank_opt export_data_param_opt
+|   select_with_parens offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: $4}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: tree.SelectIntoExportOr($1, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window offset_clause rank_opt export_data_param_opt
+|   select_with_parens time_window offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: $5}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($1, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   select_with_parens time_window_opt order_by_clause offset_clause rank_opt export_data_param_opt
+|   select_with_parens time_window_opt order_by_clause offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($1)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($1, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $7) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: append(intoVars, $7.UserVars...), DeprecatedInto: deprecatedInto, SelectLockInfo:$8, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens order_by_clause export_data_param_opt
+|   with_clause select_with_parens order_by_clause select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $4) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: tree.SelectIntoExportOr($2, $4.Export), IntoVars: append(intoVars, $4.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
+|   with_clause select_with_parens order_by_opt limit_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens offset_clause rank_opt export_data_param_opt
+|   with_clause select_with_parens offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, Limit: $3, RankOption: $4, Ep: $5, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $5) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, Limit: $3, RankOption: $4, Ep: tree.SelectIntoExportOr($2, $5.Export), IntoVars: append(intoVars, $5.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause select_with_parens order_by_clause offset_clause rank_opt export_data_param_opt
+|   with_clause select_with_parens order_by_clause offset_clause rank_opt select_into_param_opt
     {
-        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
+        intoVars, deprecatedInto, intoErr := tree.SelectIntoVariablesForTopLevel($2)
+        if intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        if tree.SelectIntoActionConflict($2, $6) {
+            yylex.Error(tree.MisplacedIntoClauseMessage)
+            return 1
+        }
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($2, $6.Export), IntoVars: append(intoVars, $6.UserVars...), DeprecatedInto: deprecatedInto, With: $1}
+        if intoErr := tree.ValidateSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
 
 time_window_opt:
@@ -7068,15 +7323,17 @@ union_op:
     }
 
 simple_select_clause:
-    SELECT select_options_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+    SELECT select_options_opt select_expression_list select_into_param_opt from_opt where_expression_opt group_by_opt having_opt
     {
         $$ = &tree.SelectClause{
             Distinct: tree.QuerySpecOptionDistinct & $2 != 0,
             Exprs: $3,
-            From: $4,
-            Where: $5,
-            GroupBy: $6,
-            Having: $7,
+            IntoVars: $4.UserVars,
+            IntoExport: $4.Export,
+            From: $5,
+            Where: $6,
+            GroupBy: $7,
+            Having: $8,
             Option: $2,
         }
     }
@@ -7461,11 +7718,16 @@ dedup_join:
 values_stmt:
     VALUES row_constructor_list order_by_opt query_limit_opt
     {
-        $$ = &tree.ValuesStatement{
+        stmt := &tree.ValuesStatement{
             Rows: $2,
             OrderBy: $3,
             Limit: $4,
         }
+        if intoErr := tree.ValidateValuesIntoPlacement(stmt); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
+        $$ = stmt
     }
 
 row_constructor_list:
@@ -8107,6 +8369,10 @@ create_view_stmt:
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -8122,6 +8388,10 @@ create_view_stmt:
         var ColNames = $6
         var AsSource = $8
         var IfNotExists = $4
+        if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         $$ = tree.NewCreateView(
             Replace,
             Name,
@@ -9950,6 +10220,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -9960,6 +10234,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($9); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -9971,6 +10249,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -9981,6 +10263,10 @@ create_table_stmt:
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
     {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
         t := tree.NewCreateTable()
         t.IsAsSelect = true
         t.Temporary = $2
@@ -14771,17 +15057,29 @@ perform_stmt:
     PERFORM perform_select
     {
         $2.IsPerform = true
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($2); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
         $$ = $2
     }
 
 perform_select:
-    simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: tree.SelectIntoExportOr($1, $6.Export), IntoVars: $6.UserVars, SelectLockInfo: $7}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
-|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt select_into_param_opt select_lock_opt
     {
-        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo: $8, With: $1}
+        $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: tree.SelectIntoExportOr($2, $7.Export), IntoVars: $7.UserVars, SelectLockInfo: $8, With: $1}
+        if intoErr := tree.ValidatePerformSelectIntoPlacement($$); intoErr != "" {
+            yylex.Error(intoErr)
+            return 1
+        }
     }
 
 declare_stmt:
