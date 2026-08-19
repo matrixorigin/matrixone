@@ -929,17 +929,19 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarType plan.Type
 	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
 		userVarIsBin            bool
+		valueType               plan.Type
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
-		value, evalErr := getExprValueWithPrepareMeta(
+		value, valueType, evalErr := getExprValueWithPrepareMeta(
 			assign.Value, ses, execCtx, preparedExpression, &prepareParamKind, &isBin)
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -962,6 +964,7 @@ func doSetVar(
 			assign:                  assign,
 			value:                   value,
 			userVarIsBin:            isBin,
+			valueType:               valueType,
 			userVarPrepareParamKind: prepareParamKind,
 		}, nil
 	}
@@ -1001,8 +1004,8 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithKind(
-				name, value, sql, userVarIsBin, userVarPrepareParamKind)
+			err = ses.setUserDefinedVarWithTypeAndKind(
+				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind)
 			if err != nil {
 				return err
 			}
@@ -1015,6 +1018,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarType = item.valueType
 		userVarPrepareParamKind = item.userVarPrepareParamKind
 
 		//TODO : fix SET NAMES after parser is ready
@@ -1326,10 +1330,20 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(MsgCol)
 
 	info := ses.diagnosticsSnapshot()
+	showErrorsOnly := false
+	if execCtx != nil {
+		_, showErrorsOnly = execCtx.stmt.(*tree.ShowErrors)
+	}
 
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
+		if i < len(info.levels) && info.levels[i] != "" {
+			row[0] = info.levels[i]
+		}
+		if showErrorsOnly && !strings.EqualFold(row[0].(string), "Error") {
+			continue
+		}
 		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
@@ -2111,7 +2125,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicy(execCtx.reqCtx, execCtx.sqlOfStmt, sql)
+		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLMode(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses), parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -2142,7 +2157,8 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	var remapDb map[string]string
 	if execCtx.rewriteEnabled {
 		parserSQLMode := sessionSQLModeForParser(ses)
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, rewritten, parserSQLMode); err != nil {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, rewritten, parserSQLMode, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -2151,7 +2167,7 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
-		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps, v.(int64)); err != nil {
 			stmts[0].Free()
 			return rewritten, nil, nil, err
 		}
@@ -3192,7 +3208,14 @@ func buildPlanWithPrepareMode(
 	var ret *plan2.Plan
 	var err error
 
-	txnOp := ctx.GetProcess().GetTxnOperator()
+	// A later statement in a multi-statement packet can reuse a compiler
+	// context whose process has already been released.  Planning does not
+	// require a transaction operator, so keep the tracing setup optional
+	// instead of dereferencing the missing process.
+	var txnOp client.TxnOperator
+	if proc := ctx.GetProcess(); proc != nil {
+		txnOp = proc.GetTxnOperator()
+	}
 	start := time.Now()
 	seq := uint64(0)
 	if txnOp != nil {
@@ -3408,7 +3431,26 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
 		return nil
 	}
-	return ses.getCachedPlan(input.getHash())
+	cached := ses.getCachedPlan(input.getHash())
+	// SELECT ... INTO @var changes the type of a session variable as part of
+	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
+	// may have been bound against the variable's pre-assignment type, and the
+	// assignment also invalidates the session cache.  Drop any stale entry so
+	// it cannot be selected again after this request.
+	if cached != nil && containsSelectInto(cached.stmts) {
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
+	return cached
+}
+
+func containsSelectInto(stmts []tree.Statement) bool {
+	for _, stmt := range stmts {
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -3537,7 +3579,8 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			return nil, err
 		}
 		if execCtx.rewriteEnabled {
-			err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode)
+			err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+				execCtx.reqCtx, stmts, execCtx.input.getSql(), parserSQLMode, parserLowerCaseTableNames(ses))
 			if err != nil {
 				return nil, err
 			}
@@ -3570,7 +3613,9 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 					}
 				}
 			}
-			if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, statementRemaps); err != nil {
+			if err = applyRemapDbByStatement(
+				execCtx.reqCtx, stmts, statementRemaps, parserLowerCaseTableNames(ses),
+			); err != nil {
 				return nil, err
 			}
 		}
@@ -4512,7 +4557,9 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 		return moerr.NewInternalError(execCtx.reqCtx, "the count of stmts parsed from cached sql is not equal to cws length")
 	}
 	if execCtx.rewriteEnabled {
-		if err = parsers.AddRewriteHintsWithSQLMode(execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses)); err != nil {
+		if err = parsers.AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
+			execCtx.reqCtx, stmts, execCtx.input.getSql(), sessionSQLModeForParser(ses),
+			parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 		remaps := make([]map[string]string, len(execCtx.cws))
@@ -4521,7 +4568,9 @@ func rebuildStaleCachedStatements(ses FeSession, execCtx *ExecCtx) (err error) {
 				remaps[i] = carrier.GetRemapDb()
 			}
 		}
-		if err = applyRemapDbByStatement(execCtx.reqCtx, stmts, remaps); err != nil {
+		if err = applyRemapDbByStatement(
+			execCtx.reqCtx, stmts, remaps, parserLowerCaseTableNames(ses),
+		); err != nil {
 			return err
 		}
 	}
@@ -4955,6 +5004,13 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	for i := 0; i < len(cws); i++ {
 		cw := cws[i]
 		stmt := cw.GetAst()
+		// The assignment performed by SELECT ... INTO @var changes the
+		// variable's bind-time type.  Do not cache this statement after it has
+		// run; setUserDefinedVarWithTypeAndKind clears the existing cache, but
+		// the outer request must also avoid writing this just-executed plan back.
+		if selectStmt, ok := stmt.(*tree.Select); ok && len(selectStmt.IntoVars) > 0 {
+			canCache = false
+		}
 		currentInput := input
 		currentSQLRecord := ""
 		sqlType := input.getSqlSourceType(i)
@@ -5216,6 +5272,49 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
+func wrapNativePrepareSQL(name, materializedSQL string) string {
+	trimmed := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	if strings.HasPrefix(trimmed, "/*+") || strings.HasPrefix(trimmed, "/*!+") {
+		if end := strings.Index(trimmed, "*/"); end >= 0 {
+			content, ok := leadingHintContent(trimmed)
+			content = strings.TrimSpace(content)
+			var policy map[string]json.RawMessage
+			decodeErr := json.Unmarshal([]byte(content), &policy)
+			isPolicy := policy["rewrites"] != nil || policy["remapdb"] != nil
+			if ok && strings.HasPrefix(content, "{") && (decodeErr != nil || isPolicy) {
+				end += 2
+				return fmt.Sprintf("%s prepare %s from %s", trimmed[:end], quotePrepareStmtName(name),
+					strings.TrimSpace(trimmed[end:]))
+			}
+		}
+	}
+	return fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(name), materializedSQL)
+}
+
+func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string, lowerCaseTableNames int64) error {
+	rest := strings.TrimLeft(materializedSQL, " \t\r\n\f")
+	for strings.HasPrefix(rest, "/*+") || strings.HasPrefix(rest, "/*!+") {
+		contentStart := 3
+		if strings.HasPrefix(rest, "/*!+") {
+			contentStart = 4
+		}
+		end := strings.Index(rest[contentStart:], "*/")
+		if end < 0 {
+			break
+		}
+		end += contentStart
+		content := strings.TrimSpace(rest[contentStart:end])
+		if strings.HasPrefix(content, "{") {
+			if _, _, err := parsers.DecodeRewriteHintWithLowerCaseTableNames(
+				ctx, content, lowerCaseTableNames); err != nil {
+				return err
+			}
+		}
+		rest = strings.TrimLeft(rest[end+2:], " \t\r\n\f")
+	}
+	return nil
+}
+
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -5322,6 +5421,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 			preparedRemapDb = extractInlineRemapDb(sql)
 		}
+		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
+			ses.resetDiagnostics()
+			markRowCountFailed(ses, ses.GetProc())
+			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
+			return resp, nil
+		}
 		ses.addSqlCount(1)
 
 		// Keep the protocol acceptance boundary in prepareable_stmt. EXPLAIN is
@@ -5329,7 +5434,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// before planning.
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
-		sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(newStmtName), sql)
+		sql = wrapNativePrepareSQL(newStmtName, sql)
 		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
 
 		savedRowCount := ses.GetLastAffectedRows()
