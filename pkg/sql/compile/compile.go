@@ -4091,11 +4091,12 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
-	_, _, err := c.getCompileTableScanDataSourceTxn(s)
+	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err
 	}
 	spec := node.VectorIndexScan
+	spec.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
 	fold := func(expr **plan.Expr) error {
 		if expr == nil || *expr == nil {
 			return nil
@@ -4136,7 +4137,7 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 	s.DataSource.SchemaName = node.ObjRef.SchemaName
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
-	s.DataSource.Timestamp = c.proc.GetTxnOperator().Txn().SnapshotTS
+	s.DataSource.Timestamp = txnOp.Txn().SnapshotTS
 	return nil
 }
 
@@ -5161,6 +5162,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
+			op.TxnOffset = c.TxnOffset
 			if op.TableFunction != nil && op.TableFunction.IsSingle {
 				rs[i].NodeInfo.Mcpu = 1
 			}
@@ -5170,6 +5172,7 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_OUTERAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.OUTER, c.proc)
+			op.TxnOffset = c.TxnOffset
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}

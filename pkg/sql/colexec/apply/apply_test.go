@@ -313,6 +313,24 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 }
 
+func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
+	proc := testutil.NewProc(t)
+	apply := NewArgument()
+	apply.VectorIndexScan = vectorSourceSpec()
+	apply.VectorAttrs = []string{"pkid"}
+	apply.Typs = []types.Type{types.T_int64.ToType()}
+	apply.TxnOffset = 17
+	t.Cleanup(func() {
+		apply.Free(proc, false, nil)
+		apply.Release()
+		proc.Free()
+	})
+	require.NoError(t, apply.Prepare(proc))
+	source, ok := apply.Source.(*vectorSource)
+	require.True(t, ok)
+	require.Equal(t, 17, source.txnOffset)
+}
+
 func TestVectorSourceReaderLifecycle(t *testing.T) {
 	proc := testutil.NewProc(t)
 	source := &vectorSource{

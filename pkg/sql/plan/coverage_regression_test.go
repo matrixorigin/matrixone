@@ -59,7 +59,7 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeOffsetCompensationUsesCompensat
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Equal(t, uint64(15), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
-	require.Equal(t, uint64(15), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+	require.False(t, tableFuncNode.VectorIndexScan.GetPostFilterOverFetch())
 }
 
 func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t *testing.T) {
@@ -91,7 +91,6 @@ func TestApplyIndicesForSortUsingIvfflat_DistRangeOnlyFilterCompensatesOffset(t 
 	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.Equal(t, uint64(3), tableFuncNode.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
 	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange())
 	require.NotNil(t, tableFuncNode.VectorIndexScan.GetDistanceRange().GetUpperBound())

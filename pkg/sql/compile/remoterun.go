@@ -897,6 +897,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:           convertToPlanTypes(t.Typs),
 			VectorIndexScan: t.VectorIndexScan,
 			VectorAttrs:     t.VectorAttrs,
+			TxnOffset:       int64(t.TxnOffset),
 		}
 		if t.TableFunction != nil {
 			in.TableFunction = &pipeline.TableFunction{
@@ -1430,6 +1431,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Typs = convertToTypes(t.Types)
 		arg.VectorIndexScan = t.VectorIndexScan
 		arg.VectorAttrs = t.VectorAttrs
+		arg.TxnOffset = int(t.TxnOffset)
 		if opr.TableFunction != nil {
 			arg.TableFunction = table_function.NewArgument()
 			arg.TableFunction.Attrs = opr.TableFunction.Attrs

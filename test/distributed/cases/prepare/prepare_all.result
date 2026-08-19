@@ -51,11 +51,11 @@ INSERT INTO test_table VALUES(0, @float1_num, @double_num1), (1, @float2_num, @d
 INSERT INTO test_table VALUES(0, 1.2345678, 1.223344556677889900), (1, 1.876599999432, 1.223344556677889900);
 Duplicate entry '0' for key 'pk'
 select * from test_table;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]  𝄀
 0  ¦  1.2345678  ¦  1.22334455667789  𝄀
 1  ¦  1.8765432  ¦  1.22334455667789
 select * from test_table where fl=1.2345678;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]  𝄀
 0  ¦  1.2345678  ¦  1.22334455667789
 SET @fl_hit=1.2345678;
 SET @fl_not_hit=1.234567800;
@@ -64,25 +64,25 @@ SET @dou_hit=1.223344556677889900;
 PREPARE s1 FROM 'SELECT * FROM test_table WHERE fl=?';
 PREPARE s2 FROM 'SELECT * FROM test_table WHERE dou=?';
 EXECUTE s1 USING @fl_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]  𝄀
 0  ¦  1.2345678  ¦  1.22334455667789
 EXECUTE s1 USING @fl_not_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]  𝄀
 0  ¦  1.2345678  ¦  1.22334455667789
 EXECUTE s1 USING @dou_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]
 EXECUTE s1 USING @dou_not_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]
 EXECUTE s2 USING @fl_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]
 EXECUTE s2 USING @fl_not_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]
 EXECUTE s2 USING @dou_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]  𝄀
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]  𝄀
 0  ¦  1.2345678  ¦  1.22334455667789  𝄀
 1  ¦  1.8765432  ¦  1.22334455667789
 EXECUTE s2 USING @dou_not_hit;
-➤ pk[4,32,0]  ¦  fl[7,24,0]  ¦  dou[8,54,0]
+➤ pk[4,32,0]  ¦  fl[7,23,31]  ¦  dou[8,53,31]
 DEALLOCATE PREPARE s1;
 DEALLOCATE PREPARE s2;
 DROP TABLE test_table;
@@ -99,7 +99,7 @@ set @not_hit_str2='b';
 execute s1 using @hit_str2;
 execute s1 using @not_hit_str2;
 select * from t1;
-➤ str1[12,-1,0]  ¦  str2[1,25,0]  𝄀
+➤ str1[12,25,0]  ¦  str2[1,25,0]  𝄀
 a2  ¦  b2  𝄀
 a3  ¦    𝄀
 a4  ¦  null  𝄀
@@ -110,9 +110,8 @@ set @hit_str1='a2';
 set @not_hit_str2='a';
 execute s2 using @hit_str1;
 execute s2 using @not_hit_str1;
-internal error: the user variable not_hit_str1 does not exist
 select * from t1;
-➤ str1[12,-1,0]  ¦  str2[1,25,0]  𝄀
+➤ str1[12,25,0]  ¦  str2[1,25,0]  𝄀
 a3  ¦    𝄀
 a4  ¦  null  𝄀
 xx1  ¦  b1  𝄀
@@ -122,7 +121,7 @@ prepare s3 from 'select * from t1 where str1 like ?';
 prepare s4 from 'select * from t1 where str2 not like ?';
 set @a='a%';
 execute s3 using @a;
-➤ str1[12,-1,0]  ¦  str2[1,25,0]  𝄀
+➤ str1[12,25,0]  ¦  str2[1,25,0]  𝄀
 a3  ¦    𝄀
 a4  ¦  null  𝄀
 a2  ¦  yy1
@@ -131,7 +130,7 @@ DEALLOCATE PREPARE s4;
 prepare s5 from 'select * from t1 where str2=?';
 set @hit_empty='';
 execute s5 using @hit_empty;
-➤ str1[12,-1,0]  ¦  str2[1,25,0]  𝄀
+➤ str1[12,25,0]  ¦  str2[1,25,0]  𝄀
 a3  ¦  
 DEALLOCATE PREPARE s5;
 DROP TABLE t1;
@@ -413,20 +412,20 @@ prepare s2 from 'select str1,count(a1) as c from t4 group by str1 having count(a
 prepare s3 from 'select str1,count(a1) as c from t4 group by str1 having count(a1)<?';
 prepare s4 from 'select str1,count(a1) as c from t4 group by str1 having count(a1)<=?';
 execute s1 using @min;
-➤ str1[12,-1,0]  ¦  c[-5,64,0]  𝄀
+➤ str1[12,25,0]  ¦  c[-5,64,0]  𝄀
 aaa  ¦  2  𝄀
 bbb  ¦  5
 execute s2 using @min;
-➤ str1[12,-1,0]  ¦  c[-5,64,0]  𝄀
+➤ str1[12,25,0]  ¦  c[-5,64,0]  𝄀
 aaa  ¦  2  𝄀
 bbb  ¦  5  𝄀
 ccc  ¦  1
 execute s3 using @max;
-➤ str1[12,-1,0]  ¦  c[-5,64,0]  𝄀
+➤ str1[12,25,0]  ¦  c[-5,64,0]  𝄀
 aaa  ¦  2  𝄀
 ccc  ¦  1
 execute s4 using @max;
-➤ str1[12,-1,0]  ¦  c[-5,64,0]  𝄀
+➤ str1[12,25,0]  ¦  c[-5,64,0]  𝄀
 aaa  ¦  2  𝄀
 bbb  ¦  5  𝄀
 ccc  ¦  1
@@ -472,13 +471,13 @@ prepare s7 from 'select * from t5 a right join t6 b on a.a1=b.b1 where a.a2=?';
 prepare s8 from 'select * from t5 a right join t6 b on a.a1=b.b1 where a.a1>=?';
 prepare s9 from 'select * from t5 a right join t6 b on a.a1=b.b1 where b.b1>=?';
 execute s1 using @a2_val;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  ccc1
 execute s2 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 20  ¦  xxx1  ¦  20  ¦  aaa1  𝄀
@@ -492,7 +491,7 @@ execute s2 using @min;
 20  ¦  yyy1  ¦  20  ¦  ccc1  𝄀
 40  ¦  xxx1  ¦  40  ¦  bbb1
 execute s3 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 20  ¦  xxx1  ¦  20  ¦  aaa1  𝄀
@@ -506,13 +505,13 @@ execute s3 using @min;
 20  ¦  yyy1  ¦  20  ¦  ccc1  𝄀
 40  ¦  xxx1  ¦  40  ¦  bbb1
 execute s4 using @a2_val;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  ccc1
 execute s5 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 20  ¦  xxx1  ¦  20  ¦  aaa1  𝄀
@@ -526,7 +525,7 @@ execute s5 using @min;
 20  ¦  yyy1  ¦  20  ¦  ccc1  𝄀
 40  ¦  xxx1  ¦  40  ¦  bbb1
 execute s6 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 20  ¦  xxx1  ¦  20  ¦  aaa1  𝄀
@@ -540,13 +539,13 @@ execute s6 using @min;
 20  ¦  yyy1  ¦  20  ¦  ccc1  𝄀
 40  ¦  xxx1  ¦  40  ¦  bbb1
 execute s7 using @a2_val;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  aaa1  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 20  ¦  yyy1  ¦  20  ¦  ccc1
 execute s8 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 10  ¦  zzz1  ¦  10  ¦  aaa1  𝄀
@@ -560,7 +559,7 @@ execute s8 using @min;
 20  ¦  xxx1  ¦  20  ¦  ccc1  𝄀
 20  ¦  yyy1  ¦  20  ¦  ccc1
 execute s9 using @min;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  ¦  b1[4,32,0]  ¦  b2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  ¦  b1[4,32,0]  ¦  b2[12,25,0]  𝄀
 10  ¦  xxx1  ¦  10  ¦  aaa1  𝄀
 10  ¦  yyy1  ¦  10  ¦  aaa1  𝄀
 10  ¦  zzz1  ¦  10  ¦  aaa1  𝄀
@@ -589,7 +588,7 @@ set @b1=10;
 prepare s1 from 'select * from t5 where a1 > ? union select * from t6 where b1 > ?';
 prepare s2 from 'select * from t5 where a1 > ? union all select * from t6 where b1 > ?';
 execute s1 using @a1, @b1;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  𝄀
 20  ¦  aaa1  𝄀
 30  ¦  aaa1  𝄀
 40  ¦  bbb1  𝄀
@@ -601,38 +600,38 @@ execute s1 using @a1, @b1;
 20  ¦  yyy1  𝄀
 40  ¦  xxx1
 execute s2 using @a1, @b1;
-➤ a1[4,32,0]  ¦  a2[12,-1,0]  𝄀
-20  ¦  xxx1  𝄀
-30  ¦  xxx1  𝄀
-20  ¦  yyy1  𝄀
-40  ¦  xxx1  𝄀
+➤ a1[4,32,0]  ¦  a2[12,25,0]  𝄀
 20  ¦  aaa1  𝄀
 30  ¦  aaa1  𝄀
 40  ¦  bbb1  𝄀
 50  ¦  aaa1  𝄀
 60  ¦  ccc1  𝄀
-20  ¦  ccc1
+20  ¦  ccc1  𝄀
+20  ¦  xxx1  𝄀
+30  ¦  xxx1  𝄀
+20  ¦  yyy1  𝄀
+40  ¦  xxx1
 drop table t5;
 drop table t6;
 set @maxint=18446744073709551615;
 select @maxint;
-➤ @maxint[12,0,0]  𝄀
+➤ @maxint[-5,64,0]  𝄀
 18446744073709551615
 SELECT @maxint + 0e0;
-➤ @maxint + 0e0[8,54,0]  𝄀
+➤ @maxint + 0e0[8,53,31]  𝄀
 1.8446744073709552E19
 SELECT 18446744073709551615 + 0e0;
-➤ 18446744073709551615 + 0e0[8,54,0]  𝄀
+➤ 18446744073709551615 + 0e0[8,53,31]  𝄀
 1.8446744073709552E19
 SELECT @maxint + 0.0;
-➤ @maxint + 0.0[8,54,0]  𝄀
-1.8446744073709552E19
+➤ @maxint + 0.0[3,38,1]  𝄀
+18446744073709551615.0
 SELECT 18446744073709551615 + 0.0;
 ➤ 18446744073709551615 + 0.0[3,38,1]  𝄀
 18446744073709551615.0
 PREPARE s FROM 'SELECT 0e0 + ?';
 EXECUTE s USING @maxint;
-➤ 0e0 + ?[8,54,0]  𝄀
+➤ 0e0 + ?[8,53,31]  𝄀
 1.8446744073709552E19
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0.0 + ?';
@@ -646,7 +645,7 @@ Data truncation: data out of range: data type int64, value '18446744073709551615
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
-➤ concat(?, )[12,-1,0]  𝄀
+➤ concat(?, )[12,65535,0]  𝄀
 18446744073709551615
 DEALLOCATE PREPARE s;
 drop table if exists prepare_bit_numeric;
@@ -676,12 +675,12 @@ drop table if exists prepare_bit64_signed;
 create table prepare_bit64_signed (b bit(64));
 insert into prepare_bit64_signed values (-6109877384019645241);
 select hex(b), cast(b as unsigned) from prepare_bit64_signed;
-➤ hex(b)[12,-1,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
+➤ hex(b)[12,65535,0]  ¦  cast(b as unsigned)[-5,64,0]  𝄀
 AB355AE40850ECC7  ¦  12336866689689906375
 truncate table prepare_bit64_signed;
 insert into prepare_bit64_signed values ('-6109877384019645241');
 -- @regex("(data out of range|data too long)", true)
-Data truncation: data out of range: data type bit(64), value -6109877384019645241
+invalid input: data too long
 drop table if exists prepare_bit63_signed;
 create table prepare_bit63_signed (b bit(63));
 insert into prepare_bit63_signed values (-1);
@@ -697,7 +696,7 @@ PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA wh
 SET @dbname1 = 'mocloud_meta%';
 SET @dbname2 = 'mocloud_meta';
 EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
-➤ SCHEMA_NAME[12,-1,0]  𝄀
+➤ SCHEMA_NAME[12,5000,0]  𝄀
 mocloud_meta
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
@@ -750,22 +749,21 @@ execute prepared_rows_frame using @before, @after;
 3  ¦  30
 deallocate prepare prepared_rows_frame;
 drop table prepared_window_frame;
-
 set @input = 41;
 prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
 execute prepared_set_literal;
 select @prepared_literal;
-➤ @prepared_literal[12,0,0]  𝄀
+➤ @prepared_literal[-5,64,0]  𝄀
 42
 prepare prepared_set_param from 'set @prepared_param = ? + 1';
 execute prepared_set_param using @input;
 select @prepared_param;
-➤ @prepared_param[12,0,0]  𝄀
+➤ @prepared_param[-5,64,0]  𝄀
 42
 set @input = 9;
 execute prepared_set_param using @input;
 select @prepared_param;
-➤ @prepared_param[12,0,0]  𝄀
+➤ @prepared_param[-5,64,0]  𝄀
 10
 deallocate prepare prepared_set_literal;
 deallocate prepare prepared_set_param;
@@ -777,58 +775,58 @@ prepare prepared_set_multi from 'set @prepared_a = ? + 1, @prepared_b = concat(?
 set @prepared_input_a = 41, @prepared_input_b = 'first';
 execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
 select @prepared_a, @prepared_b;
-➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+➤ @prepared_a[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
 42  ¦  first-text
 set @prepared_input_a = 9, @prepared_input_b = null;
 execute prepared_set_multi using @prepared_input_a, @prepared_input_b;
 select @prepared_a, @prepared_b;
-➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
-10  ¦  NULL
+➤ @prepared_a[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
+10  ¦  null
 set @prepared_visibility_a = 5, @prepared_visibility_b = 0, @prepared_visibility_input = 41;
 prepare prepared_set_visibility from 'set @prepared_visibility_a = ?, @prepared_visibility_b = @prepared_visibility_a + 1';
 execute prepared_set_visibility using @prepared_visibility_input;
 select @prepared_visibility_a, @prepared_visibility_b;
-➤ @prepared_visibility_a[12,0,0]  ¦  @prepared_visibility_b[12,0,0]  𝄀
+➤ @prepared_visibility_a[12,0,0]  ¦  @prepared_visibility_b[-5,64,0]  𝄀
 41  ¦  42
 set @prepared_self_ref = 5;
 prepare prepared_set_self_ref from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1';
 execute prepared_set_self_ref using @prepared_visibility_input;
 select @prepared_self_ref;
-➤ @prepared_self_ref[12,0,0]  𝄀
+➤ @prepared_self_ref[-5,64,0]  𝄀
 42
 prepare prepared_set_self_ref_error from 'set @prepared_self_ref = ?, @prepared_self_ref = @prepared_self_ref + 1, @prepared_b = (select v from prepared_set_values)';
 set @prepared_self_ref = 5, @prepared_b = 'unchanged';
 execute prepared_set_self_ref_error using @prepared_visibility_input;
 Subquery returns more than 1 row
 select @prepared_self_ref, @prepared_b;
-➤ @prepared_self_ref[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+➤ @prepared_self_ref[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
 5  ¦  unchanged
 set @prepared_a = 77, @prepared_b = 'stable';
 execute prepared_set_multi using @prepared_input_a;
 invalid input: Incorrect arguments to EXECUTE
 select @prepared_a, @prepared_b;
-➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+➤ @prepared_a[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
 77  ¦  stable
 prepare prepared_set_error from 'set @prepared_a = ?, @prepared_b = (select v from prepared_set_values)';
 set @prepared_a = 88, @prepared_b = 'unchanged';
 execute prepared_set_error using @prepared_input_a;
 Subquery returns more than 1 row
 select @prepared_a, @prepared_b;
-➤ @prepared_a[12,0,0]  ¦  @prepared_b[12,0,0]  𝄀
+➤ @prepared_a[-5,64,0]  ¦  @prepared_b[12,65535,0]  𝄀
 88  ¦  unchanged
 prepare prepared_set_reserved_error from 'set @names = ?, @prepared_reserved_failure = (select v from prepared_set_values)';
 set @names = 'names-before', @character_set_client = 'client-before', @character_set_connection = 'connection-before', @character_set_results = 'results-before', @prepared_reserved_input = 'mutated';
 execute prepared_set_reserved_error using @prepared_reserved_input;
 Subquery returns more than 1 row
 select @names, @character_set_client, @character_set_connection, @character_set_results;
-➤ @names[12,0,0]  ¦  @character_set_client[12,0,0]  ¦  @character_set_connection[12,0,0]  ¦  @character_set_results[12,0,0]  𝄀
+➤ @names[12,65535,0]  ¦  @character_set_client[12,65535,0]  ¦  @character_set_connection[12,65535,0]  ¦  @character_set_results[12,65535,0]  𝄀
 names-before  ¦  client-before  ¦  connection-before  ¦  results-before
 prepare prepared_set_system_error from 'set @prepared_a = ?, transaction_isolation = ?';
 set @prepared_input_a = 7, @prepared_input_b = 'INVALID', @prepared_a = 88, @prepared_isolation_before = @@transaction_isolation;
 execute prepared_set_system_error using @prepared_input_a, @prepared_input_b;
 not supported: prepared multi-assignment SET supports user variables only
 select @prepared_a, @@transaction_isolation = @prepared_isolation_before;
-➤ @prepared_a[12,0,0]  ¦  @@transaction_isolation = @prepared_isolation_before[1,0,0]  𝄀
+➤ @prepared_a[-5,64,0]  ¦  @@transaction_isolation = @prepared_isolation_before[-7,1,0]  𝄀
 88  ¦  1
 deallocate prepare prepared_set_multi;
 deallocate prepare prepared_set_visibility;

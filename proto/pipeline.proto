@@ -764,4 +764,5 @@ message Apply {
   repeated plan.Type types = 4 [(gogoproto.nullable) = false];
   plan.VectorIndexScan vector_index_scan = 5;
   repeated string vector_attrs = 6;
+  int64 txn_offset = 7;
 }

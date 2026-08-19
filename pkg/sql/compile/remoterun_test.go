@@ -1058,6 +1058,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	t.Run("Apply_VectorIndexScan", func(t *testing.T) {
 		op := apply.NewArgument()
 		op.VectorAttrs = []string{"pkid", "score"}
+		op.TxnOffset = 19
 		op.VectorIndexScan = &planpb.VectorIndexScan{
 			Index:            &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
 			DistanceFunction: "l2_distance",
@@ -1078,6 +1079,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, op.VectorAttrs, restoredOp.VectorAttrs)
 		require.Equal(t, "idx", restoredOp.VectorIndexScan.GetIndex().GetIndexName())
 		require.Equal(t, uint64(8), restoredOp.VectorIndexScan.GetCandidateLimit().GetLit().GetU64Val())
+		require.Equal(t, 19, restoredOp.TxnOffset)
 	})
 
 	t.Run("TableFunction_Limit", func(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,14 +74,16 @@ func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 
 func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	source := &planpb.VectorIndexScan{
-		SourceTable:       &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
-		SourceTableDef:    &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
-		Index:             &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
-		HiddenTables:      []*planpb.VectorIndexTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
-		QueryVector:       &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
-		CandidateLimit:    MakePlan2Uint64ConstExprWithType(4),
-		IncludedColumns:   []string{"payload"},
-		InitialProbeCount: 2,
+		SourceTable:         &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
+		SourceTableDef:      &planpb.TableDef{Name: "t", Cols: []*planpb.ColDef{{Name: "v"}}},
+		Index:               &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+		HiddenTables:        []*planpb.VectorIndexTableRef{{Role: "entries", Object: &planpb.ObjectRef{ObjName: "e"}}},
+		QueryVector:         &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		CandidateLimit:      MakePlan2Uint64ConstExprWithType(4),
+		IncludedColumns:     []string{"payload"},
+		InitialProbeCount:   2,
+		ScanSnapshot:        &planpb.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 9}, Tenant: &planpb.SnapshotTenant{TenantID: 7}},
+		PostFilterOverFetch: true,
 	}
 
 	cloned := DeepCopyVectorIndexScan(source)
@@ -90,12 +93,15 @@ func TestDeepCopyVectorIndexScanOwnsNestedMetadata(t *testing.T) {
 	require.Equal(t, source.QueryVector, cloned.QueryVector)
 	require.Equal(t, source.CandidateLimit, cloned.CandidateLimit)
 	require.Equal(t, source.IncludedColumns, cloned.IncludedColumns)
+	require.Equal(t, source.ScanSnapshot, cloned.ScanSnapshot)
+	require.True(t, cloned.PostFilterOverFetch)
 	require.NotSame(t, source.SourceTable, cloned.SourceTable)
 	require.NotSame(t, source.SourceTableDef, cloned.SourceTableDef)
 	require.NotSame(t, source.Index, cloned.Index)
 	require.NotSame(t, source.HiddenTables[0], cloned.HiddenTables[0])
 	require.NotSame(t, source.QueryVector, cloned.QueryVector)
 	require.NotSame(t, source.CandidateLimit, cloned.CandidateLimit)
+	require.NotSame(t, source.ScanSnapshot, cloned.ScanSnapshot)
 }
 
 func TestDeepCopyExprClonesAggregateConfig(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 )
 
 type ivfIndexContext struct {
@@ -391,8 +392,8 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 		return originalLimit
 	}
 
-	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
-	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+	overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
+	return overfetch.Limit(originalLimit, overFetchFactor)
 }
 
 func ensureIvfIncludeSearchRoundLimitAtLeastK(searchRoundLimit uint64, outerResultNeed *plan.Expr) uint64 {
@@ -658,6 +659,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// vectorSortContext.limit already contains the outer LIMIT+OFFSET window.
 	// Filter pressure adds over-fetch on top of that candidate budget below.
 	outerResultNeedExpr := DeepCopyExpr(limit)
+	// Literal limits are over-fetched in the plan below. Prepared limits must
+	// be over-fetched by the execution reader after their value is known.
+	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter && outerResultNeedExpr.GetLit() == nil
 
 	firstRoundLimit := uint64(0)
 	var firstRoundLimitExpr *plan.Expr
@@ -703,19 +707,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorSearchProviderChildren(vecCtx),
 		VectorIndexScan: &plan.VectorIndexScan{
-			SourceTable:       DeepCopyObjectRef(scanNode.ObjRef),
-			SourceTableDef:    DeepCopyTableDef(scanNode.TableDef, true),
-			Index:             DeepCopyIndexDef(ivfCtx.metaDef),
-			QueryVector:       DeepCopyExpr(ivfCtx.vecLitArg),
-			DistanceFunction:  ivfCtx.origFuncName,
-			Direction:         vecCtx.sortDirection,
-			DistanceRange:     DeepCopyDistRange(distRange),
-			PreFilters:        typedPreFilters,
-			IncludedColumns:   append([]string(nil), tableFuncIncludeColumns...),
-			InitialProbeCount: uint32(ivfCtx.nProbe),
-			FirstRoundLimit:   firstRoundLimitExpr,
-			BucketExpandStep:  uint32(bucketExpandStep),
-			ThreadsSearch:     ivfCtx.nThread,
+			SourceTable:         DeepCopyObjectRef(scanNode.ObjRef),
+			SourceTableDef:      DeepCopyTableDef(scanNode.TableDef, true),
+			ScanSnapshot:        DeepCopySnapshot(scanNode.ScanSnapshot),
+			Index:               DeepCopyIndexDef(ivfCtx.metaDef),
+			QueryVector:         DeepCopyExpr(ivfCtx.vecLitArg),
+			DistanceFunction:    ivfCtx.origFuncName,
+			Direction:           vecCtx.sortDirection,
+			DistanceRange:       DeepCopyDistRange(distRange),
+			PreFilters:          typedPreFilters,
+			IncludedColumns:     append([]string(nil), tableFuncIncludeColumns...),
+			InitialProbeCount:   uint32(ivfCtx.nProbe),
+			FirstRoundLimit:     firstRoundLimitExpr,
+			BucketExpandStep:    uint32(bucketExpandStep),
+			ThreadsSearch:       ivfCtx.nThread,
+			PostFilterOverFetch: postFilterOverFetch,
 			HiddenTables: []*plan.VectorIndexTableRef{
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.metaDef.IndexTableName}},
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: ivfCtx.idxDef.IndexTableName}},
@@ -757,9 +763,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 
 			// Filtered post mode needs a larger candidate budget than the historical
 			// default, but we keep it as fixed buckets so the plan is predictable.
-			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
+			overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
 
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
+			newLimit := overfetch.Limit(originalLimit, overFetchFactor)
 
 			if ivfCtx.isAutoMode {
 				logutil.Debugf(

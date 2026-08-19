@@ -45,6 +45,10 @@ type Fulltext2Query struct {
 	// prefilter pushed down as a runtime filter (built in C from the eligible pks),
 	// applied INSIDE the search so a pushed LIMIT bounds the filtered set. nil = none.
 	FilterBytes []byte
+	// ScoreRange is the optional pushed-down relevance interval from a
+	// `MATCH(...) <op> const` predicate. Applied inside the search so out-of-range rows
+	// never cross into the join above. nil = no bound.
+	ScoreRange *ScoreRange
 	// IncludePredsJSON is the optional pushed-down predicate set on INCLUDE columns
 	// (IncludePredicateSpec JSON), evaluated in Go against the stored per-doc INCLUDE
 	// values INSIDE the search — so a WHERE on an INCLUDE column needs no second base scan.
@@ -183,8 +187,8 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 	} else if k <= 0 {
 		k = int(s.idx.NumDocs())
 	}
-	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 {
-		pf = &prefilter{}
+	if len(q.FilterBytes) > 0 || len(q.IncludePredsJSON) > 0 || q.ScoreRange != nil {
+		pf = &prefilter{scoreRange: q.ScoreRange}
 		if len(q.FilterBytes) > 0 {
 			var filter docfilter.MembershipFilter
 			if filter, err = docfilter.New(q.FilterBytes); err != nil {
@@ -206,10 +210,30 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 
 // runTopK dispatches the bounded top-k search (ranked bag-of-words vs positional query).
 func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Result, error) {
+	var (
+		res []Result
+		err error
+	)
 	if q.BagOfWords {
-		return s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+	} else {
+		res, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
 	}
-	return s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
+	if err != nil || pf == nil || pf.scoreRange == nil {
+		return res, err
+	}
+	// Drop out-of-range results. This runs AFTER the top-k heap, so it can only be combined
+	// with a pushed LIMIT when the range has no upper bound: the k highest scores are then
+	// exactly the k highest in range. The planner enforces that -- it refuses to push a
+	// candidate LIMIT whenever it lifts a score predicate (see the limitExpr gate in
+	// applyJoinFullTextIndices) -- so k here is the whole result set.
+	kept := res[:0]
+	for _, r := range res {
+		if pf.scoreRange.contains(r.Score) {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
 }
 
 // Search runs the WAND positional query (NL exact-phrase or boolean) and returns

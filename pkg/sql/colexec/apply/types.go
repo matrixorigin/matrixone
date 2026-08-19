@@ -58,7 +58,10 @@ type Apply struct {
 	TableFunction   *table_function.TableFunction
 	VectorIndexScan *plan.VectorIndexScan
 	VectorAttrs     []string
-	Source          AppliedSource
+	// TxnOffset is the statement boundary used by correlated vector scans.
+	// APPLY must preserve it across every provider row and remote generation.
+	TxnOffset int
+	Source    AppliedSource
 	vm.OperatorBase
 }
 

@@ -34,6 +34,7 @@ type vectorSource struct {
 	spec          *plan.VectorIndexScan
 	attrs         []string
 	types         []types.Type
+	txnOffset     int
 	executors     []colexec.ExpressionExecutor
 	queryVec      *vector.Vector
 	limitVec      *vector.Vector
@@ -121,6 +122,7 @@ func (s *vectorSource) ApplyStart(row int, proc *process.Process, _ process.Anal
 		QueryType:      s.spec.QueryVector.Typ,
 		CandidateLimit: limit,
 		PartitionCount: 1,
+		TxnOffset:      s.txnOffset,
 	})
 	if err != nil {
 		return err

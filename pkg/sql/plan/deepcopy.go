@@ -372,6 +372,7 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 		OrigFuncName:   oldParam.OrigFuncName,
 		PartitionCnCnt: oldParam.PartitionCnCnt,
 		PartitionCnIdx: oldParam.PartitionCnIdx,
+		OverFetchLimit: oldParam.OverFetchLimit,
 	}
 
 	if oldParam.DistRange != nil {
@@ -414,21 +415,23 @@ func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
 		}
 	}
 	return &plan.VectorIndexScan{
-		SourceTable:       DeepCopyObjectRef(old.SourceTable),
-		SourceTableDef:    DeepCopyTableDef(old.SourceTableDef, true),
-		Index:             DeepCopyIndexDef(old.Index),
-		HiddenTables:      hidden,
-		QueryVector:       DeepCopyExpr(old.QueryVector),
-		DistanceFunction:  old.DistanceFunction,
-		Direction:         old.Direction,
-		CandidateLimit:    DeepCopyExpr(old.CandidateLimit),
-		DistanceRange:     DeepCopyDistRange(old.DistanceRange),
-		PreFilters:        DeepCopyExprList(old.PreFilters),
-		IncludedColumns:   slices.Clone(old.IncludedColumns),
-		InitialProbeCount: old.InitialProbeCount,
-		FirstRoundLimit:   DeepCopyExpr(old.FirstRoundLimit),
-		BucketExpandStep:  old.BucketExpandStep,
-		ThreadsSearch:     old.ThreadsSearch,
+		SourceTable:         DeepCopyObjectRef(old.SourceTable),
+		SourceTableDef:      DeepCopyTableDef(old.SourceTableDef, true),
+		Index:               DeepCopyIndexDef(old.Index),
+		HiddenTables:        hidden,
+		QueryVector:         DeepCopyExpr(old.QueryVector),
+		DistanceFunction:    old.DistanceFunction,
+		Direction:           old.Direction,
+		CandidateLimit:      DeepCopyExpr(old.CandidateLimit),
+		DistanceRange:       DeepCopyDistRange(old.DistanceRange),
+		PreFilters:          DeepCopyExprList(old.PreFilters),
+		IncludedColumns:     slices.Clone(old.IncludedColumns),
+		InitialProbeCount:   old.InitialProbeCount,
+		FirstRoundLimit:     DeepCopyExpr(old.FirstRoundLimit),
+		BucketExpandStep:    old.BucketExpandStep,
+		ThreadsSearch:       old.ThreadsSearch,
+		ScanSnapshot:        DeepCopySnapshot(old.ScanSnapshot),
+		PostFilterOverFetch: old.PostFilterOverFetch,
 	}
 }
 

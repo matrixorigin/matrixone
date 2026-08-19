@@ -32,6 +32,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -131,9 +132,25 @@ func ivfpqSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, er
 	var err error
 	st := &ivfpqSearchState{}
 
-	st.limit, err = evalLimitExpression(proc, arg.Limit, 1)
-	if err != nil {
-		return nil, err
+	// k is carried on IndexReaderParam.Limit (prepared/param path: raw k,
+	// over-fetched here at EXECUTE) or on arg.Limit (literal path: already
+	// over-fetched at plan time, or the no-filter limit). Take the max.
+	if arg.IndexReaderParam != nil {
+		st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if arg.Limit != nil {
+		var tfLimit uint64
+		tfLimit, err = evalLimitExpression(proc, arg.Limit, 1)
+		if err != nil {
+			return nil, err
+		}
+		st.limit = max(st.limit, tfLimit)
+	}
+	if st.limit == 0 {
+		st.limit = 1
 	}
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
@@ -257,6 +274,14 @@ func (u *ivfpqSearchState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.batch = tf.createResultBatch()
 		// Resolve the output slots once for this layout (see vector_search_layout.go).
 		u.slots = resolveVectorSearchSlots(u.batch.Attrs, nil, "")
+		// When a residual filter will drop candidates after this search (post-filter
+		// JOIN), grow the candidate budget so k rows still survive. For a prepared
+		// LIMIT ? this is the only place k is known; a literal LIMIT was already
+		// over-fetched at plan time and leaves the flag off. Done once here (guarded
+		// by u.inited). See pkg/vectorindex/overfetch.
+		if u.tblcfg.PostFilterOverFetch && u.limit > 0 {
+			u.limit = overfetch.PostFilterLimit(u.limit)
+		}
 		u.inited = true
 	}
 

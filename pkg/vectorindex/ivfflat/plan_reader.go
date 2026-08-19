@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -76,8 +77,12 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		partitionIndex: req.PartitionIndex,
 		ownsInMemory:   ownsInMemoryPartition(req.PartitionCount, req.PartitionIndex),
 		txnOffset:      req.TxnOffset,
+		snapshot:       cloneIvfSnapshot(spec.ScanSnapshot),
 	}
-	if source := spec.SourceTable; source != nil && source.PubInfo != nil {
+	if spec.ScanSnapshot != nil && spec.ScanSnapshot.Tenant != nil {
+		accountID := spec.ScanSnapshot.Tenant.TenantID
+		r.scanner.accountID = &accountID
+	} else if source := spec.SourceTable; source != nil && source.PubInfo != nil {
 		if source.PubInfo.TenantId < 0 {
 			return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan has an invalid publisher tenant")
 		}
@@ -89,6 +94,26 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 
 func ownsInMemoryPartition(partitionCount, partitionIndex int32) bool {
 	return partitionCount <= 1 || partitionIndex == 0
+}
+
+func cloneIvfSnapshot(snapshot *plan.Snapshot) *plan.Snapshot {
+	if snapshot == nil {
+		return nil
+	}
+	clone := *snapshot
+	if snapshot.TS != nil {
+		ts := *snapshot.TS
+		clone.TS = &ts
+	}
+	if snapshot.Tenant != nil {
+		tenant := *snapshot.Tenant
+		clone.Tenant = &tenant
+	}
+	if snapshot.ExtraInfo != nil {
+		extra := *snapshot.ExtraInfo
+		clone.ExtraInfo = &extra
+	}
+	return &clone
 }
 
 func (r *planReader) Close() error {
@@ -214,20 +239,21 @@ func (r *planReader) initialize() error {
 	}
 
 	tblcfg := vectorindex.IndexTableConfig{
-		DbName:             r.spec.SourceTable.SchemaName,
-		SrcTable:           r.spec.SourceTableDef.Name,
-		MetadataTable:      metaTable,
-		IndexTable:         centroidTable,
-		EntriesTable:       entriesTable,
-		ThreadsSearch:      r.spec.ThreadsSearch,
-		Nprobe:             uint(max(uint32(1), r.spec.InitialProbeCount)),
-		PKeyType:           r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
-		PKey:               pkName,
-		KeyPart:            partName,
-		KeyPartType:        r.spec.SourceTableDef.Cols[partPos].Typ.Id,
-		OrigFuncName:       r.spec.DistanceFunction,
-		IncludeColumns:     includeColumns,
-		IncludeColumnTypes: includeTypes,
+		DbName:              r.spec.SourceTable.SchemaName,
+		SrcTable:            r.spec.SourceTableDef.Name,
+		MetadataTable:       metaTable,
+		IndexTable:          centroidTable,
+		EntriesTable:        entriesTable,
+		ThreadsSearch:       r.spec.ThreadsSearch,
+		Nprobe:              uint(max(uint32(1), r.spec.InitialProbeCount)),
+		PKeyType:            r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
+		PKey:                pkName,
+		KeyPart:             partName,
+		KeyPartType:         r.spec.SourceTableDef.Cols[partPos].Typ.Id,
+		OrigFuncName:        r.spec.DistanceFunction,
+		IncludeColumns:      includeColumns,
+		IncludeColumnTypes:  includeTypes,
+		PostFilterOverFetch: r.spec.PostFilterOverFetch,
 	}
 	sqlproc := sqlexec.NewSqlProcess(r.proc)
 	sqlproc.RelationScanner = r.scanner
@@ -363,6 +389,13 @@ func searchPlanReader[T types.RealNumbers](
 	if uint64(limit) != r.req.CandidateLimit {
 		return moerr.NewInvalidInputNoCtx("IVF candidate limit exceeds platform uint")
 	}
+	if tblcfg.PostFilterOverFetch && limit > 0 {
+		budget := overfetch.FilteredPostModeLimit(uint64(limit))
+		if uint64(uint(budget)) != budget {
+			return moerr.NewInvalidInputNoCtx("IVF over-fetch candidate limit exceeds platform uint")
+		}
+		limit = uint(budget)
+	}
 	if limit == 0 {
 		return nil
 	}
@@ -492,6 +525,7 @@ func (r *planReader) sortAndLimit() {
 type relationScanner struct {
 	proc           *process.Process
 	accountID      *uint32
+	snapshot       *plan.Snapshot
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
@@ -507,6 +541,12 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
 	txn := s.proc.GetTxnOperator()
+	if s.snapshot != nil && s.snapshot.TS != nil &&
+		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) {
+		if clone := s.proc.GetCloneTxnOperator(); clone != nil {
+			txn = clone
+		}
+	}
 	db, err := s.proc.GetSessionInfo().StorageEngine.Database(ctx, req.Schema, txn)
 	if err != nil {
 		return res, err

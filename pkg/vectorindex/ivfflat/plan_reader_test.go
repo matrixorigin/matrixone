@@ -30,6 +30,7 @@ import (
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -685,6 +686,27 @@ func TestRelationScannerPropagatesStorageFailure(t *testing.T) {
 	require.Empty(t, res.Batches)
 }
 
+func TestRelationScannerUsesSnapshotCloneTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProc(t)
+	t.Cleanup(proc.Free)
+	original := mock_frontend.NewMockTxnOperator(ctrl)
+	clone := mock_frontend.NewMockTxnOperator(ctrl)
+	proc.Base.TxnOperator = original
+	proc.Base.CloneTxnOperator = clone
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	proc.Base.SessionInfo.StorageEngine = eng
+	eng.EXPECT().Database(gomock.Any(), "db", clone).Return(db, nil)
+	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(nil, errors.New("snapshot relation unavailable"))
+
+	_, err := (&relationScanner{
+		proc:     proc,
+		snapshot: &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 8}},
+	}).ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
+	require.ErrorContains(t, err, "snapshot relation unavailable")
+}
+
 func TestRelationScannerPropagatesRelationSetupFailures(t *testing.T) {
 	validDef := &plan.TableDef{Name: "entries"}
 	for _, test := range []struct {
@@ -947,6 +969,8 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 			bat.SetRowCount(1)
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 		case "entries_plan_reader":
+			require.NotNil(t, req.IndexParam)
+			require.Equal(t, uint64(12), req.IndexParam.GetLimit().GetLit().GetU64Val())
 			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -983,12 +1007,13 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
 	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
 	tblcfg := vectorindex.IndexTableConfig{
-		DbName:             "db",
-		IndexTable:         "centroids_plan_reader",
-		EntriesTable:       "entries_plan_reader",
-		OrigFuncName:       metric.DistFn_L2Distance,
-		IncludeColumns:     []string{"payload"},
-		IncludeColumnTypes: []int32{int32(types.T_int32)},
+		DbName:              "db",
+		IndexTable:          "centroids_plan_reader",
+		EntriesTable:        "entries_plan_reader",
+		OrigFuncName:        metric.DistFn_L2Distance,
+		IncludeColumns:      []string{"payload"},
+		IncludeColumnTypes:  []int32{int32(types.T_int32)},
+		PostFilterOverFetch: true,
 	}
 	r := &planReader{
 		spec: &plan.VectorIndexScan{
@@ -1208,4 +1233,16 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	}, searchplugin.Request{})
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), *reader.(*planReader).scanner.accountID)
+	snapshotReader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 3}},
+		ScanSnapshot: &plan.Snapshot{
+			TS:     &timestamp.Timestamp{PhysicalTime: 8},
+			Tenant: &plan.SnapshotTenant{TenantID: 99},
+		},
+	}, searchplugin.Request{})
+	require.NoError(t, err)
+	snapshotPlanReader := snapshotReader.(*planReader)
+	require.Equal(t, uint32(99), *snapshotPlanReader.scanner.accountID)
+	require.Equal(t, int64(8), snapshotPlanReader.scanner.snapshot.TS.PhysicalTime)
 }

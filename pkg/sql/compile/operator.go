@@ -607,6 +607,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Typs = t.Typs
 		op.VectorIndexScan = plan2.DeepCopyVectorIndexScan(t.VectorIndexScan)
 		op.VectorAttrs = slices.Clone(t.VectorAttrs)
+		op.TxnOffset = t.TxnOffset
 		if t.TableFunction != nil {
 			op.TableFunction = table_function.NewArgument()
 			op.TableFunction.FuncName = t.TableFunction.FuncName
