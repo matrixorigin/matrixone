@@ -460,6 +460,15 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 		}
 	}
 
+	if sync {
+		stopWake := context.AfterFunc(ctx, func() {
+			gs.mu.Lock()
+			gs.mu.cond.Broadcast()
+			gs.mu.Unlock()
+		})
+		defer stopWake()
+	}
+
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
@@ -477,9 +486,8 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 			}
 
 			func() {
-				// We force to trigger the update, which will hang when the channel
-				// is full. Another goroutine will fetch items from the channel
-				// which hold the lock, so we need to unlock it first.
+				// A forced update can block while the channel is full. A worker
+				// draining it may need gs.mu, so unlock before enqueueing.
 				gs.mu.Unlock()
 				defer gs.mu.Lock()
 				// If the trigger condition is not satisfied, the stats will not be updated
@@ -491,6 +499,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 			info, ok = gs.mu.statsInfoMap[key]
 			if ok {
 				break
+			}
+			if ctx.Err() != nil {
+				return nil
 			}
 
 			// Wait until stats info of the key is updated.
@@ -547,10 +558,14 @@ func (gs *GlobalStats) enqueueStatsUpdate(key pb.StatsInfoKeyWithContext, force 
 		v2.StatsTriggerQueueSizeGauge.Set(float64(len(gs.updateC)))
 	}()
 	if force {
-		gs.updateC <- key
-		gs.queueWatcher.add(key.Key.TableID)
-		v2.StatsTriggerForcedCounter.Add(1)
-		return true
+		select {
+		case gs.updateC <- key:
+			gs.queueWatcher.add(key.Key.TableID)
+			v2.StatsTriggerForcedCounter.Add(1)
+			return true
+		case <-key.Ctx.Done():
+			return false
+		}
 	}
 
 	select {

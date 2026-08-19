@@ -6568,7 +6568,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables,
+		*tree.ShowMongoDBConnections:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -6822,6 +6823,13 @@ func getDbNameForPrivilege(objRef *plan2.ObjectRef) string {
 	return objRef.GetSchemaName()
 }
 
+func isMongoDBExternalTableScan(node *plan.Node) bool {
+	return node != nil &&
+		node.GetNodeType() == plan.Node_EXTERNAL_SCAN &&
+		node.GetExternScan() != nil &&
+		node.GetExternScan().GetType() == int32(plan.ExternType_MONGODB_TB)
+}
+
 func (pot privilegeTips) String() string {
 	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
 }
@@ -6956,7 +6964,7 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 
 		for nodeID, node := range q.Nodes {
-			if node.NodeType == plan.Node_TABLE_SCAN {
+			if node.NodeType == plan.Node_TABLE_SCAN || isMongoDBExternalTableScan(node) {
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}

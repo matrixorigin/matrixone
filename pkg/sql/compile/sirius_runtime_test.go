@@ -70,6 +70,14 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 		AuthorizedClientSPKIHash: make([]byte, 32), DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
 	}
 	require.Error(t, invalid.Validate())
+	benchmark := *invalid
+	benchmark.BenchmarkNoGC = true
+	benchmark.Leases = substrait.NewBenchmarkLeaseManager(1, &siriusRuntimeTestProtector{})
+	require.NoError(t, benchmark.Validate())
+	require.False(t, nondurable.BenchmarkReady())
+	wrongNormalMode := benchmark
+	wrongNormalMode.BenchmarkNoGC = false
+	require.ErrorContains(t, wrongNormalMode.Validate(), "incomplete CN Sirius runtime")
 	leases := substrait.NewPersistentLeaseManager(1, &siriusRuntimeTestProtector{}, siriusJournalStub{})
 	require.NoError(t, leases.Replay(context.Background()))
 	valid := &SiriusRuntime{
@@ -79,6 +87,9 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 		DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
 	}
 	require.NoError(t, valid.Validate())
+	wrongBenchmarkMode := *valid
+	wrongBenchmarkMode.BenchmarkNoGC = true
+	require.ErrorContains(t, wrongBenchmarkMode.Validate(), "incomplete benchmark CN Sirius runtime")
 
 	service := "sirius-runtime-lookup-test"
 	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
