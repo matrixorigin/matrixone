@@ -464,6 +464,32 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	require.Len(t, args3, 2)
 	require.NotNil(t, args3[0])
 	require.NotNil(t, args3[1])
+
+	// Test non-literal VARCHAR expression. It must remain a row-dependent
+	// expression rather than being normalized as an empty string literal.
+	colRefVarcharExpr := &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 3,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+		},
+	}
+
+	intervalExpr4 := makeIntervalExpr(colRefVarcharExpr, "SECOND")
+	args4, err := resetIntervalFunctionArgs(ctx, intervalExpr4)
+	require.NoError(t, err)
+	require.Len(t, args4, 2)
+
+	castExpr := args4[0].GetF()
+	require.NotNil(t, castExpr)
+	require.NotNil(t, castExpr.Func)
+	require.Equal(t, "cast", castExpr.Func.GetObjName())
+	require.Equal(t, colRefVarcharExpr, castExpr.Args[0])
 }
 
 // TestResetIntervalFunction tests the wrapper function resetIntervalFunction

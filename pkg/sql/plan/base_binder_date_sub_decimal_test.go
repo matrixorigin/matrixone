@@ -151,6 +151,21 @@ func makeFloat64ColumnExpr(relPos, colPos int32) *plan.Expr {
 	}
 }
 
+func makeVarcharColumnExpr(relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: colPos,
+			},
+		},
+		Typ: plan.Type{
+			Id:          int32(types.T_varchar),
+			NotNullable: true,
+		},
+	}
+}
+
 func makeFunctionExprForResetDate(name string, typ plan.Type, args ...*plan.Expr) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -386,4 +401,25 @@ func TestResetDateFunctionArgsDoesNotFoldLiteralFirstDynamicFunction(t *testing.
 
 	intervalType := extractInt64Value(args[2])
 	require.Equal(t, int64(types.Second), intervalType, "non-constant dynamic SECOND interval must not be rewritten to constant MICROSECOND")
+}
+
+func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	varcharColumn := makeVarcharColumnExpr(0, 0)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(varcharColumn, "SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, dateExpr, args[0])
+
+	castExpr := args[1].GetF()
+	require.NotNil(t, castExpr, "VARCHAR column interval must be cast at execution time, not folded to a literal")
+	require.NotNil(t, castExpr.Func)
+	require.Equal(t, "cast", castExpr.Func.GetObjName())
+	require.Len(t, castExpr.Args, 2)
+	require.Equal(t, varcharColumn, castExpr.Args[0])
+
+	intervalType := extractInt64Value(args[2])
+	require.Equal(t, int64(types.Second), intervalType)
 }

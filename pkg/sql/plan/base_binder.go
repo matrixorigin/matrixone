@@ -5621,7 +5621,11 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		Id: int32(types.T_int64),
 	}
 
-	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
+	// Normalize string literals during planning, but leave VARCHAR/CHAR
+	// expressions (for example, column references) for execution-time casting.
+	// Calling GetLit on a non-literal produces an empty string and incorrectly
+	// turns a valid row value into the invalid-interval NULL marker.
+	if (firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char)) && firstExpr.GetLit() != nil {
 		s := firstExpr.GetLit().GetSval()
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 
@@ -5834,7 +5838,9 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		Id: int32(types.T_int64),
 	}
 
-	if firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char) {
+	// Keep non-literal VARCHAR/CHAR expressions dynamic for the same reason as
+	// resetDateFunctionArgs above.
+	if (firstExpr.Typ.Id == int32(types.T_varchar) || firstExpr.Typ.Id == int32(types.T_char)) && firstExpr.GetLit() != nil {
 		s := firstExpr.GetLit().GetSval()
 		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
 		if err != nil {
