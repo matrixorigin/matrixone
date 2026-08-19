@@ -74,6 +74,24 @@ func TestTableFunctionPrepareIncrementalDiscoveryFunctions(t *testing.T) {
 	}
 }
 
+func TestTableChangesSpillConfigUsesExecutionResourceBudget(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	config := tableChangesSpillConfig(proc)
+	require.True(t, config.Enabled())
+
+	disk, err := config.ReserveDisk(0)
+	require.NoError(t, err)
+	require.NotNil(t, disk)
+	require.True(t, disk.Release())
+
+	files, err := config.ReserveFiles(0)
+	require.NoError(t, err)
+	require.NotNil(t, files)
+	require.True(t, files.Release())
+}
+
 func TestValidateTableChangesWindow(t *testing.T) {
 	snapshot := types.BuildTS(100, 5)
 
