@@ -632,6 +632,20 @@ func (t *tunnel) resetTrackedRequestLocked() {
 	t.requestBoundary.prepareMetadataRemaining = 0
 }
 
+// finishLocallyConsumedRequest closes only the proxy-owned request boundary.
+// Unlike a backend response, a local KILL or UPGRADE completion does not prove
+// that the CN has processed earlier no-response statement commands.
+func (t *tunnel) finishLocallyConsumedRequest() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.inFlight && !t.requestBoundary.ambiguous {
+		t.resetTrackedRequestLocked()
+	}
+}
+
 func (t *tunnel) finishTrackedResponseLocked(status uint16, successful bool) {
 	if status&frontend.SERVER_MORE_RESULTS_EXISTS != 0 {
 		t.requestBoundary.phase = responsePhaseFirst
@@ -891,6 +905,10 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 
 	if t.hasUntransferableClientState() {
 		t.logger.Info("reason: client protocol state is not transferable")
+		return false
+	}
+	if t.hasExpectedClientQuit() {
+		t.logger.Info("reason: client connection is terminating")
 		return false
 	}
 
@@ -1371,18 +1389,28 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		// state only after the same barrier that gates forwarding, so successful
 		// migration cannot clear state that was absent from its snapshot.
 		if p.name == pipeClientToServer && len(clientRequest) > 0 {
-			if stopAfterSend {
-				p.tun.markExpectedClientQuit()
-			} else {
-				clientCommit = p.tun.trackClientRequest(clientRequest)
+			var publish bool
+			clientCommit, publish = p.publishClientRequest(clientRequest, stopAfterSend)
+			if !publish {
+				// Asynchronous migration won the publication boundary. Keep the
+				// packet in the shared client buffer; the replacement c2s pipe will
+				// publish and forward it after migration.
+				return nil
 			}
 		}
 
-		if err = p.src.sendTo(p.dst); err != nil {
+		handled, err := p.src.sendTo(p.dst)
+		if err != nil {
 			return wrapPipeSendError(p.name, err)
 		}
 		if p.name == pipeClientToServer {
-			p.tun.commitClientRequest(clientCommit)
+			if handled {
+				if !stopAfterSend {
+					p.tun.finishLocallyConsumedRequest()
+				}
+			} else {
+				p.tun.commitClientRequest(clientCommit)
+			}
 		}
 		if stopAfterSend {
 			// COM_QUIT is terminal even when another complete packet is already
@@ -1392,6 +1420,27 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}
 	}
 	return ctx.Err()
+}
+
+// publishClientRequest is the common ownership boundary between c2s and
+// asynchronous migration. canStartTransfer takes the same pipe mutex before it
+// marks the pipe paused. Whichever side acquires it first either publishes
+// request state that blocks migration, or leaves the packet for the replacement
+// pipe without forwarding it to the old CN.
+func (p *pipe) publishClientRequest(
+	request []byte,
+	quit bool,
+) (clientRequestCommit, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mu.paused {
+		return clientRequestCommit{}, false
+	}
+	if quit {
+		p.tun.markExpectedClientQuit()
+		return clientRequestCommit{}, true
+	}
+	return p.tun.trackClientRequest(request), true
 }
 
 func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {

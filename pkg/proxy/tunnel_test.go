@@ -1297,6 +1297,20 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.True(t, tun.hasUntransferableClientState())
 	})
 
+	t.Run("locally consumed request is not a backend fence", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x'))
+		tun.trackClientRequest(makeSimplePacket("kill query 123"))
+		tun.finishLocallyConsumedRequest()
+
+		require.True(t, tun.hasUntransferableClientState(),
+			"local completion cannot prove that the CN received earlier long data")
+		tun.requestBoundary.Lock()
+		require.False(t, tun.requestBoundary.pendingLongData[41])
+		tun.requestBoundary.Unlock()
+	})
+
 	t.Run("later response supersedes close tombstone", func(t *testing.T) {
 		const statementID uint32 = 41
 		tun := &tunnel{}
@@ -1699,6 +1713,205 @@ func TestClientRequestTrackingWaitsForSyncMigrationBarrier(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("client-to-server pipe did not stop")
 	}
+}
+
+func TestAsyncTransferSerializesClientRequestPublication(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clientProxy, client := net.Pipe()
+	defer client.Close()
+	oldBackendProxy, oldBackend := net.Pipe()
+	defer oldBackend.Close()
+	newBackendProxy, newBackend := net.Pipe()
+	defer newBackend.Close()
+
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1)
+	oldBackendConn := newMySQLConn(connServerName, oldBackendProxy, 0, nil, nil, false, 2)
+	csp := tun.newPipe(pipeClientToServer, clientConn, oldBackendConn)
+	scp := tun.newPipe(pipeServerToClient, oldBackendConn, clientConn)
+	tun.mu.started = true
+	tun.mu.csp = csp
+	tun.mu.scp = scp
+
+	packetRead := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var packetReadOnce sync.Once
+	var releaseReadOnce sync.Once
+	releasePacket := func() { releaseReadOnce.Do(func() { close(releaseRead) }) }
+	defer releasePacket()
+	csp.testHelper.beforeSend = func() {
+		packetReadOnce.Do(func() { close(packetRead) })
+		<-releaseRead
+	}
+	pipeDone := make(chan error, 1)
+	go func() { pipeDone <- csp.kickoff(ctx, scp) }()
+	require.NoError(t, csp.waitReady(ctx))
+
+	request := makeSimplePacket("select 1")
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write(request)
+		writeDone <- err
+	}()
+	select {
+	case <-packetRead:
+	case <-time.After(time.Second):
+		t.Fatal("client request was not read")
+	}
+
+	// The async transfer wins while the request is read but unpublished. Its
+	// paused flag and request publication use the same mutex, so the old c2s pipe
+	// must stop without consuming the buffered packet.
+	require.True(t, tun.canStartTransfer(false))
+	releasePacket()
+	select {
+	case err := <-pipeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("paused client-to-server pipe did not stop")
+	}
+	require.NoError(t, <-writeDone)
+	require.False(t, tun.hasUnsafeClientState())
+
+	// transfer() calls pause before installing its replacement pipes. Complete
+	// that transition here, then prove the same buffered request is published
+	// and forwarded exactly once by the replacement pipe.
+	require.NoError(t, csp.pause(ctx))
+	require.NoError(t, scp.pause(ctx))
+	newBackendConn := newMySQLConn(connServerName, newBackendProxy, 0, nil, nil, false, 3)
+	replacement := tun.newPipe(pipeClientToServer, clientConn, newBackendConn)
+	replacementDone := make(chan error, 1)
+	go func() { replacementDone <- replacement.kickoff(ctx, &pipe{}) }()
+	require.NoError(t, replacement.waitReady(ctx))
+
+	got := make([]byte, len(request))
+	_, err := io.ReadFull(newBackend, got)
+	require.NoError(t, err)
+	require.Equal(t, request, got)
+	require.True(t, tun.hasInFlightClientRequest())
+	tun.trackServerResponse(makeOKPacket(8))
+	require.False(t, tun.hasUnsafeClientState())
+
+	require.NoError(t, client.Close())
+	select {
+	case err := <-replacementDone:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(time.Second):
+		t.Fatal("replacement client-to-server pipe did not stop")
+	}
+}
+
+func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		statement string
+		eventType eventType
+	}{
+		{name: "kill", statement: "kill query 123", eventType: TypeKill},
+		{name: "upgrade", statement: "upgrade account all", eventType: TypeUpgrade},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			clientProxy, client := net.Pipe()
+			defer client.Close()
+			backendProxy, backend := net.Pipe()
+			defer backend.Close()
+
+			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+			tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+			clientConn := newMySQLConn(
+				connClientName, clientProxy, 0, tun.reqC, tun.respC, false, 1)
+			backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2)
+			csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+
+			eventSeen := make(chan eventType, 1)
+			go func() {
+				var e IEvent
+				select {
+				case e = <-tun.reqC:
+				case <-ctx.Done():
+					return
+				}
+				switch e.(type) {
+				case *killEvent:
+					eventSeen <- TypeKill
+				case *upgradeEvent:
+					eventSeen <- TypeUpgrade
+				default:
+					eventSeen <- 0
+				}
+				e.notify()
+			}()
+
+			pipeDone := make(chan error, 1)
+			go func() { pipeDone <- csp.kickoff(ctx, &pipe{}) }()
+			require.NoError(t, csp.waitReady(ctx))
+
+			localRequest := makeSimplePacket(test.statement)
+			nextRequest := makeSimplePacket("select 1")
+			writeDone := make(chan error, 1)
+			go func() {
+				if _, err := client.Write(localRequest); err != nil {
+					writeDone <- err
+					return
+				}
+				_, err := client.Write(nextRequest)
+				writeDone <- err
+			}()
+
+			got := make([]byte, len(nextRequest))
+			_, err := io.ReadFull(backend, got)
+			require.NoError(t, err)
+			require.Equal(t, nextRequest, got,
+				"the locally consumed command must not reach the session CN")
+			select {
+			case gotType := <-eventSeen:
+				require.Equal(t, test.eventType, gotType)
+			case <-time.After(time.Second):
+				t.Fatal("local event was not consumed")
+			}
+			require.NoError(t, <-writeDone)
+
+			// The second request must own a normal, non-ambiguous boundary. Its
+			// response can therefore restore a clean migration/cache boundary.
+			tun.requestBoundary.Lock()
+			require.True(t, tun.requestBoundary.inFlight)
+			require.False(t, tun.requestBoundary.ambiguous)
+			tun.requestBoundary.Unlock()
+			tun.trackServerResponse(makeOKPacket(8))
+			require.False(t, tun.hasUnsafeClientState())
+
+			require.NoError(t, client.Close())
+			select {
+			case err := <-pipeDone:
+				require.ErrorIs(t, err, io.EOF)
+			case <-time.After(time.Second):
+				t.Fatal("client-to-server pipe did not stop")
+			}
+		})
+	}
+}
+
+func TestClientQuitBlocksTransferAdmission(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet())
+	csp := &pipe{tun: tun}
+	csp.mu.cond = sync.NewCond(&csp.mu)
+	scp := &pipe{}
+	scp.mu.cond = sync.NewCond(&scp.mu)
+	tun.mu.started = true
+	tun.mu.csp = csp
+	tun.mu.scp = scp
+
+	quit := makeSimplePacket("quit")
+	quit[4] = byte(frontend.COM_QUIT)
+	_, published := csp.publishClientRequest(quit, true)
+	require.True(t, published)
+	require.True(t, tun.hasExpectedClientQuit())
+	require.False(t, tun.canStartTransfer(false))
 }
 
 func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
