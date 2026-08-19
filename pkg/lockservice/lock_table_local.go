@@ -839,31 +839,14 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 	if !ok || pairedLock.holders != lock.holders || pairedLock.waiters != lock.waiters {
 		// The endpoint may be stale because its paired entry was removed or its
 		// shared state was replaced while an aborted waiter was being detached.
-		// Do not return the possibly shared state to the pools. Remove the empty
-		// entry so a later request cannot try to hold it. If the paired endpoint
-		// is still live, rebuild this endpoint from the paired state first so a
-		// valid range lock is not split by the cleanup.
+		// Do not return the possibly shared state to the pools. Remove only the
+		// empty entry so a later request cannot try to hold it. In particular, an
+		// unrelated live range may be the nearest opposite endpoint; rebuilding
+		// this entry from that range would make two ranges share one lock state.
 		l.logger.Error("missing paired empty range lock during waiter cleanup",
 			zap.Uint64("table", l.bind.Table),
 			zap.Binary("key", key))
-		if ok && !pairedLock.isEmpty() {
-			repaired := pairedLock
-			repaired.value &^= flagLockRangeStart | flagLockRangeEnd
-			if lock.isLockRangeStart() {
-				repaired.value |= flagLockRangeStart
-			} else {
-				repaired.value |= flagLockRangeEnd
-			}
-			l.mu.store.Add(key, repaired)
-			return
-		}
 		l.mu.store.Delete(key)
-		if ok {
-			// Both endpoints are empty but do not share their backing state.
-			// Remove the paired stale entry as well; neither state is returned
-			// to the pools because its ownership is ambiguous.
-			l.mu.store.Delete(pairedKey)
-		}
 		return
 	}
 	l.mu.store.Delete(key)
@@ -874,6 +857,7 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 func (l *localLockTable) addRangeLockLocked(
 	c *lockContext,
 	start, end []byte) ([]byte, Lock, error) {
+	originalStart, originalEnd := start, end
 
 	if c.opts.LockOptions.Mode == pb.LockMode_Shared {
 		l1, ok1 := l.mu.store.Get(start)
@@ -989,10 +973,16 @@ func (l *localLockTable) addRangeLockLocked(
 			if holdErr != nil {
 				if errors.Is(holdErr, errEmptyLock) {
 					// A stale empty range endpoint is not a real conflict. Clean
-					// it and retry the range scan with the same request.
+					// it and restart the merge transaction before rescanning. The
+					// first scan may already have moved waiters into mc.to and
+					// recorded locks for removal; retaining that state would merge
+					// the same waiter twice on the retry.
+					mc.restart()
 					l.deleteEmptyLockLocked(conflictKey, conflictWith)
 					conflictWith = Lock{}
 					conflictKey = nil
+					start = originalStart
+					end = originalEnd
 					prevStartKey = nil
 					rangeStartEncountered = false
 					continue
@@ -1187,9 +1177,10 @@ func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.L
 	}
 }
 
-// findPairedRangeLock locates the other end of a range lock pair.
-// Between range-start and range-end there may be interleaved row locks
-// from other transactions, so we scan until we find the matching entry.
+// findPairedRangeLock locates the other end of a range lock pair. Between
+// range-start and range-end there may be interleaved row locks from other
+// transactions, so we scan until we find an endpoint with the same backing
+// holder and waiter state.
 func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Lock, bool) {
 	if lock.isLockRangeEnd() {
 		cur := key
@@ -1198,7 +1189,7 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 			if !ok {
 				return nil, Lock{}, false
 			}
-			if prevLock.isLockRangeStart() {
+			if prevLock.isLockRangeStart() && sameRangeLockState(lock, prevLock) {
 				return prevKey, prevLock, true
 			}
 			cur = prevKey
@@ -1212,7 +1203,7 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 		nextKey(key, nil),
 		nil,
 		func(k []byte, v Lock) bool {
-			if v.isLockRangeEnd() {
+			if v.isLockRangeEnd() && sameRangeLockState(lock, v) {
 				pairedKey, pairedLock, found = k, v, true
 				return false
 			}
@@ -1220,6 +1211,10 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 		},
 	)
 	return pairedKey, pairedLock, found
+}
+
+func sameRangeLockState(left, right Lock) bool {
+	return left.holders == right.holders && left.waiters == right.waiters
 }
 
 func nextKey(src, dst []byte) []byte {
@@ -1249,6 +1244,19 @@ func newMergeContext(to waiterQueue) *mergeContext {
 	c.to = to
 	c.to.beginChange()
 	return c
+}
+
+// restart discards a failed merge attempt and starts a fresh change on the
+// same destination queue. A range scan can discover and merge several locks
+// before it reaches a stale empty conflict; those speculative waiters and lock
+// keys must not survive the retry.
+func (c *mergeContext) restart() {
+	c.to.rollbackChange()
+	for k := range c.mergedLocks {
+		delete(c.mergedLocks, k)
+	}
+	c.mergedWaiters = c.mergedWaiters[:0]
+	c.to.beginChange()
 }
 
 func (c *mergeContext) close() {
