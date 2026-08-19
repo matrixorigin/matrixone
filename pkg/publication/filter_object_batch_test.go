@@ -125,7 +125,8 @@ func TestDecompressObjectColumnExtentNoneClonesData(t *testing.T) {
 
 func TestDecompressObjectColumnExtentRejectsMalformedCompressedData(t *testing.T) {
 	ext := objectio.NewExtent(compress.Lz4, 0, 3, 8)
-	_, err := decompressObjectColumnExtent(context.Background(), []byte{1, 2, 3}, ext, nil)
+	_, err := decompressObjectColumnExtent(
+		context.Background(), []byte{1, 2, 3}, ext, fileservice.DefaultCacheDataAllocator())
 	require.Error(t, err)
 }
 
