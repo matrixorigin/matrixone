@@ -297,28 +297,32 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			{"select (nextval('volatile_seq'), 1) in ((?, ?), (?, ?))", []any{"0", "1", "2", "1"}, false},
 			{"select (nextval('volatile_seq'), 1) not in ((?, ?), (?, ?))", []any{"0", "1", "2", "1"}, true},
 		} {
-			mustExec(t, ctx, conn, "drop sequence if exists volatile_seq")
-			mustExec(t, ctx, conn, "create sequence volatile_seq increment 1 start with 1 no cycle")
-			stmt, err := conn.PrepareContext(ctx, test.query)
-			require.NoError(t, err)
-			var matched bool
-			require.NoError(t, stmt.QueryRowContext(ctx, test.args...).Scan(&matched), test.query)
-			require.NoError(t, stmt.Close())
-			require.Equal(t, test.expected, matched, test.query)
-			var current int64
-			require.NoError(t, conn.QueryRowContext(ctx, "select currval('volatile_seq')").Scan(&current))
-			require.Equal(t, int64(1), current, test.query)
+			func() {
+				mustExec(t, ctx, conn, "drop sequence if exists volatile_seq")
+				mustExec(t, ctx, conn, "create sequence volatile_seq increment 1 start with 1 no cycle")
+				stmt, err := conn.PrepareContext(ctx, test.query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				var matched bool
+				require.NoError(t, stmt.QueryRowContext(ctx, test.args...).Scan(&matched), test.query)
+				require.Equal(t, test.expected, matched, test.query)
+				var current int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select currval('volatile_seq')").Scan(&current))
+				require.Equal(t, int64(1), current, test.query)
+			}()
 		}
 
 		mustExec(t, ctx, conn, "create sequence tuple_seq_a increment 1 start with 1 no cycle")
 		mustExec(t, ctx, conn, "create sequence tuple_seq_b increment 1 start with 10 no cycle")
 		query := "select (nextval('tuple_seq_a'), nextval('tuple_seq_b')) in ((?, ?), (?, ?))"
-		stmt, err := conn.PrepareContext(ctx, query)
-		require.NoError(t, err)
-		var matched bool
-		require.NoError(t, stmt.QueryRowContext(ctx, "1", "1", "0", "0").Scan(&matched))
-		require.NoError(t, stmt.Close())
-		require.False(t, matched)
+		func() {
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			defer stmt.Close()
+			var matched bool
+			require.NoError(t, stmt.QueryRowContext(ctx, "1", "1", "0", "0").Scan(&matched))
+			require.False(t, matched)
+		}()
 		var currentA, currentB int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select currval('tuple_seq_a'), currval('tuple_seq_b')").Scan(&currentA, &currentB))
 		require.Equal(t, int64(1), currentA)
@@ -333,26 +337,28 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			{"select id, if(id = 1, nextval('selective_seq') in (?, ?), false) from selective_rows order by id", []any{int64(1), int64(3)}},
 			{"select id, case when id = 1 then (nextval('selective_seq'), 1) not in ((?, ?), (?, ?)) else false end from selective_rows order by id", []any{int64(0), int64(1), int64(2), int64(1)}},
 		} {
-			mustExec(t, ctx, conn, "drop sequence if exists selective_seq")
-			mustExec(t, ctx, conn, "create sequence selective_seq increment 1 start with 1 no cycle")
-			stmt, err := conn.PrepareContext(ctx, selective.query)
-			require.NoError(t, err)
-			rows, err := stmt.QueryContext(ctx, selective.args...)
-			require.NoError(t, err)
-			var got []bool
-			for rows.Next() {
-				var id int
-				var matched bool
-				require.NoError(t, rows.Scan(&id, &matched))
-				got = append(got, matched)
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			require.NoError(t, stmt.Close())
-			require.Equal(t, []bool{false, true}, got, selective.query)
-			var current int64
-			require.NoError(t, conn.QueryRowContext(ctx, "select currval('selective_seq')").Scan(&current))
-			require.Equal(t, int64(1), current, selective.query)
+			func() {
+				mustExec(t, ctx, conn, "drop sequence if exists selective_seq")
+				mustExec(t, ctx, conn, "create sequence selective_seq increment 1 start with 1 no cycle")
+				stmt, err := conn.PrepareContext(ctx, selective.query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				rows, err := stmt.QueryContext(ctx, selective.args...)
+				require.NoError(t, err)
+				defer rows.Close()
+				var got []bool
+				for rows.Next() {
+					var id int
+					var matched bool
+					require.NoError(t, rows.Scan(&id, &matched))
+					got = append(got, matched)
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, []bool{false, true}, got, selective.query)
+				var current int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select currval('selective_seq')").Scan(&current))
+				require.Equal(t, int64(1), current, selective.query)
+			}()
 		}
 	})
 }

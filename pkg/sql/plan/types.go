@@ -351,6 +351,18 @@ type QueryBuilder struct {
 	userWindowNodes          map[int32]struct{}
 	partitionTopNWindowNodes map[int32]struct{}
 
+	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
+	// paired with the fulltext node producing each score. applyIndices recurses children
+	// first, so those scans already exist when the PROJECT above the join is visited -- but
+	// that PROJECT is a different call frame and gets no return value from them. A MATCH in
+	// its select list is resolved against this.
+	//
+	// Never reset, and it does not need to be: a QueryBuilder is built per statement, and
+	// within one build every binding tag is unique, so an entry can only ever be matched by a
+	// MATCH on the very table instance it came from -- steps and subqueries cannot collide.
+	// If a builder is ever reused across statements, this must be cleared with it.
+	ftJoinServed []fulltextServedMatch
+
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
 

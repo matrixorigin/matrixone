@@ -1053,8 +1053,7 @@ func preparedParamBindingTypes(
 		if params.IsNull(uint64(i)) {
 			continue
 		}
-		var value []byte
-		value = params.GetRawBytesAt(i)
+		value := params.GetRawBytesAt(i)
 		var kind vector.PrepareParamKind
 		if i < len(kinds) {
 			kind = kinds[i]

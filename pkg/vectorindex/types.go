@@ -126,6 +126,14 @@ type IndexTableConfig struct {
 	IncludeColumns     []string `json:"include_columns,omitempty"`
 	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
 
+	// PostFilterOverFetch tells the search to grow the candidate budget so that
+	// k rows still survive a residual filter applied after the search. The plan
+	// sets it when a residual post-filter is present but the LIMIT is a prepared
+	// parameter (LIMIT ?), whose value is unknown until EXECUTE — the search
+	// resolves k there and over-fetches via pkg/vectorindex/overfetch. A literal
+	// LIMIT is over-fetched at plan time instead, and leaves this false.
+	PostFilterOverFetch bool `json:"post_filter_overfetch,omitempty"`
+
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
 	// GpuMultiSimulation is a test-only knob: when >= 2, the device list is
