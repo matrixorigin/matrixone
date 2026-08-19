@@ -3788,7 +3788,7 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
-	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4096)
 	defer bat.Clean(mp)
 
 	estimated, err := estimatePreparedCursorBatchBytes(bat)
@@ -3797,22 +3797,43 @@ func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) 
 	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
 		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
 		maxBytes: estimated,
-		maxRows:  4,
+		maxRows:  4096,
 	}}
 	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
 
 	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
-	require.Equal(t, uint64(4), stmt.cursor.result.GetRowCount())
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
 	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
 
 	// The next batch is rejected before another row is copied into the
 	// retained result, and the cursor still owns exactly the first batch.
 	err = capturePreparedCursorBatch(ses, ctx, bat)
 	require.ErrorContains(t, err, "prepared cursor result exceeds the")
-	require.Equal(t, uint64(4), stmt.cursor.result.GetRowCount())
+	require.Equal(t, uint64(4096), stmt.cursor.result.GetRowCount())
 
 	stmt.closeCursor()
 	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestCapturePreparedCursorBatchErrorReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"unsupported"}, []types.Type{types.T_any.ToType()}, 1)
+	defer bat.Clean(mp)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: preparedCursorDefaultMaxBytes,
+		maxRows:  preparedCursorMaxRows,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	err := capturePreparedCursorBatch(ses, ctx, bat)
+	require.Error(t, err)
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
 }
 
 func TestPreparedCursorSessionBudgetCoversMultipleCursors(t *testing.T) {
