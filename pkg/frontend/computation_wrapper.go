@@ -939,6 +939,12 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	if err := plan2.ValidatePreparedPaginationParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
+	if err := normalizePreparedPaginationBooleans(cwft.proc, preparePlan.Plan, cwft.paramVals); err != nil {
+		return nil, nil, nil, originSQL, false, err
+	}
 	// A cached prepared Compile already owns a materialized worker topology.
 	// Explicit scheduling or Sirius intent must be evaluated for this execution,
 	// so neither can reuse a native topology compiled under prepare-time defaults.
@@ -949,6 +955,9 @@ func initExecuteStmtParamWithResolverInSession(
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
+	if plan2.PreparedPlanHasPaginationParams(preparePlan.Plan) {
+		retComp = nil
+	}
 	if executionSes.IsBackgroundSession() {
 		// A cached compile owns pipelines tied to the client process used at
 		// PREPARE time. A procedure executes with a distinct background process.
@@ -966,6 +975,34 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, preparePlan.Plan, executionStmt, originSQL, owned, nil
+}
+
+func normalizePreparedPaginationBooleans(proc *process.Process, preparePlan *plan.Plan, paramVals []any) error {
+	params := proc.GetPrepareParams()
+	if params == nil {
+		return nil
+	}
+	for _, position := range plan2.PreparedPaginationParamPositions(preparePlan) {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.PrepareParamKind != vector.PrepareParamBoolean {
+			continue
+		}
+		value, ok := param.Value.(bool)
+		if !ok {
+			continue
+		}
+		encoded := "0"
+		if value {
+			encoded = "1"
+		}
+		if err := vector.SetStringAt(params, int(position), encoded, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
