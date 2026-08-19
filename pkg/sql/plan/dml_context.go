@@ -31,7 +31,10 @@ type DMLContext struct {
 	targetTableName string
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
-	updatePartCol  []bool                 //If update cols contains col that Partition expr used
+	// updateColOrder preserves the source order of SET assignments for each target
+	// table. MySQL evaluates single-table UPDATE assignments from left to right.
+	updateColOrder [][]string
+	updatePartCol  []bool //If update cols contains col that Partition expr used
 	//oldColPosMap   []map[string]int       // origin table values to their position in derived table
 	//newColPosMap   []map[string]int       // insert/update values to their position in derived table
 	//nameToIdx      map[string]int         // Mapping of table full path name to tableDefs index，such as： 'tpch.nation -> 0'
@@ -55,6 +58,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 
 	// check update field and set updateKeys
 	usedTbl := make(map[string]map[string]tree.Expr)
+	updateColOrder := make(map[string][]string)
 	allColumns := make(map[string]map[string]bool)
 	for alias, idx := range dmlCtx.aliasMap {
 		allColumns[alias] = make(map[string]bool)
@@ -66,6 +70,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	appendToTbl := func(table, column string, expr tree.Expr) {
 		if _, exists := usedTbl[table]; !exists {
 			usedTbl[table] = make(map[string]tree.Expr)
+		}
+		if _, exists := usedTbl[table][column]; !exists {
+			updateColOrder[table] = append(updateColOrder[table], column)
 		}
 		usedTbl[table][column] = expr
 	}
@@ -117,9 +124,11 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	}
 
 	dmlCtx.updateCol2Expr = make([]map[string]tree.Expr, len(dmlCtx.tableDefs))
+	dmlCtx.updateColOrder = make([][]string, len(dmlCtx.tableDefs))
 	for alias, columnMap := range usedTbl {
 		idx := dmlCtx.aliasMap[alias]
 		dmlCtx.updateCol2Expr[idx] = columnMap
+		dmlCtx.updateColOrder[idx] = updateColOrder[alias]
 	}
 
 	dmlCtx.updatePartCol = make([]bool, len(dmlCtx.tableDefs))
