@@ -23,10 +23,12 @@ import (
 )
 
 type DMLContext struct {
-	objRefs        []*plan.ObjectRef
-	tableDefs      []*plan.TableDef
-	aliases        []string
-	isClusterTable []bool
+	objRefs         []*plan.ObjectRef
+	tableDefs       []*plan.TableDef
+	aliases         []string
+	isClusterTable  []bool
+	targetDBName    string
+	targetTableName string
 
 	updateCol2Expr []map[string]tree.Expr // This slice index correspond to tableDefs
 	updatePartCol  []bool                 //If update cols contains col that Partition expr used
@@ -82,7 +84,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 				if allColumns[tblName][colName] {
 					appendToTbl(tblName, colName, expr)
 				} else {
-					return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
+					return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table %s", parts.ColNameOrigin(), parts.TblNameOrigin())
 				}
 			} else {
 				return moerr.NewNoSuchTable(ctx.GetContext(), "", parts.TblNameOrigin())
@@ -107,9 +109,9 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 					}
 					str += string(c.Name.Alias)
 				}
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table or the target table %s of the UPDATE is not updatable", parts.ColNameOrigin(), str)
 			} else if !found {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "column '%v' not found in table", parts.ColNameOrigin())
+				return moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%v' not found in table", parts.ColNameOrigin())
 			}
 		}
 	}

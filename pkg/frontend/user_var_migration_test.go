@@ -34,25 +34,33 @@ func TestUserDefinedVarMigrationRoundTrip(t *testing.T) {
 	ses := newTestSession(t, ctrl)
 
 	values := map[string]any{
-		"null_value":   nil,
-		"bool_value":   true,
-		"i8_value":     int8(-8),
-		"i16_value":    int16(-16),
-		"i32_value":    int32(-32),
-		"i64_value":    int64(-64),
-		"u8_value":     uint8(8),
-		"u16_value":    uint16(16),
-		"u32_value":    uint32(32),
-		"u64_value":    uint64(64),
-		"f32_value":    float32(1.25),
-		"f64_value":    2.5,
-		"text_value":   "timestamp-value",
-		"enum_value":   types.Enum(3),
-		"year_value":   types.MoYear(2026),
-		"dec64_value":  types.Decimal64(12345),
-		"dec128_value": types.Decimal128{B0_63: 123, B64_127: 456},
-		"dec256_value": types.Decimal256{B0_63: 1, B64_127: 2, B128_191: 3, B192_255: 4},
-		"vec_value":    []float32{1, 2, 3},
+		"null_value":      nil,
+		"bool_value":      true,
+		"i8_value":        int8(-8),
+		"i16_value":       int16(-16),
+		"i32_value":       int32(-32),
+		"i64_value":       int64(-64),
+		"u8_value":        uint8(8),
+		"u16_value":       uint16(16),
+		"u32_value":       uint32(32),
+		"u64_value":       uint64(64),
+		"f32_value":       float32(1.25),
+		"f64_value":       2.5,
+		"date_value":      types.Date(20260819),
+		"time_value":      types.Time(123456),
+		"datetime_value":  types.Datetime(20260819040506),
+		"timestamp_value": types.Timestamp(20260819040506),
+		"text_value":      "timestamp-value",
+		"enum_value":      types.Enum(3),
+		"year_value":      types.MoYear(2026),
+		"uuid_value":      types.Uuid{1, 2, 3},
+		"ts_value":        types.TS{1, 2, 3},
+		"rowid_value":     types.Rowid{1, 2, 3},
+		"blockid_value":   types.Blockid{1, 2, 3},
+		"dec64_value":     types.Decimal64(12345),
+		"dec128_value":    types.Decimal128{B0_63: 123, B64_127: 456},
+		"dec256_value":    types.Decimal256{B0_63: 1, B64_127: 2, B128_191: 3, B192_255: 4},
+		"vec_value":       []float32{1, 2, 3},
 	}
 	for name, value := range values {
 		require.NoError(t, ses.setUserDefinedVarWithKind(name, value, "set @"+name+" = expression", name == "text_value", vector.PrepareParamDecimal))
@@ -87,6 +95,27 @@ func TestDecodeUserDefinedVarsPreservesReplayability(t *testing.T) {
 	}, true)
 	require.NoError(t, err)
 	require.True(t, restored["v"].Replayable)
+}
+
+func TestUserDefinedVarMigrationPreservesType(t *testing.T) {
+	typ := plan.Type{
+		Id:          int32(types.T_decimal64),
+		NotNullable: true,
+		Width:       18,
+		Scale:       4,
+		Charset:     uint32(types.CharsetUTF8),
+	}
+	source := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	require.NoError(t, source.setUserDefinedVarWithTypeAndKind(
+		"amount", types.Decimal64(12345), "set @amount = 123.4500", false, typ, vector.PrepareParamDecimal))
+
+	snapshot, err := source.snapshotUserDefinedVars(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, typ, *snapshot[0].Type)
+
+	restored, err := decodeUserDefinedVars(context.Background(), snapshot, false)
+	require.NoError(t, err)
+	require.Equal(t, typ, restored["amount"].Type)
 }
 
 func TestDecodeUserDefinedVarsIsAtomic(t *testing.T) {

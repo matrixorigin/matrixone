@@ -87,6 +87,16 @@ func (ses *Session) snapshotUserDefinedVars(ctx context.Context) ([]*query.Migra
 			Sql:              variable.Sql,
 			IsBin:            variable.IsBin,
 			PrepareParamKind: uint32(variable.PrepareParamKind),
+			Type: &plan.Type{
+				Id:          variable.Type.Id,
+				NotNullable: variable.Type.NotNullable,
+				AutoIncr:    variable.Type.AutoIncr,
+				Width:       variable.Type.Width,
+				Scale:       variable.Type.Scale,
+				Table:       variable.Type.Table,
+				Enumvalues:  variable.Type.Enumvalues,
+				Charset:     variable.Type.Charset,
+			},
 		}
 		result = append(result, item)
 	}
@@ -196,10 +206,18 @@ func decodeUserDefinedVars(
 		if err != nil {
 			return nil, err
 		}
+		typ := plan.Type{}
+		if item.Type != nil {
+			typ = *item.Type
+		}
+		if typ.Id == 0 {
+			typ = inferUserDefinedVarType(value)
+		}
 		result[name] = &UserDefinedVar{
 			Value:            value,
 			Sql:              item.Sql,
 			IsBin:            item.IsBin,
+			Type:             typ,
 			PrepareParamKind: vector.PrepareParamKind(item.PrepareParamKind),
 			Replayable:       replayable,
 		}
@@ -312,8 +330,24 @@ func encodeUserDefinedVarValue(ctx context.Context, value any, isBin bool) (*pla
 		return plan2.MakePlan2Uint64ConstExprWithType(uint64(v)), nil
 	case uint64:
 		return plan2.MakePlan2Uint64ConstExprWithType(v), nil
+	case types.Date:
+		return makeUserVarLiteral(types.T_date, &plan.Literal{Value: &plan.Literal_Dateval{Dateval: int32(v)}}, 0), nil
+	case types.Time:
+		return makeUserVarLiteral(types.T_time, &plan.Literal{Value: &plan.Literal_Timeval{Timeval: int64(v)}}, 0), nil
+	case types.Datetime:
+		return makeUserVarLiteral(types.T_datetime, &plan.Literal{Value: &plan.Literal_Datetimeval{Datetimeval: int64(v)}}, 0), nil
+	case types.Timestamp:
+		return makeUserVarLiteral(types.T_timestamp, &plan.Literal{Value: &plan.Literal_Timestampval{Timestampval: int64(v)}}, 0), nil
 	case types.MoYear:
 		return makeUserVarFixedVectorLiteral(types.T_year, types.EncodeFixed(v)), nil
+	case types.Uuid:
+		return makeUserVarFixedVectorLiteral(types.T_uuid, types.EncodeFixed(v)), nil
+	case types.TS:
+		return makeUserVarFixedVectorLiteral(types.T_TS, types.EncodeFixed(v)), nil
+	case types.Rowid:
+		return makeUserVarFixedVectorLiteral(types.T_Rowid, types.EncodeFixed(v)), nil
+	case types.Blockid:
+		return makeUserVarFixedVectorLiteral(types.T_Blockid, types.EncodeFixed(v)), nil
 	case float32:
 		return plan2.MakePlan2Float32ConstExprWithType(v), nil
 	case float64:
@@ -435,6 +469,30 @@ func decodeUserDefinedVarValue(ctx context.Context, expr *plan.Expr) (any, error
 			return invalid()
 		}
 		return v.U64Val, nil
+	case types.T_date:
+		v, ok := lit.Value.(*plan.Literal_Dateval)
+		if !ok {
+			return invalid()
+		}
+		return types.Date(v.Dateval), nil
+	case types.T_time:
+		v, ok := lit.Value.(*plan.Literal_Timeval)
+		if !ok {
+			return invalid()
+		}
+		return types.Time(v.Timeval), nil
+	case types.T_datetime:
+		v, ok := lit.Value.(*plan.Literal_Datetimeval)
+		if !ok {
+			return invalid()
+		}
+		return types.Datetime(v.Datetimeval), nil
+	case types.T_timestamp:
+		v, ok := lit.Value.(*plan.Literal_Timestampval)
+		if !ok {
+			return invalid()
+		}
+		return types.Timestamp(v.Timestampval), nil
 	case types.T_float32:
 		v, ok := lit.Value.(*plan.Literal_Fval)
 		if !ok {
@@ -532,6 +590,26 @@ func decodeUserDefinedVarFixedValue(ctx context.Context, expr *plan.Expr) (any, 
 			return nil, err
 		}
 		return types.DecodeFixed[types.Decimal256](vec.Data), nil
+	case types.T_uuid:
+		if err := invalidSize(types.UuidSize); err != nil {
+			return nil, err
+		}
+		return types.DecodeFixed[types.Uuid](vec.Data), nil
+	case types.T_TS:
+		if err := invalidSize(types.TxnTsSize); err != nil {
+			return nil, err
+		}
+		return types.DecodeFixed[types.TS](vec.Data), nil
+	case types.T_Rowid:
+		if err := invalidSize(types.RowidSize); err != nil {
+			return nil, err
+		}
+		return types.DecodeFixed[types.Rowid](vec.Data), nil
+	case types.T_Blockid:
+		if err := invalidSize(types.BlockidSize); err != nil {
+			return nil, err
+		}
+		return types.DecodeFixed[types.Blockid](vec.Data), nil
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "unsupported fixed user variable type %s in connection migration", types.T(expr.Typ.Id).String())
 	}

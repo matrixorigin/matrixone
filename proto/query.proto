@@ -599,6 +599,7 @@ message MigrateUserDefinedVar {
   string Sql = 3;
   bool IsBin = 4;
   uint32 PrepareParamKind = 5;
+  plan.Type Type = 6;
 }
 
 message UserLevelLock {

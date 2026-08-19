@@ -164,6 +164,16 @@ func Test_SendResponse(t *testing.T) {
 		convey.So(string(packets[0][9:]), convey.ShouldEqual,
 			"execute context: invalid input: bad numeric parameter")
 
+		rawConn.data = nil
+		resp.SetData(moerr.NewBadFieldErrorf(ctx, "invalid input: column %s does not exist", "metric"))
+		err = mp.SendResponse(ctx, resp)
+		convey.So(err, convey.ShouldBeNil)
+		packets = splitProtocolPackets(t, rawConn.data)
+		convey.So(len(packets), convey.ShouldEqual, 1)
+		convey.So(binary.LittleEndian.Uint16(packets[0][1:]), convey.ShouldEqual, moerr.ER_BAD_FIELD_ERROR)
+		convey.So(string(packets[0][4:9]), convey.ShouldEqual, "42S22")
+		convey.So(string(packets[0][9:]), convey.ShouldEqual, "invalid input: column metric does not exist")
+
 		resp.category = -1
 		err = mp.SendResponse(ctx, resp)
 		convey.So(err, convey.ShouldNotBeNil)

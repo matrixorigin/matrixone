@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
@@ -4313,13 +4314,82 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 }
 
 type UserDefinedVar struct {
-	Value            interface{}
-	Sql              string
-	IsBin            bool
+	Value interface{}
+	Sql   string
+	IsBin bool
+	// Type is the type of the value at the time the variable was assigned.
+	// User variables are exposed to the planner as text values for wire
+	// compatibility, but MySQL fixes their effective type at statement start.
+	// Keeping the assignment type here prevents a numeric sibling operand from
+	// silently narrowing a decimal or floating-point variable.
+	Type             planpb.Type
 	PrepareParamKind vector.PrepareParamKind
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool
+}
+
+// inferUserDefinedVarType supplies a conservative type for callers which set
+// a variable without an explicit expression type (for example tests and
+// stored-procedure helpers). Expression evaluation records the exact plan
+// type separately when it is available.
+func inferUserDefinedVarType(value interface{}) planpb.Type {
+	var oid types.T
+	switch v := value.(type) {
+	case bool:
+		oid = types.T_bool
+	case int, int8, int16, int32, int64:
+		oid = types.T_int64
+	case uint, uint8, uint16, uint32, uint64:
+		oid = types.T_uint64
+	case float32:
+		oid = types.T_float32
+	case float64:
+		oid = types.T_float64
+	case types.Date:
+		oid = types.T_date
+	case types.Time:
+		oid = types.T_time
+	case types.Datetime:
+		oid = types.T_datetime
+	case types.Timestamp:
+		oid = types.T_timestamp
+	case types.Decimal64:
+		oid = types.T_decimal64
+	case types.Decimal128:
+		oid = types.T_decimal128
+	case types.Decimal256:
+		oid = types.T_decimal256
+	case types.Enum:
+		oid = types.T_enum
+	case types.MoYear:
+		oid = types.T_year
+	case types.Uuid:
+		oid = types.T_uuid
+	case types.TS:
+		oid = types.T_TS
+	case types.Rowid:
+		oid = types.T_Rowid
+	case types.Blockid:
+		oid = types.T_Blockid
+	case []byte:
+		oid = types.T_varbinary
+	case []float32:
+		return planpb.Type{Id: int32(types.T_array_float32), Width: int32(len(v))}
+	case []float64:
+		return planpb.Type{Id: int32(types.T_array_float64), Width: int32(len(v))}
+	case []types.BF16:
+		return planpb.Type{Id: int32(types.T_array_bf16), Width: int32(len(v))}
+	case []types.Float16:
+		return planpb.Type{Id: int32(types.T_array_float16), Width: int32(len(v))}
+	case []int8:
+		return planpb.Type{Id: int32(types.T_array_int8), Width: int32(len(v))}
+	case nil:
+		oid = types.T_text
+	default:
+		oid = types.T_text
+	}
+	return planpb.Type{Id: int32(oid)}
 }
 
 func prepareParamKindFromType(oid types.T) vector.PrepareParamKind {

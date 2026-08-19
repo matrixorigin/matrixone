@@ -198,8 +198,16 @@ func nessieRefName(raw string) string {
 	}
 	if typ, value, ok := strings.Cut(raw, ":"); ok {
 		switch strings.ToLower(strings.TrimSpace(typ)) {
-		case "branch", "tag", "hash":
+		case "branch", "tag":
 			return strings.TrimSpace(value)
+		case "hash":
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return ""
+			}
+			// Nessie encodes a detached commit in a REST prefix as @<hash>.
+			// A bare hash is parsed as a named reference instead.
+			return "@" + value
 		}
 	}
 	return raw

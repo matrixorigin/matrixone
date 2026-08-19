@@ -51,14 +51,15 @@ type MockCompilerContext struct {
 	ctx context.Context
 
 	// Add function fields for test overrides
-	GetAccountNameFunc    func() string
-	GetAccountIdFunc      func() (uint32, error)
-	DatabaseExistsFunc    func(string, *Snapshot) bool
-	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
-	ResolveAccountIdsFunc func([]string) ([]uint32, error)
-	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
-	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
-	GetProcessFunc        func() *process.Process
+	GetAccountNameFunc      func() string
+	GetAccountIdFunc        func() (uint32, error)
+	DatabaseExistsFunc      func(string, *Snapshot) bool
+	GetDatabaseIdFunc       func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc   func([]string) ([]uint32, error)
+	ResolveFunc             func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc     func(string, bool, bool) (interface{}, error)
+	ResolveVariableTypeFunc func(string, bool, bool) (Type, error)
+	GetProcessFunc          func() *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -137,12 +138,53 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 
 	vars["foreign_key_checks"] = int64(1)
 	vars["sort_spill_mem"] = int64(0)
+	vars["lower_case_table_names"] = int64(1)
+
+	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
+	// plugin DDL and search paths).
+	vars["cagra_threads_build"] = int64(1)
+	vars["cagra_threads_search"] = int64(1)
+	vars["cagra_batch_window"] = int64(0)
+	vars["ivfpq_threads_build"] = int64(1)
+	vars["ivfpq_threads_search"] = int64(1)
+	vars["ivfpq_batch_window"] = int64(0)
+	vars["hnsw_threads_build"] = int64(1)
+	vars["hnsw_threads_search"] = int64(1)
+	vars["ivf_threads_build"] = int64(1)
+	vars["ivf_threads_search"] = int64(1)
+	vars["gpu_multi_simulation"] = int64(0)
+	vars["probe_limit"] = int64(20)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
 
-	return nil, moerr.NewInternalError(m.ctx, "var not found")
+	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
+}
+
+func (m *MockCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (Type, error) {
+	if m.ResolveVariableTypeFunc != nil {
+		return m.ResolveVariableTypeFunc(varName, isSystemVar, isGlobalVar)
+	}
+	if isSystemVar {
+		return Type{}, nil
+	}
+	switch varName {
+	case "int_var":
+		return makeSimplePlan2Type(types.T_int64), nil
+	case "float_var":
+		return makeSimplePlan2Type(types.T_float64), nil
+	case "decimal_var":
+		typ := types.T_decimal128.ToType()
+		typ.Width, typ.Scale = 38, 3
+		return makePlan2Type(&typ), nil
+	case "bool_var":
+		return makeSimplePlan2Type(types.T_bool), nil
+	case "null_var", "str_var":
+		return makeSimplePlan2Type(types.T_text), nil
+	default:
+		return Type{}, nil
+	}
 }
 
 type col struct {

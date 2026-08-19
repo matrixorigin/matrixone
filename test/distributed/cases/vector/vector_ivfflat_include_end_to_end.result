@@ -18,7 +18,7 @@ insert into phase8_main values
 create index idx_ivf_include_phase8 using ivfflat on phase8_main(embedding)
 lists=2 op_type "vector_l2_ops" include(title, category);
 show create table phase8_main;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,8,0]  ¦  Create Table[12,253,0]  𝄀
 phase8_main  ¦  CREATE TABLE `phase8_main` (
   `id` int NOT NULL,
   `embedding` vecf32(3) DEFAULT NULL,
@@ -34,21 +34,20 @@ where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Table Function on ivf_search  𝄀
               Index Reader Param:  Limit: 3  𝄀
-              Limit: 3  𝄀
               Filter Cond: (`__mo_index_include_category` >= 20)
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40  𝄀
 5  ¦  epsilon  ¦  50
@@ -58,7 +57,7 @@ where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -70,16 +69,22 @@ Project  𝄀
               ->  Table Scan on vector_ivfflat_include_phase8.phase8_main  𝄀
                     Filter Cond: phase8_main.note in ([n2 n5])  𝄀
                     Runtime Filter Probe: phase8_main.id  𝄀
-              ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 9223372036854775807  𝄀
-                    Limit: 9223372036854775807  𝄀
-                    Filter Cond: (`__mo_index_include_category` >= 20)
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = phase8_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 2  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Filter Cond: (`__mo_index_include_category` >= 20)  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase8.phase8_main  𝄀
+                          Filter Cond: phase8_main.note in ([n2 n5])
 select id, title, note
 from phase8_main
 where category >= 20 and note in ("n2", "n5")
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  note[12,15,0]  𝄀
 2  ¦  beta  ¦  n2  𝄀
 5  ¦  epsilon  ¦  n5
 set @entries = (
@@ -103,7 +108,7 @@ set @entries_sql = concat(
 );
 prepare s_entries from @entries_sql;
 execute s_entries;
-➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,20,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
 1  ¦  alpha  ¦  10  𝄀
 2  ¦  beta  ¦  20  𝄀
 3  ¦  gamma  ¦  30  𝄀
@@ -116,7 +121,7 @@ insert into phase8_main values
 (6, "[1,2,3.5]", "zeta", 35, "n6");
 delete from phase8_main where id = 1;
 execute s_entries;
-➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,20,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
 2  ¦  beta2  ¦  25  𝄀
 3  ¦  gamma  ¦  30  𝄀
 4  ¦  delta  ¦  40  𝄀
@@ -126,7 +131,7 @@ deallocate prepare s_entries;
 select id, title, category, note
 from phase8_main
 order by id;
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  ¦  note[12,15,0]  𝄀
 2  ¦  beta2  ¦  25  ¦  n2b  𝄀
 3  ¦  gamma  ¦  30  ¦  n3  𝄀
 4  ¦  delta  ¦  40  ¦  n4  𝄀
@@ -134,7 +139,7 @@ order by id;
 6  ¦  zeta  ¦  35  ¦  n6
 alter table phase8_main alter reindex idx_ivf_include_phase8 ivfflat lists=3;
 show create table phase8_main;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,8,0]  ¦  Create Table[12,253,0]  𝄀
 phase8_main  ¦  CREATE TABLE `phase8_main` (
   `id` int NOT NULL,
   `embedding` vecf32(3) DEFAULT NULL,
@@ -145,7 +150,7 @@ phase8_main  ¦  CREATE TABLE `phase8_main` (
   KEY `idx_ivf_include_phase8` USING ivfflat (`embedding`) lists = 3  op_type 'vector_l2_ops'  INCLUDE (`title`, `category`)
 )
 show index from phase8_main;
-➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+➤ Table[12,8,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
 phase8_main  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 phase8_main  ¦  1  ¦  idx_ivf_include_phase8  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"title\",\"category\"]","lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 set @entries = (
@@ -169,7 +174,7 @@ set @entries_sql = concat(
 );
 prepare s_entries from @entries_sql;
 execute s_entries;
-➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,-1,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
+➤ __mo_index_pri_col[4,32,0]  ¦  __mo_index_include_title[12,20,0]  ¦  __mo_index_include_category[4,32,0]  𝄀
 2  ¦  beta2  ¦  25  𝄀
 3  ¦  gamma  ¦  30  𝄀
 4  ¦  delta  ¦  40  𝄀
@@ -182,21 +187,20 @@ where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Table Function on ivf_search  𝄀
               Index Reader Param:  Limit: 3  𝄀
-              Limit: 3  𝄀
               Filter Cond: (`__mo_index_include_category` >= 20)
 select id, title, category
 from phase8_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 3 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 6  ¦  zeta  ¦  35  𝄀
 2  ¦  beta2  ¦  25  𝄀
 4  ¦  delta  ¦  40
@@ -215,19 +219,18 @@ from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
 limit 2 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Table Function on ivf_search  𝄀
-              Index Reader Param:  Limit: 2  𝄀
-              Limit: 2
+              Index Reader Param:  Limit: 2
 select id, title, category
 from phase8_empty
 order by l2_distance(embedding, "[1,1,1]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]
 drop table phase8_empty;
 drop table if exists phase8_nulls;
 create table phase8_nulls(
@@ -246,7 +249,7 @@ select id, title, category
 from phase8_nulls
 order by l2_distance(embedding, "[1,1,1]")
 limit 3 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 1  ¦  null  ¦  10  𝄀
 2  ¦  beta  ¦  null  𝄀
 3  ¦  gamma  ¦  30
@@ -268,7 +271,7 @@ insert into phase8_many_include values
 create index idx_ivf_include_phase8_many using ivfflat on phase8_many_include(embedding)
 lists=2 op_type "vector_l2_ops" include(c1, c2, c3, c4, c5, c6);
 show create table phase8_many_include;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,14,0]  ¦  Create Table[12,334,0]  𝄀
 phase8_many_include  ¦  CREATE TABLE `phase8_many_include` (
   `id` int NOT NULL,
   `embedding` vecf32(3) DEFAULT NULL,
@@ -282,14 +285,14 @@ phase8_many_include  ¦  CREATE TABLE `phase8_many_include` (
   KEY `idx_ivf_include_phase8_many` USING ivfflat (`embedding`) lists = 2  op_type 'vector_l2_ops'  INCLUDE (`c1`, `c2`, `c3`, `c4`, `c5`, `c6`)
 )
 show index from phase8_many_include;
-➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+➤ Table[12,14,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,48,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,192,0]  ¦  Collation[12,0,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,3,0]  ¦  Packed[12,3,0]  ¦  Null[12,2,0]  ¦  Index_type[12,8,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,1536,0]  ¦  Index_params[12,1536,0]  ¦  Visible[12,2,0]  ¦  Expression[12,192,0]  𝄀
 phase8_many_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
 phase8_many_include  ¦  1  ¦  idx_ivf_include_phase8_many  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"c1\",\"c2\",\"c3\",\"c4\",\"c5\",\"c6\"]","lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 select id, c1, c2, c3, c4, c5, c6
 from phase8_many_include
 order by l2_distance(embedding, "[1,0,0]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  c1[12,-1,0]  ¦  c2[12,-1,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[12,-1,0]  ¦  c6[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  c1[12,7,0]  ¦  c2[12,7,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[12,7,0]  ¦  c6[12,7,0]  𝄀
 1  ¦  a1  ¦  b1  ¦  11  ¦  21  ¦  e1  ¦  f1  𝄀
 2  ¦  a2  ¦  b2  ¦  12  ¦  22  ¦  e2  ¦  f2
 drop table phase8_many_include;
@@ -334,14 +337,13 @@ where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
         Limit: 20  𝄀
         ->  Table Function on ivf_search  𝄀
               Index Reader Param:  Limit: 20  𝄀
-              Limit: 20  𝄀
               Filter Cond: (`__mo_index_include_category` between 20 and 120)
 explain select id, title, category
 from phase8_perf_plain
@@ -349,7 +351,7 @@ where category between 20 and 120
 order by l2_distance(embedding, "[0.1,0.2,0.3,0.4]")
 limit 20 by rank with option 'mode=post';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -362,8 +364,7 @@ Project  𝄀
                     Filter Cond: phase8_perf_plain.category BETWEEN 20 AND 120  𝄀
                     Runtime Filter Probe: phase8_perf_plain.id  𝄀
               ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 100  𝄀
-                    Limit: 100
+                    Index Reader Param:  Limit: 20  OverFetchLimit: 100
 select count(*) from (
 select id, title, category
 from phase8_perf_include

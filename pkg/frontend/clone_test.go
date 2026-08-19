@@ -1090,3 +1090,17 @@ func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
 }
+
+func Test_rewriteCloneCreateSQL_PreservesModeTwoNames(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view `SrcDB`.`ViewName` as select `SrcDB`.`TableName`.`ID` from `SrcDB`.`TableName`",
+		"SrcDB",
+		"DstDB",
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create view `DstDB`.`ViewName` as select `DstDB`.`TableName`.`ID` from `DstDB`.`TableName`;",
+		got,
+	)
+}

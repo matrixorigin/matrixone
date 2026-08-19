@@ -211,6 +211,57 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1064, "syntax error")
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowErrors{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	level, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Error", level)
+	code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1064", code)
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	execCtx.stmt = &tree.ShowWarnings{}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Warning", level)
+}
+
+func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	resp := ses.SetNewResponse(OkResponse, 0, int(COM_QUERY), "", true)
+	require.Equal(t, uint16(1), resp.warnings)
+}
+
+func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: 3}}
+	ses.AppendWarningBatch(
+		100,
+		[]uint16{1, 2, 3, 4},
+		[]string{"one", "two", "three", "four"},
+	)
+
+	info := ses.diagnosticsSnapshot()
+	require.Len(t, info.codes, 3)
+	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, uint16(100), info.warningCount())
+}
+
 func TestHandleSetTransaction(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -2505,6 +2556,28 @@ func TestRebuildStaleCachedStatementsTransfersOwnership(t *testing.T) {
 	}
 }
 
+func TestRebuildStaleCachedStatementsRemapsModeTwoQualifiedColumns(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+
+	const sql = "insert into SrcMix.T(SrcMix.T.id, SrcMix.T.v) values (1, 10)"
+	wrapper := &TxnComputationWrapper{}
+	wrapper.SetRemapDb(map[string]string{"SrcMix": "DstMix"})
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: sql}
+	execCtx.cws = []ComputationWrapper{wrapper}
+	execCtx.rewriteEnabled = true
+
+	require.NoError(t, rebuildStaleCachedStatements(ses, execCtx))
+	insert := wrapper.GetAst().(*tree.Insert)
+	require.Equal(t, tree.Identifier("DstMix"), insert.TargetDatabaseName)
+	require.Equal(t, "DstMix", insert.ColumnNames[0].DbNameOrigin())
+	require.Equal(t, "dstmix", insert.ColumnNames[0].DbName())
+}
+
 func TestPrepareStringStatementAppliesRemapPolicy(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -3826,8 +3899,22 @@ func Test_statement_type(t *testing.T) {
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetTransaction{}), convey.ShouldBeFalse)
-		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeTrue)
+		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetVar{}), convey.ShouldBeFalse)
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.SetTransaction{}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetVar{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      false,
+			},
+		}), convey.ShouldBeTrue)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.SetVar{},
+			txnOpt: FeTxnOption{
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      true,
+			},
+		}), convey.ShouldBeFalse)
 		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
 			stmt: &tree.SetTransaction{},
 			txnOpt: FeTxnOption{
@@ -4790,6 +4877,17 @@ func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, preparedPlan.GetIsPrepare())
 	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
+}
+
+func TestBuildPlanWithPrepareModeAllowsMissingCompilerProcess(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select 1", 1)
+	require.NoError(t, err)
+
+	compCtx := plan.NewEmptyCompilerContext()
+	compCtx.GetProcessFunc = func() *process.Process { return nil }
+	_, err = buildPlanWithPrepareMode(ctx, nil, compCtx, stmt, false)
+	require.NoError(t, err)
 }
 
 func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
@@ -6851,6 +6949,74 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{"review27190.t": "delete from review27190.t"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("set @native_invalid = ?"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.ruleCache = map[string]string{"review27190.t": "select 1"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("select 1"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	selected, ok := prepared.PrepareStmt.(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, selected.RewriteOption)
+	require.Len(t, selected.RewriteOption.Rewrites["review27190.t"], 1)
+
+	ses.rewriteEnabled.Store(false)
+	const sidecarSQL = "/*+ SIDECAR */ select 1"
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(sidecarSQL),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, sidecarSQL, strings.TrimSpace(prepared.Sql))
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{"review27190.t": "select 1"}
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte(`/*+ {"rewrites": } */ select 1`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+
+	ses.rewriteEnabled.Store(false)
+	const nonPolicyJSON = `/*+ {"optimizer":"keep"} */ select 1`
+	resp, err = ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_PREPARE, data: []byte(nonPolicyJSON)})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.Equal(t, nonPolicyJSON, strings.TrimSpace(prepared.Sql))
 }
 
 func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.T) {

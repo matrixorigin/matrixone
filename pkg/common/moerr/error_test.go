@@ -200,6 +200,14 @@ func TestNoSuchTableWithFormattedMessage(t *testing.T) {
 	require.Equal(t, `SQL parser error: table "missing" does not exist`, err.Error())
 }
 
+func TestBadFieldErrorWithFormattedMessage(t *testing.T) {
+	err := NewBadFieldErrorf(context.Background(), "invalid input: column %s does not exist", "metric")
+	require.Equal(t, ErrBadFieldError, err.ErrorCode())
+	require.Equal(t, ER_BAD_FIELD_ERROR, err.MySQLCode())
+	require.Equal(t, "42S22", err.SqlState())
+	require.Equal(t, "invalid input: column metric does not exist", err.Error())
+}
+
 func TestMPoolCapacityEncoding(t *testing.T) {
 	err := NewMPoolCapacityNoCtxf("alloc %d bytes, cap %d", 8, 4)
 	require.Equal(t, ErrMPoolCapacity, err.ErrorCode())
@@ -219,6 +227,42 @@ func TestErrSubqueryNo1RowContract(t *testing.T) {
 	require.Equal(t, ER_SUBQUERY_NO_1_ROW, err.MySQLCode())
 	require.Equal(t, "21000", err.SqlState())
 	require.Equal(t, "Subquery returns more than 1 row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestErrTooManyRowsContract(t *testing.T) {
+	err := NewTooManyRows(context.Background())
+	require.Equal(t, ErrTooManyRows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_ROWS, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Result consisted of more than one row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestErrCantChangeTxnCodeRemainsStable(t *testing.T) {
+	// This code is part of the client-visible compatibility contract. New
+	// MatrixOne errors must use a fresh code instead of renumbering it.
+	require.Equal(t, uint16(20325), ErrCantChangeTxn)
+}
+
+func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
+	err := NewWrongNumberOfColumnsInSelect(context.Background())
+	require.Equal(t, ErrWrongNumberOfColumnsInSelect, err.ErrorCode())
+	require.Equal(t, ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "The used SELECT statements have a different number of columns", err.Error())
 
 	data, marshalErr := err.MarshalBinary()
 	require.NoError(t, marshalErr)
