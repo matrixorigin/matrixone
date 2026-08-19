@@ -50,11 +50,19 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		if c.tun != nil && moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+			c.tun.rejectPendingLongDataReconciliation()
+		}
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	defer c.queryClient.Release(resp)
 	r := resp.MigrateConnFromResponse
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
+	}
+	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
+		c.tun.rejectPendingLongDataReconciliation()
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if c.tun != nil {
 		r.PrepareStmts = c.tun.filterClosedStatementsForMigration(r.PrepareStmts)
@@ -69,7 +77,6 @@ func (c *clientConn) migrateConnFromContext(
 		zap.Int64("goId", goid.Get()),
 	)
 
-	defer c.queryClient.Release(resp)
 	return r, nil
 }
 
@@ -244,7 +251,7 @@ func (c *clientConn) migrateConnContext(
 		return err
 	}
 	if c.tun != nil {
-		c.tun.clearClosedStatements()
+		c.tun.clearMigratedStatementState()
 	}
 	return nil
 }

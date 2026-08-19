@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -1275,6 +1276,42 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun.commitClientRequest(close2)
 		require.False(t, tun.hasUntransferableClientState())
 		require.True(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("later response fences long data for authoritative reconciliation", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(
+			frontend.COM_STMT_SEND_LONG_DATA, 41, 0, 0, 'x'))
+		require.True(t, tun.hasUntransferableClientState())
+
+		// A successful COM_QUERY response proves that the old CN processed the
+		// no-response long-data command first. It does not prove whether SQL
+		// DEALLOCATE/PREPARE removed or replaced that statement; MigrateConnFrom
+		// remains the authoritative check.
+		tun.trackClientRequest(makeSimplePacket("deallocate prepare __mo_stmt_id_41"))
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState())
+
+		tun.rejectPendingLongDataReconciliation()
+		require.True(t, tun.hasUntransferableClientState())
+	})
+
+	t.Run("later response supersedes close tombstone", func(t *testing.T) {
+		const statementID uint32 = 41
+		tun := &tunnel{}
+		commit := tun.trackClientRequest(
+			makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statementID))
+		tun.commitClientRequest(commit)
+
+		tun.trackClientRequest(makeSimplePacket(
+			"prepare __mo_stmt_id_41 from select 1"))
+		tun.trackServerResponse(makeOKPacket(8))
+
+		stmt := &query.PrepareStmt{Name: frontend.GetPrepareStmtName(statementID)}
+		filtered := tun.filterClosedStatementsForMigration([]*query.PrepareStmt{stmt})
+		require.Equal(t, []*query.PrepareStmt{stmt}, filtered)
+		require.False(t, tun.hasUnsafeClientState())
 	})
 
 	t.Run("close is unsafe until forwarded without staged data", func(t *testing.T) {

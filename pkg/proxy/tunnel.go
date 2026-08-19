@@ -165,8 +165,12 @@ type tunnel struct {
 		phase                    responsePhase
 		legacyResultEOFSeen      bool
 		prepareMetadataRemaining uint32
-		pendingLongData          map[uint32]struct{}
-		closedStatements         map[string]struct{}
+		// pendingLongData records whether a later backend response has fenced
+		// each statement's most recent COM_STMT_SEND_LONG_DATA. An unfenced
+		// entry cannot be reconciled through the query service because the
+		// no-response command may still be waiting on the SQL socket.
+		pendingLongData  map[uint32]bool
+		closedStatements map[string]struct{}
 	}
 	clientDeprecatesEOF bool
 
@@ -415,15 +419,17 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 		}
 		statementID := binary.LittleEndian.Uint32(msg[5:9])
 		if s.pendingLongData == nil {
-			s.pendingLongData = make(map[uint32]struct{})
+			s.pendingLongData = make(map[uint32]bool)
 		}
 		if _, ok := s.pendingLongData[statementID]; !ok {
 			if len(s.pendingLongData) >= maxTrackedStatementIDs {
 				s.ambiguous = true
 				return commit
 			}
-			s.pendingLongData[statementID] = struct{}{}
 		}
+		// Repeated chunks start a new unfenced generation too. A response that
+		// preceded this chunk says nothing about whether the backend received it.
+		s.pendingLongData[statementID] = false
 		if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
 			s.longDataContinuation = true
 			s.longDataNextSequence = 1
@@ -513,9 +519,55 @@ func (t *tunnel) hasUntransferableClientState() bool {
 	}
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	return t.requestBoundary.inFlight ||
-		t.requestBoundary.ambiguous ||
-		len(t.requestBoundary.pendingLongData) > 0
+	if t.requestBoundary.inFlight || t.requestBoundary.ambiguous {
+		return true
+	}
+	for _, fenced := range t.requestBoundary.pendingLongData {
+		if !fenced {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectPendingLongDataReconciliation makes the current staged-data
+// generation non-transferable again after the old CN reports that it still
+// owns binary parameter data. A later backend response may fence a subsequent
+// SQL EXECUTE, RESET, DEALLOCATE, or PREPARE transition and permit another
+// authoritative reconciliation attempt.
+func (t *tunnel) rejectPendingLongDataReconciliation() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	for statementID := range t.requestBoundary.pendingLongData {
+		t.requestBoundary.pendingLongData[statementID] = false
+	}
+}
+
+// acceptPendingLongDataSnapshot verifies that every staged-data generation is
+// fenced by a later SQL-socket response and that the exporting CN understands
+// the authoritative pending-data check. The capability check keeps rolling
+// upgrades fail-closed when a new proxy is paired with an older CN.
+func (t *tunnel) acceptPendingLongDataSnapshot(checked bool) bool {
+	if t == nil {
+		return true
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if len(t.requestBoundary.pendingLongData) == 0 {
+		return true
+	}
+	if !checked {
+		return false
+	}
+	for _, fenced := range t.requestBoundary.pendingLongData {
+		if !fenced {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *tunnel) filterClosedStatementsForMigration(stmts []*query.PrepareStmt) []*query.PrepareStmt {
@@ -540,13 +592,14 @@ func (t *tunnel) filterClosedStatementsForMigration(stmts []*query.PrepareStmt) 
 	return filtered
 }
 
-func (t *tunnel) clearClosedStatements() {
+func (t *tunnel) clearMigratedStatementState() {
 	if t == nil {
 		return
 	}
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
 	clear(t.requestBoundary.closedStatements)
+	clear(t.requestBoundary.pendingLongData)
 }
 
 func (t *tunnel) resetTrackedRequestLocked() {
@@ -574,6 +627,15 @@ func (t *tunnel) finishTrackedResponseLocked(status uint16, successful bool) {
 				delete(t.requestBoundary.pendingLongData, t.requestBoundary.statementID)
 			}
 		}
+	}
+	// A terminal response is a causal fence for every earlier no-response
+	// command on this MySQL connection. CLOSE tombstones are no longer needed:
+	// the old CN snapshot now reflects the close and any same-name SQL PREPARE
+	// that followed it. Staged long data becomes eligible for authoritative
+	// reconciliation by MigrateConnFrom, but remains unsafe for connection cache.
+	clear(t.requestBoundary.closedStatements)
+	for statementID := range t.requestBoundary.pendingLongData {
+		t.requestBoundary.pendingLongData[statementID] = true
 	}
 	t.resetTrackedRequestLocked()
 }
