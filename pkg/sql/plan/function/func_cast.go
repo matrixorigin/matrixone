@@ -935,6 +935,17 @@ func isStrictSqlMode(proc *process.Process) bool {
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil && v != nil {
 			if s, ok := v.(string); ok {
+				// Remote/background processes can retain a resolver supplied by an
+				// internal executor. An empty value from that resolver must not
+				// overwrite the session snapshot serialized by the coordinator:
+				// recursive CTE assignment casts rely on that snapshot to preserve
+				// STRICT_TRANS_TABLES across CN boundaries. The explicit empty-mode
+				// sentinel still means non-strict and is intentionally not replaced.
+				if s == "" && proc.Base != nil && !proc.Base.IsFrontend {
+					if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" && snapshot != process.EmptySqlModeSentinel {
+						return sqlModeIsStrict(snapshot)
+					}
+				}
 				return sqlModeIsStrict(s)
 			}
 		}
