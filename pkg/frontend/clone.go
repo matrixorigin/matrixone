@@ -16,9 +16,7 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -1023,17 +1020,7 @@ func handleCloneDatabaseWithSource(
 		snapshotTS int64
 		source     cloneDatabaseSource
 		accounts   cloneDatabaseAccountResolution
-		routineFS  fileservice.FileService
 	)
-
-	// Imported UDF package files are not transactional. They remain staging
-	// resources until this clone transaction succeeds, so every statement-level
-	// failure deletes exactly the destination files it created.
-	defer func() {
-		if err != nil && len(source.clonedRoutineFiles) != 0 {
-			err = errors.Join(err, cleanupCloneUDFPackages(reqCtx, routineFS, source.clonedRoutineFiles))
-		}
-	}()
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
 	defer func() {
@@ -1265,18 +1252,6 @@ func handleCloneDatabaseWithSource(
 			return nil, err
 		}
 	}
-	if hasImportedUserDefinedFunctionPackages(source.userDefinedFuncs) {
-		routineFS = getPu(ses.GetService()).FileService
-		if routineFS == nil {
-			return nil, moerr.NewInternalErrorNoCtx("file service is unavailable for imported function clone")
-		}
-		source.userDefinedFuncs, source.clonedRoutineFiles, err = cloneImportedUserDefinedFunctionPackages(
-			reqCtx, routineFS, source.toAccountId, source.userDefinedFuncs,
-		)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if err = restoreCloneDatabaseUserDefinedFunctions(
 		ctx1, bh, routineTenant, source.userDefinedFuncs, stmt.DstDatabase.String(),
 	); err != nil {
@@ -1323,44 +1298,7 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 
-	if len(source.clonedRoutineFiles) != 0 {
-		if resolvedSource != nil {
-			resolvedSource.clonedRoutineFiles = append(
-				resolvedSource.clonedRoutineFiles,
-				source.clonedRoutineFiles...,
-			)
-		}
-		registerCloneUDFPackageRollbackCleanup(ses, routineFS, source.clonedRoutineFiles)
-	}
-
 	return
-}
-
-// registerCloneUDFPackageRollbackCleanup extends an explicit user transaction
-// with the non-transactional file cleanup that its clone staged. A successful
-// commit transfers ownership to the destination UDF metadata; every other
-// terminal state removes the destination-only files.
-func registerCloneUDFPackageRollbackCleanup(
-	ses *Session,
-	fileService fileservice.FileService,
-	paths []string,
-) {
-	if ses == nil || ses.proc == nil || fileService == nil || len(paths) == 0 {
-		return
-	}
-	txnOp := ses.proc.GetTxnOperator()
-	if txnOp == nil || !txnOp.TxnOptions().ByBegin {
-		return
-	}
-	stagedPaths := slices.Clone(paths)
-	txnOp.AppendEventCallback(client.ClosedEvent, client.NewTxnEventCallback(
-		func(ctx context.Context, _ TxnOperator, event client.TxnEvent, _ any) error {
-			if event.Committed() {
-				return nil
-			}
-			return cleanupCloneUDFPackages(ctx, fileService, stagedPaths)
-		},
-	))
 }
 
 func prepareCloneViewSnapshot(snapshot *plan.Snapshot, snapshotTS int64) *plan.Snapshot {

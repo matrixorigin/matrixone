@@ -45,10 +45,9 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
-// could change its meaning. USE is intentionally not remapped; unqualified
-// names are resolved through TxnCompilerContext.DefaultDatabase(), which applies
-// the active database remap. Sub-selects nested in expressions (e.g. WHERE id
-// IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
+// could change its meaning. USE carries an explicit database name, so it is
+// remapped when it is not a role-selection form. Sub-selects nested in
+// expressions (e.g. WHERE id IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
 func applyRemapDb(
 	ctx context.Context,
@@ -91,21 +90,58 @@ func applyRemapDbByStatement(
 	return nil
 }
 
-func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
+// remapCloneRoutineStatements applies the shared remapper under the stricter
+// persistence rule for a cloned SQL routine: every executable statement must
+// be structurally audited. Leaving an unhandled statement unchanged is safe
+// for a one-shot query remap, but not for a procedure body that will execute
+// after the source database may have been dropped.
+func remapCloneRoutineStatements(
+	ctx context.Context,
+	stmts []tree.Statement,
+	remap map[string]string,
+	lowerCaseTableNames int64,
+) error {
+	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
+	if err != nil {
+		return err
+	}
+	if !remapDbInStatements(stmts, remapDbContext{
+		databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+	}) {
+		return moerr.NewNotSupported(ctx,
+			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
+		)
+	}
+	return nil
+}
+
+// remapDbInStmt returns false when a statement cannot be structurally audited
+// for database remapping. General query remapping preserves its existing
+// best-effort behavior, while stored-procedure clone restoration rejects such
+// statements rather than persisting a possible source-database reference.
+func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
+	if stmt == nil {
+		return true
+	}
+	remappable := true
 	switch s := stmt.(type) {
 	case *tree.CompoundStmt:
-		remapDbInStatements(s.Stmts, remap)
+		remappable = remapDbInStatements(s.Stmts, remap)
 	case *tree.IfStmt:
 		remapDbInExpr(s.Cond, remap)
-		remapDbInStatements(s.Body, remap)
+		remappable = remapDbInStatements(s.Body, remap)
 		for _, elif := range s.Elifs {
 			if elif == nil {
 				continue
 			}
 			remapDbInExpr(elif.Cond, remap)
-			remapDbInStatements(elif.Body, remap)
+			if !remapDbInStatements(elif.Body, remap) {
+				remappable = false
+			}
 		}
-		remapDbInStatements(s.Else, remap)
+		if !remapDbInStatements(s.Else, remap) {
+			remappable = false
+		}
 	case *tree.CaseStmt:
 		remapDbInExpr(s.Expr, remap)
 		for _, when := range s.Whens {
@@ -113,17 +149,21 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 				continue
 			}
 			remapDbInExpr(when.Cond, remap)
-			remapDbInStatements(when.Body, remap)
+			if !remapDbInStatements(when.Body, remap) {
+				remappable = false
+			}
 		}
-		remapDbInStatements(s.Else, remap)
+		if !remapDbInStatements(s.Else, remap) {
+			remappable = false
+		}
 	case *tree.WhileStmt:
 		remapDbInExpr(s.Cond, remap)
-		remapDbInStatements(s.Body, remap)
+		remappable = remapDbInStatements(s.Body, remap)
 	case *tree.RepeatStmt:
-		remapDbInStatements(s.Body, remap)
+		remappable = remapDbInStatements(s.Body, remap)
 		remapDbInExpr(s.Cond, remap)
 	case *tree.LoopStmt:
-		remapDbInStatements(s.Body, remap)
+		remappable = remapDbInStatements(s.Body, remap)
 	case *tree.Declare:
 		remapDbInExpr(s.DefaultVal, remap)
 	case *tree.SetVar:
@@ -185,9 +225,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 			}
 		}
 	case *tree.ExplainStmt:
-		remapDbInStmt(s.Statement, remap)
+		remappable = remapDbInStmt(s.Statement, remap)
 	case *tree.ExplainAnalyze:
-		remapDbInStmt(s.Statement, remap)
+		remappable = remapDbInStmt(s.Statement, remap)
 	case *tree.LockTableStmt:
 		for i := range s.TableLocks {
 			remapTableName(&s.TableLocks[i].Table, remap)
@@ -197,7 +237,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 			remapTableName(table, remap)
 		}
 	case *tree.PrepareStmt:
-		remapDbInStmt(s.Stmt, remap)
+		remappable = remapDbInStmt(s.Stmt, remap)
 	case *tree.Do:
 		remapDbInExprs(s.Exprs, remap)
 	case *tree.Merge:
@@ -232,8 +272,25 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 		remapTableName(s.Name, remap)
 	case *tree.ShowCreateTable:
 		remapObjectName(s.Name, remap)
+		if s.AtTsExpr != nil {
+			remapDbInExpr(s.AtTsExpr.Expr, remap)
+		}
 	case *tree.ShowCreateView:
 		remapObjectName(s.Name, remap)
+		if s.AtTsExpr != nil {
+			remapDbInExpr(s.AtTsExpr.Expr, remap)
+		}
+	case *tree.ShowCreateDatabase:
+		remapDatabaseName(&s.Name, remap)
+		if s.AtTsExpr != nil {
+			remapDbInExpr(s.AtTsExpr.Expr, remap)
+		}
+	case *tree.ShowDatabases:
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+		if s.AtTsExpr != nil {
+			remapDbInExpr(s.AtTsExpr.Expr, remap)
+		}
 	case *tree.ShowColumns:
 		remapObjectName(s.Table, remap)
 		remapDatabaseName(&s.DBName, remap)
@@ -252,12 +309,62 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 	case *tree.ShowTableSize:
 		remapObjectName(s.Table, remap)
 		remapDatabaseName(&s.DbName, remap)
+	case *tree.ShowTarget:
+		remapDatabaseName(&s.DbName, remap)
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowTableStatus:
+		remapDatabaseName(&s.DbName, remap)
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowSequences:
+		remapDatabaseName(&s.DBName, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowTables:
+		remapDatabaseName(&s.DBName, remap)
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+		if s.AtTsExpr != nil {
+			remapDbInExpr(s.AtTsExpr.Expr, remap)
+		}
+	case *tree.ShowTableNumber:
+		remapDatabaseName(&s.DbName, remap)
+	case *tree.ShowCollation:
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowVariables:
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowStatus:
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowFunctionOrProcedureStatus:
+		remapDbInExpr(s.Like, remap)
+		remapDbInWhere(s.Where, remap)
+	case *tree.ShowAccounts:
+		remapDbInExpr(s.Like, remap)
+	case *tree.ShowPublications:
+		remapDbInExpr(s.Like, remap)
+	case *tree.ShowSubscriptions:
+		remapDbInExpr(s.Like, remap)
+	case *tree.ShowRolesStmt:
+		remapDbInExpr(s.Like, remap)
+	case *tree.ShowGrants, *tree.ShowProcessList, *tree.ShowErrors,
+		*tree.ShowWarnings, *tree.ShowNodeList, *tree.ShowLocks,
+		*tree.ShowAccountUpgrade, *tree.ShowCreatePublications,
+		*tree.ShowPublicationCoverage, *tree.ShowCcprSubscriptions,
+		*tree.ShowBackendServers, *tree.ShowLogserviceReplicas,
+		*tree.ShowLogserviceStores, *tree.ShowLogserviceSettings,
+		*tree.ShowRules, *tree.Deallocate, *tree.Reset, *tree.Execute:
+		// These forms carry no database or table identity. Their nested expression
+		// fields, where present, are handled by their dedicated cases above.
+	case *tree.Use:
+		remapUseDatabase(s, remap)
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked
-	// too, as are TRUNCATE TABLE and RENAME TABLE. Database-level DDL
-	// (CREATE/DROP/ALTER DATABASE, USE) is intentionally absent here and never
-	// remapped.
+	// too, as are TRUNCATE TABLE and RENAME TABLE. Database-level statements that
+	// are not structurally remapped remain unsupported in cloned SQL routines.
 	case *tree.CreateTable:
 		remapTableName(&s.Table, remap)
 		remapTableName(&s.LikeTableName, remap)
@@ -309,15 +416,20 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) {
 				}
 			}
 		}
+	default:
+		return false
 	}
+	return remappable
 }
 
-func remapDbInStatements(stmts []tree.Statement, remap remapDbContext) {
+func remapDbInStatements(stmts []tree.Statement, remap remapDbContext) bool {
+	remappable := true
 	for _, stmt := range stmts {
-		if stmt != nil {
-			remapDbInStmt(stmt, remap)
+		if !remapDbInStmt(stmt, remap) {
+			remappable = false
 		}
 	}
+	return remappable
 }
 
 func remapDbInWith(w *tree.With, remap remapDbContext) {
@@ -656,5 +768,14 @@ func remapDatabaseName(name *string, remap remapDbContext) {
 	}
 	if target, ok := remap.lookup(*name); ok {
 		*name = target
+	}
+}
+
+func remapUseDatabase(stmt *tree.Use, remap remapDbContext) {
+	if stmt == nil || stmt.IsUseRole() || stmt.Name == nil {
+		return
+	}
+	if target, ok := remap.lookup(stmt.Name.Compare()); ok {
+		stmt.Name = tree.NewCStr(target, remap.lowerCaseTableNames)
 	}
 }

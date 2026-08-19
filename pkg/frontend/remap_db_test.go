@@ -524,6 +524,7 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 	})
 
 	t.Run("show statements", func(t *testing.T) {
+		showCreateDatabase := &tree.ShowCreateDatabase{Name: "src"}
 		showCreateTable := qualifiedObject("create_table")
 		showCreateView := qualifiedObject("create_view")
 		showColumnsTable := qualifiedObject("columns_table")
@@ -534,7 +535,14 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 		showColumnNumber := qualifiedObject("column_number")
 		showTableValues := qualifiedObject("table_values")
 		showTableSize := qualifiedObject("table_size")
+		showTarget := &tree.ShowTarget{DbName: "src"}
+		showTableStatus := &tree.ShowTableStatus{DbName: "src"}
+		showSequences := &tree.ShowSequences{DBName: "src"}
+		showTables := &tree.ShowTables{DBName: "src"}
+		showTableNumber := &tree.ShowTableNumber{DbName: "src"}
+		useDatabase := tree.NewUse(tree.NewCStr("src", 1), false, tree.SecondaryRoleTypeAll, nil)
 		for _, statement := range []tree.Statement{
+			showCreateDatabase,
 			&tree.ShowCreateTable{Name: showCreateTable},
 			&tree.ShowCreateView{Name: showCreateView},
 			&tree.ShowColumns{
@@ -551,9 +559,16 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 			&tree.ShowColumnNumber{Table: showColumnNumber, DbName: "src"},
 			&tree.ShowTableValues{Table: showTableValues, DbName: "src"},
 			&tree.ShowTableSize{Table: showTableSize, DbName: "src"},
+			showTarget,
+			showTableStatus,
+			showSequences,
+			showTables,
+			showTableNumber,
+			useDatabase,
 		} {
 			remapDbInStmt(statement, remap)
 		}
+		require.Equal(t, "dst", showCreateDatabase.Name)
 		for _, object := range []*tree.UnresolvedObjectName{
 			showCreateTable, showCreateView, showColumnsTable, showIndexTable,
 			showColumnNumber, showTableValues, showTableSize,
@@ -563,6 +578,12 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 		for _, column := range []*tree.UnresolvedName{showColumnsLike, showColumnsWhere, showIndexWhere} {
 			assertColumn(t, column)
 		}
+		require.Equal(t, "dst", showTarget.DbName)
+		require.Equal(t, "dst", showTableStatus.DbName)
+		require.Equal(t, "dst", showSequences.DBName)
+		require.Equal(t, "dst", showTables.DBName)
+		require.Equal(t, "dst", showTableNumber.DbName)
+		require.Equal(t, "dst", useDatabase.Name.Compare())
 	})
 }
 

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -24,18 +23,13 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type accountRecordingBackgroundExec struct {
@@ -290,122 +284,21 @@ func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) 
 		require.Empty(t, procedures)
 		require.Empty(t, bh.executedSQLs)
 	})
-}
 
-func TestCloneImportedUserDefinedFunctionPackagesHaveIndependentOwnership(t *testing.T) {
-	ctx := context.Background()
-	fileService, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
+	t.Run("imported package functions are rejected before target creation", func(t *testing.T) {
+		const dbName = "source_db"
+		functionQuerySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function where db = 'source_db' order by name"
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[functionQuerySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{{
+			"f_imported", "{}", "int", `{"handler":"f_imported","import":true,"body":"shared:udf/f_imported.py"}`, "python", "",
+		}})
 
-	const sourcePath = "shared:udf/source/f_identity.py"
-	const contents = "def f_identity(x):\n    return x\n"
-	writeSource := func() {
-		require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
-			FilePath: sourcePath,
-			Entries:  []fileservice.IOEntry{{Size: int64(len(contents)), Data: []byte(contents)}},
-		}))
-	}
-	read := func(name string) string {
-		vector := &fileservice.IOVector{FilePath: name, Entries: []fileservice.IOEntry{{Size: -1}}}
-		require.NoError(t, fileService.Read(ctx, vector))
-		return string(vector.Entries[0].Data)
-	}
-	definition := userDefinedFunctionDefinition{name: "f_identity", lang: "python"}
-	body, err := json.Marshal(function.NonSqlUdfBody{Handler: "f_identity", Import: true, Body: sourcePath})
-	require.NoError(t, err)
-	definition.body = string(body)
-
-	writeSource()
-	cloned, stagedFiles, err := cloneImportedUserDefinedFunctionPackages(ctx, fileService, 7, []userDefinedFunctionDefinition{definition})
-	require.NoError(t, err)
-	require.Len(t, stagedFiles, 1)
-	require.Equal(t, string(body), definition.body)
-
-	var clonedBody function.NonSqlUdfBody
-	require.NoError(t, json.Unmarshal([]byte(cloned[0].body), &clonedBody))
-	require.NotEqual(t, sourcePath, clonedBody.Body)
-	require.Contains(t, strings.ToLower(clonedBody.Body), "shared:udf/clone/7/")
-	require.Equal(t, contents, read(clonedBody.Body))
-
-	// Dropping the source must leave the destination package callable.
-	require.NoError(t, fileService.Delete(ctx, sourcePath))
-	require.Equal(t, contents, read(clonedBody.Body))
-
-	// In the other direction, dropping a clone's package must not delete the
-	// independent source package.
-	writeSource()
-	_, secondFiles, err := cloneImportedUserDefinedFunctionPackages(ctx, fileService, 7, []userDefinedFunctionDefinition{definition})
-	require.NoError(t, err)
-	require.Len(t, secondFiles, 1)
-	require.NoError(t, fileService.Delete(ctx, secondFiles[0]))
-	require.Equal(t, contents, read(sourcePath))
-
-	// A failed clone owns and deletes only its destination staging object.
-	require.NoError(t, cleanupCloneUDFPackages(ctx, fileService, stagedFiles))
-	_, err = fileService.StatFile(ctx, stagedFiles[0])
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
-	require.NoError(t, cleanupCloneUDFPackages(ctx, fileService, stagedFiles))
-}
-
-func TestRegisterCloneUDFPackageRollbackCleanup(t *testing.T) {
-	ctx := context.Background()
-	fileService, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
-	require.NoError(t, err)
-	stagedPath := "shared:udf/clone/7/f_identity/package.zip"
-	require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
-		FilePath: stagedPath,
-		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
-	}))
-
-	t.Run("ignores incomplete and implicit transaction state", func(t *testing.T) {
-		registerCloneUDFPackageRollbackCleanup(nil, fileService, []string{stagedPath})
-		registerCloneUDFPackageRollbackCleanup(&Session{}, nil, []string{stagedPath})
-
-		ctrl := gomock.NewController(t)
-		ses := newTestSession(t, ctrl)
-		t.Cleanup(ses.Close)
-		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-		ses.proc.Base.TxnOperator = txnOp
-		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: false})
-		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{stagedPath})
-		_, err := fileService.StatFile(ctx, stagedPath)
-		require.NoError(t, err)
-	})
-
-	t.Run("retains packages on commit and removes them on rollback", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		ses := newTestSession(t, ctrl)
-		t.Cleanup(ses.Close)
-		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-		ses.proc.Base.TxnOperator = txnOp
-		rollbackPath := "shared:udf/clone/7/f_identity/rollback.zip"
-		require.NoError(t, fileService.Write(ctx, fileservice.IOVector{
-			FilePath: rollbackPath,
-			Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
-		}))
-
-		var callbacks []client.TxnEventCallback
-		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true}).Times(2)
-		txnOp.EXPECT().AppendEventCallback(client.ClosedEvent, gomock.Any()).Times(2).DoAndReturn(
-			func(_ client.EventType, registered ...client.TxnEventCallback) {
-				callbacks = append(callbacks, registered...)
-			},
-		)
-		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{stagedPath})
-		registerCloneUDFPackageRollbackCleanup(ses, fileService, []string{rollbackPath})
-		require.Len(t, callbacks, 2)
-
-		require.NoError(t, callbacks[0].Func(ctx, txnOp, client.TxnEvent{
-			Txn: txn.TxnMeta{Status: txn.TxnStatus_Committed},
-		}, nil))
-		_, err := fileService.StatFile(ctx, stagedPath)
-		require.NoError(t, err)
-
-		require.NoError(t, callbacks[1].Func(ctx, txnOp, client.TxnEvent{
-			Txn: txn.TxnMeta{Status: txn.TxnStatus_Aborted},
-		}, nil))
-		_, err = fileService.StatFile(ctx, rollbackPath)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+		functions, procedures, err := getCloneDatabaseRoutineInfos(context.Background(), bh, nil, dbName, nil)
+		require.ErrorContains(t, err, "imported python function f_imported is not supported")
+		require.Nil(t, functions)
+		require.Nil(t, procedures)
+		require.Equal(t, []string{functionQuerySQL}, bh.executedSQLs)
 	})
 }
 
@@ -654,6 +547,16 @@ func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.
 			explain analyze select * from source_db.analyze_table;
 			lock tables source_db.lock_table read;
 			check table source_db.check_table;
+			show table status from source_db;
+			show sequences from source_db;
+			show tables from source_db;
+			show triggers from source_db;
+			show create database source_db;
+			show table number from source_db;
+			show databases;
+			show variables;
+			show status;
+			use source_db;
 		end`,
 	}}
 
@@ -665,7 +568,23 @@ func TestRewriteCloneStoredProcedureBodiesRewritesExecutableWrappers(t *testing.
 	for _, table := range []string{"explain_table", "analyze_table", "lock_table", "check_table"} {
 		require.Contains(t, rewritten[0].body, "`target_db`.`"+table+"`")
 	}
+	for _, show := range []string{
+		"show table status from target_db",
+		"show sequences from target_db",
+		"show tables from target_db",
+		"show triggers from target_db",
+		"show create database target_db",
+		"show table number from target_db",
+		"show databases",
+		"show variables",
+		"show status",
+		"use target_db",
+	} {
+		require.Contains(t, rewritten[0].body, show)
+	}
 	require.NotContains(t, rewritten[0].body, "source_db.")
+	require.NotContains(t, rewritten[0].body, "from source_db")
+	require.NotContains(t, rewritten[0].body, "use source_db")
 }
 
 func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *testing.T) {
@@ -700,6 +619,13 @@ func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *
 		require.Error(t, err)
 	})
 
+	t.Run("unhandled executable statement aborts the clone", func(t *testing.T) {
+		_, err := rewriteCloneStoredProcedureBodies(ctx, []storedProcedureDefinition{{
+			name: "p_unhandled", lang: "sql", body: "begin create database source_db; end",
+		}}, "source_db", "target_db", 1)
+		require.ErrorContains(t, err, "cannot be safely remapped")
+	})
+
 	t.Run("identity mapping does not parse the body", func(t *testing.T) {
 		body, err := rewriteCloneSQLRoutineBody(ctx, "not valid SQL", "", "source_db", "source_db", 1)
 		require.NoError(t, err)
@@ -719,16 +645,23 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 			lang: "sql",
 			body: "$1 + 1",
 		},
+		{
+			name: "f_uppercase_select",
+			lang: "sql",
+			body: "SELECT count(*) FROM SOURCE_DB.uppercase_t",
+		},
 	}
 
 	rewritten, err := rewriteCloneUserDefinedFunctionBodies(
 		context.Background(), functions, "source_db", "target_db", 1,
 	)
 	require.NoError(t, err)
-	require.Len(t, rewritten, 2)
+	require.Len(t, rewritten, 3)
 	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
 	require.Contains(t, rewritten[0].body, "$1")
 	require.Equal(t, "$1 + 1", rewritten[1].body)
+	require.Contains(t, rewritten[2].body, "from `target_db`.`uppercase_t`")
+	require.NotContains(t, rewritten[2].body, "SOURCE_DB.uppercase_t")
 	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
 }
 

@@ -17,20 +17,14 @@ package frontend
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"path"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -52,7 +46,6 @@ type cloneDatabaseSource struct {
 	snapshot           *plan.Snapshot
 	opAccountId        uint32
 	toAccountId        uint32
-	clonedRoutineFiles []string
 }
 
 type cloneDatabaseAccountResolution struct {
@@ -183,11 +176,37 @@ func getCloneDatabaseRoutineInfos(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := validateCloneUserDefinedFunctions(userDefinedFuncs); err != nil {
+		return nil, nil, err
+	}
 	storedProcedures, err := getStoredProcedureInfos(ctx, bh, snapshot, dbName)
 	if err != nil {
 		return nil, nil, err
 	}
 	return userDefinedFuncs, storedProcedures, nil
+}
+
+// validateCloneUserDefinedFunctions rejects imported non-SQL UDFs before the
+// target database is created. Their package object is not versioned with the
+// catalog snapshot and transaction outcome, so copying it here would either
+// make a historical clone depend on a deleted live object or leave ownership
+// ambiguous after an unknown commit result.
+func validateCloneUserDefinedFunctions(functions []userDefinedFunctionDefinition) error {
+	for _, definition := range functions {
+		if strings.EqualFold(definition.lang, string(tree.SQL)) {
+			continue
+		}
+
+		var body function.NonSqlUdfBody
+		if json.Unmarshal([]byte(definition.body), &body) == nil && body.Import {
+			return moerr.NewNotSupportedNoCtxf(
+				"CREATE DATABASE CLONE with imported %s function %s is not supported: imported UDF packages are not snapshot-versioned",
+				definition.lang,
+				definition.name,
+			)
+		}
+	}
+	return nil
 }
 
 func getUserDefinedFunctionInfos(
@@ -290,153 +309,6 @@ func restoreCloneDatabaseUserDefinedFunctions(
 		}
 	}
 	return nil
-}
-
-// cloneImportedUserDefinedFunctionPackages gives every cloned imported UDF an
-// independent file-service object. The returned paths are staging-owned until
-// the caller's clone transaction commits, then become owned by the destination
-// routine metadata and its normal DROP cleanup.
-func cloneImportedUserDefinedFunctionPackages(
-	ctx context.Context,
-	fileService fileservice.FileService,
-	targetAccountID uint32,
-	functions []userDefinedFunctionDefinition,
-) ([]userDefinedFunctionDefinition, []string, error) {
-	cloned := slices.Clone(functions)
-	clonedFiles := make([]string, 0)
-
-	for i := range cloned {
-		if strings.EqualFold(cloned[i].lang, string(tree.SQL)) {
-			continue
-		}
-
-		var body function.NonSqlUdfBody
-		if err := json.Unmarshal([]byte(cloned[i].body), &body); err != nil || !body.Import {
-			// Non-SQL routines that do not carry an imported package keep their
-			// existing opaque body contract.
-			continue
-		}
-		if body.Body == "" {
-			return nil, nil, moerr.NewInternalErrorNoCtxf(
-				"imported function %s has an empty package path", cloned[i].name,
-			)
-		}
-
-		clonedPath, err := newCloneUDFPackagePath(body.Body, targetAccountID)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err = copyCloneUDFPackage(ctx, fileService, body.Body, clonedPath); err != nil {
-			return nil, nil, errors.Join(err, cleanupCloneUDFPackages(ctx, fileService, clonedFiles))
-		}
-
-		body.Body = clonedPath
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return nil, nil, errors.Join(err, cleanupCloneUDFPackages(ctx, fileService, append(clonedFiles, clonedPath)))
-		}
-		cloned[i].body = string(encoded)
-		clonedFiles = append(clonedFiles, clonedPath)
-	}
-
-	return cloned, clonedFiles, nil
-}
-
-func hasImportedUserDefinedFunctionPackages(functions []userDefinedFunctionDefinition) bool {
-	for _, definition := range functions {
-		if strings.EqualFold(definition.lang, string(tree.SQL)) {
-			continue
-		}
-		var body function.NonSqlUdfBody
-		if json.Unmarshal([]byte(definition.body), &body) == nil && body.Import {
-			return true
-		}
-	}
-	return false
-}
-
-func newCloneUDFPackagePath(sourcePath string, targetAccountID uint32) (string, error) {
-	parsed, err := fileservice.ParsePath(sourcePath)
-	if err != nil {
-		return "", err
-	}
-	if parsed.File == "" {
-		return "", moerr.NewInternalErrorNoCtx("imported function package path is empty")
-	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		return "", err
-	}
-	return fileservice.JoinPath(
-		defines.SharedFileServiceName,
-		path.Join("udf", "clone", strconv.FormatUint(uint64(targetAccountID), 10), id.String(), path.Base(parsed.File)),
-	), nil
-}
-
-// copyCloneUDFPackage prefers a provider-side copy. File services without that
-// capability use the standard streaming Read/Write contract.
-func copyCloneUDFPackage(
-	ctx context.Context,
-	fileService fileservice.FileService,
-	sourcePath string,
-	destinationPath string,
-) error {
-	results, err := fileservice.CopyObjects(
-		ctx,
-		fileService,
-		fileService,
-		[]fileservice.ObjectCopy{{SourcePath: sourcePath, DestinationPath: destinationPath}},
-		fileservice.ObjectCopyOptions{},
-	)
-	if err != nil {
-		return err
-	}
-	if len(results) != 1 {
-		return moerr.NewInternalErrorNoCtxf("copying imported function package returned %d results", len(results))
-	}
-	if results[0].Copied {
-		return nil
-	}
-
-	var reader io.ReadCloser
-	if err = fileService.Read(ctx, &fileservice.IOVector{
-		FilePath: sourcePath,
-		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1, ReadCloserForRead: &reader}},
-		Policy:   fileservice.SkipAllCache,
-	}); err != nil {
-		return err
-	}
-	if reader == nil {
-		return moerr.NewInternalErrorNoCtx("reading imported function package returned no reader")
-	}
-	defer reader.Close()
-
-	return fileService.Write(ctx, fileservice.IOVector{
-		FilePath: destinationPath,
-		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1, ReaderForWrite: reader}},
-		Policy:   fileservice.SkipAllCache,
-	})
-}
-
-func cleanupCloneUDFPackages(
-	ctx context.Context,
-	fileService fileservice.FileService,
-	paths []string,
-) error {
-	if len(paths) == 0 {
-		return nil
-	}
-	if fileService == nil {
-		return moerr.NewInternalErrorNoCtx("file service is unavailable for imported function cleanup")
-	}
-	err := fileService.Delete(ctx, paths...)
-	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		// Statement cleanup and an explicit transaction's rollback callback can
-		// legitimately converge on the same destination-only object. Deletion is
-		// therefore intentionally idempotent.
-		return nil
-	}
-	return err
 }
 
 // resolveCloneDatabaseRoutineTenant preserves the caller identity for a
@@ -560,7 +432,7 @@ func rewriteCloneSQLFunctionBody(
 	dstDBName string,
 	lowerCaseTableNames int64,
 ) (string, error) {
-	if !strings.Contains(body, "select") {
+	if !strings.Contains(strings.ToLower(body), "select") {
 		return body, nil
 	}
 	return rewriteCloneSQLRoutineBody(
@@ -591,7 +463,9 @@ func rewriteCloneSQLRoutineBody(
 		options = append(options, tree.WithNoBackslashEscape())
 	}
 	original := formatCloneRoutineStatements(stmts, options...)
-	if err := applyRemapDb(ctx, stmts, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames); err != nil {
+	if err := remapCloneRoutineStatements(
+		ctx, stmts, map[string]string{srcDBName: dstDBName}, lowerCaseTableNames,
+	); err != nil {
 		return "", err
 	}
 	rewritten := formatCloneRoutineStatements(stmts, options...)
