@@ -2629,34 +2629,34 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(source, rs, length, selectList, explicit)
@@ -6249,6 +6249,15 @@ func strToSigned[T constraints.Signed](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+}
+
+func strToSignedWithProc[T constraints.Signed](
+	ctx context.Context,
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -6297,6 +6306,7 @@ func strToSigned[T constraints.Signed](
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
+				appendNumericCoercionWarning(proc, s)
 				result = T(r)
 			}
 			if err := to.Append(result, false); err != nil {
@@ -6441,6 +6451,40 @@ func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompati
 		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", string(value))
 	}
 	return float64(raw), nil
+}
+
+// warningDiagnosticAppender is implemented by the frontend session without
+// making the execution-layer process.Session contract depend on diagnostics.
+// Remote and unit-test processes simply do not implement it, in which case
+// numeric conversion still succeeds but has nowhere to expose a warning.
+type warningDiagnosticAppender interface {
+	AppendWarningDiagnostic(code uint16, msg string)
+}
+
+// appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
+// whose numeric prefix was consumed and whose remaining text was discarded.
+// Empty strings intentionally coerce to zero without a warning.
+func appendNumericCoercionWarning(proc *process.Process, value string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
+		return
+	}
+	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
+	if ok && strings.TrimSpace(prefix) == trimmed {
+		return
+	}
+	if proc == nil {
+		return
+	}
+	session := proc.GetSession()
+	appender, ok := session.(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+	)
 }
 
 func parseStrictFloatStringWithBitSize(s string, bitSize int) (float64, error) {
@@ -6689,6 +6733,15 @@ func strToUnsigned[T constraints.Unsigned](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+}
+
+func strToUnsignedWithProc[T constraints.Unsigned](
+	ctx context.Context,
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -6722,6 +6775,9 @@ func strToUnsigned[T constraints.Unsigned](
 				}
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
+			if !isBinary {
+				appendNumericCoercionWarning(proc, *res)
+			}
 			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
@@ -6732,6 +6788,16 @@ func strToUnsigned[T constraints.Unsigned](
 
 func strToFloat[T constraints.Float](
 	ctx context.Context,
+	mode SQLCompatibilityMode,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
+}
+
+func strToFloatWithProc[T constraints.Float](
+	ctx context.Context,
+	proc *process.Process,
 	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
@@ -6767,6 +6833,9 @@ func strToFloat[T constraints.Float](
 			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
 			if tErr != nil {
 				return tErr
+			}
+			if !isBinary && mode == SQLCompatibilityMySQL {
+				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

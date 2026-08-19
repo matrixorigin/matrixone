@@ -233,7 +233,12 @@ func NewExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
-			executor.volatile, executor.timeDependent = overload.CannotFold(), overload.IsRealTimeRelated()
+			// String-to-numeric casts can emit one warning for every logical
+			// output row.  Do not constant-fold them: a folded vector has only
+			// one physical value, so warning generation would depend on the
+			// physical batch layout rather than the rows evaluated by the query.
+			executor.volatile = overload.CannotFold() || isStringToNumericCast(planExpr)
+			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
@@ -258,6 +263,24 @@ func NewExpressionExecutorWithAllocation(
 	}
 
 	return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("unsupported expression executor for %v now", planExpr))
+}
+
+func isStringToNumericCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || len(f.Args) == 0 {
+		return false
+	}
+	switch f.Func.GetObjName() {
+	case "cast", "cast_strict", "cast_assign", "cast_ignore":
+	default:
+		return false
+	}
+	source := types.T(f.Args[0].Typ.Id)
+	target := types.T(expr.Typ.Id)
+	return source.IsMySQLString() && target.ToType().IsNumeric()
 }
 
 func newExpressionOffHeapVector(
@@ -562,6 +585,17 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 
 	if expr.vec == nil {
+		expr.vec, err = util.GenVectorByVarValueWithAllocation(
+			proc, expr.typ, val, expr.allocation,
+		)
+	} else if !expr.typ.IsVarlen() || expr.typ.Oid == types.T_json || expr.typ.Oid.IsArrayRelate() {
+		// Fixed-width user-variable values (including DECIMAL), JSON values, and
+		// array/vector values need typed reconstruction on every evaluation.
+		// Reusing the generic varlena update path would either reinterpret a
+		// fixed vector's backing memory as a Varlena, skip JSON's binary
+		// encoding, or replace array element bytes with display text such as
+		// "[1 2 3]".
+		expr.vec.Free(expr.mp)
 		expr.vec, err = util.GenVectorByVarValueWithAllocation(
 			proc, expr.typ, val, expr.allocation,
 		)
