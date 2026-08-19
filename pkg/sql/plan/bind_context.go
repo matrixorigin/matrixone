@@ -714,48 +714,50 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 }
 
 // havingOutputExpr resolves an unqualified name against the query block's
-// visible SELECT outputs. Explicit aliases take precedence over implicit
-// output names. Only direct column projections acquire an implicit name;
-// anonymous expressions must not make their source columns HAVING-visible.
-// The third return value reports duplicate output names with different
-// expressions, which are ambiguous rather than silently last-wins.
+// visible SELECT outputs. Explicit aliases and implicit output names share one
+// candidate set: an explicit alias does not hide a separately projected column
+// with the same output name. Only direct column projections (optionally
+// wrapped in a no-op unary plus or parentheses) acquire an implicit name;
+// anonymous expressions must not make their source columns HAVING-visible. The
+// third return value reports duplicate output names with different expressions,
+// which are ambiguous rather than silently last-wins.
 func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool, bool) {
 	var selected tree.Expr
-	hasExplicit := false
+	found := false
 	for _, field := range bc.projectByAst {
-		if field.aliasName == "" || !strings.EqualFold(field.aliasName, name) {
+		outputName, ok := havingImplicitOutputName(field)
+		if !ok || !strings.EqualFold(outputName, name) {
 			continue
 		}
-		if selected == nil {
+		if !found {
 			selected = field.ast
-			hasExplicit = true
+			found = true
 			continue
 		}
 		if semanticAstKey(selected) != semanticAstKey(field.ast) {
 			return nil, true, true
 		}
 	}
-	if hasExplicit {
-		return selected, true, false
-	}
+	return selected, found, false
+}
 
-	for _, field := range bc.projectByAst {
-		if field.aliasName != "" {
-			continue
-		}
-		column, ok := unwrapParenExpr(field.ast).(*tree.UnresolvedName)
-		if !ok || column.Star || !strings.EqualFold(column.ColName(), name) {
-			continue
-		}
-		if selected == nil {
-			selected = field.ast
-			continue
-		}
-		if semanticAstKey(selected) != semanticAstKey(field.ast) {
-			return nil, true, true
-		}
+// havingImplicitOutputName returns the name exposed by a SELECT field when it
+// has no explicit alias. MySQL treats unary plus as a no-op for this purpose,
+// so SELECT +column retains column's implicit output name. Other expressions
+// remain anonymous and must not make their input columns visible to HAVING.
+func havingImplicitOutputName(field SelectField) (string, bool) {
+	if field.aliasName != "" {
+		return field.aliasName, true
 	}
-	return selected, selected != nil, false
+	ast := unwrapParenExpr(field.ast)
+	if unary, ok := ast.(*tree.UnaryExpr); ok && unary.Op == tree.UNARY_PLUS {
+		ast = unwrapParenExpr(unary.Expr)
+	}
+	column, ok := ast.(*tree.UnresolvedName)
+	if !ok || column.Star {
+		return "", false
+	}
+	return column.ColName(), true
 }
 
 // havingProjectedColumnExpr resolves a qualified HAVING column only when the

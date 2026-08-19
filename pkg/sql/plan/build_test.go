@@ -2103,6 +2103,46 @@ func TestOnlyFullGroupByAllowsNonAggregateHavingDirectColumn(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestOnlyFullGroupByRejectsExplicitImplicitHavingNameCollision(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_nationkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.ErrorContains(t, err, "Column 'n_regionkey' in having clause is ambiguous")
+}
+
+func TestOnlyFullGroupByAllowsEquivalentExplicitImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByExplicitHavingAliasPrecedesUnprojectedSource(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_nationkey AS n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsUnaryPlusImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
 func TestOnlyFullGroupByAllowsQualifiedHavingProjectedColumn(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT nation.n_regionkey
