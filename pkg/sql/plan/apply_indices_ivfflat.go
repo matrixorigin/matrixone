@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 )
 
 type ivfIndexContext struct {
@@ -1093,7 +1094,7 @@ func firstIvfSearchRoundLimit(limit *plan.Expr, hasFilterPressure bool) uint64 {
 		return originalLimit
 	}
 
-	overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
+	overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
 	return max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
 }
 
@@ -1352,6 +1353,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// pre-filter path and use the legacy single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
+
+	// In post-filter mode the residual filters drop index candidates after the
+	// search, so the search must over-fetch (fetch k' > k) to still return k rows.
+	// The over-fetch is done once at EXECUTE by the TVF (this flag), for literal
+	// AND parameterized limits alike (#26878). Auto mode that resolves to post
+	// filter (usePreFilter == false) flows through here too — the over-fetch
+	// factor is mode-agnostic.
+	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter
+
 	if usePreFilter && len(remainingFilters) > 0 &&
 		types.T(ivfCtx.pkType.Id).IsInteger() &&
 		!localProtocolEnablesSortedMembershipFilter(
@@ -1382,20 +1392,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 
 	tblCfg := vectorindex.IndexTableConfig{
-		DbName:             scanNode.ObjRef.SchemaName,
-		SrcTable:           scanNode.TableDef.Name,
-		MetadataTable:      ivfCtx.metaDef.IndexTableName,
-		IndexTable:         ivfCtx.idxDef.IndexTableName,
-		ThreadsSearch:      ivfCtx.nThread,
-		EntriesTable:       ivfCtx.entriesDef.IndexTableName,
-		Nprobe:             uint(ivfCtx.nProbe),
-		PKeyType:           ivfCtx.pkType.Id,
-		PKey:               scanNode.TableDef.Pkey.PkeyColName,
-		KeyPart:            ivfCtx.idxDef.Parts[0],
-		KeyPartType:        ivfCtx.partType.Id,
-		OrigFuncName:       ivfCtx.origFuncName,
-		IncludeColumns:     includeColumns,
-		IncludeColumnTypes: includeColumnTypes,
+		DbName:              scanNode.ObjRef.SchemaName,
+		SrcTable:            scanNode.TableDef.Name,
+		MetadataTable:       ivfCtx.metaDef.IndexTableName,
+		IndexTable:          ivfCtx.idxDef.IndexTableName,
+		ThreadsSearch:       ivfCtx.nThread,
+		EntriesTable:        ivfCtx.entriesDef.IndexTableName,
+		Nprobe:              uint(ivfCtx.nProbe),
+		PKeyType:            ivfCtx.pkType.Id,
+		PKey:                scanNode.TableDef.Pkey.PkeyColName,
+		KeyPart:             ivfCtx.idxDef.Parts[0],
+		KeyPartType:         ivfCtx.partType.Id,
+		OrigFuncName:        ivfCtx.origFuncName,
+		IncludeColumns:      includeColumns,
+		IncludeColumnTypes:  includeColumnTypes,
+		PostFilterOverFetch: postFilterOverFetch,
 	}
 	tblCfgBytes, err := json.Marshal(tblCfg)
 	if err != nil {
@@ -1456,59 +1467,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	// push down the candidate limit to the table function.
-	limitExpr := DeepCopyExpr(outerResultNeedExpr)
-
-	if len(remainingFilters) > 0 && !usePreFilter {
-		// When there are filters, over-fetch to get more candidates.
-		// This ensures we have enough candidates after filtering.
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limitExpr.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Filtered post mode needs a larger candidate budget than the historical
-			// default, but we keep it as fixed buckets so the plan is predictable.
-			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
-
-			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
-
-			if ivfCtx.isAutoMode {
-				logutil.Debugf(
-					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
-					originalLimit, overFetchFactor, len(remainingFilters),
-				)
-				logutil.Debugf(
-					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
-					originalLimit, newLimit,
-				)
-			} else {
-				logutil.Debugf(
-					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
-					originalLimit, overFetchFactor, len(remainingFilters), newLimit,
-				)
-			}
-
-			limitExpr = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		}
-	}
-
+	// The raw candidate limit (k) is always carried on IndexReaderParam.Limit — a
+	// TVF-only channel with no plan-level top — and node.Limit is always dropped,
+	// so the TVF is the single authority on the candidate budget. When a residual
+	// post-filter will drop candidates, the TVF over-fetches k -> k' at EXECUTE
+	// (post_filter_overfetch flag). Leaving node.Limit unset keeps the full
+	// candidate stream flowing to the JOIN, and lets a multi-CN merge see every
+	// shard's candidates rather than a per-shard-truncated subset.
 	tableFuncNode.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        limitExpr,
-		OrigFuncName: ivfCtx.origFuncName,
-		DistRange:    distRange,
+		Limit:          DeepCopyExpr(outerResultNeedExpr),
+		OrigFuncName:   ivfCtx.origFuncName,
+		DistRange:      distRange,
+		OverFetchLimit: overFetchDisplayLimit(outerResultNeedExpr, postFilterOverFetch, true),
 	}
-	tableFuncNode.Limit = DeepCopyExpr(limitExpr)
+	tableFuncNode.Limit = nil
 
 	// Determine join structure based on the effective filtering strategy:
 	//   no pre-filter: JOIN(scanNode, ivf_search)

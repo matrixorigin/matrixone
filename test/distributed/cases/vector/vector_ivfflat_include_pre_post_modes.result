@@ -21,7 +21,7 @@ from vector_ivfflat_include_phase5
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -33,13 +33,12 @@ Project  𝄀
               ->  Table Scan on vector_ivfflat_include_phase5.vector_ivfflat_include_phase5  𝄀
                     Runtime Filter Probe: vector_ivfflat_include_phase5.id  𝄀
               ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 2  𝄀
-                    Limit: 2
+                    Index Reader Param:  Limit: 2
 select id, title, category
 from vector_ivfflat_include_phase5
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 1  ¦  alpha  ¦  10  𝄀
 2  ¦  beta  ¦  20
 explain select id, title, category
@@ -48,7 +47,7 @@ where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=pre';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -67,7 +66,6 @@ Project  𝄀
                     ->  Table Function on ivf_search  𝄀
                           Index Reader Param:  Limit: 2  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
-                          Limit: 2  𝄀
                     ->  Table Scan on vector_ivfflat_include_phase5.vector_ivfflat_include_phase5  𝄀
                           Filter Cond: (vector_ivfflat_include_phase5.category >= 20)
 select id, title, category
@@ -75,7 +73,7 @@ from vector_ivfflat_include_phase5
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
 limit 2 by rank with option 'mode=pre';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40
 drop table vector_ivfflat_include_phase5;

@@ -32,6 +32,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -139,6 +140,83 @@ func createTableSQLForCatalog(ctx CompilerContext, stmt *tree.CreateTable) strin
 	return canonicalCreateTableSQL(stmt)
 }
 
+// validateViewDefinitionPlugins asks every registered index plugin to vet the optimized
+// plan of a view's defining SELECT before it is persisted.
+//
+// View DDL is the one statement that STORES a query without running it, so anything an
+// algorithm cannot execute commits silently and only surfaces when someone selects from
+// the view. Today only the fulltext family refuses anything: MATCH() AGAINST() binds to a
+// placeholder with no implementation, so a definition no FULLTEXT index can serve is
+// unrunnable rather than merely slow. Vector plugins return nil -- their distance
+// functions are real kernels, so a plan that misses the index still executes as a
+// brute-force scan.
+//
+// Plugins are consulted in a stable order so that a definition offending more than one
+// reports the same error every time.
+//
+// This must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+// passed into the bind: that hook fires before createQuery, where an index rewrite has not
+// yet had its chance and every candidate expression still looks unresolved.
+// indexRewritesDisabled reports whether the global optimizer_hints variable turns off
+// applyIndices. Reads the same variable parseOptimizeHints does, in the same key=value
+// form, rather than depending on a QueryBuilder that genViewTableDef does not have.
+func indexRewritesDisabled(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	v, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables("optimizer_hints")
+	if !ok {
+		return false
+	}
+	str, ok := v.(string)
+	if !ok || len(str) == 0 {
+		return false
+	}
+	// splitOptimizerHint, not a private copy of the split: this must answer "did applyIndices
+	// really get switched off", and only the parser the optimizer itself uses knows that. A
+	// copy that trimmed whitespace read ` applyIndices=1` as a hint the optimizer had ignored,
+	// so the rewrites ran while validation below was skipped as if they had not.
+	for _, kv := range strings.Split(str, ",") {
+		if key, value, ok := splitOptimizerHint(kv); ok && key == "applyIndices" && value != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error {
+	if query == nil {
+		return nil
+	}
+	// Every plugin's answer is inferred from whether its rewrite fired, so the inference is
+	// only valid when rewrites were allowed to run at all. The global optimizer_hints knob
+	// can switch applyIndices off wholesale (apply_indices.go), leaving every placeholder in
+	// place regardless of the catalog -- under `set global optimizer_hints = 'applyIndices=1'`
+	// this would refuse EVERY fulltext view, including ones with a perfectly good index, and
+	// keep refusing cluster-wide until someone noticed the hint. A diagnostic knob must not
+	// silently turn into a DDL policy, so skip validation entirely while it is set: being
+	// permissive costs an unrunnable view, being wrong here costs working ones.
+	if indexRewritesDisabled(ctx) {
+		return nil
+	}
+	plugins := indexplugin.All()
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Algo() < plugins[j].Algo() })
+	for _, p := range plugins {
+		hooks := p.Plan()
+		if hooks == nil {
+			continue
+		}
+		if err := hooks.ValidateViewDefinition(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	validate := func(query *Query) error {
@@ -187,6 +265,12 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.Ident
 	}
 
 	query := stmtPlan.GetQuery()
+	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
+	// above: that hook fires before createQuery, where every MATCH is still an unresolved
+	// function whether or not an index exists.
+	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
+		return nil, err
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())

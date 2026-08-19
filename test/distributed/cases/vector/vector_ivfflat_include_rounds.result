@@ -25,7 +25,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 set probe_limit = 10;
@@ -35,14 +35,13 @@ where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
         Limit: 2  𝄀
         ->  Table Function on ivf_search  𝄀
               Index Reader Param:  Limit: 2  𝄀
-              Limit: 2  𝄀
               Filter Cond: (`__mo_index_include_category` = 20)
 explain select id, title, category
 from include_rounds_main
@@ -50,7 +49,7 @@ where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=post';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON MULTICN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -63,15 +62,14 @@ Project  𝄀
                     Filter Cond: (include_rounds_main.category = 20)  𝄀
                     Runtime Filter Probe: include_rounds_main.id  𝄀
               ->  Table Function on ivf_search  𝄀
-                    Index Reader Param:  Limit: 12  𝄀
-                    Limit: 12
+                    Index Reader Param:  Limit: 2  OverFetchLimit: 12
 explain select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=pre';
 -- @regex("Table Function on ivf_search", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ AP QUERY PLAN ON ONE CN(8 core)[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
@@ -90,7 +88,6 @@ Project  𝄀
                     ->  Table Function on ivf_search  𝄀
                           Index Reader Param:  Limit: 2  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
-                          Limit: 2  𝄀
                     ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
                           Filter Cond: (include_rounds_main.category = 20)
 select id, title, category
@@ -98,7 +95,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
@@ -106,14 +103,14 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 1 offset 1 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=post';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 select id, title, category
@@ -121,7 +118,7 @@ from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
 limit 2 by rank with option 'mode=pre';
-➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  title[12,15,0]  ¦  category[4,32,0]  𝄀
 5  ¦  b0  ¦  20  𝄀
 6  ¦  b1  ¦  20
 drop table if exists include_rounds_residual;
@@ -152,7 +149,7 @@ from include_rounds_residual
 where category = 20 and note = "target"
 order by l2_distance(embedding, "[0,0,0]")
 limit 1 by rank with option 'mode=include';
-➤ id[4,32,0]  ¦  note[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
 13  ¦  target
 drop table include_rounds_residual;
 drop table include_rounds_main;
