@@ -41,6 +41,16 @@ type testColumnWindowSpill struct {
 	closed bool
 }
 
+type failingColumnWindowSpill struct {
+	growErr  error
+	writeErr error
+}
+
+func (s *failingColumnWindowSpill) ReadAt([]byte, int64) (int, error) { return 0, io.EOF }
+func (s *failingColumnWindowSpill) Write([]byte) (int, error)         { return 0, s.writeErr }
+func (s *failingColumnWindowSpill) Close() error                      { return nil }
+func (s *failingColumnWindowSpill) Grow(uint64) error                 { return s.growErr }
+
 func (s *testColumnWindowSpill) Grow(size uint64) error {
 	s.grown += size
 	return nil
@@ -287,6 +297,48 @@ func TestLegacyColumnDecoderBoundaryCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReservedSpillWriterErrorPaths(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	writer := &reservedSpillWriter{ctx: ctx, spill: &failingColumnWindowSpill{}}
+	_, err := writer.Write([]byte("cancelled"))
+	require.ErrorIs(t, err, context.Canceled)
+
+	writer = &reservedSpillWriter{
+		ctx:   context.Background(),
+		spill: &failingColumnWindowSpill{growErr: io.ErrClosedPipe},
+	}
+	_, err = writer.Write([]byte("grow"))
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+
+	writer = &reservedSpillWriter{
+		ctx:   context.Background(),
+		spill: &failingColumnWindowSpill{writeErr: io.ErrClosedPipe},
+	}
+	_, err = writer.Write([]byte("write"))
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+}
+
+func TestMaterializeLegacyColumnWindowRange(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_int32.ToType())
+	defer source.Free(mp)
+	for i := 0; i < 4; i++ {
+		require.NoError(t, vector.AppendFixed(source, int32(i), false, mp))
+	}
+	encoded := marshalLegacyTestColumn(t, source)
+	originSize := int64(len(encoded))
+	window, err := materializeLegacyColumnWindow(bytes.NewReader(encoded), originSize, 1, 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, 2, window.Length())
+	window.Free(mp)
+	_, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), originSize, -1, 1, mp)
+	require.Error(t, err)
+	_, err = materializeLegacyColumnWindow(bytes.NewReader(encoded), originSize, 4, 1, mp)
+	require.Error(t, err)
 }
 
 func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
