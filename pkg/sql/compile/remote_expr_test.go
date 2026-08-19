@@ -15,14 +15,19 @@
 package compile
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -34,6 +39,270 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type remoteWarningSession struct {
+	warnings []struct {
+		code uint16
+		msg  string
+	}
+	totalWarnings uint64
+}
+
+func (*remoteWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*remoteWarningSession) AddTempTable(string, string, string)        {}
+func (*remoteWarningSession) RemoveTempTable(string, string)             {}
+func (*remoteWarningSession) RemoveTempTableByRealName(string)           {}
+func (*remoteWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *remoteWarningSession) AppendWarningDiagnostic(code uint16, msg string) {
+	s.totalWarnings++
+	s.warnings = append(s.warnings, struct {
+		code uint16
+		msg  string
+	}{code: code, msg: msg})
+}
+func (s *remoteWarningSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	s.totalWarnings += total
+	for i := 0; i < len(codes) && i < len(messages); i++ {
+		s.warnings = append(s.warnings, struct {
+			code uint16
+			msg  string
+		}{code: codes[i], msg: messages[i]})
+	}
+}
+
+func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		if name == "s" && !system {
+			return "12abc", nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+	})
+
+	variable := makeTestVarExpr("s")
+	variable.GetV().System = false
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		variable,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+
+	folded, err := foldVarExprsInExprInPlace(cast, proc)
+	require.NoError(t, err)
+	require.True(t, folded)
+	require.Empty(t, session.warnings)
+
+	input := batch.NewWithSize(1)
+	dummy := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(dummy, int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(dummy, int64(2), false, proc.Mp()))
+	defer dummy.Free(proc.Mp())
+	input.Vecs[0] = dummy
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
+	require.Len(t, session.warnings, 2)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
+	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
+	buildCast := func(proc *process.Process) *plan.Expr {
+		proc.Session = &remoteWarningSession{}
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			if name == "s" && !system {
+				return "12abc", nil
+			}
+			return nil, moerr.NewInternalErrorNoCtx("variable not found")
+		})
+
+		variable := makeTestVarExpr("s")
+		variable.GetV().System = false
+		targetType := types.T_float64.ToType()
+		cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+			variable,
+			{
+				Typ:  plan2.MakePlan2Type(&targetType),
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			},
+		})
+		require.NoError(t, err)
+		folded, err := foldVarExprsInExprInPlace(cast, proc)
+		require.NoError(t, err)
+		require.True(t, folded)
+		return cast
+	}
+
+	run := func(layout []int) uint64 {
+		proc := testutil.NewProcess(t)
+		cast := buildCast(proc)
+		executor, err := colexec.NewExpressionExecutor(proc, cast)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		for _, rows := range layout {
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt64Vector(make([]int64, rows), nil, proc.Mp())
+			input.SetRowCount(rows)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, rows, result.Length())
+			input.Vecs[0].Free(proc.Mp())
+		}
+		session := proc.Session.(*remoteWarningSession)
+		return session.totalWarnings
+	}
+
+	// A single two-row batch and two one-row batches represent the same
+	// logical result. Constant folding must not make their diagnostics differ.
+	require.Equal(t, uint64(2), run([]int{2}))
+	require.Equal(t, uint64(2), run([]int{1, 1}))
+	require.Equal(t, uint64(0), run([]int{0}))
+}
+
+func TestRemoteNumericCoercionWarningsFollowEvaluatedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	sourceType := types.T_text.ToType()
+	source := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&sourceType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		source,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+
+	input := batch.NewWithSize(1)
+	values := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("12abc"), []byte("12abc")}, nil,
+		types.T_text.ToType(), proc.Mp())
+	defer values.Free(proc.Mp())
+	input.Vecs[0] = values
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
+	require.Len(t, session.warnings, 2)
+
+	session.warnings = nil
+	input.SetRowCount(0)
+	vec, free, err = colexec.GetReadonlyResultFromExpression(proc, cast, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 0, vec.Length())
+	free()
+	require.Empty(t, session.warnings)
+}
+
+func TestFoldVarExprRemoteNumericCastSkipsUnselectedBranchWarning(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		if name == "s" && !system {
+			return "12abc", nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("variable not found")
+	})
+
+	variable := makeTestVarExpr("s")
+	variable.GetV().System = false
+	targetType := types.T_float64.ToType()
+	cast, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		variable,
+		{
+			Typ:  plan2.MakePlan2Type(&targetType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	zeroType := types.T_int64.ToType()
+	zero := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&zeroType),
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: 0},
+		}},
+	}
+	condition := makeTestConstBoolExpr(false)
+	iff, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition, cast, zero,
+	})
+	require.NoError(t, err)
+
+	folded, err := foldVarExprsInExprInPlace(iff, proc)
+	require.NoError(t, err)
+	require.True(t, folded)
+	input := batch.NewWithSize(1)
+	input.SetRowCount(2)
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, iff, []*batch.Batch{input})
+	require.NoError(t, err)
+	require.Equal(t, 2, vec.Length())
+	free()
+	require.Empty(t, session.warnings)
+}
+
+func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
+	session := &remoteWarningSession{}
+	sender := &messageSenderOnClient{warningSink: session}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 2,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "first"},
+			{Code: moerr.ER_TRUNCATED_WRONG_VALUE, Message: "second"},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	require.Len(t, session.warnings, 2)
+	require.Equal(t, uint64(2), session.totalWarnings)
+	require.Equal(t, "first", session.warnings[0].msg)
+	require.Equal(t, "second", session.warnings[1].msg)
+}
+
+func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
+	collector := &remoteWarningCollector{maxRetained: 3}
+	for i := 0; i < 1000; i++ {
+		collector.AppendWarningDiagnostic(1292, "truncated")
+	}
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(1000), total)
+	require.Len(t, retained, 3)
+
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount:       total,
+		WarningDiagnostics: retained,
+	})
+	require.NoError(t, err)
+	require.Less(t, len(data), 1024)
+}
+
+func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
+	collector := &remoteWarningCollector{maxRetained: 2}
+	collector.AppendWarningBatch(100, []uint16{1, 2, 3}, []string{"a", "b", "c"})
+	collector.AppendWarningBatch(50, []uint16{4}, []string{"d"})
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(150), total)
+	require.Len(t, retained, 2)
+	require.Equal(t, uint16(1), retained[0].Code)
+	require.Equal(t, uint16(2), retained[1].Code)
+}
 
 func TestScopeContainsVarExpr(t *testing.T) {
 	scope := newScope(Normal)
