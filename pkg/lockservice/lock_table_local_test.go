@@ -439,6 +439,94 @@ func TestEmptyRangeEndpointDoesNotSpliceAdjacentLiveRange(t *testing.T) {
 	)
 }
 
+func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 5), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			// Keep the live range-end, but replace only the start's backing state
+			// with an empty state. This is the half-live shape left by a failed
+			// waiter cleanup and must be repaired before the next merge scan.
+			lt.mu.Lock()
+			staleStart, ok := lt.mu.store.Get([]byte{1})
+			require.True(t, ok)
+			staleStart.holders = newHolders()
+			staleStart.waiters = newWaiterQueue()
+			lt.mu.store.Add([]byte{1}, staleStart)
+			lt.mu.Unlock()
+
+			require.NotPanics(t, func() {
+				_, err = s.Lock(ctx, table, newTestRows(0, 10), txnID, newTestRangeExclusiveOptions())
+			})
+			require.NoError(t, err)
+
+			lt.mu.RLock()
+			startLock, startOK := lt.mu.store.Get([]byte{0})
+			endLock, endOK := lt.mu.store.Get([]byte{10})
+			_, oldStartOK := lt.mu.store.Get([]byte{1})
+			_, oldEndOK := lt.mu.store.Get([]byte{5})
+			lt.mu.RUnlock()
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.False(t, oldStartOK)
+			require.False(t, oldEndOK)
+			require.True(t, startLock.isLockRangeStart())
+			require.True(t, endLock.isLockRangeEnd())
+			require.Same(t, startLock.holders, endLock.holders)
+			require.Same(t, startLock.waiters, endLock.waiters)
+
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len())
+			lt.mu.RUnlock()
+		},
+	)
+}
+
+func TestMismatchedRangeEndRepairsLiveCounterpart(t *testing.T) {
+	table := uint64(11)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+			staleEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			liveStart := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, liveStart)
+			lt.mu.store.Add([]byte{5}, staleEnd)
+			lt.deleteEmptyLockLocked([]byte{5}, staleEnd)
+			startLock, startOK := lt.mu.store.Get([]byte{1})
+			endLock, endOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Same(t, sharedHolders, startLock.holders)
+			require.Same(t, sharedWaiters, startLock.waiters)
+			require.Same(t, sharedHolders, endLock.holders)
+			require.Same(t, sharedWaiters, endLock.waiters)
+			require.True(t, endLock.isLockRangeEnd())
+		},
+	)
+}
+
 func TestEmptyRowLockIsRemovedBeforeNewRowLock(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(

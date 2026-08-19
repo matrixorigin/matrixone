@@ -835,23 +835,90 @@ func (l *localLockTable) deleteEmptyLockLocked(key []byte, lock Lock) {
 		return
 	}
 
-	pairedKey, pairedLock, ok := l.findPairedRangeLock(key, lock)
-	if !ok || pairedLock.holders != lock.holders || pairedLock.waiters != lock.waiters {
-		// The endpoint may be stale because its paired entry was removed or its
-		// shared state was replaced while an aborted waiter was being detached.
-		// Do not return the possibly shared state to the pools. Remove only the
-		// empty entry so a later request cannot try to hold it. In particular, an
-		// unrelated live range may be the nearest opposite endpoint; rebuilding
-		// this entry from that range would make two ranges share one lock state.
+	pairedKey, pairedLock, structuralPair := l.findStructuralRangePair(key, lock)
+	if !structuralPair {
+		// The endpoint is an orphan. A complete range that starts/ends between
+		// this entry and the nearest opposite endpoint must not be adopted.
 		l.logger.Error("missing paired empty range lock during waiter cleanup",
 			zap.Uint64("table", l.bind.Table),
 			zap.Binary("key", key))
 		l.mu.store.Delete(key)
 		return
 	}
+
+	if sameRangeLockState(lock, pairedLock) {
+		l.mu.store.Delete(key)
+		l.mu.store.Delete(pairedKey)
+		lock.release()
+		return
+	}
+
+	// The first endpoint in the structural direction is the only endpoint
+	// that can belong to this range. If its state was replaced while the
+	// counterpart survived, restore the empty endpoint from that counterpart
+	// instead of leaving a live range-end without a range-start. A later range
+	// start/end would have made structuralPair false above, so this cannot
+	// splice an adjacent complete range into the stale one.
+	l.logger.Error("rebuilding mismatched range endpoint during waiter cleanup",
+		zap.Uint64("table", l.bind.Table),
+		zap.Binary("key", key),
+		zap.Binary("paired-key", pairedKey))
+	if !pairedLock.isEmpty() {
+		repaired := pairedLock
+		repaired.value &^= flagLockRangeStart | flagLockRangeEnd
+		if lock.isLockRangeStart() {
+			repaired.value |= flagLockRangeStart
+		} else {
+			repaired.value |= flagLockRangeEnd
+		}
+		l.mu.store.Add(key, repaired)
+		l.releaseLockStatesIfUnreferencedLocked(lock)
+		return
+	}
+
+	// Both structurally paired endpoints are stale but no longer share state.
+	// Remove and release both states, unless another store entry still refers
+	// to one of their backing pools.
 	l.mu.store.Delete(key)
 	l.mu.store.Delete(pairedKey)
-	lock.release()
+	l.releaseLockStatesIfUnreferencedLocked(lock, pairedLock)
+}
+
+// releaseLockStatesIfUnreferencedLocked returns abandoned lock states to their
+// pools only when no other store entry still points at either backing object.
+// A malformed range can share just one of holders/waiters with another entry;
+// retaining that state is safer than returning a live pool object twice.
+func (l *localLockTable) releaseLockStatesIfUnreferencedLocked(locks ...Lock) {
+	for i, lock := range locks {
+		if lock.holders == nil || lock.waiters == nil {
+			continue
+		}
+
+		// Do not release the same state twice, and do not release a partially
+		// shared state because one pool object may still be live elsewhere.
+		shared := false
+		for j := range locks[:i] {
+			if locks[j].holders == lock.holders || locks[j].waiters == lock.waiters {
+				shared = true
+				break
+			}
+		}
+		if shared {
+			continue
+		}
+
+		referenced := false
+		l.mu.store.Iter(func(_ []byte, other Lock) bool {
+			if other.holders == lock.holders || other.waiters == lock.waiters {
+				referenced = true
+				return false
+			}
+			return true
+		})
+		if !referenced {
+			lock.release()
+		}
+	}
 }
 
 func (l *localLockTable) addRangeLockLocked(
@@ -1179,9 +1246,25 @@ func (l *localLockTable) setModePairedRangeLock(key []byte, lock Lock, mode pb.L
 
 // findPairedRangeLock locates the other end of a range lock pair. Between
 // range-start and range-end there may be interleaved row locks from other
-// transactions, so we scan until we find an endpoint with the same backing
-// holder and waiter state.
+// transactions, so we scan past rows but stop at the first range endpoint.
+// The first endpoint is important: scanning past another range can attach an
+// orphan endpoint to an unrelated live range.
 func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Lock, bool) {
+	pairedKey, pairedLock, ok := l.findStructuralRangePair(key, lock)
+	if !ok || !sameRangeLockState(lock, pairedLock) {
+		return nil, Lock{}, false
+	}
+	return pairedKey, pairedLock, true
+}
+
+// findStructuralRangePair returns the first range endpoint in the direction
+// where this endpoint can be paired, without inspecting backing state. A
+// same-direction endpoint means the first opposite endpoint belongs to a
+// different range, so the pair is ambiguous and false is returned. Row locks
+// may be interleaved and are ignored.
+func (l *localLockTable) findStructuralRangePair(
+	key []byte,
+	lock Lock) ([]byte, Lock, bool) {
 	if lock.isLockRangeEnd() {
 		cur := key
 		for {
@@ -1189,13 +1272,16 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 			if !ok {
 				return nil, Lock{}, false
 			}
-			if prevLock.isLockRangeStart() && sameRangeLockState(lock, prevLock) {
+			if prevLock.isLockRangeStart() {
 				return prevKey, prevLock, true
+			}
+			if prevLock.isLockRangeEnd() {
+				return nil, Lock{}, false
 			}
 			cur = prevKey
 		}
 	}
-	// isLockRangeStart: scan forward
+
 	var pairedKey []byte
 	var pairedLock Lock
 	var found bool
@@ -1203,8 +1289,11 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 		nextKey(key, nil),
 		nil,
 		func(k []byte, v Lock) bool {
-			if v.isLockRangeEnd() && sameRangeLockState(lock, v) {
+			if v.isLockRangeEnd() {
 				pairedKey, pairedLock, found = k, v, true
+				return false
+			}
+			if v.isLockRangeStart() {
 				return false
 			}
 			return true
