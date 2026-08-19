@@ -51,11 +51,26 @@ select id AS duplicate_name, id AS duplicate_name
 from t
 having duplicate_name > 0;
 
+-- Qualified direct projections are visible to HAVING as well.
+select t.id
+from t
+having t.id > 0;
+
+select t.id AS projected_id
+from t
+having t.id > 0;
+
 -- An anonymous repeated expression does not acquire HAVING output visibility.
 -- @regex("must appear in the GROUP BY clause",true)
 select id + 1
 from t
 having id + 1 > 1;
+
+-- A qualified source inside an expression projection remains invisible.
+-- @regex("must appear in the GROUP BY clause",true)
+select t.id + 1 AS projected_id
+from t
+having t.id > 0;
 
 -- Different expressions under the same alias are ambiguous in HAVING.
 -- @regex("Column 'duplicate_name' in having clause is ambiguous",true)

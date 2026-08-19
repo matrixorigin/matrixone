@@ -50,9 +50,24 @@ from t
 having duplicate_name > 0;
 duplicate_name    duplicate_name
 1                 1
+select t.id
+from t
+having t.id > 0;
+id
+1
+select t.id AS projected_id
+from t
+having t.id > 0;
+projected_id
+1
 select id + 1
 from t
 having id + 1 > 1;
+-- @regex("must appear in the GROUP BY clause", true)
+must appear in the GROUP BY clause
+select t.id + 1 AS projected_id
+from t
+having t.id > 0;
 -- @regex("must appear in the GROUP BY clause", true)
 must appear in the GROUP BY clause
 select id AS duplicate_name, id + 1 AS duplicate_name

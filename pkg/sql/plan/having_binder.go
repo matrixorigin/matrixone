@@ -102,9 +102,14 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
-		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() &&
-		!astExpr.Star && astExpr.NumParts == 1 {
-		projected, found, ambiguous := b.ctx.havingOutputExpr(astExpr.ColName())
+		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+		var projected tree.Expr
+		var found, ambiguous bool
+		if astExpr.NumParts == 1 {
+			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
+		} else {
+			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+		}
 		if ambiguous {
 			return nil, ambiguousHavingColumn(b.GetContext(), astExpr.ColName())
 		}

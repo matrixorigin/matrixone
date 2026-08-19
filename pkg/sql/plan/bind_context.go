@@ -758,6 +758,33 @@ func (bc *BindContext) havingOutputExpr(name string) (tree.Expr, bool, bool) {
 	return selected, selected != nil, false
 }
 
+// havingProjectedColumnExpr resolves a qualified HAVING column only when the
+// same source column is itself a SELECT output. An expression such as
+// "a + 1 AS x" does not make the qualified source reference "t.a" visible.
+func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree.Expr, bool, bool) {
+	var selected tree.Expr
+	for _, field := range bc.projectByAst {
+		column, ok := unwrapParenExpr(field.ast).(*tree.UnresolvedName)
+		if !ok || column.Star || !sameHavingColumnReference(column, ref) {
+			continue
+		}
+		if selected == nil {
+			selected = field.ast
+			continue
+		}
+		if semanticAstKey(selected) != semanticAstKey(field.ast) {
+			return nil, true, true
+		}
+	}
+	return selected, selected != nil, false
+}
+
+func sameHavingColumnReference(left, right *tree.UnresolvedName) bool {
+	return strings.EqualFold(left.DbName(), right.DbName()) &&
+		strings.EqualFold(left.TblName(), right.TblName()) &&
+		strings.EqualFold(left.ColName(), right.ColName())
+}
+
 // makeCoalesceUsingExprFromList builds an AST coalesce(t1.col, t2.col, ...)
 // from the ordered list of contributing leaf tables for a column merged
 // through one or more FULL OUTER JOIN ... USING(col) clauses.

@@ -2103,6 +2103,32 @@ func TestOnlyFullGroupByAllowsNonAggregateHavingDirectColumn(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestOnlyFullGroupByAllowsQualifiedHavingProjectedColumn(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT nation.n_regionkey
+		 FROM nation
+		 HAVING nation.n_regionkey > 0`,
+		`SELECT n_regionkey AS region_key
+		 FROM nation
+		 HAVING nation.n_regionkey > 0`,
+	} {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsQualifiedColumnInsideAnonymousProjection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey + 1 AS region_key
+		FROM nation
+		HAVING nation.n_regionkey > 0`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
 func TestOnlyFullGroupByRejectsAmbiguousHavingAlias(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
