@@ -345,16 +345,25 @@ type PrepareStmt struct {
 // COM_STMT_EXECUTE and COM_STMT_FETCH. MySQL sessions serialize commands, so
 // the cursor does not need an additional lock.
 type preparedStmtCursor struct {
-	result *MysqlResultSet
-	offset uint64
+	result   *MysqlResultSet
+	offset   uint64
+	bytes    uint64
+	maxBytes uint64
+	maxRows  uint64
+	owner    *Session
 }
 
 func (cursor *preparedStmtCursor) close() {
 	if cursor == nil {
 		return
 	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
 	cursor.result = nil
 	cursor.offset = 0
+	cursor.bytes = 0
+	cursor.owner = nil
 }
 
 func (prepareStmt *PrepareStmt) closeCursor() {

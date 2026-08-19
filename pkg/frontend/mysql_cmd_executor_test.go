@@ -3763,8 +3763,10 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 		Name: getPrepareStmtName(271),
 		cursor: &preparedStmtCursor{result: &MysqlResultSet{
 			Data: [][]interface{}{{int64(1)}, {int64(2)}, {int64(3)}},
-		}},
+		}, owner: ses, bytes: 1, maxBytes: 1, maxRows: 3},
 	}
+	ses.preparedCursorLimit.Store(1)
+	ses.preparedCursorBytes.Store(1)
 	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
 
 	data := make([]byte, 8)
@@ -3780,6 +3782,67 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestCapturePreparedCursorBatchBoundsAndReleasesSessionBudget(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated,
+		maxRows:  4,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, uint64(4), stmt.cursor.result.GetRowCount())
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	// The next batch is rejected before another row is copied into the
+	// retained result, and the cursor still owns exactly the first batch.
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "prepared cursor result exceeds the")
+	require.Equal(t, uint64(4), stmt.cursor.result.GetRowCount())
+
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestPreparedCursorSessionBudgetCoversMultipleCursors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 4)
+	defer bat.Clean(mp)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+
+	ses := &Session{}
+	first := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	second := &PrepareStmt{cursor: &preparedStmtCursor{
+		result: &MysqlResultSet{Columns: []Column{&MysqlColumn{}}}, maxBytes: estimated, maxRows: 4,
+	}}
+	firstCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: first}
+	secondCtx := &ExecCtx{reqCtx: context.Background(), prepareStmt: second}
+
+	require.NoError(t, capturePreparedCursorBatch(ses, firstCtx, bat))
+	err = capturePreparedCursorBatch(ses, secondCtx, bat)
+	require.ErrorContains(t, err, "prepared cursor session result exceeds")
+	require.Equal(t, estimated, ses.preparedCursorBytes.Load())
+
+	first.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	require.NoError(t, capturePreparedCursorBatch(ses, secondCtx, bat))
+	second.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {

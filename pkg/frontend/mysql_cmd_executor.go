@@ -86,6 +86,13 @@ import (
 
 const schedulingPreviewTimeout = 100 * time.Millisecond
 
+const (
+	preparedCursorDefaultMaxBytes  uint64 = 100 << 20
+	preparedCursorHardMaxBytes     uint64 = 1 << 30
+	preparedCursorMaxRows          uint64 = 1 << 20
+	preparedCursorBytesPerMegabyte uint64 = 1 << 20
+)
+
 func createDropDatabaseErrorInfo() string {
 	return "CREATE/DROP of database is not supported in transactions"
 }
@@ -778,10 +785,123 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 	return nil
 }
 
+// newPreparedStmtCursor creates the bounded result retained for COM_STMT_FETCH.
+// query_result_maxsize is already the account-level result budget used by the
+// frontend. Reusing it keeps cursor retention configurable without introducing
+// a second session variable; the hard cap prevents an accidentally huge value
+// from turning the prepared-statement quota into an unbounded heap multiplier.
+func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
+	limit := preparedCursorDefaultMaxBytes
+	if ses != nil {
+		if value, err := ses.GetSessionSysVar(QueryResultMaxsize); err == nil {
+			var megabytes uint64
+			switch v := value.(type) {
+			case uint64:
+				megabytes = v
+			case int64:
+				if v > 0 {
+					megabytes = uint64(v)
+				}
+			}
+			if megabytes > 0 {
+				maxMegabytes := preparedCursorHardMaxBytes / preparedCursorBytesPerMegabyte
+				if megabytes > maxMegabytes {
+					megabytes = maxMegabytes
+				}
+				limit = megabytes * preparedCursorBytesPerMegabyte
+			}
+		}
+		if existing := ses.preparedCursorLimit.Load(); existing != 0 {
+			limit = existing
+		} else {
+			ses.preparedCursorLimit.CompareAndSwap(0, limit)
+			if existing := ses.preparedCursorLimit.Load(); existing != 0 {
+				limit = existing
+			}
+		}
+	}
+	return &preparedStmtCursor{
+		result:   &MysqlResultSet{},
+		maxBytes: limit,
+		maxRows:  preparedCursorMaxRows,
+		owner:    ses,
+	}
+}
+
+func (ses *Session) tryReservePreparedCursorBytes(bytes, fallbackLimit uint64) bool {
+	if ses == nil || bytes == 0 {
+		return true
+	}
+	limit := ses.preparedCursorLimit.Load()
+	if limit == 0 {
+		limit = fallbackLimit
+		if limit == 0 {
+			limit = preparedCursorDefaultMaxBytes
+		}
+		ses.preparedCursorLimit.CompareAndSwap(0, limit)
+		limit = ses.preparedCursorLimit.Load()
+	}
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current > limit || bytes > limit-current {
+			return false
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, current+bytes) {
+			return true
+		}
+	}
+}
+
+func (ses *Session) releasePreparedCursorBytes(bytes uint64) {
+	if ses == nil || bytes == 0 {
+		return
+	}
+	for {
+		current := ses.preparedCursorBytes.Load()
+		if current == 0 {
+			return
+		}
+		next := uint64(0)
+		if bytes < current {
+			next = current - bytes
+		}
+		if ses.preparedCursorBytes.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func estimatePreparedCursorBatchBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	dataBytes := bat.Size()
+	if allocated := bat.Allocated(); allocated > dataBytes {
+		dataBytes = allocated
+	}
+	if dataBytes < 0 {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	// Each retained row owns a []any backing array and may also own converted
+	// strings/arrays (for example DECIMAL and temporal values). Charge a
+	// conservative per-column allowance in addition to the source vector bytes.
+	rowBytes := uint64(len(bat.Vecs))*32 + 64
+	rows := uint64(bat.RowCount())
+	if rows > math.MaxUint64/rowBytes {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	overhead := rows * rowBytes
+	if uint64(dataBytes) > math.MaxUint64-overhead {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return uint64(dataBytes) + overhead, nil
+}
+
 // capturePreparedCursorBatch materializes a binary prepared-statement result
 // for COM_STMT_FETCH. The ordinary output callback sends each batch directly
 // to the client; a read-only server cursor must retain those rows until the
-// client asks for them. The result metadata is installed by
+// client asks for them. Retention is bounded and accounted across all active
+// cursors in the session. The result metadata is installed by
 // respColumnDefsWithoutFlush before the pipeline starts.
 func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch) error {
 	if bat == nil {
@@ -797,7 +917,48 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	if cursor.result == nil {
 		cursor.result = &MysqlResultSet{}
 	}
-	return fillResultSet(execCtx.reqCtx, bat, ses, cursor.result)
+	if cursor.owner == nil {
+		cursor.owner = ses
+	}
+	if cursor.maxBytes == 0 {
+		cursor.maxBytes = preparedCursorDefaultMaxBytes
+	}
+	if cursor.maxRows == 0 {
+		cursor.maxRows = preparedCursorMaxRows
+	}
+	rowCount := cursor.result.GetRowCount()
+	if rowCount > cursor.maxRows || uint64(bat.RowCount()) > cursor.maxRows-rowCount {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d-row limit", cursor.maxRows)
+	}
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	if err != nil {
+		return err
+	}
+	if cursor.bytes > cursor.maxBytes || estimated > cursor.maxBytes-cursor.bytes {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor result exceeds the %d MB memory limit", cursor.maxBytes/preparedCursorBytesPerMegabyte)
+	}
+	if !ses.tryReservePreparedCursorBytes(estimated, cursor.maxBytes) {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"prepared cursor session result exceeds the %d MB memory limit", cursor.maxBytes/preparedCursorBytesPerMegabyte)
+	}
+	startRows := len(cursor.result.Data)
+	committed := false
+	defer func() {
+		if !committed {
+			// Keep the result set unchanged if extraction returns an error or
+			// panics after appending a partial row prefix.
+			cursor.result.Data = cursor.result.Data[:startRows]
+			ses.releasePreparedCursorBytes(estimated)
+		}
+	}()
+	if err = fillResultSet(execCtx.reqCtx, bat, ses, cursor.result); err != nil {
+		return err
+	}
+	cursor.bytes += estimated
+	committed = true
+	return nil
 }
 
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
@@ -5340,6 +5501,12 @@ func validateNativePrepareJSONHints(ctx context.Context, materializedSQL string,
 func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			// A cursor callback may panic after reserving its batch budget. Close
+			// the statement-owned spool before converting the panic to a client
+			// error so retained rows and the session accounting are released.
+			if execCtx != nil && execCtx.prepareStmt != nil {
+				execCtx.prepareStmt.closeCursor()
+			}
 			markRowCountFailed(ses, ses.GetProc())
 			var serverStatus uint16
 			if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
@@ -5475,6 +5642,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		if err != nil {
 			ses.resetDiagnostics()
 			if prepareStmt != nil {
+				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 			}
 			// MySQL semantics: a failed statement makes the next ROW_COUNT() return -1.
@@ -5496,7 +5664,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			}
 		}
 		if cursorRequested {
-			prepareStmt.cursor = &preparedStmtCursor{result: &MysqlResultSet{}}
+			prepareStmt.cursor = newPreparedStmtCursor(ses)
 		}
 		execCtx.prepareStmt = prepareStmt
 		execCtx.prepareColDef = prepareStmt.ColDefData
@@ -5685,6 +5853,7 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	}
 	if end > start {
 		if err = ses.GetResponser().MysqlRrWr().WriteResultSetRow(rows, end-start); err != nil {
+			stmt.closeCursor()
 			return nil, err
 		}
 	}
@@ -5699,6 +5868,7 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 		status |= SERVER_STATUS_CURSOR_EXISTS
 	}
 	if err = ses.GetResponser().MysqlRrWr().WriteEOFOrOK(0, status); err != nil {
+		stmt.closeCursor()
 		return nil, err
 	}
 	setRowCount(ses, ses.GetProc(), -1)
