@@ -461,6 +461,20 @@ func TestParamExpressionExecutorParsesFixedNumericTargets(t *testing.T) {
 	}
 }
 
+func TestParamExpressionExecutorUsesCompatibilityFloatConversion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	executor := NewParamExpressionExecutor(proc.Mp(), 0, types.T_float64.ToType())
+	t.Cleanup(executor.Free)
+	vec, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Zero(t, vector.GetFixedAtNoTypeCheck[float64](vec, 0))
+}
+
 func TestFlowControlPreservesPreparedParamKindOnPartialSelection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

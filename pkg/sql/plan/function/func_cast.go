@@ -6400,6 +6400,17 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
+// ParsePreparedStringToFloat64 applies the same compatibility contract as an
+// implicit string-to-DOUBLE cast to a prepared parameter whose plan has
+// already stabilized in the DOUBLE result domain.
+func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
+	mode := SQLCompatibilityMySQL
+	if matrixOneNative {
+		mode = SQLCompatibilityMatrixOne
+	}
+	return parseStringToFloat(s, mode)
+}
+
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
 	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
 		return parseStrictFloatStringWithBitSize(s, bitSize)

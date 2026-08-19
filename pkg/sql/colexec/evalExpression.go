@@ -598,7 +598,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 
 	expr.vec, err = setPreparedParamValue(
-		expr.vec, expr.typ, val, proc.Mp(), expr.allocation)
+		expr.vec, expr.typ, val, proc, proc.Mp(), expr.allocation)
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
 		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
@@ -613,6 +613,7 @@ func setPreparedParamValue(
 	vec *vector.Vector,
 	typ types.Type,
 	value []byte,
+	proc *process.Process,
 	mp *mpool.MPool,
 	selection *vector.AllocationAccountSelection,
 ) (*vector.Vector, error) {
@@ -637,7 +638,9 @@ func setPreparedParamValue(
 		}
 		return setPreparedParamFixed(vec, typ, parsed, mp, selection)
 	case types.T_float64:
-		parsed, err := strconv.ParseFloat(text, 64)
+		matrixOneNative := proc != nil && proc.GetSessionInfo() != nil &&
+			proc.GetSessionInfo().MatrixOneNativeMode
+		parsed, err := function.ParsePreparedStringToFloat64(text, matrixOneNative)
 		if err != nil {
 			return nil, err
 		}

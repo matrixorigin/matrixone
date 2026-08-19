@@ -1085,8 +1085,10 @@ func preparedParamResultBindingType(
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
-		width, scale := preparedNativeDecimalDomain(normalizePreparedDecimalPayload(value))
-		return preparedResultDecimalType(width, scale)
+		// Native DECIMAL/NEWDECIMAL is one stable prepared result category in
+		// MySQL. Payload precision is execution data, not a reason to mutate the
+		// statement's result metadata on every bind.
+		return types.New(types.T_decimal256, 65, 30)
 	case vector.PrepareParamBoolean:
 		return types.T_bool.ToType()
 	default:

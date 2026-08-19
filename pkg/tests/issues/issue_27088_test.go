@@ -53,6 +53,7 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			{int64(42), "42"},
 			{float64(1.25), "1.25"},
 			{"1.25", "1.25"},
+			{"text", "0"},
 		} {
 			var got string
 			require.NoError(t, directStmt.QueryRowContext(ctx, test.arg).Scan(&got))

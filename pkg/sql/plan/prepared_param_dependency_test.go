@@ -225,3 +225,26 @@ func TestPreparedParamResultMetadataDependenciesFollowUnionOutputs(t *testing.T)
 		})
 	}
 }
+
+func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []bool
+	}{
+		{"if value", "prepare p from 'select if(true, ?, cast(0 as decimal(1,0)))'", []bool{true}},
+		{"case value", "prepare p from 'select case when true then ? else cast(0 as decimal(1,0)) end'", []bool{true}},
+		{"if condition excluded", "prepare p from 'select if(?, 1, 0)'", nil},
+		{"explicit cast terminates", "prepare p from 'select if(true, cast(? as text), cast(0 as decimal(1,0)))'", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.Equal(t, test.want,
+				PreparedParamResultMetadataDependencies(prepare.Plan, 1))
+		})
+	}
+}

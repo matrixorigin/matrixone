@@ -234,6 +234,23 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 			markParam(param)
 			return
 		}
+		if fn := expr.GetF(); fn != nil && fn.Func != nil {
+			switch fn.Func.GetObjName() {
+			case "if":
+				for i := 1; i < len(fn.Args); i++ {
+					traceExpr(currentNodeID, fn.Args[i], true)
+				}
+				return
+			case "case":
+				for i := 1; i < len(fn.Args); i += 2 {
+					traceExpr(currentNodeID, fn.Args[i], true)
+				}
+				if len(fn.Args)%2 == 1 {
+					traceExpr(currentNodeID, fn.Args[len(fn.Args)-1], true)
+				}
+				return
+			}
+		}
 		if allowSetCast {
 			fn := expr.GetF()
 			if fn != nil {
