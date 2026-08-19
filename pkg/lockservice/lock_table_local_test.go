@@ -386,6 +386,49 @@ func TestEmptyRangeEndpointIsRemovedBeforeNewRangeLock(t *testing.T) {
 	)
 }
 
+func TestEmptyRangeEndpointRepairsLivePairedLock(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(_ context.Context, _ *service, lt *localLockTable) {
+			sharedHolders := newHolders()
+			sharedHolders.add(pb.WaitTxn{TxnID: []byte("holder")})
+			sharedWaiters := newWaiterQueue()
+			sharedWaiters.init(lt.logger)
+
+			stale := Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: newWaiterQueue(),
+			}
+			paired := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: sharedHolders,
+				waiters: sharedWaiters,
+			}
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{1}, stale)
+			lt.mu.store.Add([]byte{5}, paired)
+			lt.deleteEmptyLockLocked([]byte{1}, stale)
+			start, startOK := lt.mu.store.Get([]byte{1})
+			end, endOK := lt.mu.store.Get([]byte{5})
+			lt.mu.Unlock()
+
+			require.True(t, startOK)
+			require.True(t, endOK)
+			require.Same(t, sharedHolders, start.holders)
+			require.Same(t, sharedWaiters, start.waiters)
+			require.True(t, start.isLockRangeStart())
+			require.False(t, start.isLockRangeEnd())
+			require.Same(t, sharedHolders, end.holders)
+			require.Same(t, sharedWaiters, end.waiters)
+			require.True(t, end.isLockRangeEnd())
+		},
+	)
+}
+
 func TestEmptyRowLockIsRemovedBeforeNewRowLock(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(

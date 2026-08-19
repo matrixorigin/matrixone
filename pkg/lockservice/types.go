@@ -50,7 +50,7 @@ var (
 	// errEmptyLock is returned when a stale lock-table entry has no holder or
 	// waiter. Such an entry can be left behind by a failed waiter cleanup, but
 	// it must never be treated as a live lock or cause a panic.
-	errEmptyLock = errors.New("empty lock")
+	errEmptyLock = moerr.NewInvalidStateNoCtx("empty lock")
 )
 
 // Option lockservice option
