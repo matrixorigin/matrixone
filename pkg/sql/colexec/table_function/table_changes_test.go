@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -170,6 +171,38 @@ func TestChangeWatermarkStartAndTableChangesPrepare(t *testing.T) {
 	prepared, err := tableChangesPrepare(proc, &TableFunction{})
 	require.NoError(t, err)
 	require.IsType(t, &tableChangesState{}, prepared)
+}
+
+func TestTableChangesStateLifecycleAndAlreadyCalled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	tf := &TableFunction{Attrs: []string{"value"}, ctr: container{
+		retSchema: []types.Type{types.T_varchar.ToType()},
+	}}
+	state := &tableChangesState{batch: tf.createResultBatch()}
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	require.NoError(t, state.end(tf, proc))
+	require.Nil(t, state.handle)
+
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	state.called = true
+	state.reset(tf, proc)
+	require.False(t, state.called)
+	require.Nil(t, state.relation)
+
+	state.handle = mock_frontend.NewMockChangesHandle(ctrl)
+	state.handle.(*mock_frontend.MockChangesHandle).EXPECT().Close().Return(nil)
+	state.free(tf, proc, false, nil)
+	require.Nil(t, state.batch)
+
+	state.called = true
+	result, err := state.call(tf, proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult.Status, result.Status)
 }
 
 func TestTableChangesStartStopsBeforeEngineLookup(t *testing.T) {
