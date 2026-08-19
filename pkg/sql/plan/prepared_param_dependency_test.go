@@ -190,11 +190,38 @@ func TestPreparedParamResultMetadataDependencies(t *testing.T) {
 }
 
 func TestPreparedParamResultMetadataDependenciesFollowUnionOutputs(t *testing.T) {
-	mock := NewMockOptimizer(false)
-	logicPlan, err := runOneStmt(mock, t, "prepare p from 'select ? union all select ?'")
-	require.NoError(t, err)
-	prepare := logicPlan.GetDcl().GetPrepare()
-	require.NotNil(t, prepare)
-	require.Equal(t, []bool{true, true},
-		PreparedParamResultMetadataDependencies(prepare.Plan, 2))
+	for _, test := range []struct {
+		name   string
+		sql    string
+		params int
+		want   []bool
+	}{
+		{
+			name:   "bare params",
+			sql:    "prepare p from 'select ? union all select ?'",
+			params: 2,
+			want:   []bool{true, true},
+		},
+		{
+			name:   "set operation implicit cast",
+			sql:    "prepare p from 'select ? union all select cast(0 as decimal(1,0))'",
+			params: 1,
+			want:   []bool{true},
+		},
+		{
+			name:   "user explicit cast remains fixed",
+			sql:    "prepare p from 'select cast(? as text) union all select cast(0 as decimal(1,0))'",
+			params: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.Equal(t, test.want,
+				PreparedParamResultMetadataDependencies(prepare.Plan, test.params))
+		})
+	}
 }

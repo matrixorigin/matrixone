@@ -214,9 +214,9 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 		return nil
 	}
 	var dependencies []bool
-	visited := make(map[[2]int32]bool)
-	var traceOutput func(int32, int32)
-	var traceExpr func(int32, *Expr)
+	visited := make(map[[3]int32]bool)
+	var traceOutput func(int32, int32, bool)
+	var traceExpr func(int32, *Expr, bool)
 	markParam := func(param *planpb.ParamRef) {
 		if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
 			return
@@ -226,13 +226,26 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 		}
 		dependencies[param.Pos] = true
 	}
-	traceExpr = func(currentNodeID int32, expr *Expr) {
+	traceExpr = func(currentNodeID int32, expr *Expr, allowSetCast bool) {
 		if expr == nil {
 			return
 		}
 		if param := expr.GetP(); param != nil {
 			markParam(param)
 			return
+		}
+		if allowSetCast {
+			fn := expr.GetF()
+			if fn != nil {
+				if fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+					return
+				}
+				_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+				if overload == 0 {
+					traceExpr(currentNodeID, fn.Args[0], false)
+				}
+				return
+			}
 		}
 		ref := expr.GetCol()
 		if ref == nil || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
@@ -242,10 +255,14 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 		if node == nil || len(node.Children) != 1 {
 			return
 		}
-		traceOutput(node.Children[0], ref.ColPos)
+		traceOutput(node.Children[0], ref.ColPos, allowSetCast)
 	}
-	traceOutput = func(currentNodeID, colPos int32) {
-		key := [2]int32{currentNodeID, colPos}
+	traceOutput = func(currentNodeID, colPos int32, allowSetCast bool) {
+		allowSetCastKey := int32(0)
+		if allowSetCast {
+			allowSetCastKey = 1
+		}
+		key := [3]int32{currentNodeID, colPos, allowSetCastKey}
 		if visited[key] || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
 			return
 		}
@@ -259,17 +276,17 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 			planpb.Node_INTERSECT, planpb.Node_INTERSECT_ALL,
 			planpb.Node_MINUS, planpb.Node_MINUS_ALL:
 			for _, childID := range node.Children {
-				traceOutput(childID, colPos)
+				traceOutput(childID, colPos, true)
 			}
 			return
 		}
 		if colPos < 0 || int(colPos) >= len(node.ProjectList) {
 			return
 		}
-		traceExpr(currentNodeID, node.ProjectList[colPos])
+		traceExpr(currentNodeID, node.ProjectList[colPos], allowSetCast)
 	}
 	for _, expr := range query.Nodes[nodeID].ProjectList {
-		traceExpr(nodeID, expr)
+		traceExpr(nodeID, expr, false)
 	}
 	return dependencies
 }

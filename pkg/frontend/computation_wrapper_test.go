@@ -1185,6 +1185,52 @@ func TestUnionPreparedDecimalParamsRefreshResultMetadata(t *testing.T) {
 	require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
 }
 
+func TestUnionImplicitCastPreparedParamRefreshesResultMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		mysqlType defines.MysqlType
+		value     string
+		want      types.T
+	}{
+		{"double", defines.MYSQL_TYPE_DOUBLE, "1.5", types.T_float64},
+		{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", types.T_decimal64},
+		{"string", defines.MYSQL_TYPE_VAR_STRING, "12345.6789", types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, 211, "select ? union all select cast(0 as decimal(1,0))")
+			defer prepareStmt.Close()
+
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(test.value), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes = []byte{byte(test.mysqlType), 0}
+
+			var metadataTypes []plan.Type
+			writer := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+			writer.makeColumnDefDataFunc = func(
+				_ context.Context, columns []*plan.ColDef,
+			) ([][]byte, error) {
+				metadataTypes = make([]plan.Type, len(columns))
+				for i := range columns {
+					metadataTypes[i] = columns[i].Typ
+				}
+				return [][]byte{[]byte("refreshed")}, nil
+			}
+
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Empty(t, prepareStmt.paramBindingDependencies)
+			require.Equal(t, []bool{true}, prepareStmt.paramResultMetadataDependencies)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, test.want, types.T(columns[0].Typ.Id))
+			require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
+		})
+	}
+}
+
 func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 108, "set @prepared_set_value = ? + 1")

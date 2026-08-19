@@ -3607,13 +3607,16 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// without mistaking an explicit CAST(NULL AS string) for a neutral branch.
 	setBranchPureNull := make([][]bool, len(subCtxList))
 	setBranchOrderTypes := make([][]*plan.Type, len(subCtxList))
+	setBranchDynamicParams := make([][]bool, len(subCtxList))
 	for branchIdx, branchCtx := range subCtxList {
 		setBranchPureNull[branchIdx] = make([]bool, projectLength)
 		setBranchOrderTypes[branchIdx] = make([]*plan.Type, projectLength)
+		setBranchDynamicParams[branchIdx] = make([]bool, projectLength)
 		for colIdx := 0; colIdx < projectLength && colIdx < len(branchCtx.projects); colIdx++ {
 			setBranchPureNull[branchIdx][colIdx] =
 				branchCtx.outputColumnProvenanceForProject(int32(colIdx)).State == ProvenancePureNull
 			setBranchOrderTypes[branchIdx][colIdx] = branchCtx.mysqlSpecialOrderTypeForProject(int32(colIdx))
+			setBranchDynamicParams[branchIdx][colIdx] = isDirectDynamicParam(branchCtx.projects[colIdx])
 		}
 	}
 
@@ -3667,6 +3670,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			} else {
 				targetArgType = argsCastType[0]
+			}
+			// A direct prepared string parameter determines the set column's
+			// string result domain at execution time. The ordinary COALESCE rule
+			// chooses VARCHAR for TEXT mixed with a numeric branch, which would
+			// discard the protocol parameter's result-metadata contract. Keep
+			// this limited to a bare dynamic parameter; an explicit user CAST
+			// deliberately terminates that provenance.
+			for branchIdx, typ := range argsType {
+				if setBranchDynamicParams[branchIdx][columnIdx] && typ.Oid == types.T_text {
+					targetArgType = typ
+					break
+				}
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&

@@ -59,6 +59,34 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			require.Equal(t, test.want, got)
 		}
 
+		for _, test := range []struct {
+			name             string
+			arg              any
+			wantDatabaseType string
+		}{
+			{"double", float64(1.5), "DOUBLE"},
+			{"string", "1.5", "TEXT"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				unionStmt, err := conn.PrepareContext(ctx,
+					"select ? union all select cast(0 as decimal(1,0))")
+				require.NoError(t, err)
+				defer unionStmt.Close()
+				rows, err := unionStmt.QueryContext(ctx, test.arg)
+				require.NoError(t, err)
+				defer rows.Close()
+				columns, err := rows.ColumnTypes()
+				require.NoError(t, err)
+				require.Len(t, columns, 1)
+				require.Equal(t, test.wantDatabaseType, columns[0].DatabaseTypeName())
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+				}
+				require.NoError(t, rows.Err())
+			})
+		}
+
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
 		defer func() {
