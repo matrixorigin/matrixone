@@ -118,3 +118,77 @@ func TestRequiresMORPCVersion22StringLiterals(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiresMORPCVersion22DynamicStringProvenance(t *testing.T) {
+	textType := Type{Id: 61}
+	binaryType := Type{Id: 65}
+	boolType := Type{Id: 10}
+	column := func(typ Type, pos int32) *Expr {
+		return &Expr{Typ: typ, Expr: &Expr_Col{Col: &ColRef{ColPos: pos}}}
+	}
+	function := func(name string, typ Type, overload int32, args ...*Expr) *Expr {
+		return &Expr{Typ: typ, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: name, Obj: int64(overload)},
+			Args: args,
+		}}}
+	}
+	implicitCast := func(expr *Expr, typ Type) *Expr {
+		return function("cast", typ, 0, expr)
+	}
+	explicitCast := func(expr *Expr, typ Type) *Expr {
+		return function("cast", typ, 1, expr)
+	}
+	condition := column(boolType, 0)
+	textColumn := column(textType, 1)
+	binaryColumn := column(binaryType, 2)
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{
+			name: "if text column through implicit cast",
+			expr: function("if", binaryType, 0,
+				condition, implicitCast(textColumn, binaryType), binaryColumn),
+			want: true,
+		},
+		{
+			name: "case text column through implicit cast",
+			expr: function("case", binaryType, 0,
+				condition, implicitCast(textColumn, binaryType), binaryColumn),
+			want: true,
+		},
+		{
+			name: "coalesce binary column through implicit cast",
+			expr: function("coalesce", textType, 0,
+				implicitCast(binaryColumn, textType), textColumn),
+			want: true,
+		},
+		{
+			name: "nested producer consumer",
+			expr: function("coalesce", binaryType, 0,
+				function("if", binaryType, 0,
+					condition, implicitCast(textColumn, binaryType), binaryColumn),
+				binaryColumn),
+			want: true,
+		},
+		{
+			name: "explicit cast is semantic boundary",
+			expr: function("if", binaryType, 0,
+				condition, explicitCast(textColumn, binaryType), binaryColumn),
+		},
+		{
+			name: "same domain columns",
+			expr: function("if", binaryType, 0,
+				condition, binaryColumn, binaryColumn),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			required, err := RequiresMORPCVersion22StringProvenance(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, required)
+		})
+	}
+}

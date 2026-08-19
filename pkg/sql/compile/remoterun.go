@@ -98,7 +98,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = validateRemoteStringLiteralPipelineProtocol(proc, p); err != nil {
+	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -162,7 +162,7 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
-		if err = validateRemoteStringLiteralPipelineProtocol(proc, p); err != nil {
+		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
@@ -1623,11 +1623,11 @@ func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inpu
 	return nil
 }
 
-func validateRemoteStringLiteralPipelineProtocol(
+func validateRemoteStringProvenancePipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	requiresVersion22, err := plan.RequiresMORPCVersion22StringLiterals(p)
+	requiresVersion22, err := plan.RequiresMORPCVersion22StringProvenance(p)
 	if err != nil {
 		return err
 	}
@@ -1636,7 +1636,7 @@ func validateRemoteStringLiteralPipelineProtocol(
 	}
 	if proc == nil || !supportsRemoteCrossDomainStringLiterals(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"cross-domain string literal provenance requires MORPC protocol version 22",
+			"cross-domain string provenance requires MORPC protocol version 22",
 		)
 	}
 	return nil

@@ -166,6 +166,35 @@ func TestNewReadRequestUsesVersionedMethodForPrepareParamMetadata(t *testing.T) 
 	require.Equal(t, shard.Method_ShardReadV2, rangesReq.RPCMethod)
 	s.remote.pool.ReleaseRequest(rangesReq)
 
+	boolColumn := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	textColumn := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	binaryColumn := &plan.Expr{Typ: crossDomain.Typ,
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}}
+	implicitCast := &plan.Expr{Typ: crossDomain.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast"}, Args: []*plan.Expr{textColumn},
+	}}}
+	dynamic := &plan.Expr{Typ: crossDomain.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "if"}, Args: []*plan.Expr{boolColumn, implicitCast, binaryColumn},
+	}}}
+	dynamicReaderReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{ReaderBuildParam: shard.ReaderBuildParam{Expr: dynamic}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, dynamicReaderReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(dynamicReaderReq)
+	dynamicRangesReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{RangesParam: shard.RangesParam{Exprs: []*plan.Expr{dynamic}}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, dynamicRangesReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(dynamicRangesReq)
+
 	sameDomain := proto.Clone(crossDomain).(*plan.Expr)
 	sameDomain.Typ = plan.Type{Id: int32(types.T_varchar)}
 	sameDomainReq := s.newReadRequest(
