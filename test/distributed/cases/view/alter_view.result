@@ -177,6 +177,5 @@ INSERT INTO t1 VALUES ('a');
 CREATE VIEW t2 AS SELECT * FROM t1;
 table t2 already exists
 DROP VIEW IF EXISTS t2;
-invalid view 'alter_view.t2'
 DROP TABLE t1;
 DROP TABLE t2;

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -237,13 +239,77 @@ func TestApplyIndicesForSortUsingIvfflat_PostModeDoesNotAutoUseIncludeOptimizati
 	require.NotNil(t, tableFuncNode)
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(12), tableFuncNode.Limit.GetLit().GetU64Val())
-	require.Equal(t, uint64(12), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
+	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, uint64(12), tableFuncNode.IndexReaderParam.GetOverFetchLimit())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 
 	require.Len(t, scanNode.FilterList, 2)
 	require.Equal(t, "category", scanNode.FilterList[0].GetF().Args[0].GetCol().Name)
 	require.Equal(t, "note", scanNode.FilterList[1].GetF().Args[0].GetCol().Name)
+}
+
+// A prepared (non-literal) LIMIT with a residual post-filter cannot be
+// over-fetched at plan time, so the ivf_search TVF is flagged to over-fetch at
+// EXECUTE and the raw parameter is pushed as the limit (#26878). A literal LIMIT
+// keeps being over-fetched at plan time (covered above: pushes 12, flag off).
+func TestApplyIndicesForSortUsingIvfflat_PreparedLimitFlagsPostFilterOverFetch(t *testing.T) {
+	builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
+
+	scanTag := scanNode.BindingTags[0]
+	scanNode.FilterList = []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: ">="},
+					Args: []*plan.Expr{
+						{Typ: scanNode.TableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 3, Name: "category"}}},
+						MakePlan2Int32ConstExprWithType(20),
+					},
+				},
+			},
+		},
+		{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "="},
+					Args: []*plan.Expr{
+						{Typ: scanNode.TableDef.Cols[4].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 4, Name: "note"}}},
+						makePlan2StringConstExprWithType("n2"),
+					},
+				},
+			},
+		},
+	}
+
+	vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, "post", 0, 2, 4)
+	// Replace the literal LIMIT 2 with a prepared LIMIT ? parameter marker.
+	paramLimit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	vecCtx.limit = paramLimit
+	vecCtx.resultLimit = DeepCopyExpr(paramLimit)
+
+	_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
+	require.NoError(t, err)
+
+	sortNode := builder.qry.Nodes[vecCtx.projNode.Children[0]]
+	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
+	require.NotNil(t, tableFuncNode)
+
+	var cfg vectorindex.IndexTableConfig
+	require.NoError(t, json.Unmarshal([]byte(tableFuncNode.TblFuncExprList[0].GetLit().GetSval()), &cfg))
+	require.True(t, cfg.PostFilterOverFetch, "prepared LIMIT ? + residual filter must flag over-fetch")
+
+	// node.Limit is dropped so no plan-level top truncates the over-fetched
+	// candidates before the JOIN; the raw parameter travels on IndexReaderParam.Limit
+	// (a TVF-only channel), where the TVF resolves and over-fetches it at EXECUTE.
+	require.Nil(t, tableFuncNode.Limit, "node.Limit must be dropped for the prepared over-fetch case")
+	require.NotNil(t, tableFuncNode.IndexReaderParam.GetLimit(), "raw k must be carried on IndexReaderParam.Limit")
+	require.Nil(t, tableFuncNode.IndexReaderParam.GetLimit().GetLit(), "IndexReaderParam.Limit is the raw parameter, not a literal")
 }
 
 func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidualFilter(t *testing.T) {
@@ -291,7 +357,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePartialPushdownKeepsResidual
 	require.NotNil(t, tableFuncNode)
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
@@ -330,7 +396,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeResidualOnlyUsesSingleRoundP
 
 	tableFuncNode := findIvfTableFunctionNode(builder, vecCtx.projNode.Children[0])
 	require.NotNil(t, tableFuncNode)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
@@ -413,7 +479,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeDoesNotAutoUseIncludePushdown(t 
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
@@ -436,7 +502,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithoutFiltersUsesCandidateWindo
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Empty(t, tableFuncNode.RuntimeFilterProbeList)
@@ -490,7 +556,7 @@ func TestApplyIndicesForSortUsingIvfflat_PreModeWithFiltersUsesCandidateWindow(t
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(3), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(3), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 2)
 	require.Len(t, tableFuncNode.RuntimeFilterProbeList, 1)
@@ -520,7 +586,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutMetadataFallsBackToPo
 	tableFuncNode := findIvfTableFunctionNode(builder, sortNode.Children[0])
 	require.NotNil(t, tableFuncNode)
 	require.Len(t, tableFuncNode.TableDef.Cols, 2)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())
@@ -555,7 +621,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeIndexOnlyPushdownOverfetches
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Equal(t, uint64(2), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(2), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
@@ -592,7 +658,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModePushdownRoundLimitUsesOffset
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Equal(t, uint64(5), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Contains(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval(), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"category")
@@ -614,7 +680,7 @@ func TestApplyIndicesForSortUsingIvfflat_IncludeModeWithoutFiltersDoesNotDoubleC
 
 	tableFuncNode := builder.qry.Nodes[sortNode.Children[0]]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, tableFuncNode.NodeType)
-	require.Equal(t, uint64(5), tableFuncNode.Limit.GetLit().GetU64Val())
+	require.Nil(t, tableFuncNode.Limit)
 	require.Equal(t, uint64(5), tableFuncNode.IndexReaderParam.GetLimit().GetLit().GetU64Val())
 	require.Len(t, tableFuncNode.TblFuncExprList, 5)
 	assert.Empty(t, tableFuncNode.TblFuncExprList[2].GetLit().GetSval())

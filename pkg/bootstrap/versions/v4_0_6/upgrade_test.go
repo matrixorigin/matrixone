@@ -99,66 +99,15 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	keyColumnUsage := tenantUpgEntries[5]
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
-	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
-	require.Equal(t, []string{
-		"DROP TABLE IF EXISTS information_schema.KEY_COLUMN_USAGE;",
-		"DROP VIEW IF EXISTS information_schema.KEY_COLUMN_USAGE;",
-	}, keyColumnUsage.PreSqls)
+	require.Contains(t, strings.ToLower(keyColumnUsage.UpgSql), "drop view if exists information_schema.key_column_usage")
+	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
+	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.PostSql)
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
 	require.Equal(t, "REFERENTIAL_CONSTRAINTS", referentialConstraints.TableName)
 	require.Equal(t, sysview.InformationSchemaReferentialConstraintsDDL, referentialConstraints.UpgSql)
 	require.Contains(t, strings.ToLower(referentialConstraints.PreSql), "drop view if exists information_schema.referential_constraints")
-}
-
-func TestUpgradeInformationSchemaKeyColumnUsageFromLegacyObject(t *testing.T) {
-	for _, objectKind := range []string{"table", "view"} {
-		t.Run(objectKind, func(t *testing.T) {
-			entry := upgradeInformationSchemaKeyColumnUsage()
-			objectExists := true
-			viewCreated := false
-			stub := gostub.Stub(&versions.CheckViewDefinition, func(
-				_ executor.TxnExecutor, accountID uint32, schema, viewName string,
-			) (bool, string, error) {
-				require.Equal(t, uint32(42), accountID)
-				require.Equal(t, sysview.InformationDBConst, schema)
-				require.Equal(t, "KEY_COLUMN_USAGE", viewName)
-				if viewCreated {
-					return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
-				}
-				return false, "", nil
-			})
-			defer stub.Reset()
-
-			var executed []string
-			txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				executed = append(executed, sql)
-				switch sql {
-				case entry.PreSqls[0]:
-					if objectKind == "table" {
-						objectExists = false
-					}
-				case entry.PreSqls[1]:
-					if objectKind == "view" {
-						objectExists = false
-					}
-				case entry.UpgSql:
-					require.False(t, objectExists)
-					viewCreated = true
-				}
-				return executor.Result{}, nil
-			}, nil)
-
-			require.NoError(t, entry.Upgrade(txn, 42))
-			require.Equal(t, append(append([]string{}, entry.PreSqls...), entry.UpgSql), executed)
-			require.True(t, viewCreated)
-
-			executed = nil
-			require.NoError(t, entry.Upgrade(txn, 42))
-			require.Empty(t, executed)
-		})
-	}
 }
 
 func TestUpgradeInformationSchemaColumnsCheck(t *testing.T) {
@@ -378,11 +327,15 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 
 	for _, entry := range entries {
 		t.Run(entry.TableName+"/match", func(t *testing.T) {
+			targetDefinition := entry.UpgSql
+			if entry.PostSql != "" {
+				targetDefinition = entry.PostSql
+			}
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
 				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
 				}
-				return true, entry.UpgSql, nil
+				return true, targetDefinition, nil
 			})
 			defer stub.Reset()
 
@@ -453,6 +406,37 @@ func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T)
 			require.False(t, matched)
 		})
 	}
+}
+
+func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
+	entry := upgradeInformationSchemaKeyColumnUsage()
+	upgraded := false
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "KEY_COLUMN_USAGE", viewName)
+		if upgraded {
+			return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+		}
+		return false, "", nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.PostSql {
+			upgraded = true
+		}
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Empty(t, executed)
 }
 
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {
