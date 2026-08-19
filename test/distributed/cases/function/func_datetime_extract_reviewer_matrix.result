@@ -1,16 +1,12 @@
--- @case
--- @desc: MySQL-compatible TIME/DATETIME ownership across suffix and separator boundaries.
--- @label:bvt
-
 DROP DATABASE IF EXISTS time_extract_reviewer_matrix_db;
 CREATE DATABASE time_extract_reviewer_matrix_db;
 USE time_extract_reviewer_matrix_db;
 DROP TABLE IF EXISTS time_extract_reviewer_matrix;
 CREATE TABLE time_extract_reviewer_matrix (
-  case_id INT PRIMARY KEY,
-  v VARCHAR(128),
-  t TEXT,
-  expected VARCHAR(16)
+case_id INT PRIMARY KEY,
+v VARCHAR(128),
+t TEXT,
+expected VARCHAR(16)
 );
 INSERT INTO time_extract_reviewer_matrix (case_id, v, t, expected) VALUES
 (1, '12:12:12: +', '12:12:12: +', '12/12/12'),
@@ -70,9 +66,9 @@ INSERT INTO time_extract_reviewer_matrix (case_id, v, t, expected) VALUES
 (55, ' 1:01:01: abc', ' 1:01:01: abc', '0/0/0'),
 (56, ' 12:34::56 x', ' 12:34::56 x', '12/34/0');
 SELECT COUNT(*) AS case_count,
-       SUM(CASE WHEN COALESCE(CONCAT(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
-       + SUM(CASE WHEN COALESCE(CONCAT(HOUR(CAST(v AS CHAR(128))), '/', MINUTE(CAST(v AS CHAR(128))), '/', SECOND(CAST(v AS CHAR(128)))), 'NULL') <> expected THEN 1 ELSE 0 END)
-       + SUM(CASE WHEN COALESCE(CONCAT(HOUR(t), '/', MINUTE(t), '/', SECOND(t)), 'NULL') <> expected THEN 1 ELSE 0 END) AS mismatches
+SUM(CASE WHEN COALESCE(CONCAT(HOUR(v), '/', MINUTE(v), '/', SECOND(v)), 'NULL') <> expected THEN 1 ELSE 0 END)
++ SUM(CASE WHEN COALESCE(CONCAT(HOUR(CAST(v AS CHAR(128))), '/', MINUTE(CAST(v AS CHAR(128))), '/', SECOND(CAST(v AS CHAR(128)))), 'NULL') <> expected THEN 1 ELSE 0 END)
++ SUM(CASE WHEN COALESCE(CONCAT(HOUR(t), '/', MINUTE(t), '/', SECOND(t)), 'NULL') <> expected THEN 1 ELSE 0 END) AS mismatches
 FROM time_extract_reviewer_matrix;
 ➤ case_count[-5,64,0]  ¦  mismatches[3,38,0]  𝄀
 56  ¦  0
