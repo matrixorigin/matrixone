@@ -1,5 +1,5 @@
-ARG BUILDER_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
-ARG NATIVE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
+ARG BUILDER_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04-matrixone-native-1
+ARG NATIVE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04-matrixone-native-1
 ARG GO_CACHE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
 ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
 
