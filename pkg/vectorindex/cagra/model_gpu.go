@@ -575,6 +575,22 @@ func (idx *CagraModel[B, Q]) LoadIndex(
 	idx.Idxcfg = idxcfg
 	idx.NThread = uint32(nthread)
 
+	// Reconcile idx.Devices with the shard topology recorded in the tar's
+	// manifest.json. On a single-GPU host the loader auto-pads so a SHARDED
+	// index built under gpu_multi_simulation=N loads all N shards even when
+	// the search session has the sim var unset (without this, only shard_0
+	// gets loaded and every search returns 100% shard-0 results). On a
+	// multi-GPU host with fewer physical GPUs than the saved shard count
+	// this errors, since silently overloading some GPUs would just tank
+	// throughput and hide the misconfig.
+	if resolved, shardCount, perr := cuvs.ResolveDevicesForTarLoad(idx.Devices, idx.Path); perr != nil {
+		return perr
+	} else if shardCount > 0 && len(resolved) != len(idx.Devices) {
+		logutil.Infof("CagraModel.LoadIndex: adjusted idx.Devices from %v to %v to match manifest shard_count=%d",
+			idx.Devices, resolved, shardCount)
+		idx.Devices = resolved
+	}
+
 	cuvsMetric, bp, mode, err := idx.cagraConfig()
 	if err != nil {
 		return err
