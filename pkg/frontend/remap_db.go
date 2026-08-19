@@ -25,6 +25,7 @@ import (
 type remapDbContext struct {
 	databases           map[string]string
 	lowerCaseTableNames int64
+	remapUseDatabase    bool
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
@@ -45,8 +46,9 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
-// could change its meaning. USE carries an explicit database name, so it is
-// remapped when it is not a role-selection form. Sub-selects nested in
+// could change its meaning. One-shot remapping intentionally leaves USE
+// unchanged; clone-routine remapping opts in because it persists the body.
+// Sub-selects nested in
 // expressions (e.g. WHERE id IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
 func applyRemapDb(
@@ -106,7 +108,7 @@ func remapCloneRoutineStatements(
 		return err
 	}
 	if !remapDbInStatements(stmts, remapDbContext{
-		databases: normalized, lowerCaseTableNames: lowerCaseTableNames,
+		databases: normalized, lowerCaseTableNames: lowerCaseTableNames, remapUseDatabase: true,
 	}) {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
@@ -359,7 +361,9 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		// These forms carry no database or table identity. Their nested expression
 		// fields, where present, are handled by their dedicated cases above.
 	case *tree.Use:
-		remapUseDatabase(s, remap)
+		if remap.remapUseDatabase {
+			remapUseDatabase(s, remap)
+		}
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked

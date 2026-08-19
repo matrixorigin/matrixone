@@ -56,6 +56,11 @@ func TestApplyRemapDb(t *testing.T) {
 		require.Equal(t, "prepare s from select * from dbyyy.t", out)
 	})
 
+	t.Run("use preserves one-shot remap semantics", func(t *testing.T) {
+		out := applyRemapDbToSQL(t, "use dbxxx", remap)
+		require.Equal(t, "use dbxxx", out)
+	})
+
 	t.Run("qualified ref", func(t *testing.T) {
 		out := applyRemapDbToSQL(t, "select * from dbxxx.t", remap)
 		require.Contains(t, out, "dbyyy.t")
@@ -432,6 +437,7 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 	remap := remapDbContext{
 		databases:           map[string]string{"src": "dst"},
 		lowerCaseTableNames: 1,
+		remapUseDatabase:    true,
 	}
 	qualifiedTable := func(name string) *tree.TableName {
 		return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{
