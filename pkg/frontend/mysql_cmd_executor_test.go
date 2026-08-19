@@ -833,6 +833,74 @@ func TestConsumedNextTransactionAssignmentBecomesReplayable(t *testing.T) {
 	})
 }
 
+func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		execSQL := func(sql string) {
+			t.Helper()
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+		}
+		execSQL("set session transaction isolation level read committed")
+
+		prepare, err := mysql.ParseOne(ctx, "prepare s from select ?", 1)
+		require.NoError(t, err)
+		require.IsType(t, &tree.PrepareStmt{}, prepare)
+
+		prepareCases := []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: prepare},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		}
+		for _, testCase := range prepareCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				defer testCase.stmt.Free()
+				execSQL("set transaction isolation level repeatable read")
+
+				handler := ses.GetTxnHandler()
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: testCase.stmt})
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, op)
+				require.Equal(t, txn.TxnIsolation_RC, op.Txn().Isolation)
+				require.NoError(t, op.Rollback(ctx))
+
+				nextIsolation, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.True(t, hasNextIsolation)
+				require.Equal(t, txn.TxnIsolation_SI, nextIsolation)
+
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+				applicationOp := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, applicationOp)
+				require.Equal(t, txn.TxnIsolation_SI, applicationOp.Txn().Isolation)
+				require.NoError(t, applicationOp.Rollback(ctx))
+				_, hasNextIsolation = handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+			})
+		}
+	})
+}
+
 func TestHandleSetGlobalTransaction(t *testing.T) {
 	ctx := context.Background()
 	bh := &backgroundExecTest{}

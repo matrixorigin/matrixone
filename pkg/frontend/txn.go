@@ -685,7 +685,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.inMigration),
+		statementConsumesNextTxnIsolation(execCtx.stmt),
 	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
@@ -1033,15 +1033,16 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 }
 
 // statementConsumesNextTxnIsolation marks semantic transaction admission.
-// SET statements can create an implementation-only frontend transaction for
-// expression evaluation or catalog writes; that temporary owner must never
-// consume a NEXT override intended for the next application transaction.
-func statementConsumesNextTxnIsolation(stmt tree.Statement, inMigration bool) bool {
+// SET and PREPARE statements can create an implementation-only frontend
+// transaction for expression evaluation, catalog writes, or compilation; that
+// temporary owner must never consume a NEXT override intended for the next
+// application transaction.
+func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.SetVar, *tree.SetTransaction:
 		return false
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
-		return !inMigration
+		return false
 	default:
 		return true
 	}
