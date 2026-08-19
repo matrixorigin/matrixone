@@ -644,10 +644,15 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// a MATCH wrapped in a larger expression drives the aggregate rewrite too:
+			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				nil, path.scanNode, filterids, nil)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 {
+			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, path.aggNode, path.scanNode,
-					filterids, filterFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		} else if path != nil {
 			// get the list of project that is fulltext_match func
@@ -656,11 +661,28 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// get the list of filter that is fulltext_match func
 			filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 
+			// MATCHes nested inside a larger expression drive the rewrite too. Without this a
+			// query whose ONLY match is wrapped -- `where match(...) > 0.5`, or a projected
+			// `round(match(...),3)` -- never enters the rewrite at all and throws 20105.
+			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
+				projNode, path.scanNode, filterids, projids)
+
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
-			if len(filterids) > 0 || len(projids) > 0 {
+			if len(filterids) > 0 || len(projids) > 0 || len(wrappedFTExprs) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, path.sortNode, path.scanNode,
-					filterids, filterFTIdxs, projids, projFTIdxs, colRefCnt, idxColMap)
+					filterids, filterFTIdxs, projids, projFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
+		} else {
+			// No single scan under this project: a JOIN in between takes the per-child route,
+			// which has no project node and so never replaced a MATCH in the select list.
+			// The children were rewritten before this node was visited, so resolve against the
+			// scans they built.
+			//
+			// Deliberately does NOT return: this only rewrites expressions in place, it builds
+			// no node, so the vector-index section below must still get its turn. Returning
+			// here cost a query that both projects a MATCH over a join and orders by a vector
+			// distance its vector index, silently falling back to brute force.
+			builder.resolveProjectMatchesOverJoin(projNode, builder.resolveSortNode(projNode, 1))
 		}
 	}
 
@@ -1622,6 +1644,18 @@ func isPositiveLiteralLimit(limit *plan.Expr) bool {
 	return literal && limitValue > 0 && limitValue <= maxVectorIndexTopPushdownLimit
 }
 
+// detectFullTextGuard reserves the scan that the fulltext rewrite is going to consume, so
+// applyIndicesForFilters leaves it alone instead of turning it into a secondary-index scan
+// first.
+//
+// Its predicate must stay identical to the one applyIndicesForProject rewrites on, wrapped
+// MATCHes included. A scan whose only MATCH is wrapped -- a projected `round(match(...),3)`
+// -- is just as much a fulltext scan as one with a bare MATCH, but it is invisible to
+// getFullTextMatchFromProject. Left out, such a scan goes unprotected: with any ordinary
+// index on a filtered column the regular-index rule rewrites it away, and by the time this
+// project is visited resolveFullTextIndexPath no longer finds a base scan to serve the
+// MATCH from -- so the MATCH survives into the executed plan and throws 20105. The bare
+// form of the same query is protected and works, which is what makes the gap easy to miss.
 func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 	path := builder.resolveFullTextIndexPath(projNode)
 	if path == nil {
@@ -1630,7 +1664,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	if path.aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-		if len(filterids) > 0 {
+		wrappedExprs, _ := builder.getWrappedFullTextMatches(nil, path.scanNode, filterids, nil)
+		if len(filterids) > 0 || len(wrappedExprs) > 0 {
 			return []int32{path.scanNode.NodeId}
 		}
 		return nil
@@ -1638,7 +1673,8 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 
 	projids, _ := builder.getFullTextMatchFromProject(projNode, path.scanNode)
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
-	if len(filterids) > 0 || len(projids) > 0 {
+	wrappedExprs, _ := builder.getWrappedFullTextMatches(projNode, path.scanNode, filterids, projids)
+	if len(filterids) > 0 || len(projids) > 0 || len(wrappedExprs) > 0 {
 		return []int32{path.scanNode.NodeId}
 	}
 	return nil

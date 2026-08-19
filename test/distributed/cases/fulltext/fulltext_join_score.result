@@ -1,0 +1,79 @@
+set ft_relevancy_algorithm="TF-IDF";
+set experimental_fulltext_index = 1;
+drop database if exists ft_join;
+create database ft_join;
+use ft_join;
+create table a(id int primary key, body text);
+create table b(id int primary key, note varchar(20), body text);
+insert into a values (1,'hello'),(2,'hello hello'),(3,'world');
+insert into b values (1,'x','hello hello hello'),(2,'y','zzz'),(3,'z','hello');
+create fulltext index fa on a(body);
+create fulltext index fb on b(body);
+select id, match(body) against('hello') as sc from a where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+2  ¦  0.062016264
+select id, match(body) against('hello') as sc from b where match(body) against('hello') order by id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.093024395  𝄀
+3  ¦  0.031008132
+select a.id, match(a.body) against('hello') as sc
+from a join b on a.id=b.id where match(a.body) against('hello') order by a.id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+2  ¦  0.062016264
+select a.id, round(match(a.body) against('hello'),3) as r
+from a join b on a.id=b.id where match(a.body) against('hello') order by a.id;
+➤ id[4,32,0]  ¦  r[8,53,31]  𝄀
+1  ¦  0.031  𝄀
+2  ¦  0.062
+select a.id, match(a.body) against('hello') as sa, match(b.body) against('hello') as sb
+from a join b on a.id=b.id
+where match(a.body) against('hello') and match(b.body) against('hello') order by a.id;
+➤ id[4,32,0]  ¦  sa[7,5,0]  ¦  sb[7,5,0]  𝄀
+1  ¦  0.031008132  ¦  0.093024395
+explain select a.id, match(a.body) against('hello') as sa, match(b.body) against('hello') as sb
+from a join b on a.id=b.id
+where match(a.body) against('hello') and match(b.body) against('hello');
+-- @regex("Table Function on fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INNER   hashOnPK  𝄀
+        Join Cond: (b.id = a.id)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (b.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_join.b  𝄀
+                    Runtime Filter Probe: b.id  𝄀
+              ->  Table Function on fulltext_index_scan  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (a.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_join.a  𝄀
+                    Runtime Filter Probe: a.id  𝄀
+              ->  Table Function on fulltext_index_scan
+select a.id from a join b on a.id=b.id
+where match(a.body) against('hello') order by match(a.body) against('hello') desc;
+➤ id[4,32,0]  𝄀
+2  𝄀
+1
+select x.id, match(x.body) against('hello') as sx, match(y.body) against('hello') as sy
+from a x join a y on x.id=y.id
+where match(x.body) against('hello') and match(y.body) against('hello') order by x.id;
+➤ id[4,32,0]  ¦  sx[7,5,0]  ¦  sy[7,5,0]  𝄀
+1  ¦  0.031008132  ¦  0.031008132  𝄀
+2  ¦  0.062016264  ¦  0.062016264
+select a.id, match(a.body) against('hello') as sc
+from a left join b on a.id=b.id where match(a.body) against('hello') order by a.id;
+➤ id[4,32,0]  ¦  sc[7,5,0]  𝄀
+1  ¦  0.031008132  𝄀
+2  ¦  0.062016264
+create table nox(id int primary key, txt text);
+insert into nox values (1,'hello');
+select a.id, match(nox.txt) against('hello') as s from a join nox on a.id=nox.id where match(a.body) against('hello');
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+drop database ft_join;
+set ft_relevancy_algorithm="TF-IDF";
