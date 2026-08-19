@@ -74,8 +74,8 @@ func RecoverLegacyTinyTextFromCreateSQL(ctx context.Context, tableDef *planpb.Ta
 // For an unaltered explicit CREATE, the original declaration ordinal is matched
 // only to the column's durable Seqnum. For an unaltered legacy CREATE TABLE ...
 // LIKE, which contains no subtype declarations, recovery follows the source
-// relation and copies only a recovered TINYTEXT marker after the complete visible
-// ColDef structures match.
+// relation and copies recovered TEXT-family capacity markers after the complete
+// visible ColDef structures match.
 //
 // Recovery is metadata-only: oversized values written before upgrade remain
 // readable, while future assignments observe the recovered 255-byte limit.
@@ -153,9 +153,10 @@ func hasAuthoritativeLegacyCreate(tableDef *planpb.TableDef) bool {
 }
 
 // LegacyTinyTextCreateSQLNeedsRebuild reports whether rel_createsql can no
-// longer describe the current TEXT subtype safely. Schema consumers that emit
-// executable DDL should reconstruct it from the structured TableDef in this
-// case instead of replaying historical TINYTEXT or CREATE LIKE lineage.
+// longer describe the current TEXT-family subtype safely. Schema consumers
+// that emit executable DDL should reconstruct it from the structured TableDef
+// in this case instead of replaying historical TEXT-family or CREATE LIKE
+// lineage.
 func LegacyTinyTextCreateSQLNeedsRebuild(tableDef *planpb.TableDef) bool {
 	if tableDef == nil || (tableDef.Version == 0 && hasAuthoritativeLegacyCreate(tableDef)) ||
 		tableDef.Createsql == "" || !isLegacyTinyTextTableKind(tableDef.TableType) ||
