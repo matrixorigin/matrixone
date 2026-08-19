@@ -171,6 +171,13 @@ type tunnel struct {
 		// no-response command may still be waiting on the SQL socket.
 		pendingLongData  map[uint32]bool
 		closedStatements map[string]struct{}
+		// The maps above stay bounded. Overflow is recoverable because a later
+		// terminal response fences every earlier no-response command. Unknown
+		// long-data state additionally requires an authoritative CN check before
+		// migration, since the response proves delivery but not consumption.
+		closedStatementsOverflow      bool
+		pendingLongDataOverflow       bool
+		pendingLongDataOverflowFenced bool
 	}
 	clientDeprecatesEOF bool
 
@@ -423,7 +430,8 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 		}
 		if _, ok := s.pendingLongData[statementID]; !ok {
 			if len(s.pendingLongData) >= maxTrackedStatementIDs {
-				s.ambiguous = true
+				s.pendingLongDataOverflow = true
+				s.pendingLongDataOverflowFenced = false
 				return commit
 			}
 		}
@@ -483,10 +491,10 @@ func (t *tunnel) commitClientRequest(commit clientRequestCommit) {
 	statementName := frontend.GetPrepareStmtName(commit.closedStatementID)
 	if _, ok := t.requestBoundary.closedStatements[statementName]; !ok {
 		if len(t.requestBoundary.closedStatements) >= maxTrackedStatementIDs {
-			t.requestBoundary.ambiguous = true
-			return
+			t.requestBoundary.closedStatementsOverflow = true
+		} else {
+			t.requestBoundary.closedStatements[statementName] = struct{}{}
 		}
-		t.requestBoundary.closedStatements[statementName] = struct{}{}
 	}
 	delete(t.requestBoundary.pendingLongData, commit.closedStatementID)
 	t.resetTrackedRequestLocked()
@@ -509,6 +517,8 @@ func (t *tunnel) hasUnsafeClientState() bool {
 	defer t.requestBoundary.Unlock()
 	return t.requestBoundary.inFlight ||
 		t.requestBoundary.ambiguous ||
+		t.requestBoundary.closedStatementsOverflow ||
+		t.requestBoundary.pendingLongDataOverflow ||
 		len(t.requestBoundary.pendingLongData) > 0 ||
 		len(t.requestBoundary.closedStatements) > 0
 }
@@ -519,7 +529,10 @@ func (t *tunnel) hasUntransferableClientState() bool {
 	}
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	if t.requestBoundary.inFlight || t.requestBoundary.ambiguous {
+	if t.requestBoundary.inFlight || t.requestBoundary.ambiguous ||
+		t.requestBoundary.closedStatementsOverflow ||
+		(t.requestBoundary.pendingLongDataOverflow &&
+			!t.requestBoundary.pendingLongDataOverflowFenced) {
 		return true
 	}
 	for _, fenced := range t.requestBoundary.pendingLongData {
@@ -544,6 +557,9 @@ func (t *tunnel) rejectPendingLongDataReconciliation() {
 	for statementID := range t.requestBoundary.pendingLongData {
 		t.requestBoundary.pendingLongData[statementID] = false
 	}
+	if t.requestBoundary.pendingLongDataOverflow {
+		t.requestBoundary.pendingLongDataOverflowFenced = false
+	}
 }
 
 // acceptPendingLongDataSnapshot verifies that every staged-data generation is
@@ -556,7 +572,8 @@ func (t *tunnel) acceptPendingLongDataSnapshot(checked bool) bool {
 	}
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	if len(t.requestBoundary.pendingLongData) == 0 {
+	if len(t.requestBoundary.pendingLongData) == 0 &&
+		!t.requestBoundary.pendingLongDataOverflow {
 		return true
 	}
 	if !checked {
@@ -600,6 +617,9 @@ func (t *tunnel) clearMigratedStatementState() {
 	defer t.requestBoundary.Unlock()
 	clear(t.requestBoundary.closedStatements)
 	clear(t.requestBoundary.pendingLongData)
+	t.requestBoundary.closedStatementsOverflow = false
+	t.requestBoundary.pendingLongDataOverflow = false
+	t.requestBoundary.pendingLongDataOverflowFenced = false
 }
 
 func (t *tunnel) resetTrackedRequestLocked() {
@@ -634,8 +654,12 @@ func (t *tunnel) finishTrackedResponseLocked(status uint16, successful bool) {
 	// that followed it. Staged long data becomes eligible for authoritative
 	// reconciliation by MigrateConnFrom, but remains unsafe for connection cache.
 	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
 	for statementID := range t.requestBoundary.pendingLongData {
 		t.requestBoundary.pendingLongData[statementID] = true
+	}
+	if t.requestBoundary.pendingLongDataOverflow {
+		t.requestBoundary.pendingLongDataOverflowFenced = true
 	}
 	t.resetTrackedRequestLocked()
 }
@@ -1201,9 +1225,11 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var rotated bool
 	var stopAfterSend bool
 	var clientCommit clientRequestCommit
+	var clientRequest []byte
 	prepareNextMessage := func() (terminate bool, err error) {
 		stopAfterSend = false
 		clientCommit = clientRequestCommit{}
+		clientRequest = nil
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -1308,14 +1334,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
 			}
-			if isCmdQuit(tempBuf) {
-				p.tun.markExpectedClientQuit()
-				stopAfterSend = true
-			}
 			if !isEmptyPacket(tempBuf) {
-				if !isCmdQuit(tempBuf) {
-					clientCommit = p.tun.trackClientRequest(tempBuf)
-				}
+				clientRequest = tempBuf
+				stopAfterSend = isCmdQuit(tempBuf)
 			}
 		}
 		return false, nil
@@ -1345,6 +1366,17 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}
 		// If the server is in transfer, we wait here until the transfer is finished.
 		p.wg.Wait()
+		// A client packet that was read while synchronous migration was taking its
+		// snapshot belongs to the replacement CN. Publish its request-boundary
+		// state only after the same barrier that gates forwarding, so successful
+		// migration cannot clear state that was absent from its snapshot.
+		if p.name == pipeClientToServer && len(clientRequest) > 0 {
+			if stopAfterSend {
+				p.tun.markExpectedClientQuit()
+			} else {
+				clientCommit = p.tun.trackClientRequest(clientRequest)
+			}
+		}
 
 		if err = p.src.sendTo(p.dst); err != nil {
 			return wrapPipeSendError(p.name, err)

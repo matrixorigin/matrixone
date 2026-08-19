@@ -1377,7 +1377,7 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.False(t, tun.hasUnsafeClientState())
 	})
 
-	t.Run("malformed and excessive long data stay bounded and conservative", func(t *testing.T) {
+	t.Run("malformed and excessive long data stay bounded and recover", func(t *testing.T) {
 		tun := &tunnel{}
 		malformed := makeStmtCommandPacket(frontend.COM_STMT_SEND_LONG_DATA, 1)
 		tun.trackClientRequest(malformed)
@@ -1390,11 +1390,30 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		}
 		tun.requestBoundary.Lock()
 		require.Len(t, tun.requestBoundary.pendingLongData, maxTrackedStatementIDs)
-		require.True(t, tun.requestBoundary.ambiguous)
+		require.False(t, tun.requestBoundary.ambiguous)
+		require.True(t, tun.requestBoundary.pendingLongDataOverflow)
+		require.False(t, tun.requestBoundary.pendingLongDataOverflowFenced)
 		tun.requestBoundary.Unlock()
+		require.True(t, tun.hasUntransferableClientState())
+
+		// A terminal response fences every earlier no-response command. The
+		// overflowed IDs are not known locally, so migration remains gated on the
+		// exporting CN's authoritative staged-data check.
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasUntransferableClientState())
+		require.False(t, tun.acceptPendingLongDataSnapshot(false))
+		require.True(t, tun.acceptPendingLongDataSnapshot(true))
+
+		tun.rejectPendingLongDataReconciliation()
+		require.True(t, tun.hasUntransferableClientState())
+		tun.trackClientRequest(makeSimplePacket("select 2"))
+		tun.trackServerResponse(makeOKPacket(8))
+		tun.clearMigratedStatementState()
+		require.False(t, tun.hasUnsafeClientState())
 	})
 
-	t.Run("forwarded close tracking stays bounded and conservative", func(t *testing.T) {
+	t.Run("forwarded close tracking stays bounded and recovers at a response fence", func(t *testing.T) {
 		tun := &tunnel{}
 		for i := range maxTrackedStatementIDs + 1 {
 			commit := tun.trackClientRequest(makeStmtCommandPacket(
@@ -1403,8 +1422,16 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		}
 		tun.requestBoundary.Lock()
 		require.Len(t, tun.requestBoundary.closedStatements, maxTrackedStatementIDs)
-		require.True(t, tun.requestBoundary.ambiguous)
+		require.False(t, tun.requestBoundary.ambiguous)
+		require.True(t, tun.requestBoundary.closedStatementsOverflow)
+		require.False(t, tun.requestBoundary.inFlight,
+			"overflow must not strand request ownership")
 		tun.requestBoundary.Unlock()
+		require.True(t, tun.hasUntransferableClientState())
+
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasUnsafeClientState())
 	})
 
 	t.Run("error response", func(t *testing.T) {
@@ -1604,6 +1631,74 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 
 	require.True(t, tun.canStartTransfer(true),
 		"closing the statement discards its staged long data")
+}
+
+func TestClientRequestTrackingWaitsForSyncMigrationBarrier(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clientProxy, client := net.Pipe()
+	defer client.Close()
+	backendProxy, backend := net.Pipe()
+	defer backend.Close()
+
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1)
+	backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2)
+	csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+	peer := &pipe{}
+
+	// Model the synchronous-transfer barrier installed by s2c after a terminal
+	// response. c2s may read the next packet, but it must neither publish its
+	// state nor forward it until migration and its state cleanup have finished.
+	csp.wg.Add(1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(csp.wg.Done) }
+	defer release()
+	beforeSend := make(chan struct{})
+	var beforeSendOnce sync.Once
+	csp.testHelper.beforeSend = func() {
+		beforeSendOnce.Do(func() { close(beforeSend) })
+	}
+
+	pipeDone := make(chan error, 1)
+	go func() { pipeDone <- csp.kickoff(ctx, peer) }()
+	require.NoError(t, csp.waitReady(ctx))
+
+	const statementID uint32 = 42
+	longData := makeStmtCommandPacket(
+		frontend.COM_STMT_SEND_LONG_DATA, statementID, 0, 0, 'x')
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write(longData)
+		writeDone <- err
+	}()
+
+	select {
+	case <-beforeSend:
+	case <-time.After(time.Second):
+		t.Fatal("client packet was not read before the migration barrier")
+	}
+	require.False(t, tun.hasUnsafeClientState(),
+		"a post-snapshot packet must not be published before migration cleanup")
+	tun.clearMigratedStatementState()
+	release()
+
+	got := make([]byte, len(longData))
+	_, err := io.ReadFull(backend, got)
+	require.NoError(t, err)
+	require.Equal(t, longData, got)
+	require.NoError(t, <-writeDone)
+	require.True(t, tun.hasUntransferableClientState(),
+		"the packet forwarded to the replacement CN must remain tracked")
+
+	require.NoError(t, client.Close())
+	select {
+	case err := <-pipeDone:
+		require.ErrorIs(t, err, io.EOF)
+	case <-time.After(time.Second):
+		t.Fatal("client-to-server pipe did not stop")
+	}
 }
 
 func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
