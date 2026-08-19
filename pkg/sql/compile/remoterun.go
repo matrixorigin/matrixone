@@ -1430,6 +1430,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
+		arg.InputKeysUnique = t.InputKeysUnique
 		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.Apply:
