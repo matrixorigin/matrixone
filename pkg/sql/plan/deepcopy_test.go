@@ -221,6 +221,25 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, "uk", source.Fuzzymessage.ParentUniqueCols[0].Name)
 }
 
+func TestDeepCopyNodePreservesJoinMessages(t *testing.T) {
+	source := &planpb.Node{
+		SendMsgList: []planpb.MsgHeader{{MsgTag: 17, MsgType: 1}},
+		RecvMsgList: []planpb.MsgHeader{{MsgTag: 17, MsgType: 2}},
+	}
+
+	cloned := DeepCopyNode(source)
+
+	require.Equal(t, source.SendMsgList, cloned.SendMsgList)
+	require.Equal(t, source.RecvMsgList, cloned.RecvMsgList)
+	require.NotSame(t, &source.SendMsgList[0], &cloned.SendMsgList[0])
+	require.NotSame(t, &source.RecvMsgList[0], &cloned.RecvMsgList[0])
+
+	cloned.SendMsgList[0].MsgTag = 23
+	cloned.RecvMsgList[0].MsgType = 4
+	require.Equal(t, int32(17), source.SendMsgList[0].MsgTag)
+	require.Equal(t, int32(2), source.RecvMsgList[0].MsgType)
+}
+
 func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
 	source := &planpb.Node{
 		NodeType:             planpb.Node_FILTER,

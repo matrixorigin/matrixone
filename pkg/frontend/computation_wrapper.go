@@ -1179,7 +1179,15 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
-			if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
+			// The MySQL binary protocol represents Go bool values as signed
+			// MYSQL_TYPE_TINY 0/1.  Keep the protocol type helper numeric for
+			// ordinary TINYINT callers, but restore the Boolean semantic kind
+			// before constructing the execute-time literal.  Otherwise JSON
+			// functions receive an integer 0/1 and change the stored JSON type.
+			if paramValue.PrepareParamKind == vector.PrepareParamBoolean {
+				paramValue.RuntimeType = types.T_bool.ToType()
+				paramValue.HasRuntimeType = true
+			} else if runtimeType, ok := binaryProtocolPrepareParamType(mysqlType, isUnsigned, raw); ok {
 				paramValue.RuntimeType = runtimeType
 				paramValue.HasRuntimeType = true
 			}

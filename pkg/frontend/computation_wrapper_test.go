@@ -299,6 +299,27 @@ func TestInitExecuteStmtParamPreservesNumericProtocolProvenance(t *testing.T) {
 	}
 }
 
+func TestInitExecuteStmtParamRestoresBooleanRuntimeType(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 105, "select ?")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	prepareStmt.params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1"), false, cw.proc.Mp()))
+	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_TINY), 0}
+
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Len(t, cw.paramVals, 1)
+	param, ok := cw.paramVals[0].(plan2.ParamValue)
+	require.True(t, ok)
+	require.Equal(t, vector.PrepareParamBoolean, param.PrepareParamKind)
+	require.True(t, param.HasRuntimeType)
+	require.Equal(t, types.T_bool.ToType(), param.RuntimeType)
+}
+
 func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 	for _, test := range []struct {
 		mysqlType  defines.MysqlType

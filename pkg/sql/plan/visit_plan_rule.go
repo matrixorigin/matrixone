@@ -396,10 +396,9 @@ type ResetParamRefRule struct {
 	params               []*Expr
 	exprMemo             map[*plan.Expr]*plan.Expr
 	validateFunctionArgs func(string, []*Expr) error
-	// inferTextParamTypes is enabled only for a binary-protocol execution
-	// copy.  SQL PREPARE/EXECUTE historically substitutes textual parameters
-	// without re-resolving overloads; binary protocol metadata is the explicit
-	// signal that a textual payload may need numeric overload resolution.
+	// inferTextParamTypes is enabled only for binary-protocol execution. SQL
+	// PREPARE/EXECUTE keeps textual parameters on the historical path, while
+	// binary execution may use a numeric textual payload for overload binding.
 	inferTextParamTypes bool
 }
 
@@ -471,8 +470,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
 			if implicitParamCast {
-				unwrapped, ok := unwrapImplicitPreparedParamCast(rewrittenArg, rule.inferTextParamTypes)
-				if ok {
+				// Keep decimal casts: decimal arithmetic requires every operand to
+				// be materialized as a decimal vector, even when the protocol value
+				// was encoded as an integer. For casts to other numeric domains, use
+				// the execute-time type so functions such as ABS can specialize a
+				// decimal parameter instead of retaining a prepare-time BIGINT cast.
+				if unwrapped, ok := unwrapImplicitPreparedParamCast(rewrittenArg, rule.inferTextParamTypes); ok {
 					boundArgs[i] = unwrapped
 				}
 			}
@@ -541,36 +544,41 @@ func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 	return overload == 0
 }
 
-// unwrapImplicitPreparedParamCast returns the execute-time literal used for
-// overload binding when an implicit cast surrounds a parameter. A textual
-// parameter is still kept as TEXT for direct projections, but numeric text is
-// offered to numeric overloads in its parsed decimal/integer domain.
+// unwrapImplicitPreparedParamCast strips a provisional overload cast only when
+// the execute-time value has a numeric type that can safely drive rebinding.
+// Decimal and YEAR casts are retained because their executors require the
+// target physical representation for arithmetic and index serialization.
 func unwrapImplicitPreparedParamCast(rewritten *plan.Expr, inferText bool) (*plan.Expr, bool) {
 	fn := rewritten.GetF()
 	if fn == nil || len(fn.Args) == 0 {
 		return nil, false
 	}
 	arg := fn.Args[0]
-	if arg.Typ.Id != int32(types.T_text) {
-		if types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale).IsNumeric() {
-			return arg, true
+	if arg.Typ.Id == int32(types.T_text) {
+		if !inferText {
+			return nil, false
 		}
+		literal := arg.GetLit()
+		if literal == nil {
+			return nil, false
+		}
+		typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
+		if !ok {
+			return nil, false
+		}
+		bound := DeepCopyExpr(arg)
+		bound.Typ = makePlan2Type(&typ)
+		arg = bound
+	}
+	argType := types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+	if !argType.IsNumeric() {
 		return nil, false
 	}
-	if !inferText {
+	targetType := types.New(types.T(rewritten.Typ.Id), rewritten.Typ.Width, rewritten.Typ.Scale)
+	if targetType.IsDecimal() || targetType.Oid == types.T_year {
 		return nil, false
 	}
-	literal := arg.GetLit()
-	if literal == nil {
-		return nil, false
-	}
-	typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
-	if !ok {
-		return nil, false
-	}
-	bound := DeepCopyExpr(arg)
-	bound.Typ = makePlan2Type(&typ)
-	return bound, true
+	return arg, true
 }
 
 func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {

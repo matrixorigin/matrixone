@@ -300,6 +300,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		RuntimeFilterBuildList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterBuildList),
 		IfInsertFromUnique: node.IfInsertFromUnique,
+		// Runtime execution plans are deep-copied before prepared parameters
+		// are specialized.  Join compilation relies on these message headers
+		// to recover the JoinMap tag; dropping them makes the copied plan panic
+		// with "wrong joinmap tag".
+		SendMsgList: slices.Clone(node.SendMsgList),
+		RecvMsgList: slices.Clone(node.RecvMsgList),
 	}
 	if node.Fuzzymessage != nil {
 		newNode.Fuzzymessage = &plan.OriginTableMessageForFuzzy{

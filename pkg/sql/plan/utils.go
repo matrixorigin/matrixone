@@ -3179,9 +3179,7 @@ func PreparedRuntimeTypeFromString(value string) (types.Type, bool) {
 		return preparedDecimalType(value)
 	}
 	negative := strings.HasPrefix(value, "-")
-	if strings.HasPrefix(value, "+") {
-		value = value[1:]
-	}
+	value = strings.TrimPrefix(value, "+")
 	if negative {
 		value = value[1:]
 	}
