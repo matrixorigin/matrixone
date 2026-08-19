@@ -103,6 +103,27 @@ func TestBuildDropTemporaryTableIfExistsDoesNotTargetPermanentTable(t *testing.T
 	require.Nil(t, p.GetDdl().GetDropTable().GetTableDef())
 }
 
+func TestBuildDropViewIfExistsDoesNotTargetBaseTable(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "drop view if exists nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	drop := p.GetDdl().GetDropTable()
+	require.Empty(t, drop.GetTable())
+	require.True(t, drop.GetIsView())
+}
+
+func TestBuildDropViewRejectsBaseTableWithoutIfExists(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "drop view nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadView), err)
+}
+
 func (c *rootSQLCompilerContext) GetRootSql() string {
 	c.calls++
 	return c.rootSQL
