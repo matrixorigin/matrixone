@@ -211,6 +211,57 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1064, "syntax error")
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowErrors{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	level, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Error", level)
+	code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+	require.NoError(t, err)
+	require.Equal(t, "1064", code)
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	execCtx.stmt = &tree.ShowWarnings{}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, "Warning", level)
+}
+
+func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.appendWarningDiagnostic(1329, "No data")
+
+	resp := ses.SetNewResponse(OkResponse, 0, int(COM_QUERY), "", true)
+	require.Equal(t, uint16(1), resp.warnings)
+}
+
+func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: 3}}
+	ses.AppendWarningBatch(
+		100,
+		[]uint16{1, 2, 3, 4},
+		[]string{"one", "two", "three", "four"},
+	)
+
+	info := ses.diagnosticsSnapshot()
+	require.Len(t, info.codes, 3)
+	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, uint16(100), info.warningCount())
+}
+
 func TestHandleSetTransaction(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -744,6 +795,167 @@ func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
 				require.Equal(t, txn.TxnIsolation_SI, isolation)
 				require.Equal(t, txn.TxnIsolation_SI, createTxn())
 				require.Equal(t, txn.TxnIsolation_SI, createTxn())
+			})
+		}
+	})
+}
+
+func TestConsumedNextTransactionAssignmentBecomesReplayable(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		sql := "set transaction isolation level read committed"
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		execCtx := newTestExecCtx(ctx, ctrl)
+		execCtx.ses = ses
+		execCtx.singleStatementQuery = true
+		execCtx.sqlOfStmt = sql
+		require.NoError(t, handleSetTransaction(ses, execCtx, stmt.(*tree.SetTransaction)))
+		require.True(t, ses.hasUnreplayableMigrationSystemVars())
+
+		handler := ses.GetTxnHandler()
+		handler.mu.Lock()
+		err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.NoError(t, op.Rollback(ctx))
+		require.False(t, ses.hasUnreplayableMigrationSystemVars())
+	})
+}
+
+func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		execSQL := func(sql string) {
+			t.Helper()
+			stmt, err := mysql.ParseOne(ctx, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+		}
+		execSQL("set session transaction isolation level read committed")
+
+		prepare, err := mysql.ParseOne(ctx, "prepare s from select ?", 1)
+		require.NoError(t, err)
+		require.IsType(t, &tree.PrepareStmt{}, prepare)
+
+		prepareCases := []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: prepare},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		}
+		for _, testCase := range prepareCases {
+			t.Run(testCase.name, func(t *testing.T) {
+				defer testCase.stmt.Free()
+				execSQL("set transaction isolation level repeatable read")
+
+				handler := ses.GetTxnHandler()
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{
+					reqCtx: ctx, ses: ses, stmt: testCase.stmt,
+					txnOpt: FeTxnOption{autoCommit: true},
+				})
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, op)
+				require.Equal(t, txn.TxnIsolation_RC, op.Txn().Isolation)
+				require.NoError(t, op.Rollback(ctx))
+
+				nextIsolation, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.True(t, hasNextIsolation)
+				require.Equal(t, txn.TxnIsolation_SI, nextIsolation)
+
+				handler.mu.Lock()
+				err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}})
+				applicationOp := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NotNil(t, applicationOp)
+				require.Equal(t, txn.TxnIsolation_SI, applicationOp.Txn().Isolation)
+				require.NoError(t, applicationOp.Rollback(ctx))
+				_, hasNextIsolation = handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+			})
+		}
+	})
+}
+
+func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		for _, testCase := range []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: tree.NewPrepareStmt("s", &tree.Select{})},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				originalTxnClient := getPu("").TxnClient
+				defer func() { getPu("").TxnClient = originalTxnClient }()
+				getPu("").TxnClient = realTxnClient
+
+				handler := ses.GetTxnHandler()
+				handler.setSessionTxnIsolation(txn.TxnIsolation_RC)
+				require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+				execCtx := &ExecCtx{
+					reqCtx: ctx,
+					ses:    ses,
+					stmt:   testCase.stmt,
+					txnOpt: FeTxnOption{
+						autoCommit:            false,
+						activeTxnAtStartKnown: true,
+						activeTxnAtStart:      false,
+					},
+				}
+				t.Cleanup(testCase.stmt.Free)
+
+				handler.mu.Lock()
+				handler.optionBits = OPTION_NOT_AUTOCOMMIT
+				handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+				err := handler.createTxnOpUnsafe(execCtx)
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NoError(t, handler.Commit(execCtx))
+				require.True(t, handler.InActiveTxn())
+				require.Equal(t, txn.TxnIsolation_SI, handler.GetTxn().Txn().Isolation)
+				_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+
+				handler.mu.Lock()
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, op.Rollback(ctx))
+				require.False(t, handler.InActiveTxn())
 			})
 		}
 	})
