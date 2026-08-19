@@ -392,18 +392,38 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				freeBytes>>20, devices[0], perRow, rowsFit)
 		}
 
+		// INCLUDE column metadata is resolved HERE — before hostRowsFittingMem —
+		// so its per-row bytes can be added to the host cost model. FilterStore::init
+		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
+		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
+		// budget when only the vector width is charged. filterCols is stashed on the
+		// state so the later filter setup does not rebuild it.
+		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
+			return err
+		}
+		hostPerRow := uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt) +
+			uint64(includeBytesPerRowFromCols(u.filterCols))
+
 		// CAGRA's per-row cost still includes the dataset, so its VRAM bound already
 		// keeps the host buffer at or under the device budget. The host bound is applied
 		// anyway: it costs one syscall, and it stops the two algorithms from drifting
 		// apart the next time one of their cost models changes.
-		hostRowsFit, availBytes, herr := hostRowsFittingMem(
-			uint64(u.idxcfg.CuvsCagra.Dimensions) * quantizationBytes(qt))
+		hostRowsFit, availBytes, herr := hostRowsFittingMem(hostPerRow)
 		if herr != nil {
+			// availBytes>0 with hostRowsFit==0 is a hard error: the host cannot
+			// hold one row even at the 60% budget. Surface as fatal — silently
+			// disabling the bound would hand the build straight to OOM.
+			if availBytes > 0 {
+				return moerr.NewInternalErrorf(proc.Ctx, "cagra: %v", herr)
+			}
 			logutil.Warnf("CAGRA create: cannot read host memory (%v); "+
 				"capacity bounded by GPU memory only", herr)
 		} else if hostRowsFit > 0 {
-			logutil.Infof("CAGRA create: %d MB host available -> %d rows fit",
-				availBytes>>20, hostRowsFit)
+			logutil.Infof("CAGRA create: %d MB host available, %d B/row host (%d vector + %d include) -> %d rows fit",
+				availBytes>>20, hostPerRow,
+				uint64(u.idxcfg.CuvsCagra.Dimensions)*quantizationBytes(qt),
+				includeBytesPerRowFromCols(u.filterCols),
+				hostRowsFit)
 		}
 
 		// cuVS validate_build_params rejects `n_rows <= intermediate_graph_degree`,
@@ -479,12 +499,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// Derive filter column metadata from the INCLUDE names stashed in
-		// the params JSON paired with the types of the trailing argVecs —
-		// the DDL layer emits names, the table-function layer resolves types.
-		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
-			return err
-		}
+		// u.filterCols was already resolved above (before hostRowsFittingMem)
+		// so its per-row bytes could be added to the host cost model. Just wire
+		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {
 			logutil.Infof("CAGRA create: INCLUDE columns = %v (from %d arg vectors)",
 				u.filterCols, len(tf.ctr.argVecs)-3)

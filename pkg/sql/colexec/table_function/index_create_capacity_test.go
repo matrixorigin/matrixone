@@ -224,4 +224,15 @@ func TestHostRowsFittingMem(t *testing.T) {
 	z, _, err := hostRowsFittingMem(0)
 	require.NoError(t, err)
 	require.Zero(t, z)
+
+	// A per-row cost larger than the whole 75% budget is a hard error, not a
+	// silent zero. Silently returning (0, avail, nil) here would let the caller
+	// treat the bound as "unmeasured" and disable it — exactly the OOM the
+	// bound exists to prevent.
+	huge, availHuge, err := hostRowsFittingMem(avail) // one row costs the entire node
+	require.Error(t, err)
+	require.Zero(t, huge)
+	require.Positive(t, availHuge, "err path must still report the measured avail")
+	require.Contains(t, err.Error(), "cannot hold one row",
+		"the message must explain WHY the sizing failed")
 }

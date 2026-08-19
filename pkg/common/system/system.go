@@ -204,20 +204,32 @@ func MemoryAvailable() uint64 {
 }
 
 // MemoryAvailableIncludingCache returns memory that could be allocated on this
-// node without evicting live pages, i.e. MemFree plus reclaimable page cache
-// and buffers. On bare-metal this is gosigar ActualFree (= Linux
-// /proc/meminfo:MemAvailable). In a container it falls back to MemoryAvailable
-// (the cgroup limit minus current cgroup usage) — cgroup accounting already
-// counts reclaimable cache against usage, so the two paths agree in intent.
+// node without evicting live pages. This is the number to use for sizing bulk
+// allocations (index build buffers, ANN staging arrays):
 //
-// This is the number you want for sizing bulk allocations (index build
-// buffers, ANN staging arrays): MemoryAvailable on bare-metal returns raw
-// MemFree, which drops to a few GiB the moment the page cache warms up and
-// false-aborts anything sized against it, even when the kernel can reclaim
-// hundreds of GiB on demand.
+//   - When a cgroup memory limit is discoverable for the current process
+//     (regardless of whether the process is PID 1), it is `limit - cgroup
+//     usage`. This bounds allocations by the CN's actual budget rather than
+//     the host's, so mo-service behind an init/entrypoint on a large node
+//     with a small cgroup does not size against the whole host and get
+//     OOM-killed by the cgroup.
+//   - Otherwise (bare-metal, no cgroup): gosigar ActualFree, i.e. Linux
+//     /proc/meminfo:MemAvailable — MemFree plus reclaimable page cache and
+//     buffers. Raw MemFree drops to a few GiB the moment the cache warms up
+//     even when the kernel can reclaim hundreds of GiB on demand.
+//
+// Zero means the measurement was unavailable (an error was logged).
 func MemoryAvailableIncludingCache() uint64 {
-	if InContainer() {
-		return MemoryAvailable()
+	if limit := CgroupMemoryLimit(); limit > 0 {
+		used, err := cgroup.GetMemUsage(pid)
+		if err != nil {
+			logutil.Errorf("failed to get cgroup memory usage: %v", err)
+			return 0
+		}
+		if uint64(used) >= limit {
+			return 0
+		}
+		return limit - uint64(used)
 	}
 	s := gosigar.ConcreteSigar{}
 	mem, err := s.GetMem()

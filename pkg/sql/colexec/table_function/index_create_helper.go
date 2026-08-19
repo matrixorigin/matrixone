@@ -326,34 +326,42 @@ func distinctDeviceCount(devices []int) int {
 	return len(seen)
 }
 
-// hostBudgetNumerator/Denominator mirror the GPU rule in cap_train_rows_to_gpu_mem:
-// take 60% of what is actually available, not all of it. The reasoning carries over
-// unchanged — the buffer is a single contiguous allocation, the allocator needs room
-// either side of it, and mo-service is still serving queries out of the same pool
-// while the build runs. Deliberately the same fraction as the device side: two memory
-// heuristics that can disagree is itself a defect.
-const hostBudgetNumerator, hostBudgetDenominator = 6, 10
+// hostBudgetNumerator/Denominator take 75% of what is actually available. The
+// budget is now derived from an accurate baseline — cgroup limit (regardless of
+// PID) or MemAvailable (cache-aware) — and the per-row cost model includes every
+// eager capacity-sized allocation (vector staging + INCLUDE columns), so the
+// safety margin does not also need to absorb measurement error. 25% still leaves
+// headroom for concurrent queries, allocator slack, and the mpool. This is a
+// deliberate divergence from the device-side 60%: VRAM is contested by the RMM
+// pool + graph build workspace + kernel scratch, which host memory is not.
+const hostBudgetNumerator, hostBudgetDenominator = 3, 4
 
 // hostRowsFittingMem returns how many rows of perRowBytes fit the host budget, and the
 // available figure it was derived from.
 //
-// perRowBytes here is the HOST cost of a row, which is not the device cost: what the
-// build buffer holds is dim * sizeof(Q) of storage-typed vector, whatever the index
-// ends up costing on the GPU.
+// perRowBytes here is the HOST cost of a row, and MUST cover every eager
+// capacity-sized host allocation the build makes:
+//   - the flattened vector staging buffer: dim * sizeof(storage-Q)
+//   - every INCLUDE column's FilterStore column (FilterStore::init resizes
+//     each of them to capacity * elem_size up front)
+//
+// A model that only charges the vector width lets a narrow vector plus several
+// fixed-width INCLUDE columns allocate far beyond the claimed 60% budget.
+// Callers must sum both terms before calling this.
 //
 // Uses system.MemoryAvailableIncludingCache() — MemFree + reclaimable buffers/cache
 // (= /proc/meminfo:MemAvailable) on bare-metal, and cgroup-limit-minus-cgroup-used
-// in a container. A plain MemFree reading false-aborts on any warm-cache host, and
-// a plain /proc/meminfo reading inside a container reports HOST memory not the
+// wherever a process cgroup is discoverable (regardless of whether mo-service runs
+// as PID 1). A plain MemFree reading false-aborts on any warm-cache host, and a
+// plain /proc/meminfo reading inside a container reports HOST memory not the
 // cgroup limit and would allow pre-allocations sized against the whole node.
 //
-// Unlike the GPU query, an unavailable measurement here is NOT fatal. cudaMemGetInfo
-// failing means the device is unusable and guessing would reintroduce the OOM being
-// prevented; a memory-query miss just means this one extra bound cannot be applied on
-// this platform, and the device bound plus the srcRowCount clamp still hold. Returning
-// (0, 0, nil) with availBytes == 0 signals "unmeasured" to the caller; returning a
-// positive availBytes with rows == 0 signals "measured but fits zero rows", which the
-// caller should treat as a hard error rather than silently disabling the bound.
+// Unlike the GPU query, an unavailable measurement here is NOT fatal:
+// (rows=0, availBytes=0, err=nil) signals "unmeasured" and the caller falls
+// back to the GPU / srcRowCount bounds. A measurement that reports 0 rows
+// (availBytes>0 but the 60% budget can't hold one row) is a hard error — the
+// host is out of memory for this build and silently disabling the bound would
+// hand the request straight to the OOM killer.
 func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err error) {
 	if perRowBytes == 0 {
 		return 0, 0, nil
@@ -363,5 +371,12 @@ func hostRowsFittingMem(perRowBytes uint64) (rows int64, availBytes uint64, err 
 		return 0, 0, nil
 	}
 	budget := avail / hostBudgetDenominator * hostBudgetNumerator
-	return int64(budget / perRowBytes), avail, nil
+	rows = int64(budget / perRowBytes)
+	if rows == 0 {
+		return 0, avail, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+			"host memory budget of %d bytes (60%% of %d available) cannot hold one row of %d bytes; "+
+				"free memory on this node or run the build on a larger CN",
+			budget, avail, perRowBytes))
+	}
+	return rows, avail, nil
 }

@@ -443,19 +443,36 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			}
 		}
 
+		// INCLUDE column metadata is resolved HERE — before hostRowsFittingMem —
+		// so its per-row bytes can be added to the host cost model. FilterStore::init
+		// eagerly resizes each INCLUDE column to `capacity * elem_size` up front, so a
+		// narrow vector with several fixed-width INCLUDE columns can blow the 60%
+		// budget when only the vector width is charged. filterCols is stashed on the
+		// state so the later filter setup does not rebuild it.
+		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
+			return err
+		}
+		ibprHost := uint64(includeBytesPerRowFromCols(u.filterCols))
+
 		// Capacity is a host allocation before it is a device one: InitEmpty resizes
 		// flattened_host_dataset to capacity*dim up front. Sizing against the PQ codes
 		// makes capacity ~7.7x larger than the old dataset-based bound did, so the host
 		// side now needs its own limit -- otherwise a 20 GB card derives 63M rows and
 		// asks the host for 97 GB.
-		hostRowsFit, availBytes, herr := hostRowsFittingMem(dim * quantizationBytes(qt))
+		hostPerRow := dim*quantizationBytes(qt) + ibprHost
+		hostRowsFit, availBytes, herr := hostRowsFittingMem(hostPerRow)
 		if herr != nil {
-			// Non-fatal: the device bound and the srcRowCount clamp still apply.
+			// availBytes>0 with hostRowsFit==0 is a hard error: the host cannot
+			// hold one row even at the 60% budget. Surface as fatal — silently
+			// disabling the bound would hand the build straight to OOM.
+			if availBytes > 0 {
+				return moerr.NewInternalErrorf(proc.Ctx, "ivfpq: %v", herr)
+			}
 			logutil.Warnf("IVFPQ create: cannot read host memory (%v); "+
 				"capacity bounded by GPU memory only", herr)
 		} else if hostRowsFit > 0 {
-			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host -> %d rows fit",
-				availBytes>>20, dim*quantizationBytes(qt), hostRowsFit)
+			logutil.Infof("IVFPQ create: %d MB host available, %d B/row host (%d vector + %d include) -> %d rows fit",
+				availBytes>>20, hostPerRow, dim*quantizationBytes(qt), ibprHost, hostRowsFit)
 		}
 
 		// lists defaults to the cuVS default when unset; a 0 threshold would silently
@@ -551,11 +568,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 
 		// ---- pre-filter (INCLUDE columns) setup ----
-		// Derive filter column metadata from the INCLUDE names stashed in
-		// the params JSON paired with the types of the trailing argVecs.
-		if u.filterCols, err = buildFilterColumnsFromParam(u.param.IncludedColumns, tf.ctr.argVecs, 3); err != nil {
-			return err
-		}
+		// u.filterCols was already resolved above (before hostRowsFittingMem)
+		// so its per-row bytes could be added to the host cost model. Just wire
+		// it into the C++ FilterStore here.
 		if len(u.filterCols) > 0 {
 			logutil.Infof("IVFPQ create: INCLUDE columns = %v (from %d arg vectors)",
 				u.filterCols, len(tf.ctr.argVecs)-3)
