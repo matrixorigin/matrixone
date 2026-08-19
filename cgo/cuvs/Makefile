@@ -72,7 +72,14 @@ TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 all: libmocuvs.so
 
-test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter
+# Builds every standalone binary in this directory, the bench sources included.
+# For the benches this is BUILD coverage, not execution: bench_wiki88 wants a
+# 20 GB card, and test_dynb deliberately reproduces an upstream dynamic_batching
+# deadlock. Building them here is what catches an API break at build time --
+# bench_upload_cost silently rotted through the cuVS 26.08 migration precisely
+# because no target compiled it, and only turned up when built by hand.
+test: test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter \
+      bench_hostview bench_wiki88 bench_upload_cost
 
 release: all
 
