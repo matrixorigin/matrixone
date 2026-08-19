@@ -246,11 +246,11 @@ func TestColumnWindowSpillPathIsAnonymous(t *testing.T) {
 
 func TestLegacyColumnDecoderMatchAndFailurePaths(t *testing.T) {
 	var output bytes.Buffer
-	// One literal followed by a three-byte match at offset one.
+	// One literal followed by the minimum four-byte match at offset one.
 	require.NoError(t, decodeLegacyLZ4Block(
-		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00}), &output, 4,
+		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00}), &output, 5,
 	))
-	require.Equal(t, "aaaa", output.String())
+	require.Equal(t, "aaaaa", output.String())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -264,6 +264,29 @@ func TestLegacyColumnDecoderMatchAndFailurePaths(t *testing.T) {
 	require.Error(t, decodeLegacyLZ4Block(
 		context.Background(), bufioReader([]byte{0x10, 'a', 0x01, 0x00, 0xff}), &output, 4,
 	))
+}
+
+func TestLegacyColumnDecoderBoundaryCases(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		payload  []byte
+		expected int64
+		wantErr  string
+	}{
+		{name: "negative size", payload: nil, expected: -1, wantErr: "invalid legacy object column size"},
+		{name: "zero size with trailing input", payload: []byte{0}, expected: 0, wantErr: "trailing bytes"},
+		{name: "zero offset", payload: []byte{0x00, 0x00, 0x00}, expected: 4, wantErr: "invalid legacy LZ4 match offset"},
+		{name: "truncated literal", payload: []byte{0x10}, expected: 1, wantErr: "EOF"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			err := decodeLegacyLZ4Block(context.Background(), bufioReader(tc.payload), &output, tc.expected)
+			require.Error(t, err)
+			if tc.wantErr != "" {
+				require.Contains(t, err.Error(), tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestLegacyColumnStreamRejectsUnsupportedAndInvalidSpill(t *testing.T) {
