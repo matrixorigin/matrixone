@@ -236,6 +236,42 @@ func TestErrSubqueryNo1RowContract(t *testing.T) {
 	require.Equal(t, err, decoded)
 }
 
+func TestErrTooManyRowsContract(t *testing.T) {
+	err := NewTooManyRows(context.Background())
+	require.Equal(t, ErrTooManyRows, err.ErrorCode())
+	require.Equal(t, ER_TOO_MANY_ROWS, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Result consisted of more than one row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
+func TestErrCantChangeTxnCodeRemainsStable(t *testing.T) {
+	// This code is part of the client-visible compatibility contract. New
+	// MatrixOne errors must use a fresh code instead of renumbering it.
+	require.Equal(t, uint16(20325), ErrCantChangeTxn)
+}
+
+func TestErrWrongNumberOfColumnsInSelectContract(t *testing.T) {
+	err := NewWrongNumberOfColumnsInSelect(context.Background())
+	require.Equal(t, ErrWrongNumberOfColumnsInSelect, err.ErrorCode())
+	require.Equal(t, ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "The used SELECT statements have a different number of columns", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 

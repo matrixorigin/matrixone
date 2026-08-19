@@ -11662,3 +11662,76 @@ func TestStringTimeExtractOracleMatrix843(t *testing.T) {
 		require.Equal(t, expected[i], fmt.Sprintf("%d/%d/%d", hour, minute, second), "case %d (%q)", i, input)
 	}
 }
+
+func TestMakeQueryIdIdxUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name    string
+		loc     int64
+		cnt     int64
+		want    int
+		wantErr bool
+	}{
+		{name: "first positive position", loc: 1, cnt: 2, want: 0},
+		{name: "last positive position", loc: 2, cnt: 2, want: 1},
+		{name: "most recent negative position", loc: -1, cnt: 2, want: 1},
+		{name: "oldest negative position", loc: -2, cnt: 2, want: 0},
+		{name: "zero is invalid", loc: 0, cnt: 2, wantErr: true},
+		{name: "positive position past last is invalid", loc: 3, cnt: 2, wantErr: true},
+		{name: "negative position before first is invalid", loc: -3, cnt: 2, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := makeQueryIdIdx(test.loc, test.cnt, proc)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestLastQueryIDUsesOneBasedPositivePositions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.QueryId = []string{"first-query", "second-query"}
+
+	for _, test := range []struct {
+		name string
+		loc  int64
+		want string
+	}{
+		{name: "first query", loc: 1, want: "first-query"},
+		{name: "second query", loc: 2, want: "second-query"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{test.loc}, []bool{false}),
+			}
+			expected := NewFunctionTestResult(
+				types.T_varchar.ToType(), false, []string{test.want}, []bool{false},
+			)
+
+			testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestLastQueryIDWithNoQueryHistoryReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+	}
+	expected := NewFunctionTestResult(
+		types.T_varchar.ToType(), false, []string{""}, []bool{true},
+	)
+
+	testCase := NewFunctionTestCase(proc, input, expected, LastQueryID)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
