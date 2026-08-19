@@ -6911,15 +6911,17 @@ func (m *DistRange) GetUpperBound() *Expr {
 }
 
 type IndexReaderParam struct {
-	OrderBy              []*OrderBySpec `protobuf:"bytes,1,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
-	Limit                *Expr          `protobuf:"bytes,2,opt,name=limit,proto3" json:"limit,omitempty"`
-	OrigFuncName         string         `protobuf:"bytes,3,opt,name=orig_func_name,json=origFuncName,proto3" json:"orig_func_name,omitempty"`
-	DistRange            *DistRange     `protobuf:"bytes,4,opt,name=dist_range,json=distRange,proto3" json:"dist_range,omitempty"`
-	PartitionCnCnt       int32          `protobuf:"varint,5,opt,name=partition_cn_cnt,json=partitionCnCnt,proto3" json:"partition_cn_cnt,omitempty"`
-	PartitionCnIdx       int32          `protobuf:"varint,6,opt,name=partition_cn_idx,json=partitionCnIdx,proto3" json:"partition_cn_idx,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
-	XXX_unrecognized     []byte         `json:"-"`
-	XXX_sizecache        int32          `json:"-"`
+	OrderBy        []*OrderBySpec `protobuf:"bytes,1,rep,name=order_by,json=orderBy,proto3" json:"order_by,omitempty"`
+	Limit          *Expr          `protobuf:"bytes,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	OrigFuncName   string         `protobuf:"bytes,3,opt,name=orig_func_name,json=origFuncName,proto3" json:"orig_func_name,omitempty"`
+	DistRange      *DistRange     `protobuf:"bytes,4,opt,name=dist_range,json=distRange,proto3" json:"dist_range,omitempty"`
+	PartitionCnCnt int32          `protobuf:"varint,5,opt,name=partition_cn_cnt,json=partitionCnCnt,proto3" json:"partition_cn_cnt,omitempty"`
+	PartitionCnIdx int32          `protobuf:"varint,6,opt,name=partition_cn_idx,json=partitionCnIdx,proto3" json:"partition_cn_idx,omitempty"`
+	// EXPLAIN-only annotation: the plan-time over-fetched candidate budget.
+	OverFetchLimit       uint64   `protobuf:"varint,7,opt,name=over_fetch_limit,json=overFetchLimit,proto3" json:"over_fetch_limit,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *IndexReaderParam) Reset()         { *m = IndexReaderParam{} }
@@ -6993,6 +6995,13 @@ func (m *IndexReaderParam) GetPartitionCnCnt() int32 {
 func (m *IndexReaderParam) GetPartitionCnIdx() int32 {
 	if m != nil {
 		return m.PartitionCnIdx
+	}
+	return 0
+}
+
+func (m *IndexReaderParam) GetOverFetchLimit() uint64 {
+	if m != nil {
+		return m.OverFetchLimit
 	}
 	return 0
 }
@@ -15070,6 +15079,18 @@ func patchPlanDescriptor(compressed []byte) []byte {
 		return compressed
 	}
 	for _, message := range file.MessageType {
+		if message.GetName() == "IndexReaderParam" {
+			found := false
+			for _, field := range message.Field {
+				if field.GetName() == "over_fetch_limit" {
+					found = true
+				}
+			}
+			if !found {
+				name, jsonName, label, typ, number := "over_fetch_limit", "overFetchLimit", descriptor.FieldDescriptorProto_LABEL_OPTIONAL, descriptor.FieldDescriptorProto_TYPE_UINT64, int32(7)
+				message.Field = append(message.Field, &descriptor.FieldDescriptorProto{Name: &name, JsonName: &jsonName, Label: &label, Type: &typ, Number: &number})
+			}
+		}
 		if message.GetName() != "Node" {
 			continue
 		}
@@ -20988,6 +21009,11 @@ func (m *IndexReaderParam) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintPlan(dAtA, i, uint64(m.PartitionCnIdx))
 		i--
 		dAtA[i] = 0x30
+	}
+	if m.OverFetchLimit != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.OverFetchLimit))
+		i--
+		dAtA[i] = 0x38
 	}
 	if m.PartitionCnCnt != 0 {
 		i = encodeVarintPlan(dAtA, i, uint64(m.PartitionCnCnt))
@@ -31080,6 +31106,9 @@ func (m *IndexReaderParam) ProtoSize() (n int) {
 	}
 	if m.PartitionCnIdx != 0 {
 		n += 1 + sovPlan(uint64(m.PartitionCnIdx))
+	}
+	if m.OverFetchLimit != 0 {
+		n += 1 + sovPlan(uint64(m.OverFetchLimit))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -47038,6 +47067,25 @@ func (m *IndexReaderParam) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.PartitionCnIdx |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OverFetchLimit", wireType)
+			}
+			m.OverFetchLimit = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.OverFetchLimit |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

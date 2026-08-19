@@ -1180,6 +1180,21 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	}
 }
 
+// splitOptimizerHint parses one comma-separated `key=value` entry of the optimizer_hints
+// variable. Nothing is trimmed, so in `a=1, applyIndices=1` the second entry has the key
+// " applyIndices" and matches no hint -- that hint is simply not applied.
+func splitOptimizerHint(str string) (key string, value int, ok bool) {
+	strs := strings.Split(str, "=")
+	if len(strs) != 2 {
+		return "", 0, false
+	}
+	v, err := strconv.Atoi(strs[1])
+	if err != nil {
+		return "", 0, false
+	}
+	return strs[0], v, true
+}
+
 func handleOptimizerHints(str string, builder *QueryBuilder) {
 	strs := strings.Split(str, "=")
 	if len(strs) != 2 {
