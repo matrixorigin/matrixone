@@ -243,6 +243,93 @@ func TestCTELazyBindingVisibilityGuards(t *testing.T) {
 	})
 }
 
+func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "exists subquery cannot add a recursive source",
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select n + 1
+					from r
+					where exists (select 1 from r nested)
+					  and n < 3
+				)
+				select * from r`,
+		},
+		{
+			name: "scalar subquery cannot add a recursive source",
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select (
+						select nested.n + 1
+						from r nested
+						where nested.n = r.n
+					)
+					from r
+					where n < 3
+				)
+				select * from r`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, test.sql)
+			require.ErrorContains(t, err, "recursive table must be referenced only once, and not in any subquery")
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "top-level recursive source in join remains valid",
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select r.n + 1
+					from r join cte_test.t1 on true
+					where r.n < 3
+				)
+				select * from r`,
+		},
+		{
+			name: "correlated subquery without recursive source remains valid",
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select n + 1
+					from r
+					where exists (select 1 where r.n < 3)
+				)
+				select * from r`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			recursiveScans := 0
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_RECURSIVE_SCAN {
+					recursiveScans++
+				}
+			}
+			require.Equal(t, 1, recursiveScans)
+		})
+	}
+}
+
 func TestCTELazyBindingKeepsRootContextOwnership(t *testing.T) {
 	ctx := &cteViewTrackingContext{CompilerContext: NewMockCompilerContext(false)}
 	mock := &cteViewTrackingOptimizer{ctx: ctx}

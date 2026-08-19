@@ -57,6 +57,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	if parent != nil {
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.cteName = parent.cteName
+		bc.queryBlockOwner = parent.queryBlockOwner
 		if parent.bindingCte() {
 			bc.cteByName = parent.cteByName
 			bc.cteState = parent.cteState
