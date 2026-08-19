@@ -38,8 +38,6 @@ const (
 	End
 )
 
-const fuzzyFilterAllocationOwner mpool.AllocationOwner = 1
-
 const (
 	fuzzyFilterAllocationSiteRuntimeFilterData mpool.AllocationSite = iota + 1
 	fuzzyFilterAllocationSiteRuntimeFilterArea
@@ -96,7 +94,7 @@ func (fuzzyFilter *FuzzyFilter) SetAllocationAccount(
 	}
 	selection, err := vector.NewAllocationAccountSelection(
 		account,
-		fuzzyFilterAllocationOwner,
+		mpool.AllocationOwnerFuzzyFilter,
 		fuzzyFilterAllocationSiteRuntimeFilterData,
 		fuzzyFilterAllocationSiteRuntimeFilterArea,
 		fuzzyFilterAllocationSiteRuntimeFilterNulls,

@@ -17,6 +17,7 @@ package mergetop
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -145,6 +146,141 @@ func TestMergeTopMaxUint64LimitReturnsAllRows(t *testing.T) {
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.proc.Free()
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+}
+
+func TestMergeTopEmitsFinalBatchOnce(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	resetChildren(tc.arg, []*batch.Batch{newBatch(tc.types, tc.proc, 3)})
+
+	t.Cleanup(func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	for range 2 {
+		result, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		require.Equal(t, vm.ExecStop, result.Status)
+	}
+}
+
+func TestMergeTopEmptyResultRemainsTerminal(t *testing.T) {
+	testCases := []struct {
+		name  string
+		limit int64
+		rows  int64
+	}{
+		{name: "empty input", limit: 1},
+		{name: "zero limit", rows: 3},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, testCase.limit,
+				[]*plan.OrderBySpec{{Expr: newExpression(0)}})
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			var bats []*batch.Batch
+			if testCase.rows > 0 {
+				bats = []*batch.Batch{newBatch(tc.types, tc.proc, testCase.rows)}
+			}
+			resetChildren(tc.arg, bats)
+
+			t.Cleanup(func() {
+				tc.arg.Free(tc.proc, false, nil)
+				tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
+
+			for range 2 {
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.Nil(t, result.Batch)
+				require.Equal(t, vm.ExecStop, result.Status)
+			}
+		})
+	}
+}
+
+func TestMergeTopResetStartsNewGeneration(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int64.ToType()}, 1,
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}})
+	var children []vm.Operator
+	t.Cleanup(func() {
+		tc.arg.Free(tc.proc, false, nil)
+		for _, child := range children {
+			child.Free(tc.proc, false, nil)
+		}
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	newValuesBatch := func(values []int64) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, tc.proc.Mp()))
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	runGeneration := func(values []int64, expected int64) {
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		resetChildren(tc.arg, []*batch.Batch{newValuesBatch(values)})
+		children = append(children, tc.arg.GetChildren(0))
+
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.NotNil(t, result.Batch)
+		require.Equal(t, []int64{expected},
+			vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+		require.Equal(t, vm.ExecStop, result.Status)
+
+		result, err = vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		require.Equal(t, vm.ExecStop, result.Status)
+	}
+
+	runGeneration([]int64{3, 1, 2}, 1)
+	tc.arg.Reset(tc.proc, false, nil)
+	runGeneration([]int64{9, 8}, 8)
+}
+
+func TestMergeTopFloatNaNLastAndPeerTieBreak(t *testing.T) {
+	tc := newTestCase(t, []bool{false, false}, []types.Type{types.T_float64.ToType(), types.T_int64.ToType()}, 5,
+		[]*plan.OrderBySpec{{Expr: newExpression(0)}, {Expr: newExpression(1)}})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []float64{
+		math.Float64frombits(0x7ff8000000000001), 1, math.Inf(-1),
+		math.Float64frombits(0x7ff8000000000002), -1, math.Inf(1),
+	}, nil, tc.proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int64{2, 40, 10, 1, 20, 60}, nil, tc.proc.Mp()))
+	bat.SetRowCount(6)
+	resetChildren(tc.arg, []*batch.Batch{bat})
+
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{10, 20, 40, 60, 1}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+
+	tc.arg.Free(tc.proc, false, nil)
+	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
 func TestMergeTopReevaluatesPreparedOrderExpressionForEachBatch(t *testing.T) {

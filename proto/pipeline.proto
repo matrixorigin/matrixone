@@ -214,6 +214,10 @@ message PreInsert {
   bool is_old_update = 10;
   bool is_new_update = 11;
   bool reject_zero_temporal = 12;
+  bool has_target_selector = 13;
+  int32 target_row_number_col = 14;
+  int32 target_active_col = 15;
+  int32 target_row_id_col = 16;
 }
 
 message PostDml {
@@ -341,6 +345,7 @@ message RightDedupJoin {
   repeated int32 update_col_idx_list = 14;
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
+  bool input_keys_unique = 17;
 }
 
 message Product {
@@ -599,6 +604,11 @@ message Instruction {
   // FILTER only: execute assertion expressions for their error side effect and
   // pass the input batch through without building a selection vector.
   bool filter_is_assert = 56;
+  // PARTITION only: number of leading order_by entries used as partition keys.
+  int32 partition_by_count = 57;
+  // PARTITION Top-N only: emit local candidates in dense batches for the
+  // global hash reduction rather than as one logical partition per batch.
+  bool partition_top_n_pre_reduce = 58;
 }
 
 message AnalysisList {

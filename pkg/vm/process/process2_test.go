@@ -28,6 +28,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type childProcessSession struct{}
+
+func (*childProcessSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*childProcessSession) AddTempTable(string, string, string)        {}
+func (*childProcessSession) RemoveTempTable(string, string)             {}
+func (*childProcessSession) RemoveTempTableByRealName(string)           {}
+func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func TestChildProcessesInheritSession(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	parent.Session = &childProcessSession{}
+
+	child := parent.NewNoContextChildProc(0)
+	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
+	contextChild := parent.NewContextChildProc(0)
+
+	require.Same(t, parent.Session, child.Session)
+	require.Same(t, parent.Session, channelChild.Session)
+	require.Same(t, parent.Session, contextChild.Session)
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()
@@ -115,21 +136,40 @@ func TestAffectedRows(t *testing.T) {
 }
 
 func TestGetSpillFileService(t *testing.T) {
-	localFS, err := fileservice.NewLocalFS(
-		context.Background(),
-		defines.LocalFileServiceName,
-		t.TempDir(),
-		fileservice.DisabledCacheConfig,
-		nil,
-	)
-	assert.Nil(t, err)
-	proc := &Process{
-		Base: &BaseProcess{
-			FileService: localFS,
-		},
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tc := range []struct {
+		name    string
+		procCtx context.Context
+	}{
+		{name: "nil process context"},
+		{name: "canceled process context", procCtx: canceledCtx},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localFS, err := fileservice.NewLocalFS(
+				context.Background(),
+				defines.LocalFileServiceName,
+				t.TempDir(),
+				fileservice.DisabledCacheConfig,
+				nil,
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { localFS.Close(context.Background()) })
+			proc := &Process{
+				Ctx: tc.procCtx,
+				Base: &BaseProcess{
+					FileService: localFS,
+				},
+			}
+
+			spillFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			file, err := spillFS.CreateAndRemoveFile(context.Background(), "probe")
+			require.NoError(t, err)
+			require.NoError(t, file.Close())
+		})
 	}
-	_, err = proc.GetSpillFileService()
-	assert.Nil(t, err)
 }
 
 func TestGetSpillFileServiceError(t *testing.T) {

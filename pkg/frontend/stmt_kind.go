@@ -146,18 +146,16 @@ func IsCreateDropSequence(stmt tree.Statement) bool {
 }
 
 /*
-NeedToBeCommittedInActiveTransaction checks the statement that need to be committed
-in an active transaction.
-
-Currently, it includes the drop statement, the administration statement ,
-
-	the parameter modification statement.
+NeedToBeCommittedInActiveTransaction checks statements whose execution must commit
+an already active transaction. Ordinary SET statements are intentionally excluded;
+their session state changes must not commit a user's explicit transaction. The
+SET autocommit OFF -> ON transition commits through TxnHandler.SetAutocommit.
 */
 func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	if stmt == nil {
 		return false
 	}
-	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || IsParameterModificationStatement(stmt) || isLockTableStatement(stmt)
+	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || isLockTableStatement(stmt)
 }
 
 func isLockTableStatement(stmt tree.Statement) bool {

@@ -425,7 +425,7 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		ctr.pass2RuntimeFilter,
 		proc.Mp(),
 		fuzzyFilter.allocationAccount,
-		fuzzyFilterAllocationOwner,
+		mpool.AllocationOwnerFuzzyFilter,
 		fuzzyFilterAllocationSiteRuntimeFilterPayload,
 	)
 	if err != nil {

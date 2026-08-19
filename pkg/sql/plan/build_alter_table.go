@@ -27,11 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
@@ -145,6 +147,89 @@ func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
 	return false
 }
 
+func reconcileIndexVisibility(
+	ctx CompilerContext,
+	tableID uint64,
+	tableDef *TableDef,
+	snapshot *Snapshot,
+) error {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
+		return nil
+	}
+
+	for _, indexDef := range tableDef.Indexes {
+		if indexDef == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil index metadata")
+		}
+	}
+	if catalog.IsSystemTable(tableID) || isSystemDatabase(tableDef.DbName) {
+		// System schemas are fixed-visible bootstrap metadata and intentionally
+		// have no mo_indexes rows. Their absence is not incomplete user metadata.
+		for _, indexDef := range tableDef.Indexes {
+			catalog.SetIndexVisibility(indexDef, true)
+		}
+		return nil
+	}
+
+	result, err := runSqlWithSnapshot(ctx, fmt.Sprintf(
+		"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
+		tableID,
+	), snapshot)
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+
+	visibility := make(map[string]bool)
+	var readErr error
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if len(cols) != 2 {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected 2 columns, got %d", len(cols))
+			return false
+		}
+		names := executor.GetStringRows(cols[0])
+		visible := executor.GetFixedRows[int8](cols[1])
+		if len(names) != rows || len(visible) != rows {
+			readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+				"invalid mo_indexes visibility result: expected %d rows", rows)
+			return false
+		}
+		for i, name := range names {
+			value := visible[i] != 0
+			key := strings.ToLower(name)
+			if previous, ok := visibility[key]; ok && previous != value {
+				readErr = moerr.NewInternalErrorf(ctx.GetContext(),
+					"inconsistent visibility metadata for index '%s'", name)
+				return false
+			}
+			visibility[key] = value
+		}
+		return true
+	})
+	if readErr != nil {
+		return readErr
+	}
+
+	resolvedVisibility := make([]bool, len(tableDef.Indexes))
+	for i, indexDef := range tableDef.Indexes {
+		visible, ok := visibility[strings.ToLower(indexDef.IndexName)]
+		if !ok {
+			return moerr.NewInternalErrorf(ctx.GetContext(),
+				"missing visibility metadata for index %q on table %d", indexDef.IndexName, tableID)
+		}
+		resolvedVisibility[i] = visible
+	}
+	for i, indexDef := range tableDef.Indexes {
+		catalog.SetIndexVisibility(indexDef, resolvedVisibility[i])
+	}
+	return nil
+}
+
+func isSystemDatabase(dbName string) bool {
+	return slices.Contains(catalog.SystemDatabases, strings.ToLower(dbName))
+}
+
 func autoIncrementValueToOffset(value uint64) uint64 {
 	if value > 0 {
 		return value - 1
@@ -181,6 +266,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// 2. split alter_option list
 	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
+		return nil, err
+	}
+	// IndexDef.visible historically used the proto3 false zero value for both
+	// default-visible and explicitly invisible indexes. mo_indexes is the
+	// authoritative source, so normalize the copied definition before applying
+	// the ALTER actions and serializing the temporary CREATE TABLE statement.
+	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
 	// The copied definition contains the source allocator's cached offset. It
@@ -321,7 +413,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
+	createTmpDdl, _, err := constructCreateTableSQL(
+		cctx, copyTableDef, snapshot, true, nil, true,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +552,7 @@ const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
 	// key   --> Copy table column name, letter case: lower
-	// value --> Original table column name
+	// value --> Expression used to populate it from the original table
 	alterColMap     map[string]selectExpr
 	schemaName      string
 	originTableName string
@@ -466,6 +560,14 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+}
+
+func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
+	source, hasSource := ctx.alterColMap[oldName]
+	delete(ctx.alterColMap, oldName)
+	if hasSource {
+		ctx.alterColMap[newName] = source
+	}
 }
 
 type exprType int
@@ -536,6 +638,13 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 	if err := validateTableIndexDefinitions(tableDef); err != nil {
 		return nil, err
+	}
+	for _, option := range stmt.Options {
+		if rename, ok := option.(*tree.AlterOptionTableName); ok {
+			if err := rejectCrossDatabaseTableRename(ctx.GetContext(), schemaName, rename); err != nil {
+				return nil, err
+			}
+		}
 	}
 	isMongoDB, err := IsMongoDBTableDef(ctx.GetContext(), tableDef)
 	if err != nil {
@@ -806,9 +915,8 @@ func isInplaceColumnDefinition(
 ) (ok bool, err error) {
 	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
-		err = moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			ctx, column.Name.ColNameOrigin(), tableDef.Name)
-		return
 	}
 
 	ok, err = positionMatched(ctx, position, tableDef, oCol)

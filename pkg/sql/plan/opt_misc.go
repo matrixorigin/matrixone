@@ -121,8 +121,16 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	case plan.Node_LOCK_OP:
+		childParentType := node.NodeType
+		if _, preserve := builder.preserveLockProjection[nodeID]; preserve {
+			// A preserved pass-through lock can feed positional consumers such as a
+			// shared SINK. Keep its immediate PROJECT as the stable row-image
+			// boundary; inlining that PROJECT changes the binding tag and can make
+			// every downstream sink column resolve to input column zero.
+			childParentType = plan.Node_UNKNOWN
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -358,9 +366,18 @@ func replaceColumnsForColRefList(cols []plan.ColRef, projMap map[[2]int32]*plan.
 	for i := range cols {
 		mapID := [2]int32{cols[i].RelPos, cols[i].ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
-			newCol := projExpr.Expr.(*plan.Expr_Col).Col
-			cols[i].RelPos = newCol.RelPos
-			cols[i].ColPos = newCol.ColPos
+			// A []plan.ColRef can only hold a column, so a mapping to any other
+			// expression form (a CTE projecting `id+1`, a cast) has nowhere to go here.
+			// Assert-and-panic would take down the CN; leaving the ref alone keeps the
+			// list valid. Vector rewrites publish such maps into idxColMap, which
+			// applyIndices then applies to every ancestor including nodes carrying
+			// UpdateCtxList / DedupJoinCtx.OldColList.
+			colExpr, isCol := projExpr.Expr.(*plan.Expr_Col)
+			if !isCol || colExpr.Col == nil {
+				continue
+			}
+			cols[i].RelPos = colExpr.Col.RelPos
+			cols[i].ColPos = colExpr.Col.ColPos
 		}
 	}
 }
@@ -1162,14 +1179,28 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	}
 }
 
-func handleOptimizerHints(str string, builder *QueryBuilder) {
+// splitOptimizerHint parses one comma-separated `key=value` entry of the optimizer_hints
+// variable. Nothing is trimmed, so in `a=1, applyIndices=1` the second entry has the key
+// " applyIndices" and matches no hint -- that hint is simply not applied.
+//
+// Anything else deciding whether a hint is in effect must call THIS, not re-split the string:
+// a copy that trims believes a hint is on while the optimizer ignores it, and the two then
+// disagree about what the plan actually did.
+func splitOptimizerHint(str string) (key string, value int, ok bool) {
 	strs := strings.Split(str, "=")
 	if len(strs) != 2 {
-		return
+		return "", 0, false
 	}
-	key := strs[0]
-	value, err := strconv.Atoi(strs[1])
+	v, err := strconv.Atoi(strs[1])
 	if err != nil {
+		return "", 0, false
+	}
+	return strs[0], v, true
+}
+
+func handleOptimizerHints(str string, builder *QueryBuilder) {
+	key, value, ok := splitOptimizerHint(str)
+	if !ok {
 		return
 	}
 	if builder.optimizerHints == nil {

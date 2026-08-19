@@ -327,6 +327,24 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
+	case vm.Partition:
+		t := sourceOp.(*partition.Partition)
+		op := partition.NewArgument()
+		op.OrderBySpecs = t.OrderBySpecs
+		op.Limit = t.Limit
+		op.PartitionByCount = t.PartitionByCount
+		op.PreReduce = t.PreReduce
+		op.SetInfo(&info)
+		return op
+	case vm.Window:
+		t := sourceOp.(*window.Window)
+		op := window.NewArgument()
+		op.WinSpecList = t.WinSpecList
+		op.Fs = t.Fs
+		op.Aggs = t.Aggs
+		op.PartitionTopN = t.PartitionTopN
+		op.SetInfo(&info)
+		return op
 	case vm.MergeTop:
 		t := sourceOp.(*mergetop.MergeTop)
 		op := mergetop.NewArgument()
@@ -532,6 +550,10 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.HasTargetSelector = t.HasTargetSelector
+		op.TargetRowNumberCol = t.TargetRowNumberCol
+		op.TargetActiveCol = t.TargetActiveCol
+		op.TargetRowIDCol = t.TargetRowIDCol
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -659,6 +681,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		op.JoinMapTag = t.JoinMapTag
 		op.OnDuplicateAction = t.OnDuplicateAction
+		op.InputKeysUnique = t.InputKeysUnique
 		op.DedupColName = t.DedupColName
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
@@ -838,6 +861,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.HasTargetSelector = preCtx.HasTargetSelector
+	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
+	op.TargetActiveCol = preCtx.TargetActiveCol
+	op.TargetRowIDCol = preCtx.TargetRowIdCol
 	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return nil, err
@@ -933,19 +960,32 @@ func constructMultiUpdate(
 			SkipInsertOnNullPk: updateCtx.SkipInsertOnNullPk,
 			InsertPkColIdx:     int(updateCtx.InsertPkColIdx),
 			IgnoreAffectedRows: updateCtx.IgnoreAffectedRows,
+			DedupByTargetRowID: updateCtx.DedupByTargetRowId,
+			TargetUpdateCtxIdx: int(updateCtx.TargetUpdateCtxIdx),
+			TargetTableID:      updateCtx.TableDef.TblId,
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	if !ps.Enabled() || !features.IsPartitioned(node.UpdateCtxList[0].TableDef.FeatureFlag) {
+	if !ps.Enabled() {
+		return arg, nil
+	}
+	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
 		return arg, nil
 	}
 
-	return multi_update.NewPartitionMultiUpdate(
-		arg,
-		node.UpdateCtxList[0].TableDef.TblId,
-	), nil
+	return multi_update.NewPartitionMultiUpdate(arg), nil
+}
+
+func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
+			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
 }
 
 func constructInsert(
@@ -1518,6 +1558,7 @@ func constructRightDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
 	arg.OnDuplicateAction = node.OnDuplicateAction
+	arg.InputKeysUnique = node.DedupInputKeysUnique
 	arg.DedupColName = node.DedupColName
 	arg.DedupColTypes = node.DedupColTypes
 	arg.DelColIdx = -1
@@ -1617,6 +1658,8 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Ts = node.GroupBy[0]
 	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.GapFill = node.GapFillMode == plan.Node_GAP_FILL_PARTITION
+	arg.GapFillStart = node.GapFillStart
+	arg.GapFillEnd = node.GapFillEnd
 	// A tumbling window normally uses the interval fast path (EndExpr != nil),
 	// which forwards only groups already produced by the child aggregate. That
 	// path cannot synthesize absent buckets. GAPFILL therefore uses the general
@@ -1637,7 +1680,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		resetTimeWindowTsColRef(endExpr)
 		arg.EndExpr = endExpr
 	}
-	arg.TsType = node.Timestamp.Typ
+	arg.TsType = plan2.TimeWindowBoundaryType(node.Timestamp.Typ)
 	return arg
 }
 
@@ -2028,6 +2071,8 @@ func constructMergeOrder(node *plan.Node) *mergeorder.MergeOrder {
 func constructPartition(node *plan.Node) *partition.Partition {
 	arg := partition.NewArgument()
 	arg.OrderBySpecs = node.OrderBy
+	arg.Limit = node.Limit
+	arg.PartitionByCount = node.PartitionByCount
 	return arg
 }
 
@@ -2474,13 +2519,18 @@ func constructTableClone(
 		}
 	}()
 
+	dstTableName := clonePlan.DstTableName
+	if createTable := clonePlan.GetCreateTable().GetDdl().GetCreateTable(); createTable.GetTemporary() {
+		dstTableName = physicalTemporaryTableName(c.proc, clonePlan.DstDatabaseName, dstTableName)
+	}
+
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
 		SrcTblDef: clonePlan.SrcTableDef,
 		SrcObjDef: clonePlan.SrcObjDef,
 
 		ScanSnapshot:    clonePlan.ScanSnapshot,
-		DstTblName:      clonePlan.DstTableName,
+		DstTblName:      dstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 	dstTblDef := clonePlan.SrcTableDef

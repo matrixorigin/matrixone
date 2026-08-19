@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"math/big"
@@ -169,6 +170,53 @@ func TestOrderedPercentileExecSpillsRuns(t *testing.T) {
 	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
 	result[0].Free(mp)
 	exec.Free()
+}
+
+func TestOrderedPercentileUnmarshalReplacesSpilledState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	config := EncodeOrderedPercentileConfig([]byte("0.5"), false)
+
+	source, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
+		types.T_int64.ToType(), orderedPercentileContinuous)
+	require.NoError(t, err)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.SetExtraInformation(config, 0))
+	sourceValues := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{100, 200})
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{sourceValues}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
+
+	target, err := makeOrderedPercentileExec(mp, AggIdOfPercentileCont, false,
+		types.T_int64.ToType(), orderedPercentileContinuous)
+	require.NoError(t, err)
+	require.NoError(t, target.GroupGrow(1))
+	require.NoError(t, target.SetExtraInformation(config, 0))
+	targetValues := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3})
+	require.NoError(t, target.BulkFill(0, []*vector.Vector{targetValues}))
+	typed := target.(*orderedPercentileExec[int64, float64])
+	typed.spillFile = func() (*os.File, error) {
+		return os.CreateTemp(t.TempDir(), "ordered-percentile-replace-*")
+	}
+	require.NoError(t, typed.spillOrderedState(context.Background()))
+	require.True(t, typed.hasSpillRuns())
+	oldSpillData := typed.spillData
+	require.NotNil(t, oldSpillData)
+
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+	require.False(t, typed.hasSpillRuns())
+	require.Nil(t, typed.spillData)
+	_, err = oldSpillData.Stat()
+	require.Error(t, err)
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 150.0, vector.GetFixedAtNoTypeCheck[float64](result[0], 0))
+
+	result[0].Free(mp)
+	targetValues.Free(mp)
+	sourceValues.Free(mp)
+	target.Free()
+	source.Free()
 }
 
 func TestOrderedPercentileFloatNaNSpillMatchesInMemory(t *testing.T) {

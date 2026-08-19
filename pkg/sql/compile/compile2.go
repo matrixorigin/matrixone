@@ -143,6 +143,22 @@ func (c *Compile) Compile(
 	topContext := context.WithValue(execTopContext, defines.EngineKey{}, c.e)
 	topContext = perfcounter.WithCounterSet(topContext, c.counterSet)
 	c.proc.ReplaceTopCtx(topContext)
+	// Resolve an ordinary statement's session row cap only after optimization,
+	// but before Sirius can export the logical plan. This preserves optimizer
+	// estimates while ensuring both native and offloaded execution see the same
+	// finite top-level LIMIT.
+	materialization, materializeErr := c.materializeSQLSelectLimit(queryPlan)
+	if materializeErr != nil {
+		return materializeErr
+	}
+	if materialization.query != nil {
+		defer materialization.restore()
+	}
+	if offloaded, offloadErr := c.tryCompileSiriusRead(execTopContext, queryPlan); offloadErr != nil {
+		return offloadErr
+	} else if offloaded {
+		return c.proc.GetQueryContextError()
+	}
 
 	// from plan to scope.
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
@@ -258,6 +274,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
+	if c.siriusRead != nil {
+		err = c.runSiriusRead(execTopContext)
+		return queryResult, err
+	}
 	attemptStart := time.Now()
 	attemptOpen := true
 	var attemptPreRunWall time.Duration

@@ -97,6 +97,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Sort"
 	case plan.Node_PARTITION:
 		pname = "Partition"
+		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {
+			pname = "Partition Top N"
+		}
 	case plan.Node_UNION:
 		pname = "Union"
 	case plan.Node_UNION_ALL:
@@ -328,11 +331,29 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
-		orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
-		if err != nil {
-			return nil, err
+		if ndesc.Node.NodeType == plan.Node_PARTITION && ndesc.Node.Limit != nil &&
+			ndesc.Node.PartitionByCount > 0 && int(ndesc.Node.PartitionByCount) < len(ndesc.Node.OrderBy) {
+			for _, item := range []struct {
+				label string
+				specs []*plan.OrderBySpec
+			}{
+				{label: "Partition Key: ", specs: ndesc.Node.OrderBy[:ndesc.Node.PartitionByCount]},
+				{label: "Sort Key: ", specs: ndesc.Node.OrderBy[ndesc.Node.PartitionByCount:]},
+			} {
+				buf := bytes.NewBuffer(make([]byte, 0, 300))
+				buf.WriteString(item.label)
+				if err := NewOrderByDescribeImpl(item.specs).GetDescription(ctx, options, buf); err != nil {
+					return nil, err
+				}
+				lines = append(lines, buf.String())
+			}
+		} else {
+			orderByInfo, err := ndesc.GetOrderByInfo(ctx, options)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, orderByInfo)
 		}
-		lines = append(lines, orderByInfo)
 	}
 
 	// Get Sort list info
@@ -1203,6 +1224,15 @@ func (ndesc *NodeDescribeImpl) GetIndexReaderParamInfo(ctx context.Context, opti
 			if err != nil {
 				return "", err
 			}
+		}
+
+		// OverFetchLimit is the plan-time over-fetched candidate budget for a
+		// literal LIMIT (the TVF fetches this many so k rows survive the
+		// post-filter). It is 0 for a prepared LIMIT ? (over-fetch computed at
+		// EXECUTE); shown only when known so EXPLAIN reflects the real budget
+		// rather than the raw k on Limit.
+		if param.OverFetchLimit != 0 {
+			fmt.Fprintf(buf, "  OverFetchLimit: %d", param.OverFetchLimit)
 		}
 
 		if param.DistRange != nil {

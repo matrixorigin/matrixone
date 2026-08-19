@@ -22,8 +22,14 @@ func (builder *QueryBuilder) wrapBareColRefsInAnyValue(expr *plan.Expr, ctx *Bin
 		// Window results are produced above AGG. They must remain window-tag
 		// references in the final projection rather than becoming any_value()
 		// inputs to the aggregate stage.
+		// Time-window boundary columns are produced by the TIME_WINDOW node
+		// above AGG too, so keep them as time-tag references for the same
+		// reason. Wrapping them before bindTimeWindow finalizes the public
+		// boundary type can leave duplicated _wstart/_wend outputs with stale
+		// DATETIME metadata.
 		if exprImpl.Col.RelPos == ctx.groupTag || exprImpl.Col.RelPos == ctx.aggregateTag ||
-			(ctx.windowTag > 0 && exprImpl.Col.RelPos == ctx.windowTag) {
+			(ctx.windowTag > 0 && exprImpl.Col.RelPos == ctx.windowTag) ||
+			(ctx.timeTag > 0 && exprImpl.Col.RelPos == ctx.timeTag) {
 			return expr
 		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})

@@ -18,18 +18,22 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const opName = "fill"
+const maxFillPendingBatches = 1024
 
 func (fill *Fill) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
@@ -49,6 +53,22 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 
 	ctr := &fill.ctr
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(fill.SpillThreshold)
+	if ctr.allocationAccount != nil {
+		ctr.budget, err = proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+		ctr.prevPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
+		ctr.linEntryPart.configure(
+			proc.Mp(),
+			ctr.allocationAccount,
+			fillAllocationSitePartitionSnapshot,
+		)
+	}
 
 	switch fill.FillType {
 	case plan.Node_VALUE:
@@ -60,7 +80,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 		if len(ctr.exes) == 0 {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, val := range fill.FillVal {
-				exe, err := colexec.NewExpressionExecutor(proc, val)
+				exe, err := colexec.NewExpressionExecutorWithAllocation(
+					proc, val, ctr.expressionAllocation,
+				)
 				if err != nil {
 					return err
 				}
@@ -101,7 +123,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 			ctr.valVecs = make([]*vector.Vector, len(fill.FillVal))
 			for _, v := range fill.FillVal {
 				resetColRef(v, 0)
-				exe, err := colexec.NewExpressionExecutor(proc, v)
+				exe, err := colexec.NewExpressionExecutorWithAllocation(
+					proc, v, ctr.expressionAllocation,
+				)
 				if err != nil {
 					return err
 				}
@@ -114,7 +138,9 @@ func (fill *Fill) Prepare(proc *process.Process) (err error) {
 	}
 
 	if fill.ProjectList != nil {
-		err := fill.PrepareProjection(proc)
+		err := fill.PrepareProjectionWithAllocation(
+			proc, ctr.expressionAllocation,
+		)
 		if err != nil {
 			return err
 		}
@@ -130,6 +156,44 @@ func (fill *Fill) Call(proc *process.Process) (vm.CallResult, error) {
 	result, err := ctr.process(ctr, fill, proc, analyzer)
 
 	return result, err
+}
+
+func cloneFillBatch(
+	source *batch.Batch,
+	mp *mpool.MPool,
+	selection *vector.AllocationAccountSelection,
+) (*batch.Batch, error) {
+	if source == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	attrs, attrTypes := source.GetSchema()
+	cloned := batch.NewWithSchema(selection != nil, attrs, attrTypes)
+	if selection != nil {
+		if err := cloned.SetAllocationAccount(selection); err != nil {
+			cloned.Clean(mp)
+			return nil, err
+		}
+	}
+	cloned.Recursive = source.Recursive
+	if err := source.CloneTo(cloned, mp); err != nil {
+		cloned.Clean(mp)
+		return nil, err
+	}
+	return cloned, nil
+}
+
+func (ctr *container) copyToOutput(
+	proc *process.Process,
+	source *batch.Batch,
+) error {
+	if ctr.buf == nil {
+		var err error
+		ctr.buf, err = cloneFillBatch(source, proc.Mp(), ctr.outputAllocation)
+		return err
+	}
+	ctr.buf.CleanOnlyData()
+	_, err := ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), source)
+	return err
 }
 
 func resetColRef(expr *plan.Expr, idx int) {
@@ -155,11 +219,7 @@ func processValue(ctr *container, ap *Fill, proc *process.Process, analyzer proc
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-	if err != nil {
+	if err = ctr.copyToOutput(proc, result.Batch); err != nil {
 		return result, err
 	}
 
@@ -213,35 +273,43 @@ func samePartitionRows(partIdx []int32, batA *batch.Batch, rowA int, batB *batch
 
 // snapshotPartKey copies a row's partition key out of the batch, so the next
 // batch can detect a boundary after this one has been recycled.
-func (ctr *container) snapshotPartKey(partIdx []int32, bat *batch.Batch, row int) {
-	if cap(ctr.prevPartKey) < len(partIdx) {
-		ctr.prevPartKey = make([][]byte, len(partIdx))
-		ctr.prevPartNull = make([]bool, len(partIdx))
-	}
-	ctr.prevPartKey = ctr.prevPartKey[:len(partIdx)]
-	ctr.prevPartNull = ctr.prevPartNull[:len(partIdx)]
+func (ctr *container) snapshotPartKey(
+	partIdx []int32,
+	bat *batch.Batch,
+	row int,
+	proc *process.Process,
+) error {
+	ctr.prevPart.configure(
+		proc.Mp(),
+		ctr.allocationAccount,
+		fillAllocationSitePartitionSnapshot,
+	)
+	ctr.prevPart.ensureShape(len(partIdx))
 	for i, col := range partIdx {
 		val, isNull := partKeyAt(bat.Vecs[col], row)
-		ctr.prevPartNull[i] = isNull
-		ctr.prevPartKey[i] = append(ctr.prevPartKey[i][:0], val...)
+		ctr.prevPart.nulls[i] = isNull
+		if err := ctr.prevPart.setKey(i, val); err != nil {
+			return err
+		}
 	}
-	ctr.prevPartSet = true
+	ctr.prevPart.set = true
+	return nil
 }
 
 // matchesSnapshot compares a row against the saved cross-batch partition key.
 func (ctr *container) matchesSnapshot(partIdx []int32, bat *batch.Batch, row int) bool {
-	if !ctr.prevPartSet {
+	if !ctr.prevPart.set {
 		return true
 	}
 	for i, col := range partIdx {
 		val, isNull := partKeyAt(bat.Vecs[col], row)
-		if isNull || ctr.prevPartNull[i] {
-			if isNull != ctr.prevPartNull[i] {
+		if isNull || ctr.prevPart.nulls[i] {
+			if isNull != ctr.prevPart.nulls[i] {
 				return false
 			}
 			continue
 		}
-		if !bytes.Equal(val, ctr.prevPartKey[i]) {
+		if !bytes.Equal(val, ctr.prevPart.keys[i]) {
 			return false
 		}
 	}
@@ -255,30 +323,101 @@ func (ctr *container) batAt(seq int) *batch.Batch {
 
 // pullChild appends the next child batch to the pending FIFO and returns its
 // absolute sequence number, or eof when the child is drained.
-func (ctr *container) pullChild(ap *Fill, proc *process.Process, analyzer process.Analyzer) (seq int, eof bool, err error) {
+func (ctr *container) pullChild(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+) (seq int, eof bool, spilled bool, err error) {
 	result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if result.Batch == nil {
-		return 0, true, nil
+		return 0, true, false, nil
 	}
-	dup, err := result.Batch.Dup(proc.Mp())
+	dup, err := cloneFillBatch(result.Batch, proc.Mp(), ctr.retainedAllocation)
 	if err != nil {
-		return 0, false, err
+		if ctr.allocationAccount == nil || !mpool.IsRetryableAllocationCapacity(err) {
+			return 0, false, false, err
+		}
+		err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
+		return 0, false, err == nil, err
 	}
-	if err = addOriginalNullMarkers(dup, ap.ColLen, proc.Mp()); err != nil {
+	if err = addOriginalNullMarkers(
+		dup, ap.ColLen, proc.Mp(), ctr.retainedAllocation,
+	); err != nil {
 		dup.Clean(proc.Mp())
-		return 0, false, err
+		if ctr.allocationAccount != nil && mpool.IsRetryableAllocationCapacity(err) {
+			err = ctr.spillCurrentSource(ap, proc, analyzer, result.Batch)
+			return 0, false, err == nil, err
+		}
+		return 0, false, false, err
 	}
 	if analyzer != nil {
 		analyzer.Alloc(int64(dup.Size()))
 	}
 	seq = ctr.baseSeq + len(ctr.bats)
-	ctr.bats = append(ctr.bats, dup)
+	ctr.appendPendingBatch(dup)
 	ctr.pendingBytes += int64(dup.Size())
 	ctr.pendingRows += int64(dup.RowCount())
-	return seq, false, nil
+	return seq, false, false, nil
+}
+
+func (ctr *container) appendPendingBatch(bat *batch.Batch) {
+	if len(ctr.bats) == cap(ctr.bats) {
+		capacity := max(16, cap(ctr.bats)*2)
+		capacity = min(capacity, maxFillPendingBatches)
+		next := make([]*batch.Batch, len(ctr.bats), capacity)
+		copy(next, ctr.bats)
+		ctr.bats = next
+	}
+	ctr.bats = append(ctr.bats, bat)
+}
+
+func (ctr *container) spillCurrentSource(
+	ap *Fill,
+	proc *process.Process,
+	analyzer process.Analyzer,
+	source *batch.Batch,
+) error {
+	if err := ctr.beginSpill(ap, proc, analyzer, false); err != nil {
+		return err
+	}
+	if err := ctr.appendSpillSource(ap, proc, analyzer, source); err != nil {
+		ctr.cleanupSpill(proc)
+		return err
+	}
+	if ctr.spill.safeWatermark > ctr.spill.segmentStart {
+		if err := ctr.spill.finalizeSegment(ctr, ap, proc); err != nil {
+			ctr.cleanupSpill(proc)
+			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) appendCoordinate(
+	run *[]fillCoord,
+	coord fillCoord,
+	proc *process.Process,
+) error {
+	if ctr.allocationAccount == nil {
+		*run = append(*run, coord)
+		return nil
+	}
+	values, err := spillutil.GrowAccountedSlice(
+		*run,
+		len(*run)+1,
+		proc.Mp(),
+		ctr.spillAllocation,
+		fillAllocationSiteCoordinates,
+	)
+	if err != nil {
+		return err
+	}
+	values[len(values)-1] = coord
+	*run = values
+	return nil
 }
 
 // emitResolved pops and returns the resolved prefix of the FIFO one batch at a
@@ -313,7 +452,11 @@ func (ctr *container) advanceLinearEntry(ap *Fill, bat *batch.Batch, proc *proce
 	for row := 0; row < bat.RowCount(); row++ {
 		if len(ap.PartitionColIdx) > 0 {
 			wasSet := ctr.linEntryPart.set
-			if !ctr.linEntryPart.sameAndSet(ap.PartitionColIdx, bat, row) && wasSet {
+			same, err := ctr.linEntryPart.sameAndSet(ap.PartitionColIdx, bat, row)
+			if err != nil {
+				return err
+			}
+			if !same && wasSet {
 				clearEndpoints(ctr.linEntryValid)
 			}
 		}
@@ -321,7 +464,9 @@ func (ctr *container) advanceLinearEntry(ap *Fill, bat *batch.Batch, proc *proce
 			if originalNullAt(bat, ap.ColLen, col, row) {
 				continue
 			}
-			if err := setEndpoint(&ctr.linEntry[col], bat.Vecs[col], row, proc); err != nil {
+			if err := setEndpoint(
+				&ctr.linEntry[col], bat.Vecs[col], row, proc, ctr.retainedAllocation,
+			); err != nil {
 				return err
 			}
 			ctr.linEntryValid[col] = true
@@ -358,7 +503,11 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 		for c := 0; c < ap.ColLen; c++ {
 			vec := bat.Vecs[c]
 			if vec.IsNull(uint64(r)) {
-				ctr.nextRun[c] = append(ctr.nextRun[c], fillCoord{seq: seq, row: r})
+				if err := ctr.appendCoordinate(
+					&ctr.nextRun[c], fillCoord{seq: seq, row: r}, proc,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			run := ctr.nextRun[c]
@@ -370,6 +519,12 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 			if len(run) > 0 && run[len(run)-1].seq == seq && vec.GetType().IsVarlen() &&
 				len(vec.GetBytesAt(r)) > types.VarlenaInlineSize {
 				snapshot = vector.NewOffHeapVecWithType(*vec.GetType())
+				if ctr.retainedAllocation != nil {
+					if err := snapshot.SetAllocationAccount(ctr.retainedAllocation); err != nil {
+						snapshot.Free(proc.Mp())
+						return err
+					}
+				}
 				if err := appendValue(snapshot, vec, r, proc); err != nil {
 					snapshot.Free(proc.Mp())
 					return err
@@ -391,7 +546,9 @@ func (ctr *container) consumeNext(ap *Fill, bat *batch.Batch, seq int, proc *pro
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rows > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+		if err := ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1, proc); err != nil {
+			return err
+		}
 	}
 	ctr.recomputeFlushableNext(ap)
 	return nil
@@ -420,11 +577,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		return result, nil
 	}
 
-	if ctr.buf != nil {
-		ctr.buf.CleanOnlyData()
-	}
-	ctr.buf, err = ctr.buf.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
-	if err != nil {
+	if err = ctr.copyToOutput(proc, result.Batch); err != nil {
 		return result, err
 	}
 
@@ -432,50 +585,47 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 		ctr.prevValid = make([]bool, ap.ColLen)
 	}
 
-	// A previous value must not leak across a partition boundary, so find
-	// where new partitions start before filling: row 0 against the key saved
-	// from the previous batch, later rows against their predecessor.
+	// A previous value must not leak across a partition boundary. Processing
+	// rows first removes the old row-count-sized boundary scratch.
 	rowCount := ctr.buf.RowCount()
-	var newSegment []bool
-	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
-		newSegment = make([]bool, rowCount)
-		newSegment[0] = !ctr.matchesSnapshot(ap.PartitionColIdx, ctr.buf, 0)
-		for j := 1; j < rowCount; j++ {
-			newSegment[j] = !samePartitionRows(ap.PartitionColIdx, ctr.buf, j-1, ctr.buf, j)
+	for j := 0; j < rowCount; j++ {
+		if len(ap.PartitionColIdx) > 0 &&
+			((j == 0 && !ctr.matchesSnapshot(ap.PartitionColIdx, ctr.buf, 0)) ||
+				(j > 0 && !samePartitionRows(
+					ap.PartitionColIdx, ctr.buf, j-1, ctr.buf, j,
+				))) {
+			clearEndpoints(ctr.prevValid)
 		}
-	}
-
-	for i := 0; i < ap.ColLen; i++ {
-		for j := 0; j < ctr.buf.Vecs[i].Length(); j++ {
-			if newSegment != nil && newSegment[j] {
-				// The new partition has no previous value yet. The vector is
-				// kept for reuse; only its validity is dropped.
-				ctr.prevValid[i] = false
-			}
+		for i := 0; i < ap.ColLen; i++ {
 			if ctr.buf.Vecs[i].IsNull(uint64(j)) {
 				if ctr.prevVecs[i] != nil && ctr.prevValid[i] {
 					if err = setValue(ctr.buf.Vecs[i], ctr.prevVecs[i], j, 0, proc); err != nil {
 						return result, err
 					}
 				}
-			} else {
-				if ctr.prevVecs[i] == nil {
-					ctr.prevVecs[i] = vector.NewVec(*ctr.buf.Vecs[i].GetType())
-					err = appendValue(ctr.prevVecs[i], ctr.buf.Vecs[i], j, proc)
-					if err != nil {
-						return result, err
-					}
-				} else {
-					if err = setValue(ctr.prevVecs[i], ctr.buf.Vecs[i], 0, j, proc); err != nil {
-						return result, err
-					}
-				}
-				ctr.prevValid[i] = true
+				continue
 			}
+			if ctr.prevVecs[i] == nil {
+				ctr.prevVecs[i], err = makeEndpoint(
+					ctr.buf.Vecs[i], j, proc, ctr.retainedAllocation,
+				)
+				if err != nil {
+					return result, err
+				}
+			} else {
+				if err = setValue(ctr.prevVecs[i], ctr.buf.Vecs[i], 0, j, proc); err != nil {
+					return result, err
+				}
+			}
+			ctr.prevValid[i] = true
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rowCount > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, ctr.buf, rowCount-1)
+		if err = ctr.snapshotPartKey(
+			ap.PartitionColIdx, ctr.buf, rowCount-1, proc,
+		); err != nil {
+			return result, err
+		}
 	}
 	result.Batch = ctr.buf
 	return result, nil
@@ -483,7 +633,7 @@ func processPrev(ctr *container, ap *Fill, proc *process.Process, analyzer proce
 
 // consumeLinear folds one freshly pulled batch into the LINEAR state. A NULL
 // with a known previous value of the same partition joins that column's run; a
-// non-NULL interpolates the pending run against the midpoint of linPre and
+// non-NULL interpolates every position in the pending run between linPre and
 // itself, then becomes the new linPre. A run whose neighbour lies across a
 // partition boundary stays NULL, because there is nothing to interpolate
 // between.
@@ -502,7 +652,11 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 			if vec.IsNull(uint64(r)) {
 				seedValid := c < len(ctr.linSeedValid) && ctr.linSeedValid[c]
 				if ctr.linPre[c].seq >= 0 || seedValid {
-					ctr.linRun[c] = append(ctr.linRun[c], fillCoord{seq: seq, row: r})
+					if err := ctr.appendCoordinate(
+						&ctr.linRun[c], fillCoord{seq: seq, row: r}, proc,
+					); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -523,14 +677,18 @@ func (ctr *container) consumeLinear(ap *Fill, bat *batch.Batch, seq int, proc *p
 		}
 	}
 	if len(ap.PartitionColIdx) > 0 && rows > 0 {
-		ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1)
+		if err := ctr.snapshotPartKey(ap.PartitionColIdx, bat, rows-1, proc); err != nil {
+			return err
+		}
 	}
 	ctr.recomputeFlushableLinear(ap)
 	return nil
 }
 
-// interpolateRun writes the midpoint of the pre and cur values into every row
-// of column col's pending run.
+// interpolateRun divides the interval between pre and cur into len(run)+1
+// equal steps. A single missing row keeps using the bound SQL expression so
+// its historical cast semantics stay unchanged; longer runs use the same
+// numeric contract at each distinct position.
 func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int, proc *process.Process) error {
 	var preBatch *batch.Batch
 	preRow := pre.row
@@ -538,24 +696,33 @@ func (ctr *container) interpolateRun(col int, pre fillCoord, curSeq, curRow int,
 		preBatch = ctr.batAt(pre.seq)
 	} else {
 		preBatch = batch.NewWithSize(col + 1)
-		preBatch.SetVector(int32(col), ctr.linSeed[col])
+		preBatch.Vecs[col] = ctr.linSeed[col]
 		preBatch.SetRowCount(1)
 		preRow = 0
 	}
-	valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, ctr.batAt(curSeq), curRow)
-	if err != nil {
-		return err
-	}
-	for _, cd := range ctr.linRun[col] {
-		if err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc); err != nil {
-			if owned {
-				valVec.Free(proc.Mp())
-			}
+	curBatch := ctr.batAt(curSeq)
+	if len(ctr.linRun[col]) == 1 {
+		valVec, owned, err := linearFillValue(ctr, proc, col, preBatch, preRow, curBatch, curRow)
+		if err != nil {
 			return err
 		}
+		cd := ctr.linRun[col][0]
+		err = setValue(ctr.batAt(cd.seq).Vecs[col], valVec, cd.row, 0, proc)
+		if owned {
+			valVec.Free(proc.Mp())
+		}
+		return err
 	}
-	if owned {
-		valVec.Free(proc.Mp())
+
+	total := uint64(len(ctr.linRun[col]) + 1)
+	for position, cd := range ctr.linRun[col] {
+		if err := setLinearInterpolatedValue(
+			ctr.batAt(cd.seq).Vecs[col], cd.row,
+			preBatch.Vecs[col], preRow, curBatch.Vecs[col], curRow,
+			uint64(position+1), total,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -581,9 +748,31 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	curVec := curBatch.Vecs[idx]
 	if preVec.GetType().Oid == types.T_decimal128 && curVec.GetType().Oid == types.T_decimal128 {
 		result := vector.NewVec(*preVec.GetType())
+		if ctr.expressionAllocation != nil {
+			result = vector.NewOffHeapVecWithType(*preVec.GetType())
+			if err := result.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+				result.Free(proc.Mp())
+				return nil, false, err
+			}
+		}
 		left := vector.GetFixedAtNoTypeCheck[types.Decimal128](preVec, preRow)
 		right := vector.GetFixedAtNoTypeCheck[types.Decimal128](curVec, curRow)
-		value, err := decimal128LinearMidpoint(left, right, preVec.GetType().Scale)
+		value, err := linearExactValue(left, right, 1, 2)
+		if err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		if err = vector.AppendFixed(result, value, false, proc.Mp()); err != nil {
+			result.Free(proc.Mp())
+			return nil, false, err
+		}
+		return result, true, nil
+	}
+	if preVec.GetType().Oid == types.T_decimal256 && curVec.GetType().Oid == types.T_decimal256 {
+		result := vector.NewVec(*preVec.GetType())
+		left := vector.GetFixedAtNoTypeCheck[types.Decimal256](preVec, preRow)
+		right := vector.GetFixedAtNoTypeCheck[types.Decimal256](curVec, curRow)
+		value, err := linearExactValue256(left, right, 1, 2)
 		if err != nil {
 			result.Free(proc.Mp())
 			return nil, false, err
@@ -596,32 +785,370 @@ func linearFillValue(ctr *container, proc *process.Process, idx int, preBatch *b
 	}
 
 	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(*preVec.GetType())
-	if err := appendValue(b.Vecs[0], preVec, preRow, proc); err != nil {
+	if ctr.expressionAllocation != nil {
+		b = batch.NewOffHeapWithSize(2)
+		if err := b.SetAllocationAccount(ctr.expressionAllocation); err != nil {
+			b.Clean(proc.Mp())
+			return nil, false, err
+		}
+	}
+	left, err := makeEndpoint(preVec, preRow, proc, ctr.expressionAllocation)
+	if err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
-	b.Vecs[1] = vector.NewVec(*curVec.GetType())
-	if err := appendValue(b.Vecs[1], curVec, curRow, proc); err != nil {
+	b.SetVector(0, left)
+	right, err := makeEndpoint(curVec, curRow, proc, ctr.expressionAllocation)
+	if err != nil {
 		b.Clean(proc.Mp())
 		return nil, false, err
 	}
+	b.SetVector(1, right)
 	b.SetRowCount(1)
 	defer b.Clean(proc.Mp())
 	result, err := ctr.exes[idx].Eval(proc, []*batch.Batch{b}, nil)
 	return result, false, err
 }
 
-func decimal128LinearMidpoint(left, right types.Decimal128, scale int32) (types.Decimal128, error) {
-	sum, err := left.Add128(right)
+// setLinearInterpolatedValue writes the value at step/total between the two
+// endpoints. Exact numeric types use a widened weighted sum, which both avoids
+// endpoint arithmetic overflow and rounds once at the destination scale.
+// Floating-point types use a stable convex form when the endpoints have
+// opposite signs, avoiding overflow in right-left.
+func setLinearInterpolatedValue(
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step uint64,
+	total uint64,
+) error {
+	if step == 0 || step >= total {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid linear interpolation position %d/%d", step, total)
+	}
+	if dst.GetType().Oid != leftVec.GetType().Oid || dst.GetType().Oid != rightVec.GetType().Oid {
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation type mismatch: dst=%s, left=%s, right=%s",
+			dst.GetType(), leftVec.GetType(), rightVec.GetType())
+	}
+
+	var err error
+	switch dst.GetType().Oid {
+	case types.T_bit:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int8:
+		err = setLinearSignedValue[int8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int16:
+		err = setLinearSignedValue[int16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int32:
+		err = setLinearSignedValue[int32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_int64:
+		err = setLinearSignedValue[int64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint8:
+		err = setLinearUnsignedValue[uint8](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint16:
+		err = setLinearUnsignedValue[uint16](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint32:
+		err = setLinearUnsignedValue[uint32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_uint64:
+		err = setLinearUnsignedValue[uint64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float32:
+		err = setLinearFloatValue[float32](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_float64:
+		err = setLinearFloatValue[float64](dst, dstRow, leftVec, leftRow, rightVec, rightRow, step, total)
+	case types.T_decimal64:
+		value, calcErr := linearExactValue(
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](leftVec, leftRow))),
+			types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[types.Decimal64](rightVec, rightRow))),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, types.Decimal64(value.B0_63))
+	case types.T_decimal128:
+		value, calcErr := linearExactValue(
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal128](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	case types.T_decimal256:
+		value, calcErr := linearExactValue256(
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](leftVec, leftRow),
+			vector.GetFixedAtNoTypeCheck[types.Decimal256](rightVec, rightRow),
+			step, total)
+		if calcErr != nil {
+			return calcErr
+		}
+		err = vector.SetFixedAtNoTypeCheck(dst, dstRow, value)
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"linear interpolation does not support result type %s", dst.GetType())
+	}
+	if err == nil && dst.HasNull() {
+		dst.GetNulls().Del(uint64(dstRow))
+	}
+	return err
+}
+
+type linearSignedNumber interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+
+func setLinearSignedValue[T linearSignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		types.Decimal128FromInt64(int64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearUnsignedNumber interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+func setLinearUnsignedValue[T linearUnsignedNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value, err := linearExactValue(
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow))),
+		unsignedDecimal128(uint64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow))),
+		step, total)
+	if err != nil {
+		return err
+	}
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value.B0_63))
+}
+
+type linearFloatNumber interface {
+	~float32 | ~float64
+}
+
+func setLinearFloatValue[T linearFloatNumber](
+	dst *vector.Vector,
+	dstRow int,
+	leftVec *vector.Vector,
+	leftRow int,
+	rightVec *vector.Vector,
+	rightRow int,
+	step, total uint64,
+) error {
+	value := linearFloat64(
+		float64(vector.GetFixedAtNoTypeCheck[T](leftVec, leftRow)),
+		float64(vector.GetFixedAtNoTypeCheck[T](rightVec, rightRow)),
+		step, total)
+	return vector.SetFixedAtNoTypeCheck(dst, dstRow, T(value))
+}
+
+func unsignedDecimal128(value uint64) types.Decimal128 {
+	return types.Decimal128{B0_63: value}
+}
+
+func linearFloat64(left, right float64, step, total uint64) float64 {
+	if left == right {
+		return left
+	}
+	ratio := float64(step) / float64(total)
+	if (left < 0) != (right < 0) {
+		return left*(1-ratio) + right*ratio
+	}
+	return left + (right-left)*ratio
+}
+
+func linearExactValue(left, right types.Decimal128, step, total uint64) (types.Decimal128, error) {
+	if step == 0 || step >= total {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+	leftTerm, err := multiplyDecimal128ByUint64(left, total-step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	value, valueScale, err := sum.Div(types.Decimal128FromInt64(2), scale, 0)
+	rightTerm, err := multiplyDecimal128ByUint64(right, step)
 	if err != nil {
 		return types.Decimal128{}, err
 	}
-	return value.Scale(scale - valueScale)
+	numerator, _, err := leftTerm.Add(rightTerm, 0, 0)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	negative := numerator.Sign()
+	if negative {
+		numerator = numerator.Minus()
+	}
+	value, err := numerator.Div256(types.Decimal256{B0_63: total})
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if negative {
+		value = value.Minus()
+	}
+	return decimal256ToDecimal128(value)
+}
+
+func multiplyDecimal128ByUint64(value types.Decimal128, factor uint64) (types.Decimal256, error) {
+	widened := types.Decimal256FromDecimal128(value)
+	negative := widened.Sign()
+	if negative {
+		widened = widened.Minus()
+	}
+	result, err := widened.Mul256(types.Decimal256{B0_63: factor})
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if negative {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func linearExactValue256(left, right types.Decimal256, step, total uint64) (types.Decimal256, error) {
+	if step == 0 || step >= total {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf(
+			"invalid exact linear interpolation position %d/%d", step, total)
+	}
+
+	// A Decimal256 endpoint multiplied by a uint64 position needs at most 320
+	// bits. Keep that exact intermediate on the stack: using Decimal256 directly
+	// can overflow before division even though the final convex value is valid.
+	leftTerm, leftNegative := multiplyDecimal256Magnitude(left, total-step)
+	rightTerm, rightNegative := multiplyDecimal256Magnitude(right, step)
+	var numerator linearUint320
+	negative := leftNegative
+	if leftNegative == rightNegative {
+		var overflow bool
+		numerator, overflow = leftTerm.add(rightTerm)
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation intermediate exceeds 320 bits")
+		}
+	} else if leftTerm.compare(rightTerm) >= 0 {
+		numerator = leftTerm.sub(rightTerm)
+	} else {
+		numerator = rightTerm.sub(leftTerm)
+		negative = rightNegative
+	}
+	value, remainder := numerator.div(total)
+	if remainder >= total-remainder {
+		var overflow bool
+		value, overflow = value.add(linearUint320{1})
+		if overflow {
+			return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+				"linear interpolation rounded result exceeds 320 bits")
+		}
+	}
+	return value.decimal256(negative)
+}
+
+// linearUint320 is an unsigned little-endian integer used only for the exact
+// Decimal256 weighted sum. Five limbs are sufficient for 256 bits × uint64.
+type linearUint320 [5]uint64
+
+func multiplyDecimal256Magnitude(value types.Decimal256, factor uint64) (linearUint320, bool) {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	input := [...]uint64{value.B0_63, value.B64_127, value.B128_191, value.B192_255}
+	var result linearUint320
+	var carry uint64
+	for i, limb := range input {
+		hi, lo := bits.Mul64(limb, factor)
+		var loCarry uint64
+		result[i], loCarry = bits.Add64(lo, carry, 0)
+		carry, _ = bits.Add64(hi, 0, loCarry)
+	}
+	result[4] = carry
+	return result, negative
+}
+
+func (value linearUint320) add(other linearUint320) (linearUint320, bool) {
+	var result linearUint320
+	var carry uint64
+	for i := range result {
+		result[i], carry = bits.Add64(value[i], other[i], carry)
+	}
+	return result, carry != 0
+}
+
+func (value linearUint320) sub(other linearUint320) linearUint320 {
+	var result linearUint320
+	var borrow uint64
+	for i := range result {
+		result[i], borrow = bits.Sub64(value[i], other[i], borrow)
+	}
+	return result
+}
+
+func (value linearUint320) compare(other linearUint320) int {
+	for i := len(value) - 1; i >= 0; i-- {
+		if value[i] < other[i] {
+			return -1
+		}
+		if value[i] > other[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func (value linearUint320) div(divisor uint64) (linearUint320, uint64) {
+	var quotient linearUint320
+	var remainder uint64
+	for i := len(value) - 1; i >= 0; i-- {
+		quotient[i], remainder = bits.Div64(remainder, value[i], divisor)
+	}
+	return quotient, remainder
+}
+
+func (value linearUint320) decimal256(negative bool) (types.Decimal256, error) {
+	if value[4] != 0 || (!negative && value[3]>>63 != 0) ||
+		(negative && value[3] > uint64(1)<<63) ||
+		(negative && value[3] == uint64(1)<<63 && (value[2] != 0 || value[1] != 0 || value[0] != 0)) {
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtx(
+			"linear interpolation result exceeds decimal256")
+	}
+	result := types.Decimal256{
+		B0_63: value[0], B64_127: value[1],
+		B128_191: value[2], B192_255: value[3],
+	}
+	if negative && (value[0] != 0 || value[1] != 0 || value[2] != 0 || value[3] != 0) {
+		result = result.Minus()
+	}
+	return result, nil
+}
+
+func decimal256ToDecimal128(value types.Decimal256) (types.Decimal128, error) {
+	if value.Sign() {
+		if value.B192_255 != ^uint64(0) || value.B128_191 != ^uint64(0) || value.B64_127>>63 == 0 {
+			return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+		}
+	} else if value.B192_255 != 0 || value.B128_191 != 0 || value.B64_127>>63 != 0 {
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtx("linear interpolation result exceeds decimal128")
+	}
+	return types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, nil
 }
 
 func processNext(ctr *container, ap *Fill, proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
@@ -647,30 +1174,30 @@ func (ctr *container) driveFill(
 		ctr.toFree.Clean(proc.Mp())
 		ctr.toFree = nil
 	}
-	if ctr.spill != nil {
-		if !ctr.spill.ready {
-			if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+	for {
+		if ctr.spill != nil {
+			if !ctr.spill.ready {
+				if err := ctr.collectSpill(ap, proc, analyzer); err != nil {
+					ctr.cleanupSpill(proc)
+					return vm.NewCallResult(), err
+				}
+			}
+			bat, err := ctr.spill.replayNext(ctr, ap, proc)
+			if err == io.EOF {
+				if err = ctr.finishSpillReplay(ap, proc); err != nil {
+					return vm.NewCallResult(), err
+				}
+				continue
+			}
+			if err != nil {
 				ctr.cleanupSpill(proc)
 				return vm.NewCallResult(), err
 			}
+			result := vm.NewCallResult()
+			result.Batch = bat
+			result.Status = vm.ExecNext
+			return result, nil
 		}
-		bat, err := ctr.spill.replayNext(ctr, ap, proc)
-		if err == io.EOF {
-			if err = ctr.finishSpillReplay(ap, proc); err != nil {
-				return vm.NewCallResult(), err
-			}
-			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
-		}
-		if err != nil {
-			ctr.cleanupSpill(proc)
-			return vm.NewCallResult(), err
-		}
-		result := vm.NewCallResult()
-		result.Batch = bat
-		result.Status = vm.ExecNext
-		return result, nil
-	}
-	for {
 		if ctr.flushable > 0 {
 			return ctr.emitResolved(ap, proc)
 		}
@@ -687,22 +1214,33 @@ func (ctr *container) driveFill(
 			ctr.flushable = len(ctr.bats)
 			continue
 		}
-		seq, eof, err := ctr.pullChild(ap, proc, analyzer)
+		seq, eof, spilled, err := ctr.pullChild(ap, proc, analyzer)
 		if err != nil {
 			return vm.NewCallResult(), err
+		}
+		if spilled {
+			continue
 		}
 		if eof {
 			ctr.childDone = true
 			continue
 		}
 		if err = consume(ctr, ap, ctr.batAt(seq), seq, proc); err != nil {
+			if ctr.allocationAccount != nil &&
+				mpool.IsRetryableAllocationCapacity(err) {
+				if spillErr := ctr.beginSpill(ap, proc, analyzer, true); spillErr != nil {
+					return vm.NewCallResult(), spillErr
+				}
+				continue
+			}
 			return vm.NewCallResult(), err
 		}
-		if ctr.flushable == 0 && ctr.shouldSpillPending() {
-			if err = ctr.beginSpill(ap, proc); err != nil {
+		if ctr.flushable == 0 &&
+			(ctr.shouldSpillPending() || len(ctr.bats) >= maxFillPendingBatches) {
+			if err = ctr.beginSpill(ap, proc, analyzer, true); err != nil {
 				return vm.NewCallResult(), err
 			}
-			return ctr.driveFill(ap, proc, analyzer, consume, flushPendingRuns)
+			continue
 		}
 	}
 }
@@ -784,6 +1322,8 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal64](w, j))
 	case types.T_decimal128:
 		err = setDecimal128Value(v, w, i, j)
+	case types.T_decimal256:
+		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Decimal256](w, j))
 	case types.T_uuid:
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Uuid](w, j))
 	case types.T_TS:

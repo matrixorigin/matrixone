@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,7 +45,7 @@ func newAccountedTestSpillEngine(
 ) *spillutil.SpillEngine {
 	t.Helper()
 	if cfg.Budget == nil {
-		budget := process.MustNewHashBuildBudget(1<<60, 1<<60)
+		budget := process.MustNewExecutionResourceBudget(1<<60, 1<<60)
 		var err error
 		cfg.Budget, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
@@ -58,7 +57,7 @@ func newAccountedTestSpillEngine(
 	engine, err := spillutil.NewSpillEngine(
 		cfg,
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	return engine
@@ -67,9 +66,9 @@ func newAccountedTestSpillEngine(
 func installHashJoinTestAllocation(
 	t *testing.T,
 	join *HashJoin,
-) (*process.HashBuildBudgetGeneration, *mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
+) (*process.ExecutionResourceGeneration, *mpool.AllocationAccountRegistry, *mpool.AllocationAccount) {
 	t.Helper()
-	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
+	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<20)
@@ -203,7 +202,7 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 
 	tc.arg.Free(tc.proc, false, nil)
 	tc.barg.Free(tc.proc, false, nil)
-	budget, err := tc.proc.GetHashBuildBudget()
+	budget, err := tc.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	require.Zero(t, budget.Used())
 	require.Zero(t, budget.SpillDiskUsed())
@@ -228,7 +227,7 @@ func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testi
 		tc.barg.Reset(tc.proc, false, nil)
 		tc.arg.Free(tc.proc, false, nil)
 		tc.barg.Free(tc.proc, false, nil)
-		budget, err := tc.proc.GetHashBuildBudget()
+		budget, err := tc.proc.GetExecutionResourceBudget()
 		require.NoError(t, err)
 		require.Zero(t, budget.Used())
 		require.Zero(t, budget.SpillDiskUsed())
@@ -476,7 +475,7 @@ func TestShuffleJoinHardBudgetRejectTransitionsToSpill(t *testing.T) {
 	oldAccount := tc.arg.allocationAccount
 	require.NoError(t, tc.arg.ClearAllocationAccount(oldAccount))
 	require.NoError(t, tc.barg.ClearAllocationAccount(oldAccount))
-	budget, err := tc.proc.GetHashBuildBudget()
+	budget, err := tc.proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := budget.AllocationAccountRegistry()
 	require.NoError(t, err)

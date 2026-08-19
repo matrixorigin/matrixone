@@ -162,6 +162,62 @@ func TestGapFillTimeWindowKeepsMaxByChildAggregate(t *testing.T) {
 	require.Equal(t, "max_by", got.GetF().Func.ObjName)
 }
 
+func TestBindTimeWindowFuncRemapsMaxByTumblingWindowIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int32
+	}{
+		{name: "max_by", id: function.MAX_BY},
+		{name: "max_by_non_null", id: function.MAX_BY_NON_NULL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			valueType := types.T_int64.ToType()
+			orderType := types.T_datetime.ToType()
+			tieType := types.T_int64.ToType()
+			ctx := NewBindContext(nil, nil)
+			ctx.aggregateTag = 1
+			ctx.timeTag = 2
+			ctx.aggregates = []*plan.Expr{{
+				Typ: makePlan2Type(&valueType),
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{
+						Obj:     function.EncodeOverloadID(tc.id, 0),
+						ObjName: tc.name,
+					},
+					Args: []*plan.Expr{
+						{Typ: makePlan2Type(&valueType)},
+						{Typ: makePlan2Type(&orderType)},
+						{Typ: makePlan2Type(&tieType)},
+					},
+				}},
+			}}
+
+			binder := &HavingBinder{
+				baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx},
+			}
+			ast := &tree.FuncExpr{
+				Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(tc.name)),
+				Exprs: tree.Exprs{
+					tree.NewUnresolvedColName("value"),
+					tree.NewUnresolvedColName("event_ts"),
+					tree.NewUnresolvedColName("seq"),
+				},
+			}
+
+			got, err := binder.BindTimeWindowFunc(tc.name, ast, 0, true)
+			require.NoError(t, err)
+			require.Len(t, ctx.times, 1)
+			require.Equal(t, "any_value", ctx.times[0].GetF().Func.ObjName)
+			require.Len(t, ctx.times[0].GetF().Args, 1)
+			require.Equal(t, int32(ctx.aggregateTag), ctx.times[0].GetF().Args[0].GetCol().RelPos)
+			require.Equal(t, int32(0), ctx.times[0].GetF().Args[0].GetCol().ColPos)
+			require.Equal(t, int32(ctx.timeTag), got.GetCol().RelPos)
+			require.Equal(t, int32(0), got.GetCol().ColPos)
+			require.Equal(t, makePlan2Type(&valueType), got.Typ)
+		})
+	}
+}
+
 func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 	countFn, err := function.GetFunctionByName(context.Background(), "count", []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)

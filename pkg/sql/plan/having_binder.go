@@ -107,7 +107,17 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			return nil, err
 		}
 
-		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+				return expr, nil
+			}
+			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&
+				(b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+					b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+					b.corrColRefTargetsGroup(corr.Corr) ||
+					b.corrColRefAllowedByTargetQuery(corr.Corr)) {
+				return expr, nil
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 
@@ -140,7 +150,11 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			if b.corrColRefTargetsCurrentGroup(corr.Corr) || b.corrColRefTargetsGroup(corr.Corr) {
+			if b.corrColRefTargetsCurrentGroup(corr.Corr) ||
+				b.corrColRefTargetsAggregateInputParent(corr.Corr) ||
+				b.corrColRefAllowedByCurrentQuery(corr.Corr) ||
+				b.corrColRefTargetsGroup(corr.Corr) ||
+				b.corrColRefAllowedByTargetQuery(corr.Corr) {
 				return expr, nil
 			}
 			return nil, b.newGroupByColumnError(astExpr)
@@ -446,13 +460,33 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 	return expr, nil
 }
 
+func needsTimeWindowResultAggRemap(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	funcId, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	switch funcId {
+	case function.MAX_BY, function.MAX_BY_NON_NULL:
+		return true
+	default:
+		return false
+	}
+}
+
 func makeTimeWindowProjectionExpr(ctx context.Context, bindCtx *BindContext, astExpr tree.Expr, colPos int32) (*plan.Expr, error) {
+	name := ""
+	if colPos >= 0 && int(colPos) < len(bindCtx.times) {
+		if col := bindCtx.times[colPos].GetCol(); col != nil {
+			name = col.Name
+		}
+	}
 	expr := &plan.Expr{
 		Typ: bindCtx.times[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: bindCtx.timeTag,
 				ColPos: colPos,
+				Name:   name,
 			},
 		},
 	}
@@ -659,6 +693,11 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 }
 
 func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	prevSubqueryInAggregateInput := b.subqueryInAggregateInput
+	b.subqueryInAggregateInput = b.insideAgg
+	defer func() {
+		b.subqueryInAggregateInput = prevSubqueryInAggregateInput
+	}()
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 
@@ -711,7 +750,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	// be reused.
 	outerFn.AggConfig = nil
 	outerFn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
-	if b.ctx.sliding {
+	if b.ctx.sliding || needsTimeWindowResultAggRemap(expr) {
 		expr, err = b.remapAggToTimeWindowResultAgg(expr)
 		if err != nil {
 			return nil, err
