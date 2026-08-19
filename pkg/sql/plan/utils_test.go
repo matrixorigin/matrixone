@@ -461,11 +461,22 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	}
 
 	t.Run("offset and parameter positions", func(t *testing.T) {
-		paginationPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ? offset ?")
-		assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
-			context.Background(), paginationPlan, []any{int64(2), "1"}))
-		assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
-			context.Background(), paginationPlan, []any{"2", int64(1)}))
+		for _, sql := range []string{
+			"select n_nationkey from nation limit ? offset ?",
+			"select n_nationkey from nation limit ?, ?",
+		} {
+			paginationPlan := buildPreparedPlan(t, sql)
+			assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{int64(2), "1"}))
+			assertWrongExecuteArgs(t, ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{"1", int64(-1)}))
+			err := ValidatePreparedPaginationParams(
+				context.Background(), paginationPlan, []any{int64(-1), "1"})
+			require.Error(t, err)
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(1690), moErr.MySQLCode())
+		}
 	})
 
 	t.Run("ctas", func(t *testing.T) {

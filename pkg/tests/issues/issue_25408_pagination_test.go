@@ -94,6 +94,20 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			assertMySQLError(t, err, 1690)
 		})
 
+		for index, paginationSQL := range []string{
+			"select id from " + dbName + ".page order by id limit ? offset ?",
+			"select id from " + dbName + ".page order by id limit ?, ?",
+		} {
+			t.Run(fmt.Sprintf("SQL PREPARE error priority %d", index), func(t *testing.T) {
+				name := fmt.Sprintf("issue25408_priority_%d", index)
+				execSQLRequire(t, ctx, db, "prepare "+name+" from '"+paginationSQL+"'")
+				defer execSQLMaybe(t, context.Background(), db, "deallocate prepare "+name)
+				execSQLRequire(t, ctx, db, "set @first='1',@second=-1")
+				_, executeErr := db.ExecContext(ctx, "execute "+name+" using @first,@second")
+				assertMySQLError(t, executeErr, 1210)
+			})
+		}
+
 		t.Run("COM_STMT and CTAS", func(t *testing.T) {
 			stmt, prepareErr := db.PrepareContext(ctx,
 				"select id from "+dbName+".page order by id limit ? offset ?")
@@ -123,5 +137,18 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			_, err = ctas.ExecContext(ctx, "1")
 			assertMySQLError(t, err, 1210)
 		})
+
+		for index, paginationSQL := range []string{
+			"select id from " + dbName + ".page order by id limit ? offset ?",
+			"select id from " + dbName + ".page order by id limit ?, ?",
+		} {
+			t.Run(fmt.Sprintf("COM_STMT error priority %d", index), func(t *testing.T) {
+				stmt, prepareErr := db.PrepareContext(ctx, paginationSQL)
+				require.NoError(t, prepareErr)
+				defer stmt.Close()
+				_, executeErr := stmt.ExecContext(ctx, "1", int64(-1))
+				assertMySQLError(t, executeErr, 1210)
+			})
+		}
 	})
 }

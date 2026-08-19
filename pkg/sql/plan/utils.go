@@ -3163,8 +3163,7 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 // integer. Negative signed values use the unsigned-range error required by
 // EXECUTE.
 func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, paramVals []any) error {
-	positions := preparedPaginationParamPositions(preparePlan)
-	for pos := range positions {
+	for _, pos := range PreparedPaginationParamPositions(preparePlan) {
 		if pos < 0 || int(pos) >= len(paramVals) {
 			continue
 		}
@@ -3194,6 +3193,7 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	for position := range positions {
 		result = append(result, position)
 	}
+	slices.Sort(result)
 	return result
 }
 
