@@ -802,7 +802,7 @@ func jitteredInterval(interval time.Duration) time.Duration {
 	return time.Duration(float64(interval) * (0.5 + 0.5*rand.Float64()))
 }
 
-func TestCanStartTransfer(t *testing.T) {
+func TestAdmitTransfer(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	runtime.SetupServiceBasedRuntime("", rt)
 	logger := rt.Logger()
@@ -811,7 +811,7 @@ func TestCanStartTransfer(t *testing.T) {
 		tu := &tunnel{
 			logger: logger,
 		}
-		can := tu.canStartTransfer(false)
+		_, can := tu.admitTransfer(false)
 		require.False(t, can)
 	})
 
@@ -820,7 +820,7 @@ func TestCanStartTransfer(t *testing.T) {
 			logger: logger,
 		}
 		tu.mu.inTransfer = true
-		can := tu.canStartTransfer(false)
+		_, can := tu.admitTransfer(false)
 		require.False(t, can)
 	})
 
@@ -832,8 +832,37 @@ func TestCanStartTransfer(t *testing.T) {
 		tu.mu.scp = &pipe{}
 		tu.mu.started = true
 		tu.trackClientRequest(makeSimplePacket("select 1"))
-		can := tu.canStartTransfer(false)
+		_, can := tu.admitTransfer(false)
 		require.False(t, can)
+	})
+
+	t.Run("client_message_active", func(t *testing.T) {
+		tu := &tunnel{
+			logger: logger,
+		}
+		csp := &pipe{tun: tu}
+		tu.mu.csp = csp
+		tu.mu.scp = &pipe{}
+		tu.mu.started = true
+
+		_, claimed, err := csp.claimClientMessage(context.Background(), nil, false)
+		require.NoError(t, err)
+		require.True(t, claimed)
+		_, can := tu.admitTransfer(true)
+		require.False(t, can,
+			"even an untracked protocol message must finish forwarding first")
+		_, can = tu.admitTransfer(false)
+		require.False(t, can)
+		require.False(t, csp.tryArmSyncTransfer())
+
+		csp.finishClientMessageClaim()
+		require.True(t, csp.tryArmSyncTransfer())
+		gate, can := tu.admitTransferWithGate(true, csp)
+		require.True(t, can)
+		defer gate.finishSyncTransfer()
+		_, can = tu.admitTransfer(false)
+		require.False(t, can, "transfer admissions must not overlap")
+		gate.finishSyncTransfer()
 	})
 
 	t.Run("inTxn", func(t *testing.T) {
@@ -843,7 +872,17 @@ func TestCanStartTransfer(t *testing.T) {
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
 		tu.mu.scp.mu.inTxn = true
-		can := tu.canStartTransfer(false)
+		_, can := tu.admitTransfer(false)
+		require.False(t, can)
+	})
+
+	t.Run("paused", func(t *testing.T) {
+		tu := &tunnel{logger: logger}
+		tu.mu.csp = &pipe{}
+		tu.mu.scp = &pipe{}
+		tu.mu.csp.mu.paused = true
+		tu.mu.started = true
+		_, can := tu.admitTransfer(true)
 		require.False(t, can)
 	})
 
@@ -855,7 +894,7 @@ func TestCanStartTransfer(t *testing.T) {
 		tu.mu.scp = &pipe{}
 		tu.mu.scp.src = newMySQLConn("", nil, 0, nil, nil, false, 0)
 		tu.mu.started = true
-		can := tu.canStartTransfer(false)
+		_, can := tu.admitTransfer(false)
 		require.True(t, can)
 	})
 }
@@ -1630,7 +1669,8 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 	longData := makeStmtCommandPacket(
 		frontend.COM_STMT_SEND_LONG_DATA, statementID, 0, 0, 'x')
 	forward(longData)
-	require.False(t, tun.canStartTransfer(true),
+	_, can := tun.admitTransfer(true)
+	require.False(t, can,
 		"staged long data cannot be reconstructed on a migrated CN")
 
 	closeStmt := makeStmtCommandPacket(frontend.COM_STMT_CLOSE, statementID)
@@ -1643,36 +1683,50 @@ func TestTunnelTransferAfterStmtLongDataIsClosed(t *testing.T) {
 		t.Fatal("client-to-server pipe did not stop")
 	}
 
-	require.True(t, tun.canStartTransfer(true),
+	gate, can := tun.admitTransfer(true)
+	require.True(t, can,
 		"closing the statement discards its staged long data")
+	defer gate.finishSyncTransfer()
+	gate.finishSyncTransfer()
 }
 
-func TestClientRequestTrackingWaitsForSyncMigrationBarrier(t *testing.T) {
+func TestSyncTransferSerializesClientRequestPublication(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	clientProxy, client := net.Pipe()
 	defer client.Close()
-	backendProxy, backend := net.Pipe()
-	defer backend.Close()
+	oldBackendProxy, oldBackend := net.Pipe()
+	defer oldBackend.Close()
+	newBackendProxy, newBackend := net.Pipe()
+	defer newBackend.Close()
 
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
 	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1)
-	backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2)
-	csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+	oldBackendConn := newMySQLConn(connServerName, oldBackendProxy, 0, nil, nil, false, 2)
+	csp := tun.newPipe(pipeClientToServer, clientConn, oldBackendConn)
 	peer := &pipe{}
+	tun.mu.started = true
+	tun.mu.csp = csp
+	tun.mu.scp = peer
 
-	// Model the synchronous-transfer barrier installed by s2c after a terminal
-	// response. c2s may read the next packet, but it must neither publish its
-	// state nor forward it until migration and its state cleanup have finished.
-	csp.wg.Add(1)
+	// Force the formerly missed ordering: c2s has returned from preRecv, but has
+	// not published the request when synchronous transfer admission closes the
+	// publication gate.
+	beforeClaimRelease := make(chan struct{})
 	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(csp.wg.Done) }
+	release := func() { releaseOnce.Do(func() { close(beforeClaimRelease) }) }
 	defer release()
 	beforeSend := make(chan struct{})
 	var beforeSendOnce sync.Once
 	csp.testHelper.beforeSend = func() {
 		beforeSendOnce.Do(func() { close(beforeSend) })
+		<-beforeClaimRelease
+	}
+	waitingOnTransfer := make(chan struct{})
+	var waitingOnce sync.Once
+	csp.testHelper.onSyncTransferWait = func() {
+		waitingOnce.Do(func() { close(waitingOnTransfer) })
 	}
 
 	pipeDone := make(chan error, 1)
@@ -1693,14 +1747,35 @@ func TestClientRequestTrackingWaitsForSyncMigrationBarrier(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("client packet was not read before the migration barrier")
 	}
+	require.True(t, csp.tryArmSyncTransfer())
+	gate, can := tun.admitTransferWithGate(true, csp)
+	require.True(t, can)
+	require.Same(t, csp, gate)
+	defer gate.finishSyncTransfer()
+	release()
+	select {
+	case <-waitingOnTransfer:
+	case <-time.After(time.Second):
+		t.Fatal("client request did not wait on synchronous transfer")
+	}
 	require.False(t, tun.hasUnsafeClientState(),
 		"a post-snapshot packet must not be published before migration cleanup")
 	tun.clearMigratedStatementState()
-	release()
+	csp.dst = newMySQLConn(connServerName, newBackendProxy, 0, nil, nil, false, 3)
+	gate.finishSyncTransfer()
 
 	got := make([]byte, len(longData))
-	_, err := io.ReadFull(backend, got)
-	require.NoError(t, err)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.ReadFull(newBackend, got)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("post-snapshot request was not forwarded to the replacement backend")
+	}
 	require.Equal(t, longData, got)
 	require.NoError(t, <-writeDone)
 	require.True(t, tun.hasUntransferableClientState(),
@@ -1713,6 +1788,106 @@ func TestClientRequestTrackingWaitsForSyncMigrationBarrier(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("client-to-server pipe did not stop")
 	}
+}
+
+func TestClientMessageClaimCancellation(t *testing.T) {
+	csp := &pipe{}
+	csp.mu.syncTransferDone = make(chan struct{})
+	defer csp.finishSyncTransfer()
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	csp.testHelper.onSyncTransferWait = func() {
+		waitingOnce.Do(func() { close(waiting) })
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	wantErr := errors.New("stop waiting for migration")
+
+	type claimResult struct {
+		claimed bool
+		err     error
+	}
+	done := make(chan claimResult, 1)
+	go func() {
+		_, claimed, err := csp.claimClientMessage(ctx, nil, false)
+		done <- claimResult{claimed: claimed, err: err}
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("client publication did not reach the transfer gate")
+	}
+	cancel(wantErr)
+	csp.finishSyncTransfer()
+	var result claimResult
+	select {
+	case result = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("client publication did not stop after cancellation")
+	}
+	require.ErrorIs(t, result.err, wantErr)
+	require.False(t, result.claimed)
+	require.False(t, csp.clientMessageActive.Load())
+}
+
+func TestSyncTransferWaiterStopsWhenResponseForwardingFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backendProxy, backend := net.Pipe()
+	defer backend.Close()
+	clientProxy, client := net.Pipe()
+	defer client.Close()
+	require.NoError(t, clientProxy.Close())
+
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+	clientConn := newMySQLConn(connClientName, clientProxy, 0, nil, nil, false, 1)
+	backendConn := newMySQLConn(connServerName, backendProxy, 0, nil, nil, false, 2)
+	csp := tun.newPipe(pipeClientToServer, clientConn, backendConn)
+	scp := tun.newPipe(pipeServerToClient, backendConn, clientConn)
+	tun.mu.started = true
+	tun.mu.csp = csp
+	tun.mu.scp = scp
+	tun.setTransferIntent(true)
+	defer tun.setTransferIntent(false)
+
+	pipeDone := make(chan error, 1)
+	go func() { pipeDone <- scp.kickoff(ctx, csp) }()
+	require.NoError(t, scp.waitReady(ctx))
+	writeDone := make(chan error, 1)
+	response := makeOKPacket(5)
+	binary.LittleEndian.PutUint16(response[7:],
+		frontend.SERVER_QUERY_WAS_SLOW|frontend.SERVER_STATUS_NO_GOOD_INDEX_USED)
+	go func() {
+		_, err := backend.Write(response)
+		writeDone <- err
+	}()
+
+	select {
+	case err := <-pipeDone:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("server-to-client pipe did not report the forwarding failure")
+	}
+	require.NoError(t, <-writeDone)
+
+	// A failed response path must not reopen c2s and let a pipelined request
+	// reach the old backend. Tunnel shutdown cancels the waiter instead.
+	csp.mu.Lock()
+	require.NotNil(t, csp.mu.syncTransferDone)
+	csp.mu.Unlock()
+	claimDone := make(chan error, 1)
+	go func() {
+		_, _, err := csp.claimClientMessage(ctx, nil, false)
+		claimDone <- err
+	}()
+	cancel()
+	select {
+	case err := <-claimDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("client publication did not stop with tunnel cancellation")
+	}
+	csp.finishSyncTransfer()
 }
 
 func TestAsyncTransferSerializesClientRequestPublication(t *testing.T) {
@@ -1764,7 +1939,8 @@ func TestAsyncTransferSerializesClientRequestPublication(t *testing.T) {
 	// The async transfer wins while the request is read but unpublished. Its
 	// paused flag and request publication use the same mutex, so the old c2s pipe
 	// must stop without consuming the buffered packet.
-	require.True(t, tun.canStartTransfer(false))
+	_, can := tun.admitTransfer(false)
+	require.True(t, can)
 	releasePacket()
 	select {
 	case err := <-pipeDone:
@@ -1908,10 +2084,13 @@ func TestClientQuitBlocksTransferAdmission(t *testing.T) {
 
 	quit := makeSimplePacket("quit")
 	quit[4] = byte(frontend.COM_QUIT)
-	_, published := csp.publishClientRequest(quit, true)
+	_, published, err := csp.claimClientMessage(context.Background(), quit, true)
+	require.NoError(t, err)
 	require.True(t, published)
 	require.True(t, tun.hasExpectedClientQuit())
-	require.False(t, tun.canStartTransfer(false))
+	_, can := tun.admitTransfer(false)
+	require.False(t, can)
+	csp.finishClientMessageClaim()
 }
 
 func TestPipeTracksFragmentedTerminalResponse(t *testing.T) {
@@ -2072,9 +2251,16 @@ func TestTransferSync_SkipCachePopOnMigration(t *testing.T) {
 		false,
 		0,
 	)
-	tun.mu.scp = &pipe{}
+	tun.mu.scp = &pipe{tun: tun}
 	tun.mu.csp = &pipe{}
-	err := tun.transferSync(ctx)
+	require.True(t, tun.mu.csp.tryArmSyncTransfer())
+	tun.mu.scp.syncTransferArmed = true
+	err := tun.mu.scp.handleTransferIntent(ctx, tun.mu.csp)
 	require.Error(t, err)
 	require.Equal(t, 0, cache.popCount)
+	require.False(t, tun.mu.scp.syncTransferArmed)
+	tun.mu.csp.mu.Lock()
+	require.Nil(t, tun.mu.csp.mu.syncTransferDone,
+		"failed synchronous migration must release client publication")
+	tun.mu.csp.mu.Unlock()
 }

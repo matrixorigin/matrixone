@@ -887,14 +887,21 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	return nil
 }
 
-// canStartTransfer checks whether the transfer can be started.
-func (t *tunnel) canStartTransfer(sync bool) bool {
+// admitTransfer atomically checks transfer eligibility and closes the client
+// publication gate. For synchronous migration, the returned c2s pipe owns the
+// gate until finishSyncTransfer is called. Asynchronous migration uses the
+// existing paused-pipe lifecycle instead.
+func (t *tunnel) admitTransfer(sync bool) (*pipe, bool) {
+	return t.admitTransferWithGate(sync, nil)
+}
+
+func (t *tunnel) admitTransferWithGate(sync bool, prearmed *pipe) (*pipe, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// The tunnel has not started.
 	if t.mu.closed || !t.mu.started {
-		return false
+		return nil, false
 	}
 
 	csp, scp := t.mu.csp, t.mu.scp
@@ -903,27 +910,41 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer csp.mu.Unlock()
 	defer scp.mu.Unlock()
 
+	gateOwned := sync && prearmed == csp && csp.mu.syncTransferDone != nil
+	if prearmed != nil && !gateOwned {
+		return nil, false
+	}
+	if csp.mu.paused || scp.mu.paused {
+		return nil, false
+	}
+	if csp.clientMessageActive.Load() ||
+		(csp.mu.syncTransferDone != nil && !gateOwned) {
+		t.logger.Info("reason: client message publication is active")
+		return nil, false
+	}
 	if t.hasUntransferableClientState() {
 		t.logger.Info("reason: client protocol state is not transferable")
-		return false
+		return nil, false
 	}
 	if t.hasExpectedClientQuit() {
 		t.logger.Info("reason: client connection is terminating")
-		return false
+		return nil, false
 	}
 
 	// We are now in a transaction.
 	if !scp.safeToTransferLocked() {
 		t.logger.Info("reason: txn status is true")
-		return false
+		return nil, false
 	}
 
-	if !sync {
+	if sync && !gateOwned {
+		csp.mu.syncTransferDone = make(chan struct{})
+	} else if !sync {
 		csp.mu.paused = true
 		scp.mu.paused = true
 	}
 
-	return true
+	return csp, true
 }
 
 func (t *tunnel) setTransferIntent(i bool) {
@@ -1007,7 +1028,7 @@ func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 func (t *tunnel) transfer(ctx context.Context) error {
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(false); !ok {
+	if _, ok := t.admitTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
 		typ := t.getTransferType()
 		t.finishTransferAttempt()
@@ -1049,14 +1070,25 @@ func (t *tunnel) transfer(ctx context.Context) error {
 }
 
 func (t *tunnel) transferSync(ctx context.Context) error {
+	return t.transferSyncWithGate(ctx, nil)
+}
+
+func (t *tunnel) transferSyncWithGate(ctx context.Context, gate *pipe) error {
+	if gate != nil {
+		defer gate.finishSyncTransfer()
+	}
 	if ok := t.tryStartTransferAttempt(); !ok {
 		t.logger.Info("tunnel is already in transfer, skip sync transfer")
 		return nil
 	}
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(true); !ok {
+	csp, ok := t.admitTransferWithGate(true, gate)
+	if !ok {
 		t.finishTransferAttempt()
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if gate == nil {
+		defer csp.finishSyncTransfer()
 	}
 	start := time.Now()
 	defer t.finishTransfer(start)
@@ -1152,9 +1184,14 @@ type pipe struct {
 	src *MySQLConn
 	dst *MySQLConn
 
-	// this value do not need in mutex as it is read and write in
-	// a single goroutine.
-	transferred bool
+	// syncTransferArmed is owned by the s2c goroutine. It records that c2s has
+	// closed its publication gate for the next synchronous transfer attempt.
+	syncTransferArmed bool
+	// clientMessageActive covers the interval after c2s claims a buffered
+	// message and before forwarding/local consumption commits. Admission and
+	// the false-to-true transition are serialized by mu; completion only needs
+	// a release store.
+	clientMessageActive atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -1171,15 +1208,17 @@ type pipe struct {
 		// inTxn indicates that if the session is in a txn. It only
 		// matters for server end.
 		inTxn bool
+		// syncTransferDone is non-nil while synchronous migration owns the
+		// client publication gate. Closing it releases a waiting c2s pipe.
+		syncTransferDone chan struct{}
 	}
 
 	// tun is the tunnel that the pipe belongs to.
 	tun *tunnel
 
-	wg sync.WaitGroup
-
 	testHelper struct {
-		beforeSend func()
+		beforeSend         func()
+		onSyncTransferWait func()
 	}
 	//id of goroutine that runs the pipe
 	goId int64
@@ -1224,6 +1263,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		return false, nil
 	}
 	finish := func() {
+		if p.name == pipeServerToClient && p.syncTransferArmed {
+			p.syncTransferArmed = false
+		}
 		// Best-effort flush of buffered writes before shutting down.
 		if p.src != nil && p.src.msgBuf != nil {
 			_ = p.src.flushBufDst()
@@ -1242,10 +1284,12 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var lastSeq int16 = -1
 	var rotated bool
 	var stopAfterSend bool
+	var armSyncTransfer bool
 	var clientCommit clientRequestCommit
 	var clientRequest []byte
 	prepareNextMessage := func() (terminate bool, err error) {
 		stopAfterSend = false
+		armSyncTransfer = false
 		clientCommit = clientRequestCommit{}
 		clientRequest = nil
 		if terminate := func() bool {
@@ -1342,8 +1386,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			}
 			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
-				peer.wg.Add(1)
-				p.transferred = true
+				armSyncTransfer = true
 			}
 			if len(tempBuf) > 3 {
 				lastSeq = int16(tempBuf[3])
@@ -1371,26 +1414,27 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	defer finish()
 
 	for ctx.Err() == nil {
-		if p.name == pipeServerToClient && p.transferred {
-			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
+		if p.name == pipeServerToClient && p.syncTransferArmed {
+			if err := p.handleTransferIntent(ctx, peer); err != nil {
 				p.logger.Error("failed to transfer connection", zap.Error(err))
 			}
 		}
 		if terminate, err := prepareNextMessage(); err != nil || terminate {
 			return err
 		}
+		if p.name == pipeServerToClient && armSyncTransfer {
+			p.syncTransferArmed = peer.tryArmSyncTransfer()
+		}
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
 		}
-		// If the server is in transfer, we wait here until the transfer is finished.
-		p.wg.Wait()
-		// A client packet that was read while synchronous migration was taking its
-		// snapshot belongs to the replacement CN. Publish its request-boundary
-		// state only after the same barrier that gates forwarding, so successful
-		// migration cannot clear state that was absent from its snapshot.
-		if p.name == pipeClientToServer && len(clientRequest) > 0 {
+		if p.name == pipeClientToServer {
 			var publish bool
-			clientCommit, publish = p.publishClientRequest(clientRequest, stopAfterSend)
+			clientCommit, publish, err = p.claimClientMessage(
+				ctx, clientRequest, stopAfterSend)
+			if err != nil {
+				return err
+			}
 			if !publish {
 				// Asynchronous migration won the publication boundary. Keep the
 				// packet in the shared client buffer; the replacement c2s pipe will
@@ -1401,6 +1445,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 
 		handled, err := p.src.sendTo(p.dst)
 		if err != nil {
+			if p.name == pipeClientToServer {
+				p.finishClientMessageClaim()
+			}
 			return wrapPipeSendError(p.name, err)
 		}
 		if p.name == pipeClientToServer {
@@ -1411,6 +1458,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			} else {
 				p.tun.commitClientRequest(clientCommit)
 			}
+			p.finishClientMessageClaim()
 		}
 		if stopAfterSend {
 			// COM_QUIT is terminal even when another complete packet is already
@@ -1422,37 +1470,85 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	return ctx.Err()
 }
 
-// publishClientRequest is the common ownership boundary between c2s and
-// asynchronous migration. canStartTransfer takes the same pipe mutex before it
-// marks the pipe paused. Whichever side acquires it first either publishes
-// request state that blocks migration, or leaves the packet for the replacement
-// pipe without forwarding it to the old CN.
-func (p *pipe) publishClientRequest(
+// claimClientMessage is the common ownership boundary between c2s and both
+// transfer modes. If c2s wins, clientMessageActive blocks transfer admission
+// until forwarding/local consumption commits. If synchronous transfer wins,
+// c2s waits for the replacement backend. If asynchronous transfer wins, the old
+// pipe leaves the message in the shared buffer for its replacement.
+func (p *pipe) claimClientMessage(
+	ctx context.Context,
 	request []byte,
 	quit bool,
-) (clientRequestCommit, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.mu.paused {
-		return clientRequestCommit{}, false
+) (clientRequestCommit, bool, error) {
+	for {
+		p.mu.Lock()
+		if p.mu.paused {
+			p.mu.Unlock()
+			return clientRequestCommit{}, false, nil
+		}
+		if done := p.mu.syncTransferDone; done != nil {
+			onWait := p.testHelper.onSyncTransferWait
+			p.mu.Unlock()
+			if onWait != nil {
+				onWait()
+			}
+			select {
+			case <-done:
+				if err := context.Cause(ctx); err != nil {
+					return clientRequestCommit{}, false, err
+				}
+				continue
+			case <-ctx.Done():
+				return clientRequestCommit{}, false, context.Cause(ctx)
+			}
+		}
+		p.clientMessageActive.Store(true)
+		var commit clientRequestCommit
+		if len(request) > 0 {
+			if quit {
+				p.tun.markExpectedClientQuit()
+			} else {
+				commit = p.tun.trackClientRequest(request)
+			}
+		}
+		p.mu.Unlock()
+		return commit, true, nil
 	}
-	if quit {
-		p.tun.markExpectedClientQuit()
-		return clientRequestCommit{}, true
-	}
-	return p.tun.trackClientRequest(request), true
 }
 
-func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {
-	// If it is not in a txn and transfer intent is true, transfer it sync.
-	if p.tun != nil && p.safeToTransfer() {
-		err := p.tun.transferSync(ctx)
-		// we have set transferred back to false, with "wg.Done()" together.
-		p.transferred = false
-		wg.Done()
-		return err
+func (p *pipe) finishClientMessageClaim() {
+	p.clientMessageActive.Store(false)
+}
+
+func (p *pipe) finishSyncTransfer() {
+	p.mu.Lock()
+	if done := p.mu.syncTransferDone; done != nil {
+		p.mu.syncTransferDone = nil
+		close(done)
 	}
-	return nil
+	p.mu.Unlock()
+}
+
+func (p *pipe) tryArmSyncTransfer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.mu.closed || p.mu.paused || p.mu.syncTransferDone != nil ||
+		p.clientMessageActive.Load() {
+		return false
+	}
+	p.mu.syncTransferDone = make(chan struct{})
+	return true
+}
+
+func (p *pipe) handleTransferIntent(ctx context.Context, peer *pipe) error {
+	if p.tun == nil {
+		peer.finishSyncTransfer()
+		p.syncTransferArmed = false
+		return nil
+	}
+	err := p.tun.transferSyncWithGate(ctx, peer)
+	p.syncTransferArmed = false
+	return err
 }
 
 // waitReady waits the pip starts up.
@@ -1583,14 +1679,6 @@ func (p *pipe) pause(ctx context.Context) error {
 		p.mu.cond.Wait()
 	}
 	return nil
-}
-
-// safeToTransfer indicates whether it is safe to transfer the session.
-// NB: the pipe MUST be server-to-client pipe.
-func (p *pipe) safeToTransfer() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return !p.mu.inTxn
 }
 
 func (p *pipe) safeToTransferLocked() bool {
