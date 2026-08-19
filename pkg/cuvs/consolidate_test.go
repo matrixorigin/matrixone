@@ -160,7 +160,7 @@ func TestShardedLoadWithFewerSavedShards(t *testing.T) {
 	}
 
 	tarPath := filepath.Join(t.TempDir(), "idx.tar")
-	if err := src.Pack(tarPath); err != nil {
+	if err := src.Pack(tarPath, ""); err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
 	src.Destroy()

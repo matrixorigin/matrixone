@@ -824,9 +824,15 @@ public:
             cuvs::neighbors::cagra::extend(
                 *res, params, new_padded->as_dataset_view(), n_old, *idx);
         }
-        handle.sync();
 
-        // Swap the owner. old_owner drops when this function returns.
+        // At this point cuvs::extend has rebound *idx to view new_padded (cuVS
+        // 26.06+ contract: "Keep that view alive for the index lifetime"). If
+        // handle.sync() below throws (async CUDA fault surfacing at stream
+        // sync) and new_padded is still only owned by this local unique_ptr,
+        // stack unwinding frees the device buffer while the still-published
+        // idx views it -> UAF on the next search. So anchor the owner in the
+        // slot BEFORE sync. The old owner survives on this stack (old_owner)
+        // and drops when we return.
         std::shared_ptr<padded_dataset_t> shared_new(new_padded.release());
         {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
@@ -837,6 +843,24 @@ public:
                 this->dataset_device_ptr_ =
                     std::static_pointer_cast<void>(shared_new);
             }
+        }
+
+        // Now sync. On async CUDA error, cuvs::extend has left the index in
+        // an undefined state (graph may be partially written); mark the index
+        // "not loaded" by clearing it so subsequent searches fail cleanly
+        // instead of returning corrupted neighbors from the half-written graph.
+        try {
+            handle.sync();
+        } catch (...) {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            if (this->dist_mode == DistributionMode_REPLICATED) {
+                this->replicated_indices_.erase(rank);
+                this->replicated_datasets_.erase(rank);
+            } else {
+                this->index_.reset();
+                this->dataset_device_ptr_.reset();
+            }
+            throw;
         }
     }
 

@@ -561,12 +561,15 @@ func (gi *GpuIvfPq[B, Q]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuIvfPq[B, Q]) Pack(filename string) error {
+// spillDir hosts the intermediate save_dir tree; pass the LocalSpillDir the
+// caller is already using for the final .tar so this scratch does NOT land in
+// $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
+func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-pq-pack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-pq-pack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -590,12 +593,13 @@ func (gi *GpuIvfPq[B, Q]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfPq[B, Q]) Unpack(filename string, mode DistributionMode) error {
+// spillDir hosts the intermediate extraction of the .tar; empty falls back to $TMPDIR.
+func (gi *GpuIvfPq[B, Q]) Unpack(filename, spillDir string, mode DistributionMode) error {
 	if gi.cIvfPq == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-pq-unpack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-pq-unpack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}

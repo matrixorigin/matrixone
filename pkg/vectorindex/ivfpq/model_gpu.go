@@ -23,6 +23,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -260,7 +261,7 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 
 	logutil.Infof("IvfpqModel.saveToFile: idx=%s len=%d calling Pack -> %s", idx.Id, idx.Len, tarPath)
 	t0 := time.Now()
-	if err = idx.Index.Pack(tarPath); err != nil {
+	if err = idx.Index.Pack(tarPath, idx.TmpDir); err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Pack FAILED idx=%s after %v: %v", idx.Id, time.Since(t0), err)
 		os.Remove(tarPath)
 		return err
@@ -599,7 +600,9 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 		return err
 	}
 
-	if err = gi.Unpack(idx.Path, mode); err != nil {
+	// idx.Path lives in LocalSpillDir; extract into the same directory so the
+	// intermediate (same-size scratch as the tar) does NOT land in /tmp.
+	if err = gi.Unpack(idx.Path, filepath.Dir(idx.Path), mode); err != nil {
 		gi.Destroy()
 		return err
 	}

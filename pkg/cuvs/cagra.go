@@ -555,12 +555,16 @@ func (gi *GpuCagra[B, Q]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuCagra[B, Q]) Pack(filename string) error {
+// spillDir hosts the intermediate save_dir tree (index.bin + ids.bin +
+// deleted_bitset.bin + host_ids.bin + manifest.json + filter blobs); pass the
+// LocalSpillDir the caller is already using for the final .tar so this scratch
+// does NOT land in $TMPDIR (/tmp) where a wiki_all-scale build would ENOSPC.
+func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "cagra-pack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "cagra-pack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -608,12 +612,14 @@ func (gi *GpuCagra[B, Q]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuCagra[B, Q]) Unpack(filename string, mode DistributionMode) error {
+// spillDir hosts the intermediate extraction of the .tar (same-size scratch as
+// the tar itself). Pass a large-enough local dir; empty falls back to $TMPDIR.
+func (gi *GpuCagra[B, Q]) Unpack(filename, spillDir string, mode DistributionMode) error {
 	if gi.cCagra == nil {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "cagra-unpack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "cagra-unpack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}

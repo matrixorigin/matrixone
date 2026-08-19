@@ -551,12 +551,14 @@ func (gi *GpuIvfFlat[B, Q]) Save(filename string) error {
 }
 
 // Pack saves the index to a .tar or .tar.gz file using save_dir.
-func (gi *GpuIvfFlat[B, Q]) Pack(filename string) error {
+// spillDir hosts the intermediate save_dir tree; pass the LocalSpillDir the
+// caller uses for the final .tar so this scratch does NOT land in $TMPDIR.
+func (gi *GpuIvfFlat[B, Q]) Pack(filename, spillDir string) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-flat-pack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-flat-pack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
@@ -580,12 +582,13 @@ func (gi *GpuIvfFlat[B, Q]) Pack(filename string) error {
 // mode overrides the distribution mode at load time — pass Replicated to broadcast
 // a SINGLE_GPU .tar to all GPUs without rebuilding.
 // The index must already be initialized and started before calling Unpack.
-func (gi *GpuIvfFlat[B, Q]) Unpack(filename string, mode DistributionMode) error {
+// spillDir hosts the intermediate extraction of the .tar; empty falls back to $TMPDIR.
+func (gi *GpuIvfFlat[B, Q]) Unpack(filename, spillDir string, mode DistributionMode) error {
 	if gi.cIvfFlat == nil {
 		return moerr.NewInternalErrorNoCtx("GpuIvfFlat is not initialized")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "ivf-flat-unpack-*")
+	tmpDir, err := os.MkdirTemp(spillDir, "ivf-flat-unpack-*")
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("failed to create temp dir: %v", err))
 	}

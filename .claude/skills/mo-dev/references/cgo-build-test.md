@@ -291,7 +291,7 @@ Prerequisites:
 
 1. CUDA toolkit matching the versions pinned by
    `optools/images/gpu/Dockerfile` and
-   `optools/images/gpu/go_cuda-130_arch-x86_64.yaml`, installed under the path
+   `optools/images/gpu/go_cuda-133_arch-x86_64.yaml`, installed under the path
    expected by those files. Do not infer an unsupported version range.
 2. cuVS Go bindings installed from the repository's Linux x86_64 environment
    file and the environment activated so `CONDA_PREFIX` is exported. Prefer the
@@ -300,7 +300,7 @@ Prerequisites:
    requires a compatible NVIDIA host/runtime.
 
 ```bash
-conda env create --name go -f optools/images/gpu/go_cuda-130_arch-x86_64.yaml
+conda env create --name go -f optools/images/gpu/go_cuda-133_arch-x86_64.yaml
 conda activate go
 ```
 

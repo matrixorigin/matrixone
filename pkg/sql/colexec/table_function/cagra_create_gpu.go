@@ -406,7 +406,13 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 				availBytes>>20, hostRowsFit)
 		}
 
-		threshold := int64(graphDegree)
+		// cuVS validate_build_params rejects `n_rows <= intermediate_graph_degree`,
+		// not just `<`. If a sub-index ends up with EXACTLY graphDegree rows the
+		// build throws "number of vectors per shard must be > intermediate_graph_degree".
+		// The threshold passed to planCapacity is what its `tail < threshold` /
+		// `capacity < threshold` guards compare against, so bump it by 1 to
+		// route any `srcRowCount % capacity == graphDegree` tail to the CDC path.
+		threshold := int64(graphDegree) + 1
 		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
 			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
 			"cagra", "max_index_capacity")
