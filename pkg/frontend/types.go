@@ -307,7 +307,9 @@ type PrepareStmt struct {
 	// paramBindingTypes records the stable runtime categories used to build PreparePlan.
 	paramBindingTypes               []types.Type
 	paramBindingDependencies        []bool
+	paramExecutionDependencies      []bool
 	paramResultMetadataDependencies []bool
+	paramResultColumnTypes          []types.Type
 	paramBindingDependenciesSet     bool
 	ColDefData                      [][]byte
 	IsCloudNonuser                  bool
@@ -701,7 +703,9 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.paramBindingTypes = nil
 	prepareStmt.paramBindingDependencies = nil
+	prepareStmt.paramExecutionDependencies = nil
 	prepareStmt.paramResultMetadataDependencies = nil
+	prepareStmt.paramResultColumnTypes = nil
 	prepareStmt.paramBindingDependenciesSet = false
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil

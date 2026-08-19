@@ -561,7 +561,7 @@ func TestPreparedParamBindingTypesSkipPlansWithoutDependencies(t *testing.T) {
 	// A nil vector is deliberately safe here only when dependency inspection
 	// happens before parameter value access. This also proves the fast path does
 	// not allocate a result slice.
-	require.Nil(t, preparedParamBindingTypes(nil, nil, nil, nil, nil, 1))
+	require.Nil(t, preparedParamBindingTypes(nil, nil, nil, nil, nil, nil, 1))
 }
 
 func TestPreparedExecuteParamStateOwnership(t *testing.T) {
@@ -1141,6 +1141,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 			require.Empty(t, prepareStmt.paramBindingDependencies)
 			require.Equal(t, []bool{true}, prepareStmt.paramResultMetadataDependencies)
 			require.Len(t, metadataTypes, 1)
+			require.Equal(t, prepareStmt.ColDefData, execCtx.prepareColDef)
 			last := test.steps[len(test.steps)-1]
 			if last.typ == defines.MYSQL_TYPE_NEWDECIMAL && !last.isNull {
 				require.Equal(t, types.T_decimal256, types.T(metadataTypes[0].Id))
@@ -1291,6 +1292,96 @@ func TestControlFlowPreparedParamRefreshesResultMetadata(t *testing.T) {
 				require.Equal(t, binding.want, types.T(columns[0].Typ.Id))
 			})
 		}
+	}
+}
+
+func TestExplicitCastControlFlowRebindsExecutionCategory(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 213,
+		"select if(true, cast(? as char), cast(0 as decimal(1,0)))")
+	defer prepareStmt.Close()
+	for _, step := range []struct {
+		mysqlType defines.MysqlType
+		value     string
+		want      types.T
+	}{
+		{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", types.T_decimal64},
+		{defines.MYSQL_TYPE_DOUBLE, "1.5", types.T_float64},
+		{defines.MYSQL_TYPE_VAR_STRING, "text", types.T_text},
+	} {
+		if prepareStmt.params != nil {
+			cw.proc.SetPrepareParams(nil)
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(
+			prepareStmt.params, []byte(step.value), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(step.mysqlType), 0}
+		_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.Equal(t, []bool{true}, prepareStmt.paramExecutionDependencies)
+		require.Equal(t, step.want, prepareStmt.paramBindingTypes[0].Oid)
+	}
+}
+
+func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 214,
+		"select if(false, ?, ?)")
+	defer prepareStmt.Close()
+	steps := []struct {
+		types  []defines.MysqlType
+		values []string
+		want   types.T
+	}{
+		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1", "2"}, types.T_decimal64},
+		{[]defines.MysqlType{defines.MYSQL_TYPE_DOUBLE, defines.MYSQL_TYPE_NEWDECIMAL}, []string{"1.5", "2"}, types.T_float64},
+		{[]defines.MysqlType{defines.MYSQL_TYPE_NEWDECIMAL, defines.MYSQL_TYPE_VAR_STRING}, []string{"1", "tail"}, types.T_float64},
+	}
+	for _, step := range steps {
+		if prepareStmt.params != nil {
+			cw.proc.SetPrepareParams(nil)
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		prepareStmt.ParamTypes = make([]byte, len(step.types)*2)
+		for i := range step.types {
+			require.NoError(t, vector.AppendBytes(
+				prepareStmt.params, []byte(step.values[i]), false, cw.proc.Mp()))
+			prepareStmt.ParamTypes[i*2] = byte(step.types[i])
+		}
+		_, queryPlan, _, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		columns := plan2.GetResultColumnsFromPlan(queryPlan)
+		require.Equal(t, step.want, types.T(columns[0].Typ.Id),
+			"bindings=%v resultDeps=%v resultTypes=%v", prepareStmt.paramBindingTypes,
+			prepareStmt.paramResultMetadataDependencies, prepareStmt.paramResultColumnTypes)
+	}
+	require.Equal(t, types.T_float64, prepareStmt.paramBindingTypes[0].Oid)
+	require.Equal(t, types.T_float64, prepareStmt.paramBindingTypes[1].Oid)
+}
+
+func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 215,
+				"select "+name+"(?, ?)")
+			defer prepareStmt.Close()
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			for _, value := range []string{"10", "2"} {
+				require.NoError(t, vector.AppendBytes(
+					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			}
+			prepareStmt.ParamTypes = []byte{
+				byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+				byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+			}
+			_, queryPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Equal(t, []bool{true, true}, prepareStmt.paramBindingDependencies)
+			columns := plan2.GetResultColumnsFromPlan(queryPlan)
+			require.True(t, types.T(columns[0].Typ.Id).IsDecimal())
+		})
 	}
 }
 

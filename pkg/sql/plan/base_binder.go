@@ -217,6 +217,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 		}
+		// A CAST directly consuming a parameter is an execution-domain boundary:
+		// it must see each new protocol value instead of a previously widened
+		// binding.  Do not extend that rule through a composite operand.  For
+		// example, CAST((? + ?) AS DECIMAL) still needs the arithmetic binder's
+		// stable numeric domain rather than rebinding its inputs as TEXT.
+		if _, directParam := unwrapParenExpr(exprImpl.Expr).(*tree.ParamExpr); directParam {
+			markExplicitCastPreparedParams(expr)
+		}
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
@@ -345,6 +353,21 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	}
 
 	return
+}
+
+func markExplicitCastPreparedParams(expr *Expr) {
+	if expr == nil {
+		return
+	}
+	if expr.GetP() != nil {
+		expr.Typ.Enumvalues = "mo_explicit_cast_param_dependency"
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			markExplicitCastPreparedParams(arg)
+		}
+	}
 }
 
 func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
@@ -6072,11 +6095,13 @@ func decimalParamCommonTypeResolutionTypes(
 
 	hasParam := false
 	hasDecimal := false
+	allParams := len(args) > 0
 	for i, typ := range argsType {
 		if isUnresolvedPreparedNumericParam(args[i], typ) {
 			hasParam = true
 			continue
 		}
+		allParams = false
 		switch {
 		case typ.Oid == types.T_any:
 			continue
@@ -6092,7 +6117,7 @@ func decimalParamCommonTypeResolutionTypes(
 			return argsType
 		}
 	}
-	if !hasDecimal {
+	if !hasDecimal && !allParams {
 		return argsType
 	}
 	for i, typ := range argsType {

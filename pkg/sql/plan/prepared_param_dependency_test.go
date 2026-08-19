@@ -248,9 +248,24 @@ func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testi
 			require.Equal(t, test.want,
 				PreparedParamResultMetadataDependencies(prepare.Plan, 1))
 			if test.name == "explicit cast terminates" {
+				require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 1))
 				require.Equal(t, []bool{true},
-					PreparedParamCommonTypeDependencies(prepare.Plan, 1))
+					PreparedParamExecutionDependencies(prepare.Plan, 1))
 			}
+		})
+	}
+}
+
+func TestPreparedAllParameterCommonTypeDependencies(t *testing.T) {
+	for _, name := range []string{"coalesce", "greatest", "least"} {
+		t.Run(name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t,
+				"prepare p from 'select "+name+"(?, ?)'")
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.Equal(t, []bool{true, true},
+				PreparedParamCommonTypeDependencies(prepare.Plan, 2))
 		})
 	}
 }

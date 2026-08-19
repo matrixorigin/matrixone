@@ -23,7 +23,8 @@ import (
 )
 
 type preparedParamCommonTypeDependencyRule struct {
-	positions map[int32]struct{}
+	positions          map[int32]struct{}
+	executionPositions map[int32]struct{}
 }
 
 func (r *preparedParamCommonTypeDependencyRule) MatchNode(*Node) bool { return false }
@@ -42,20 +43,15 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 		return
 	}
 	switch impl := expr.Expr.(type) {
+	case *planpb.Expr_P:
+		if expr.Typ.Enumvalues == "mo_explicit_cast_param_dependency" {
+			r.executionPositions[impl.P.Pos] = struct{}{}
+		}
 	case *planpb.Expr_F:
 		functionID, _ := function.DecodeOverloadID(impl.F.Func.Obj)
 		if functionID == function.COALESCE || functionID == function.GREATEST || functionID == function.LEAST {
 			for _, arg := range impl.F.Args {
 				r.collectDirectParams(arg)
-			}
-		}
-		if functionID == function.IFF || functionID == function.CASE {
-			for i, arg := range impl.F.Args {
-				isValue := functionID == function.IFF && i > 0 ||
-					functionID == function.CASE && (i%2 == 1 || i == len(impl.F.Args)-1)
-				if isValue {
-					r.collectExplicitCastParams(arg)
-				}
 			}
 		}
 		for _, arg := range impl.F.Args {
@@ -86,24 +82,6 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 				r.visit(frame.End.Val)
 			}
 		}
-	}
-}
-
-func (r *preparedParamCommonTypeDependencyRule) collectExplicitCastParams(expr *Expr) {
-	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
-		return
-	}
-	functionID, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
-	if functionID != function.CAST || len(expr.GetF().Args) == 0 {
-		return
-	}
-	inner := expr.GetF().Args[0].GetF()
-	if inner == nil || inner.Func == nil || len(inner.Args) == 0 {
-		return
-	}
-	innerID, _ := function.DecodeOverloadID(inner.Func.Obj)
-	if innerID == function.CAST {
-		collectPlanExprParamPositions(inner.Args[0], r.positions)
 	}
 }
 
@@ -199,7 +177,9 @@ func PreparedParamCommonTypeDependencies(p *Plan, paramCount int) []bool {
 	if p == nil || paramCount <= 0 {
 		return nil
 	}
-	rule := &preparedParamCommonTypeDependencyRule{positions: make(map[int32]struct{})}
+	rule := &preparedParamCommonTypeDependencyRule{
+		positions: make(map[int32]struct{}), executionPositions: make(map[int32]struct{}),
+	}
 	if err := rule.visitPlan(p); err != nil {
 		dependencies := make([]bool, paramCount)
 		for i := range dependencies {
@@ -212,6 +192,34 @@ func PreparedParamCommonTypeDependencies(p *Plan, paramCount int) []bool {
 	}
 	dependencies := make([]bool, paramCount)
 	for pos := range rule.positions {
+		if pos >= 0 && int(pos) < paramCount {
+			dependencies[pos] = true
+		}
+	}
+	return dependencies
+}
+
+// PreparedParamExecutionDependencies returns parameters whose runtime physical
+// type must be rebound even though an explicit CAST fixes the result metadata.
+func PreparedParamExecutionDependencies(p *Plan, paramCount int) []bool {
+	if p == nil || paramCount <= 0 {
+		return nil
+	}
+	rule := &preparedParamCommonTypeDependencyRule{
+		positions: make(map[int32]struct{}), executionPositions: make(map[int32]struct{}),
+	}
+	if err := rule.visitPlan(p); err != nil {
+		dependencies := make([]bool, paramCount)
+		for i := range dependencies {
+			dependencies[i] = true
+		}
+		return dependencies
+	}
+	if len(rule.executionPositions) == 0 {
+		return nil
+	}
+	dependencies := make([]bool, paramCount)
+	for pos := range rule.executionPositions {
 		if pos >= 0 && int(pos) < paramCount {
 			dependencies[pos] = true
 		}
@@ -307,6 +315,10 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					if fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
 						return
 					}
+					if containsPreparedParamMarker(
+						fn.Args[0], "mo_explicit_cast_param_dependency") {
+						return
+					}
 					_, overload := function.DecodeOverloadID(fn.Func.GetObj())
 					if overload == 0 {
 						traceExpr(currentNodeID, fn.Args[0], false)
@@ -356,4 +368,21 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 		columnDependencies[columnPos] = dependencies
 	}
 	return columnDependencies
+}
+
+func containsPreparedParamMarker(expr *Expr, marker string) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil && expr.Typ.Enumvalues == marker {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsPreparedParamMarker(arg, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }

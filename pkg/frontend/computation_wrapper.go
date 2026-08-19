@@ -1036,18 +1036,20 @@ func preparedParamBindingTypes(
 	params *vector.Vector,
 	kinds []vector.PrepareParamKind,
 	commonDependencies []bool,
+	executionDependencies []bool,
 	resultDependencies []bool,
 	paramTypes []byte,
 	count int,
 ) []types.Type {
-	if len(commonDependencies) == 0 && len(resultDependencies) == 0 {
+	if len(commonDependencies) == 0 && len(executionDependencies) == 0 && len(resultDependencies) == 0 {
 		return nil
 	}
 	var bindingTypes []types.Type
 	for i := 0; i < count; i++ {
 		commonDependent := i < len(commonDependencies) && commonDependencies[i]
+		executionDependent := i < len(executionDependencies) && executionDependencies[i]
 		resultDependent := i < len(resultDependencies) && resultDependencies[i]
-		if !commonDependent && !resultDependent {
+		if !commonDependent && !executionDependent && !resultDependent {
 			continue
 		}
 		if params.IsNull(uint64(i)) {
@@ -1109,13 +1111,14 @@ func preparedResultDecimalType(width, scale int32) types.Type {
 
 func preparedParamBindingTypesEqualAtDependencies(
 	left, right []types.Type,
-	commonDependencies, resultDependencies []bool,
+	commonDependencies, executionDependencies, resultDependencies []bool,
 	count int,
 ) bool {
 	for i := 0; i < count; i++ {
 		commonDependent := i < len(commonDependencies) && commonDependencies[i]
+		executionDependent := i < len(executionDependencies) && executionDependencies[i]
 		resultDependent := i < len(resultDependencies) && resultDependencies[i]
-		if !commonDependent && !resultDependent {
+		if !commonDependent && !executionDependent && !resultDependent {
 			continue
 		}
 		var leftType, rightType types.Type
@@ -1126,7 +1129,7 @@ func preparedParamBindingTypesEqualAtDependencies(
 			rightType = right[i]
 		}
 		equal := preparedParamBindingCategoryEqual(leftType, rightType)
-		if resultDependent {
+		if executionDependent || resultDependent {
 			equal = leftType.Eq(rightType)
 		}
 		if !equal {
@@ -1262,7 +1265,7 @@ type preparedExecuteParamState struct {
 }
 
 func (state *preparedExecuteParamState) bindingTypesFor(
-	commonDependencies, resultDependencies []bool, count int,
+	commonDependencies, executionDependencies, resultDependencies []bool, count int,
 ) []types.Type {
 	if state == nil || state.params == nil {
 		return nil
@@ -1272,7 +1275,8 @@ func (state *preparedExecuteParamState) bindingTypesFor(
 	// DECIMAL common-type resolver, where signed/unsigned integer parameters
 	// share MySQL's stable DECIMAL(65,30) result domain.
 	return preparedParamBindingTypes(
-		state.params, state.paramKinds, commonDependencies, resultDependencies, state.paramTypes, count)
+		state.params, state.paramKinds, commonDependencies, executionDependencies,
+		resultDependencies, state.paramTypes, count)
 }
 
 func (state *preparedExecuteParamState) apply(proc *process.Process) {
@@ -1302,6 +1306,7 @@ func initPreparedExecuteParams(
 	execPlan *plan.Execute,
 	cwft *TxnComputationWrapper,
 	commonDependencies []bool,
+	executionDependencies []bool,
 	resultDependencies []bool,
 	numParams int,
 ) (*preparedExecuteParamState, error) {
@@ -1324,7 +1329,8 @@ func initPreparedExecuteParams(
 			}
 		}
 		bindingTypes := preparedParamBindingTypes(
-			prepareStmt.params, kinds, commonDependencies, resultDependencies, prepareStmt.ParamTypes, numParams)
+			prepareStmt.params, kinds, commonDependencies, executionDependencies,
+			resultDependencies, prepareStmt.ParamTypes, numParams)
 		return &preparedExecuteParamState{
 			params:       prepareStmt.params,
 			paramVals:    preparedParamValues(prepareStmt.params, nil, kinds),
@@ -1346,7 +1352,8 @@ func initPreparedExecuteParams(
 			paramIsBin: paramIsBin,
 			paramKinds: paramKinds,
 			bindingTypes: preparedParamBindingTypes(
-				params, paramKinds, commonDependencies, resultDependencies, nil, numParams),
+				params, paramKinds, commonDependencies, executionDependencies,
+				resultDependencies, nil, numParams),
 			owned: true,
 		}, nil
 	} else if numParams > 0 {
@@ -1377,17 +1384,21 @@ func initExecuteStmtParamWithResolverInSession(
 	if !prepareStmt.paramBindingDependenciesSet {
 		prepareStmt.paramBindingDependencies = plan2.PreparedParamCommonTypeDependencies(
 			preparePlan.Plan, len(preparePlan.ParamTypes))
+		prepareStmt.paramExecutionDependencies = plan2.PreparedParamExecutionDependencies(
+			preparePlan.Plan, len(preparePlan.ParamTypes))
 		prepareStmt.paramResultMetadataDependencies = plan2.PreparedParamResultMetadataDependencies(
 			preparePlan.Plan, len(preparePlan.ParamTypes))
 		prepareStmt.paramBindingDependenciesSet = true
 	}
 	paramDependencies := mergePreparedParamDependencies(
 		prepareStmt.paramBindingDependencies,
-		prepareStmt.paramResultMetadataDependencies,
+		mergePreparedParamDependencies(prepareStmt.paramExecutionDependencies,
+			prepareStmt.paramResultMetadataDependencies, len(preparePlan.ParamTypes)),
 		len(preparePlan.ParamTypes))
 	paramState, err := initPreparedExecuteParams(
 		reqCtx, prepareStmt, execPlan, cwft,
 		prepareStmt.paramBindingDependencies,
+		prepareStmt.paramExecutionDependencies,
 		prepareStmt.paramResultMetadataDependencies,
 		len(preparePlan.ParamTypes))
 	if err != nil {
@@ -1396,10 +1407,16 @@ func initExecuteStmtParamWithResolverInSession(
 	defer paramState.release(cwft.proc)
 	paramBindingTypes := preserveWiderPreparedParamBindings(
 		prepareStmt.paramBindingTypes, paramState.bindingTypes,
-		paramDependencies, len(preparePlan.ParamTypes))
+		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
 	paramBindingTypes = preservePreparedResultMetadataBindings(
 		prepareStmt.paramBindingTypes, paramBindingTypes,
 		prepareStmt.paramResultMetadataDependencies, len(preparePlan.ParamTypes))
+	paramBindingTypes = preservePreparedResultColumnBindings(
+		paramBindingTypes,
+		plan2.PreparedParamResultMetadataDependencyColumns(
+			preparePlan.Plan, len(preparePlan.ParamTypes)),
+		prepareStmt.paramResultColumnTypes,
+	)
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -1480,6 +1497,7 @@ func initExecuteStmtParamWithResolverInSession(
 	paramBindingMismatch := !preparedParamBindingTypesEqualAtDependencies(
 		prepareStmt.paramBindingTypes, paramBindingTypes,
 		prepareStmt.paramBindingDependencies,
+		prepareStmt.paramExecutionDependencies,
 		prepareStmt.paramResultMetadataDependencies,
 		len(preparePlan.ParamTypes))
 	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) ||
@@ -1503,15 +1521,25 @@ func initExecuteStmtParamWithResolverInSession(
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
 		newCommonDependencies := plan2.PreparedParamCommonTypeDependencies(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+		newExecutionDependencies := plan2.PreparedParamExecutionDependencies(
+			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		newResultDependencies := plan2.PreparedParamResultMetadataDependencies(
 			newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		newDependencies := mergePreparedParamDependencies(
-			newCommonDependencies, newResultDependencies, len(newPreparePlan.ParamTypes))
+			newCommonDependencies,
+			mergePreparedParamDependencies(newExecutionDependencies, newResultDependencies,
+				len(newPreparePlan.ParamTypes)), len(newPreparePlan.ParamTypes))
 		convergedBindingTypes := paramState.bindingTypesFor(
-			newCommonDependencies, newResultDependencies, len(newPreparePlan.ParamTypes))
+			newCommonDependencies, newExecutionDependencies, newResultDependencies,
+			len(newPreparePlan.ParamTypes))
+		convergedBindingTypes = preservePreparedResultColumnBindings(
+			convergedBindingTypes,
+			plan2.PreparedParamResultMetadataDependencyColumns(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
+			prepareStmt.paramResultColumnTypes)
 		if !preparedParamBindingTypesEqualAtDependencies(
 			paramBindingTypes, convergedBindingTypes,
-			newCommonDependencies, newResultDependencies,
+			newCommonDependencies, newExecutionDependencies, newResultDependencies,
 			len(newPreparePlan.ParamTypes)) {
 			newPlan, err = rebuildWithBindingTypes(convergedBindingTypes, newDependencies)
 			if err != nil {
@@ -1520,22 +1548,35 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan = newPlan.GetDcl().GetPrepare()
 			finalCommonDependencies := plan2.PreparedParamCommonTypeDependencies(
 				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
+			finalExecutionDependencies := plan2.PreparedParamExecutionDependencies(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 			finalResultDependencies := plan2.PreparedParamResultMetadataDependencies(
 				newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 			finalDependencies := mergePreparedParamDependencies(
-				finalCommonDependencies, finalResultDependencies, len(newPreparePlan.ParamTypes))
+				finalCommonDependencies,
+				mergePreparedParamDependencies(finalExecutionDependencies, finalResultDependencies,
+					len(newPreparePlan.ParamTypes)), len(newPreparePlan.ParamTypes))
 			finalBindingTypes := paramState.bindingTypesFor(
-				finalCommonDependencies, finalResultDependencies, len(newPreparePlan.ParamTypes))
-			if !slices.Equal(newDependencies, finalDependencies) ||
+				finalCommonDependencies, finalExecutionDependencies, finalResultDependencies,
+				len(newPreparePlan.ParamTypes))
+			finalBindingTypes = preservePreparedResultColumnBindings(
+				finalBindingTypes,
+				plan2.PreparedParamResultMetadataDependencyColumns(
+					newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
+				prepareStmt.paramResultColumnTypes)
+			if !slices.Equal(newCommonDependencies, finalCommonDependencies) ||
+				!slices.Equal(newExecutionDependencies, finalExecutionDependencies) ||
+				!slices.Equal(newResultDependencies, finalResultDependencies) ||
 				!preparedParamBindingTypesEqualAtDependencies(
 					convergedBindingTypes, finalBindingTypes,
-					finalCommonDependencies, finalResultDependencies,
+					finalCommonDependencies, finalExecutionDependencies, finalResultDependencies,
 					len(newPreparePlan.ParamTypes)) {
 				return nil, nil, nil, "", false, moerr.NewInternalError(
 					reqCtx, "prepared parameter dependencies did not converge after schema rebuild")
 			}
 			newDependencies = finalDependencies
 			newCommonDependencies = finalCommonDependencies
+			newExecutionDependencies = finalExecutionDependencies
 			newResultDependencies = finalResultDependencies
 			convergedBindingTypes = finalBindingTypes
 		}
@@ -1549,6 +1590,8 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		columns := getPreparedResultColumnsFromPlan(
 			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
+		prepareStmt.paramResultColumnTypes = preservePreparedResultColumnTypes(
+			prepareStmt.paramResultColumnTypes, columns)
 		columns = stablePreparedResultMetadataColumns(
 			columns,
 			plan2.PreparedParamResultMetadataDependencyColumns(
@@ -1576,9 +1619,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.exactDecimalComparisonParams = len(prepareStmt.exactDecimalParamPositions) > 0
 		prepareStmt.exactDecimalComparisonParamsSet = true
 		prepareStmt.ColDefData = newColDefData
-		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
-			execCtx.prepareColDef = newColDefData
-		}
+		execCtx.prepareColDef = newColDefData
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.onlyFullGroupBySet = true
@@ -1591,8 +1632,12 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.paramBindingTypes = clonePreparedParamBindingTypes(paramBindingTypes)
 		prepareStmt.paramBindingDependencies = newCommonDependencies
+		prepareStmt.paramExecutionDependencies = newExecutionDependencies
 		prepareStmt.paramResultMetadataDependencies = newResultDependencies
 		prepareStmt.paramBindingDependenciesSet = true
+	}
+	if execCtx.prepareColDef == nil {
+		execCtx.prepareColDef = prepareStmt.ColDefData
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -1754,6 +1799,48 @@ func stablePreparedResultMetadataColumns(
 	}
 	if result == nil {
 		return columns
+	}
+	return result
+}
+
+func preservePreparedResultColumnBindings(
+	bindingTypes []types.Type, dependencies [][]bool, resultTypes []types.Type,
+) []types.Type {
+	result := bindingTypes
+	cloned := false
+	for columnPos, positions := range dependencies {
+		if columnPos >= len(resultTypes) || resultTypes[columnPos].Oid != types.T_float64 {
+			continue
+		}
+		if !cloned {
+			if result == nil {
+				result = make([]types.Type, len(positions))
+			} else {
+				result = clonePreparedParamBindingTypes(result)
+			}
+			cloned = true
+		}
+		for paramPos, dependent := range positions {
+			if dependent && paramPos < len(result) {
+				result[paramPos] = types.T_float64.ToType()
+			}
+		}
+	}
+	return result
+}
+
+func preservePreparedResultColumnTypes(previous []types.Type, columns []*plan2.ColDef) []types.Type {
+	result := make([]types.Type, len(columns))
+	for i, column := range columns {
+		if column == nil {
+			continue
+		}
+		result[i] = types.Type{
+			Oid: types.T(column.Typ.Id), Width: column.Typ.Width, Scale: column.Typ.Scale,
+		}
+		if i < len(previous) && previous[i].Oid == types.T_float64 {
+			result[i] = previous[i]
+		}
 	}
 	return result
 }
