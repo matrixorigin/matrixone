@@ -26,17 +26,28 @@
 //             never referenced again -- so uploading it and holding it meant
 //             carrying the dataset TWICE on the device, for the index's life.
 //   CAGRA     searches by reading the actual vectors, so a dataset must stay
-//             resident. Only the OWNER changes: with a device view cuVS stores a
-//             reference to the caller's buffer when rows are 16B-aligned
-//             (cagra.hpp:524-527); with a host view it makes and owns a copy
-//             (:556-558). Steady state is identical. The win is that cuVS attaches
-//             the dataset LAST, after optimize (cagra_build.cuh:2264, :2289), so
-//             with a host view the raw vectors are not resident during the
-//             optimize step -- which is the device peak.
+//             resident. Only the OWNER changes: a device dataset VIEW references
+//             the caller's buffer (requires rows already at the aligned stride);
+//             an owning device dataset built from a host view holds cuVS-side
+//             padded storage. Steady state is identical.
+//
+//             NOTE (cuVS 26.06+): the "attach LAST, after optimize" win this
+//             benchmark was written to measure is GONE. build() now takes a
+//             dataset view, so the padded device copy is materialised BEFORE
+//             the build instead of being attached after optimize
+//             (cagra_build.cuh:2264, :2289). Both arms therefore carry the
+//             dataset across the optimize peak, and the only remaining
+//             difference is whether the staging upload buffer is ALSO resident.
+//             Expect the two CAGRA rows to come out near-identical now; the
+//             IVF-Flat rows below are where the real delta still lives.
 //
 // So the prediction is: IVF-Flat should show a large peak drop (a whole redundant
-// copy), CAGRA a smaller one (peak goes from dataset+optimize to
-// max(optimize, dataset+graph)), and neither should lose recall.
+// copy), CAGRA none at all under 26.06+ (see the NOTE above -- both arms now pay
+// dataset+optimize), and neither should lose recall.
+//
+// Measured on an RTX 5070 Laptop, n=100000 dim=768, cuVS 26.08 / CUDA 13.3:
+//   cagra   device 4.18s 0.72GB r=1.000 | host 4.31s 0.72GB r=1.000  (no delta)
+//   ivfflat device 0.50s 0.82GB r=1.000 | host 0.50s 0.75GB r=1.000  (delta holds)
 //
 // Also checks the failure mode CAGRA hides: cuVS catches std::bad_alloc while
 // attaching and returns a GRAPH-ONLY index with a warning, and size() does not
@@ -149,31 +160,38 @@ int main(int argc, char** argv) {
     raft::device_resources res;
     auto stream = raft::resource::get_cuda_stream(res);
     size_t base = free_bytes(); Peak w; auto t0=std::chrono::steady_clock::now();
-    std::unique_ptr<cuvs::neighbors::cagra::index<float,uint32_t>> idx;
-    // MUST outlive idx on the device path. update_dataset stores only a REFERENCE
-    // when rows are 16B-aligned (cagra.hpp:524-527), so letting this go out of
-    // scope dangles the index -- the first search then dies with
-    // cudaErrorIllegalAddress. That is precisely why MO retained the buffer in
-    // dataset_device_ptr_, and precisely what the host view removes the need for:
-    // with a host view cuVS makes and owns the copy itself.
+    // BOTH of these MUST outlive idx: 26.06+ attaches only a VIEW of the
+    // dataset to the index, so whichever one backs this arm has to stay alive
+    // or the first search dies with cudaErrorIllegalAddress. Declared before
+    // idx so they are destroyed after it -- the original code declared `held`
+    // AFTER idx, which only survived because ~index never reads the dataset.
+    //   host arm   -- owning padded device copy, made from host memory.
+    //   device arm -- non-owning view of `held`, which is the caller's buffer.
+    //                 make_device_padded_dataset() REJECTS an already-correctly
+    //                 -strided device source (common.hpp:1228) and demands the
+    //                 _view form; kDim=768 float is 16B-aligned so it applies.
+    std::unique_ptr<cuvs::neighbors::device_padded_dataset<float,int64_t>> owner;
     std::unique_ptr<rmm::device_uvector<float>> held;
+    std::unique_ptr<cuvs::neighbors::cagra::device_padded_index<float,uint32_t>> idx;
     if (host) {
-      idx.reset(new cuvs::neighbors::cagra::index<float,uint32_t>(
-          cuvs::neighbors::cagra::build(res, cp, hv)));
+      owner = cuvs::neighbors::make_device_padded_dataset(res, hv);
+      idx.reset(new cuvs::neighbors::cagra::device_padded_index<float,uint32_t>(
+          cuvs::neighbors::cagra::build(res, cp, owner->as_dataset_view())));
     } else {
       held.reset(new rmm::device_uvector<float>((size_t)n*kDim, stream));
       auto dv = upload(res, *held);
-      idx.reset(new cuvs::neighbors::cagra::index<float,uint32_t>(
-          cuvs::neighbors::cagra::build(res, cp, dv)));
+      idx.reset(new cuvs::neighbors::cagra::device_padded_index<float,uint32_t>(
+          cuvs::neighbors::cagra::build(
+              res, cp, cuvs::neighbors::make_device_padded_dataset_view(res, dv))));
       res.sync_stream();
     }
     res.sync_stream();
     auto t1=std::chrono::steady_clock::now(); size_t pk=w.stop(base);
 
     // The degradation cuVS hides: a graph-only index still reports size().
-    if (idx->dataset().extent(0) != n)
+    if (idx->dataset().n_rows() != n)
       std::printf("  !! cagra attached %ld of %ld rows -- graph-only index\n",
-                  (long)idx->dataset().extent(0), (long)n);
+                  (long)idx->dataset().n_rows(), (long)n);
 
     double rc = recall_of([&]{
       rmm::device_uvector<float> dq(kQueries*kDim, stream);
