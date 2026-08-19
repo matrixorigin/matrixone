@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -74,11 +75,13 @@ func NewStrHashMapWithAllocations(
 
 func (m *StrHashMap) NewIterator() Iterator {
 	return &strHashmapIterator{
-		mp:            m,
-		values:        make([]uint64, UnitLimit),
-		zValues:       make([]int64, UnitLimit),
-		keys:          make([][]byte, UnitLimit),
-		strHashStates: make([][3]uint64, UnitLimit),
+		mp: m,
+	}
+}
+
+func (m *StrHashMap) NewTransactionalIterator() TransactionalIterator {
+	return &transactionalStrIterator{
+		strHashmapIterator: m.NewIterator().(*strHashmapIterator),
 	}
 }
 
@@ -104,15 +107,16 @@ func (itr *strHashmapIterator) prepareHashKeys(
 	if err := validateIteratorVectors(vecs, start, count); err != nil {
 		return err
 	}
+	itr.ensureCapacity(count)
 	for i := 0; i < count; i++ {
-		itr.keyLengths[i] = 0
+		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
 	add := func(row int, size int) error {
-		if size < 0 || itr.keyLengths[row] > maxInt-size {
+		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		itr.keyLengths[row] += size
+		itr.zValues[row] += int64(size)
 		return nil
 	}
 	for _, vec := range vecs {
@@ -227,15 +231,17 @@ func (itr *strHashmapIterator) prepareHashKeys(
 
 	total := 0
 	for i := 0; i < count; i++ {
-		if itr.keyLengths[i] < 16 {
-			itr.keyLengths[i] = 16
+		if itr.zValues[i] < 16 {
+			itr.zValues[i] = 16
 		}
-		if total > maxInt-itr.keyLengths[i] {
+		keyLength := int(itr.zValues[i])
+		if total > maxInt-keyLength {
 			return mpool.ErrAllocationAccountInvalid
 		}
-		total += itr.keyLengths[i]
+		total += keyLength
 	}
 	if cap(itr.keyBuffer) < total {
+		itr.clearKeys()
 		if allocation := itr.mp.iteratorAllocation; allocation != nil {
 			var next []byte
 			var err error
@@ -259,15 +265,19 @@ func (itr *strHashmapIterator) prepareHashKeys(
 				return err
 			}
 			itr.keyBuffer = next
+			itr.keyBufferMP = itr.mp.mp
+			itr.keyBufferAllocation = allocation
 		} else {
 			itr.keyBuffer = make([]byte, total)
+			itr.keyBufferMP = nil
+			itr.keyBufferAllocation = nil
 		}
 	}
 	itr.keyBuffer = itr.keyBuffer[:total]
 	storage := itr.keyBuffer
 	offset := 0
 	for i := 0; i < count; i++ {
-		end := offset + itr.keyLengths[i]
+		end := offset + int(itr.zValues[i])
 		itr.keys[i] = storage[offset:offset:end]
 		offset = end
 	}
@@ -291,7 +301,11 @@ func (m *StrHashMap) SetGroupingAware() error {
 }
 
 func (m *StrHashMap) Free() {
+	if m == nil || m.hashMap == nil {
+		return
+	}
 	m.hashMap.Free()
+	m.hashMap = nil
 }
 
 func (m *StrHashMap) PreAlloc(n uint64) error {
@@ -994,6 +1008,23 @@ func (m *StrHashMap) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// MarshalBinarySize returns the exact number of bytes written by WriteTo.
+// The wire format contains a one-byte option field, the eight-byte logical
+// row count, the eight-byte hash-table element count, and one 32-byte cell per
+// group.
+func (m *StrHashMap) MarshalBinarySize() (int64, error) {
+	const (
+		fixedSize = uint64(1 + 8 + 8)
+		cellSize  = uint64(32)
+		maxInt64  = uint64(^uint64(0) >> 1)
+	)
+	if m == nil || m.hashMap == nil || m.rows != m.hashMap.Cardinality() ||
+		m.rows > (maxInt64-fixedSize)/cellSize {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	return int64(fixedSize + m.rows*cellSize), nil
+}
+
 func (m *StrHashMap) UnmarshalBinary(data []byte, mp *mpool.MPool) error {
 	r := bytes.NewReader(data)
 	_, err := m.UnmarshalFrom(r, mp)
@@ -1071,6 +1102,16 @@ func (m *StrHashMap) UnmarshalFrom(r io.Reader, mp *mpool.MPool) (int64, error) 
 		return 0, err
 	}
 	n += subn
+	if m.rows != m.hashMap.Cardinality() {
+		declaredRows := m.rows
+		cardinality := m.hashMap.Cardinality()
+		m.hashMap.Free()
+		m.hashMap = nil
+		m.rows = 0
+		return 0, moerr.NewInvalidInputNoCtxf(
+			"string hash map row count %d does not match cardinality %d",
+			declaredRows, cardinality)
+	}
 
 	return n, nil
 }

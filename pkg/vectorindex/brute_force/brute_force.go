@@ -32,8 +32,12 @@ import (
 )
 
 type UsearchBruteForceIndex[T types.RealNumbers] struct {
-	Dataset      *[]T // flattend vector
-	Metric       usearch.Metric
+	Dataset *[]T // flattend vector
+	Metric  usearch.Metric
+	// MoMetric is the metric the caller asked for, kept because MetricTypeToUsearchMetric
+	// is lossy: Metric_L2Distance and Metric_L2sqDistance both become usearch.L2sq, so
+	// without it the search cannot tell whether the caller wants the distance sqrt-ed.
+	MoMetric     metric.MetricType
 	Dimension    uint
 	Count        uint
 	Quantization usearch.Quantization
@@ -126,6 +130,7 @@ func NewUsearchBruteForceIndex[T types.RealNumbers](dataset [][]T,
 
 	idx := &UsearchBruteForceIndex[T]{}
 	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.MoMetric = m
 	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
 	if err != nil {
 		return nil, err
@@ -180,6 +185,7 @@ func NewUsearchBruteForceIndexFlattened[T types.RealNumbers](dataset []T,
 
 	idx := &UsearchBruteForceIndex[T]{}
 	idx.Metric = metric.MetricTypeToUsearchMetric[m]
+	idx.MoMetric = m
 	idx.Quantization, err = GetUsearchQuantizationFromType(T(0))
 	if err != nil {
 		return nil, err
@@ -283,9 +289,18 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 		return
 	}
 
+	// Same rebase HNSW applies at its usearch boundary (hnsw/search.go): usearch's IP
+	// metric is 1 - a·b where MO's inner_product is -a·b, and an l2_distance query off an
+	// L2sq index must be sqrt-ed. Both are monotonic, so the order usearch returned is
+	// preserved. Without this the two usearch consumers would disagree by exactly 1 on
+	// inner product — the same silent value error, one layer down.
+	//
+	// The metric the caller built the index with is the authority here — not
+	// rt.OrigFuncName, which the index search paths populate but a direct brute-force
+	// caller need not set (and whose empty value would look up as Metric_L2Distance).
 	distances = make([]float64, len(distances_f32))
 	for i, dist := range distances_f32 {
-		distances[i] = float64(dist)
+		distances[i] = metric.DistanceTransformHnsw(float64(dist), idx.MoMetric, idx.Metric)
 	}
 
 	keys_i64 := make([]int64, len(keys_ui64))

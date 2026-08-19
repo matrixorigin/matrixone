@@ -49,6 +49,8 @@ type HashMap interface {
 	GroupCount() uint64
 	// Size returns the hash map's size
 	Size() int64
+	// PreAlloc admits capacity for at most n additional keys before mutation.
+	PreAlloc(n uint64) error
 	// MarshalBinary serializes the hash map into a byte slice.
 	MarshalBinary() ([]byte, error)
 	// UnmarshalBinary deserializes a byte slice into the hash map.
@@ -80,6 +82,92 @@ type Iterator interface {
 	Find(start, count int, vecs []*vector.Vector) (vs []uint64, zvs []int64, err error)
 }
 
+// TransactionalIterator is the opt-in hash publication protocol used by
+// operators which must admit every fallible allocation before changing their
+// resident state. Ordinary hashmap users keep the smaller Iterator contract
+// and do not pay for an InsertPlan.
+type TransactionalIterator interface {
+	Iterator
+
+	// Preflight reserves all fallible iterator scratch needed by the next
+	// Insert/Find work unit without mutating the hash table.
+	Preflight(start, count int, vecs []*vector.Vector) error
+	// PreviewInsert computes the exact group mapping and first-insert selection
+	// for one work unit without mutating the hash table.
+	PreviewInsert(
+		start, count int,
+		vecs []*vector.Vector,
+		groupCount uint64,
+		plan *InsertPlan,
+	) error
+	// CommitPreview atomically publishes a valid plan. It may resize the table,
+	// but does not encode or hash the input a second time when the preview still
+	// matches the current table generation.
+	CommitPreview(plan *InsertPlan) (vs []uint64, zvs []int64, err error)
+}
+
+// InsertPlan owns the fixed-size scratch and immutable outputs of one bounded
+// transactional insert. Keeping it with the opting-in operator avoids adding
+// scratch to every hashmap iterator in the system. Values stay in the owning
+// iterator: the plan epoch prevents any other iterator operation between
+// preview and commit, and a resize re-plan reconstructs the same mapping from
+// the immutable hashes plus insertion flags.
+type InsertPlan struct {
+	count     int
+	newGroups uint64
+	base      uint64
+	version   uint64
+	epoch     uint64
+	ready     bool
+	complete  bool
+	strOwner  *transactionalStrIterator
+	intOwner  *transactionalIntIterator
+	slots     [UnitLimit]uint64
+	inserted  [UnitLimit]uint8
+}
+
+func (p *InsertPlan) Values() []uint64 {
+	if p == nil || p.count < 0 || p.count > UnitLimit {
+		return nil
+	}
+	if p.intOwner != nil {
+		return p.intOwner.values[:p.count]
+	}
+	if p.strOwner != nil {
+		return p.strOwner.values[:p.count]
+	}
+	return nil
+}
+
+func (p *InsertPlan) Inserted() []uint8 {
+	if p == nil || p.count < 0 || p.count > UnitLimit {
+		return nil
+	}
+	return p.inserted[:p.count]
+}
+
+func (p *InsertPlan) NewGroups() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.newGroups
+}
+
+func (p *InsertPlan) reset() {
+	if p == nil {
+		return
+	}
+	p.count = 0
+	p.newGroups = 0
+	p.base = 0
+	p.version = 0
+	p.epoch = 0
+	p.ready = false
+	p.complete = false
+	p.strOwner = nil
+	p.intOwner = nil
+}
+
 // IteratorAllocation selects exact physical provenance for data-scaled hash
 // key encoding scratch. It is immutable and shared by iterators created from
 // one map generation.
@@ -100,7 +188,7 @@ func NewIteratorAllocation(
 		site:    site,
 	}
 	if account == nil || account.Handle() == 0 ||
-		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerMax ||
+		owner < mpool.AllocationOwnerMin || owner > mpool.AllocationOwnerCatalogMax ||
 		site < mpool.AllocationSiteMin {
 		return nil, mpool.ErrAllocationAccountInvalid
 	}
@@ -131,11 +219,12 @@ type IntHashMap struct {
 }
 
 type strHashmapIterator struct {
-	mp         *StrHashMap
-	keys       [][]byte
-	values     []uint64
-	keyBuffer  []byte
-	keyLengths [UnitLimit]int
+	mp                  *StrHashMap
+	keys                [][]byte
+	values              []uint64
+	keyBuffer           []byte
+	keyBufferMP         *mpool.MPool
+	keyBufferAllocation *IteratorAllocation
 	// zValues: 0 indicates a SQL NULL key and 1 indicates a non-NULL key.
 	zValues       []int64
 	nonMatching   []bool
@@ -150,4 +239,14 @@ type intHashMapIterator struct {
 	zValues     []int64
 	nonMatching []bool
 	hashes      []uint64
+}
+
+type transactionalStrIterator struct {
+	*strHashmapIterator
+	epoch uint64
+}
+
+type transactionalIntIterator struct {
+	*intHashMapIterator
+	epoch uint64
 }

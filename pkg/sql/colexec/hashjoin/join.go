@@ -405,7 +405,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				NeedAllocateSels:        !hashJoin.HashOnPK,
 				NeedBatches:             hashJoin.NeedBuildBatches(),
 				Budget:                  budget,
-			}, hashJoin.allocationAccount, hashbuild.HashBuildAllocationOwner)
+			}, hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
 				_ = payload.Close()
 				ctr.mp.Free()
@@ -454,7 +454,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				ctr.rightRowCnt,
 				proc.Mp(),
 				hashJoin.allocationAccount,
-				hashbuild.HashBuildAllocationOwner,
+				mpool.AllocationOwnerHashBuild,
 				hashJoinAllocationSiteMatchedRows,
 			)
 			if err != nil {
@@ -515,7 +515,7 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 									ctr.rightRowCnt,
 									proc.Mp(),
 									hashJoin.allocationAccount,
-									hashbuild.HashBuildAllocationOwner,
+									mpool.AllocationOwnerHashBuild,
 									hashJoinAllocationSiteMatchedRows,
 								)
 							ctr.rightMatchedIter = nil

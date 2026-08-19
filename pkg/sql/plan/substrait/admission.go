@@ -123,16 +123,27 @@ type LeaseManager struct {
 	leases   map[string]*Lease
 	releases map[string]releasePhase
 
-	protector    Protector
-	journal      LeaseJournal
-	resolveBytes *resolveByteBudget
-	maximum      int
-	now          func() time.Time
-	ready        bool
+	protector     Protector
+	journal       LeaseJournal
+	resolveBytes  *resolveByteBudget
+	maximum       int
+	now           func() time.Time
+	ready         bool
+	benchmarkNoGC bool
 }
 
 func NewLeaseManager(maximum int, protector Protector) *LeaseManager {
 	return NewPersistentLeaseManager(maximum, protector, nil)
+}
+
+// NewBenchmarkLeaseManager creates the process-local lease authority used by
+// the explicitly verified local-CN benchmark profile. It is intentionally
+// separate from NewLeaseManager so non-durable managers cannot accidentally
+// satisfy the Sirius runtime's benchmark admission check.
+func NewBenchmarkLeaseManager(maximum int, protector Protector) *LeaseManager {
+	manager := NewPersistentLeaseManager(maximum, protector, nil)
+	manager.benchmarkNoGC = true
+	return manager
 }
 
 func NewPersistentLeaseManager(maximum int, protector Protector, journal LeaseJournal) *LeaseManager {
@@ -744,6 +755,19 @@ func (m *LeaseManager) DurableReady() bool {
 	}
 	m.mu.RLock()
 	ready := m.ready && m.journal != nil && m.protector != nil
+	m.mu.RUnlock()
+	return ready
+}
+
+// BenchmarkReady reports whether this manager was explicitly constructed for
+// the no-GC benchmark profile. It never reports true for a normal
+// non-durable manager, even when that manager happens to be ready.
+func (m *LeaseManager) BenchmarkReady() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	ready := m.benchmarkNoGC && m.ready && m.journal == nil && m.protector != nil
 	m.mu.RUnlock()
 	return ready
 }

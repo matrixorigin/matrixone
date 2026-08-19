@@ -68,6 +68,24 @@ func TestCloneCatalogLockBatch(t *testing.T) {
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
+func TestGeneratedCloneRestoreSnapshotTS(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		optionBits uint32
+		want       int64
+	}{
+		{name: "autocommit keeps generated timestamp", want: 42},
+		{name: "explicit transaction keeps shared visibility", optionBits: OPTION_BEGIN},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses := &Session{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{optionBits: test.optionBits},
+			}}
+			require.Equal(t, test.want, generatedCloneRestoreSnapshotTS(ses, 42))
+		})
+	}
+}
+
 func TestShouldLockDataBranchCloneSource(t *testing.T) {
 	timestampSource := &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42},
@@ -103,6 +121,102 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
 		dataBranchCtx, namedSnapshotSource,
 	))
+}
+
+func TestHandleCloneTableRejectsUnsupportedTemporaryOptionsBeforeExecution(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*tree.CloneTable)
+		wantErr string
+	}{
+		{
+			name: "to account",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+		{
+			name: "copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "if not exists copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.CreateTable.IfNotExists = true
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with COPY GRANTS",
+		},
+		{
+			name: "to account and copy grants",
+			prepare: func(stmt *tree.CloneTable) {
+				stmt.ToAccountOpt = &tree.ToAccountOpt{AccountName: "target"}
+				stmt.CopyGrants = true
+			},
+			wantErr: "CREATE TEMPORARY TABLE ... CLONE cannot be used with TO ACCOUNT",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt := tree.NewCloneTable()
+			t.Cleanup(stmt.Free)
+			stmt.CreateTable.Temporary = true
+			test.prepare(stmt)
+
+			// Nil execution dependencies prove this semantic rejection happens before
+			// opening a background transaction, resolving a snapshot/account, or
+			// publishing any temporary-table state.
+			_, err := handleCloneTable(nil, nil, stmt, nil, nil)
+			require.ErrorContains(t, err, test.wantErr)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
+func TestRemoveFailedTemporaryCloneAlias(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{
+			tempTables:    make(map[string]string),
+			tempTablesRev: make(map[string]string),
+		}
+	}
+
+	t.Run("failed clone removes its newly registered alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, errors.New("clone failed"))
+
+		_, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.False(t, exists)
+	})
+
+	t.Run("failed if not exists clone preserves a preexisting alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", true, errors.New("later failure"))
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
+
+	t.Run("successful clone preserves its new alias", func(t *testing.T) {
+		ses := newSession()
+		ses.AddTempTable("clone_db", "temp_dst", "physical_temp_dst")
+
+		removeFailedTemporaryCloneAlias(ses, "clone_db", "temp_dst", false, nil)
+
+		realName, exists := ses.GetTempTable("clone_db", "temp_dst")
+		require.True(t, exists)
+		require.Equal(t, "physical_temp_dst", realName)
+	})
 }
 
 func TestShouldLockNamedDataBranchCloneSnapshot(t *testing.T) {
@@ -935,4 +1049,18 @@ func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
+}
+
+func Test_rewriteCloneCreateSQL_PreservesModeTwoNames(t *testing.T) {
+	got, err := rewriteCloneCreateSQL(
+		"create view `SrcDB`.`ViewName` as select `SrcDB`.`TableName`.`ID` from `SrcDB`.`TableName`",
+		"SrcDB",
+		"DstDB",
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t,
+		"create view `DstDB`.`ViewName` as select `DstDB`.`TableName`.`ID` from `DstDB`.`TableName`;",
+		got,
+	)
 }

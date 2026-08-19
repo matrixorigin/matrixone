@@ -307,7 +307,7 @@ conda activate go
 Build:
 
 ```bash
-MO_CL_CUDA=1 make
+MO_CL_CUDA=1 make -j8
 ```
 
 What `MO_CL_CUDA=1` flips:
@@ -324,13 +324,14 @@ Guardrails:
 
 - `CONDA_PREFIX env variable not found`: conda env not activated. Run `conda activate <env>` first. This is not a code bug.
 - `libmo` is re-linked on every GPU build deliberately because `mo-service` loads `libmo.so` dynamically. A stale `.so` silently runs old C++.
+- Always pass `-j8`. The cuVS/CUDA objects dominate a GPU build and a single-threaded `make` stalls the edit-build-test loop for minutes at a time.
 
 The `gpu` tag gates index-plugin registration. CAGRA and IVF-PQ register only under `//go:build gpu` (`pkg/indexplugin/all/all_gpu.go`). On a CPU binary their plugins are absent from the registry, so `CREATE INDEX ... USING ivfpq|cagra` fails cleanly at plan-build with `unsupported index type: <algo>` before hidden table creation. Do not move those imports into `all.go`.
 
 The linked `libmo` must itself be GPU-built:
 
 ```bash
-MO_CL_CUDA=1 make cgo
+MO_CL_CUDA=1 make -j8 cgo
 ```
 
 GPU tests need `-tags gpu` plus CUDA search paths. Linux only:
@@ -348,3 +349,65 @@ GOWORK=off go test -mod=readonly -tags gpu \
 The authoritative flag source is the Makefile (`CUDA_CFLAGS` / `CUDA_LDFLAGS`), not this snippet. If a GPU link error appears, diff your flags against those lines.
 
 Tag-split test files are a trap: `*_gpu.go` / `//go:build gpu` tests compile only under `-tags gpu`. A plain `go test ./pkg/vectorindex/ivfpq/...` runs `//go:build !gpu` / `*_cpu.go` stubs instead. CPU tests passing does not test the GPU path.
+
+### The GPU suite is not green just because CI is
+
+CI does not compile `//go:build gpu` files at all, so GPU-tagged tests are unmaintained by
+default: nothing tells an author when one rots. A single local sweep in August 2026 found
+**four** failing on `main`, each broken by an unrelated change months earlier —
+
+| Test | Broken by |
+|---|---|
+| `TestIvfpqSearch` | the quantization base-type guard (#25095); its `IndexTableConfig` omits `parttype`, so `KeyPartType` defaulted to 0 and every `vecf32` query was rejected |
+| `TestBuildCagraSecondaryIndexDef_OK`, `TestBuildIvfpqSecondaryIndexDef_OK` | mock catalog drift |
+| `TestBatchArrayDistanceSync_GPU_InnerProduct` | an inner-product double negation |
+
+Two consequences for anyone running GPU tests:
+
+1. **A GPU failure is not automatically yours.** Prove ownership at the clean baseline
+   using the isolated worktree in section 5 — do NOT revert in place. `git stash` is
+   forbidden there for reasons that apply verbatim here, and `git checkout HEAD~1 -- <paths>`
+   is worse: it rewrites the index AND the working tree, so an interrupted or mistyped
+   invocation silently discards uncommitted work. A GPU build in the worktree needs its own
+   `MO_CL_CUDA=1 make -j8 cgo`, since `cgo/libmo.so` is a build artifact and is not checked
+   out with it.
+
+   Once the failure is shown to predate your change, find out who owns it before touching it:
+   `git log -S '<symbol>' --all --oneline` and `git branch --contains <commit>`. Three of the
+   four above were already fixed on other in-flight branches; duplicating those fixes would
+   have produced merge conflicts for no gain.
+2. **Run the whole GPU set, not just your package**, when touching shared vector code:
+
+```bash
+grep -rl '^//go:build gpu' --include='*_test.go' pkg/ | xargs -n1 dirname | sort -u
+```
+
+### mo-cgo-test merges the gpu tag into yours
+
+`MO_CL_CUDA=1` makes the wrapper add `-tags gpu`. When the caller passes their own `-tags`,
+it is **merged** (`-tags typecheck` becomes `-tags typecheck,gpu`, in whichever spelling was
+used) rather than replaced or skipped.
+
+It skipped it until August 2026, on the reasoning that `go test` keeps only the last `-tags`
+and appending would discard the caller's. The effect was a false green:
+`MO_CL_CUDA=1 mo-cgo-test -tags typecheck ./pkg/vectorindex/metric/` compiled **0** of that
+package's 2 GPU test files while reporting a pass. `mo-cgo-test-tags-test` pins every form
+and needs no GPU, CUDA toolkit or built libmo.
+
+Stubbing `go` is not enough to earn that, and the first version of the test wrongly
+claimed it: the wrapper resolves its repository from its own location and rejects the run
+unless `cgo/libmo.so` and `thirdparties/install/include` exist there, before it would ever
+reach the stub. Pointed at the real checkout the test passed only where libmo happened to
+be built, and in a clean worktree reported all seven cases as `<no -tags at all>` -- a
+wrapper that never ran, misread as a wrapper that dropped the tag. It now copies the real
+wrapper into a throwaway git repo with empty stand-ins for both prerequisites, and checks
+each invocation exited zero before parsing its stdout, so a setup fault reports as
+`harness broken` instead of as seven tag failures.
+
+The wrapper's CUDA support is itself branch-dependent: a checkout whose `mo-cgo-test`
+predates it ignores `MO_CL_CUDA` entirely and fails to link a GPU-built `libmo` with
+`undefined reference to cuMemcpyHtoD_v2` and `libcuda.so.1 not found`. Check with
+`grep -c MO_CL_CUDA .agents/skills/mo-dev/scripts/mo-cgo-test` before concluding the tree is
+broken; borrow a newer copy into the repo root if needed (it derives the repo from its own
+location, so it must sit inside the worktree).
+

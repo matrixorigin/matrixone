@@ -1,0 +1,29 @@
+drop database if exists date_add_dynamic_interval;
+create database date_add_dynamic_interval;
+use date_add_dynamic_interval;
+select result,
+timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval floor(result / 1000) second)) as direct_offset,
+timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (1000 + floor(result / 1000)) second)) as literal_first_offset,
+timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (floor(result / 1000) + 1000) second)) as literal_second_offset
+from generate_series(0, 2000, 1000) g
+order by result;
+result    direct_offset    literal_first_offset    literal_second_offset
+0    0    1000    1000
+1000    1    1001    1001
+2000    2    1002    1002
+create table t_dynamic_interval as
+select result,
+date_add('2026-01-01', interval (1000 + floor(result / 1000)) second) as ts
+from generate_series(0, 2000, 1000) g;
+select result,
+timestampdiff(second, '2026-01-01', ts) as persisted_offset
+from t_dynamic_interval
+order by result;
+result    persisted_offset
+0    1000
+1000    1001
+2000    1002
+select count(distinct ts) as distinct_ts from t_dynamic_interval;
+distinct_ts
+3
+drop database date_add_dynamic_interval;

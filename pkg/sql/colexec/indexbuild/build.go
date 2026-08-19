@@ -377,7 +377,7 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 		vec,
 		proc.Mp(),
 		ap.allocationAccount,
-		indexBuildAllocationOwner,
+		mpool.AllocationOwnerIndexBuild,
 		indexBuildAllocationSiteRuntimeFilterPayload,
 	)
 	if err != nil {

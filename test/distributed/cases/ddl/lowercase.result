@@ -347,8 +347,8 @@ DROP VIEW IF EXISTS vie;
 CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
-View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,47,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+vie  ¦  create view `vie` as select `tab`.`field` as `field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -358,8 +358,8 @@ INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
-View    Create View    character_set_client    collation_connection
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
+➤ View[12,4,0]  ¦  Create View[12,71,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+view01  ¦  create view `view01` as select `t13`.`a` as `a` from `t13` where `t13`.`a` = 1 or `t13`.`a` = 2  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SELECT * FROM view01;
 a
 1
@@ -584,8 +584,8 @@ CREATE TABLE `TaB`(Field int);
 INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
-View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
+➤ View[12,2,0]  ¦  Create View[12,47,0]  ¦  character_set_client[12,5,0]  ¦  collation_connection[12,13,0]  𝄀
+vie  ¦  create view `vie` as select `tab`.`field` as `field` from `tab`  ¦  utf8mb4  ¦  utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;

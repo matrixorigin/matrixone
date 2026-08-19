@@ -1053,10 +1053,19 @@ message Node {
   // row image and moving it would change statement semantics.
   bool filter_is_barrier = 79;
 
+  int32 partition_by_count = 80;
+
+  // TIME_WINDOW only: optional half-open GAPFILL domain inferred from simple
+  // timestamp predicates.
+  Expr gap_fill_start = 81;
+  Expr gap_fill_end = 82;
+
+  // DEDUP only: incoming key columns are proven unique by the planner.
+  bool dedup_input_keys_unique = 83;
+
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
-  int32 partition_by_count = 80;
-  int32 asof_right_col = 81;
+  int32 asof_right_col = 84;
 }
 
 message SnapshotExtraInfo {

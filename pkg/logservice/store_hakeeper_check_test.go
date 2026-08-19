@@ -225,11 +225,19 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 }
 
 func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
+	runHakeeperTaskServiceTestWithCNStoreTimeout(t, 5*time.Second, fn)
+}
+
+func runHakeeperTaskServiceTestWithCNStoreTimeout(
+	t *testing.T,
+	cnStoreTimeout time.Duration,
+	fn func(*testing.T, *store, taskservice.TaskService),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
-		cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
+		cfg.HAKeeperConfig.CNStoreTimeout.Duration = cnStoreTimeout
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -1093,7 +1101,7 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 			} else {
 				break
 			}
-			if i == 2999 {
+			if i == 99 {
 				t.Fatalf("failed to complete bootstrap")
 			}
 		}
@@ -1201,7 +1209,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 			} else {
 				break
 			}
-			if i == 2999 {
+			if i == 99 {
 				t.Fatalf("failed to complete bootstrap")
 			}
 		}
@@ -1242,7 +1250,6 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				assert.NoError(t, err)
 				if len(tasks) == 0 {
 					testLogger.Info("no task found")
-					time.Sleep(50 * time.Millisecond)
 					return true
 				}
 				return false
@@ -1257,7 +1264,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 		}
 		t.Fatalf("failed to reschedule expired tasks")
 	}
-	runHakeeperTaskServiceTest(t, fn)
+	runHakeeperTaskServiceTestWithCNStoreTimeout(t, time.Second, fn)
 }
 
 func TestGetTaskTableUserFromEnv(t *testing.T) {

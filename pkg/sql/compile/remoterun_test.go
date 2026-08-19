@@ -409,6 +409,21 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, vm.IntersectAll, restored.OpType())
 	})
 
+	t.Run("Order", func(t *testing.T) {
+		original := order.NewArgument()
+		original.OrderBySpec = []*planpb.OrderBySpec{{
+			Expr: plan.MakePlan2Int64ConstExprWithType(1),
+			Flag: planpb.OrderBySpec_DESC,
+		}}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredOrder, ok := restored.(*order.Order)
+		require.True(t, ok)
+		require.Equal(t, original.OrderBySpec, restoredOrder.OrderBySpec)
+		_, ownsAllocation := any(restoredOrder).(executionAllocationAccountOwner)
+		require.True(t, ownsAllocation)
+	})
+
 	t.Run("GroupByHashKey", func(t *testing.T) {
 		original := group.NewArgument()
 		original.GroupByHashKey = []int32{0, 2}
@@ -529,6 +544,60 @@ func TestTargetAwareUpdateRemoteProtocolValidation(t *testing.T) {
 	_, _, err = convertToPipelineInstruction(targetIndexedMultiUpdate, proc, ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, validateRemoteTargetAwareUpdatePipelineProtocol(proc, targetAwarePipeline))
+}
+
+func TestRightDedupInputUniqueRemoteProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	unique := &rightdedupjoin.RightDedupJoin{
+		Conditions:      [][]*planpb.Expr{{}, {}},
+		InputKeysUnique: true,
+	}
+	ordinary := &rightdedupjoin.RightDedupJoin{Conditions: [][]*planpb.Expr{{}, {}}}
+	uniquePipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.RightDedupJoin),
+			RightDedupJoin: &pipeline.RightDedupJoin{
+				InputKeysUnique: true,
+			},
+		}},
+	}}}
+	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op:             int32(vm.RightDedupJoin),
+		RightDedupJoin: &pipeline.RightDedupJoin{},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion20)
+	_, _, err := convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 21")
+	require.ErrorContains(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline),
+		"requires MORPC protocol version 21")
+	encodedPipeline, err := uniquePipeline.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(encodedPipeline, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 21")
+	_, _, err = convertToPipelineInstruction(ordinary, proc, ctx, 1)
+	require.NoError(t, err, "ordinary RIGHT DEDUP remains wire-compatible")
+	require.NoError(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, ordinaryPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion21)
+	_, instruction, err := convertToPipelineInstruction(unique, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.RightDedupJoin.InputKeysUnique)
+	require.NoError(t,
+		validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, uniquePipeline))
 }
 
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
@@ -1206,8 +1275,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 					SpillThreshold: threshold,
 				},
 				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
-					Conditions:     [][]*planpb.Expr{{}, {}},
-					SpillThreshold: threshold,
+					Conditions:      [][]*planpb.Expr{{}, {}},
+					SpillThreshold:  threshold,
+					InputKeysUnique: true,
 				},
 			} {
 				t.Run(fmt.Sprintf("%s/%d", name, threshold), func(t *testing.T) {
@@ -1224,6 +1294,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 						require.Equal(t, threshold, join.SpillThreshold)
 					case *rightdedupjoin.RightDedupJoin:
 						require.Equal(t, threshold, join.SpillThreshold)
+						require.True(t, join.InputKeysUnique)
 					default:
 						t.Fatalf("unexpected restored operator %T", restored)
 					}
@@ -2497,6 +2568,101 @@ func TestSendNotifyMessageReportsSenderFactoryError(t *testing.T) {
 		t.Fatal("notify sender factory error did not send cleanup signal")
 	}
 	wg.Wait()
+}
+
+func TestSendNotifyMessageNormalizesPipelineCancellationCause(t *testing.T) {
+	duplicateErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	tests := []struct {
+		name        string
+		cancelCause error
+		factoryErr  func(context.Context) error
+		wantErr     error
+	}{
+		{
+			name:        "query interruption recovers substantive cancellation cause",
+			cancelCause: duplicateErr,
+			factoryErr: func(ctx context.Context) error {
+				return moerr.NewQueryInterrupted(ctx)
+			},
+			wantErr: duplicateErr,
+		},
+		{
+			name: "normal query interruption remains secondary",
+			factoryErr: func(ctx context.Context) error {
+				return moerr.NewQueryInterrupted(ctx)
+			},
+		},
+		{
+			name:        "raw cancellation recovers substantive cancellation cause",
+			cancelCause: duplicateErr,
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: duplicateErr,
+		},
+		{
+			name: "raw cancellation without substantive cause remains visible",
+			factoryErr: func(context.Context) error {
+				return context.Canceled
+			},
+			wantErr: context.Canceled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			proc.BuildPipelineContext(queryCtx)
+			scopeProc := proc.NewContextChildProc(1)
+			scopeProc.Cancel(tt.cancelCause)
+
+			uid, err := uuid.NewV7()
+			require.NoError(t, err)
+			s := &Scope{
+				Proc: scopeProc,
+				RemoteReceivRegInfos: []RemoteReceivRegInfo{
+					{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+				},
+			}
+			factory := func(
+				ctx context.Context,
+				_ string,
+				_ string,
+				_ *mpool.MPool,
+				_ *AnalyzeModule,
+			) (*messageSenderOnClient, error) {
+				return nil, tt.factoryErr(ctx)
+			}
+
+			var wg sync.WaitGroup
+			resultCh := make(chan notifyMessageResult, 1)
+			s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+
+			select {
+			case result := <-resultCh:
+				if tt.wantErr == nil {
+					require.NoError(t, result.err)
+				} else {
+					require.ErrorIs(t, result.err, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote notify did not report cancellation")
+			}
+
+			select {
+			case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+				_, terminalErr := signal.Action()
+				if tt.wantErr == nil {
+					require.NoError(t, terminalErr)
+				} else {
+					require.ErrorIs(t, terminalErr, tt.wantErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("remote notify cleanup did not terminate its receiver")
+			}
+			wg.Wait()
+		})
+	}
 }
 
 func TestSendNotifyMessageReportsStreamSendError(t *testing.T) {

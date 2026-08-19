@@ -1586,7 +1586,7 @@ func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinTy
 	}
 	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"native ASOF join remote execution requires MORPC protocol version 21",
+			"native ASOF join remote execution requires MORPC protocol version 22",
 		)
 	}
 	return nil
@@ -1600,6 +1600,37 @@ func validateRemoteTargetAwareUpdateProtocol(proc *process.Process, targetAware 
 		return moerr.NewNotSupportedNoCtx(
 			"target-aware multi-table UPDATE remote execution requires MORPC protocol version 20",
 		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniqueProtocol(proc *process.Process, inputKeysUnique bool) error {
+	if !inputKeysUnique {
+		return nil
+	}
+	if proc == nil || !supportsRemoteRightDedupInputKeysUnique(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"lookup-only RIGHT DEDUP remote execution requires MORPC protocol version 21",
+		)
+	}
+	return nil
+}
+
+func validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if rightDedup := instruction.GetRightDedupJoin(); rightDedup != nil {
+			if err := validateRemoteRightDedupInputKeysUniqueProtocol(proc, rightDedup.InputKeysUnique); err != nil {
+				return err
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteRightDedupInputKeysUniquePipelineProtocol(proc, child); err != nil {
+			return err
+		}
 	}
 	return nil
 }
