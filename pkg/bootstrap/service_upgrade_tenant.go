@@ -350,13 +350,23 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 				return
 			}
 
-			for {
-				if hasUpgradeTenants, err := fn(); err != nil || hasUpgradeTenants {
-					continue
-				}
-				break
-			}
+			drainUpgradeTenants(ctx, fn)
 			timer.Reset(s.upgrade.checkUpgradeTenantDuration)
+		}
+	}
+}
+
+func drainUpgradeTenants(ctx context.Context, fn func() (bool, error)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		hasUpgradeTenants, err := fn()
+		if err != nil || !hasUpgradeTenants {
+			return
 		}
 	}
 }
