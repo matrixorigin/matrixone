@@ -1085,10 +1085,8 @@ func preparedParamResultBindingType(
 	case vector.PrepareParamFloat:
 		return types.T_float64.ToType()
 	case vector.PrepareParamDecimal:
-		// Native DECIMAL/NEWDECIMAL is one stable prepared result category in
-		// MySQL. Payload precision is execution data, not a reason to mutate the
-		// statement's result metadata on every bind.
-		return types.New(types.T_decimal256, 65, 30)
+		width, scale := preparedNativeDecimalDomain(normalizePreparedDecimalPayload(value))
+		return preparedResultDecimalType(width, scale)
 	case vector.PrepareParamBoolean:
 		return types.T_bool.ToType()
 	default:
@@ -1551,6 +1549,12 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		columns := getPreparedResultColumnsFromPlan(
 			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
+		columns = stablePreparedResultMetadataColumns(
+			columns,
+			plan2.PreparedParamResultMetadataDependencyColumns(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
+			paramState.paramKinds,
+		)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
@@ -1713,6 +1717,45 @@ func initExecuteStmtParamWithResolverInSession(
 		return nil, nil, nil, "", false, err
 	}
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
+}
+
+func stablePreparedResultMetadataColumns(
+	columns []*plan2.ColDef,
+	dependencies [][]bool,
+	paramKinds []vector.PrepareParamKind,
+) []*plan2.ColDef {
+	var result []*plan2.ColDef
+	for columnPos, positions := range dependencies {
+		if columnPos >= len(columns) {
+			break
+		}
+		if columns[columnPos] == nil || !types.T(columns[columnPos].Typ.Id).IsDecimal() {
+			continue
+		}
+		stableDecimal := false
+		for paramPos, dependent := range positions {
+			if dependent && paramPos < len(paramKinds) &&
+				paramKinds[paramPos] == vector.PrepareParamDecimal {
+				stableDecimal = true
+				break
+			}
+		}
+		if !stableDecimal {
+			continue
+		}
+		if result == nil {
+			result = append([]*plan2.ColDef(nil), columns...)
+		}
+		column := plan2.DeepCopyColDef(columns[columnPos])
+		column.Typ.Id = int32(types.T_decimal256)
+		column.Typ.Width = 65
+		column.Typ.Scale = 30
+		result[columnPos] = column
+	}
+	if result == nil {
+		return columns
+	}
+	return result
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

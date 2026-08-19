@@ -1068,9 +1068,9 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				isNull bool
 				want   types.T
 			}{
-				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal256},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal256},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal256},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal128},
 			},
 		},
 		{
@@ -1082,7 +1082,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				want   types.T
 			}{
 				{defines.MYSQL_TYPE_LONGLONG, "7", false, types.T_int64},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal256},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
 		{
@@ -1094,7 +1094,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				want   types.T
 			}{
 				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_text},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal256},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
 		{
@@ -1105,9 +1105,9 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				isNull bool
 				want   types.T
 			}{
-				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal256},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", false, types.T_decimal256},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal256},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", false, types.T_decimal64},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
 			},
 		},
 	} {
@@ -1132,18 +1132,42 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 				require.Len(t, columns, 1)
 				require.Equal(t, step.want, types.T(columns[0].Typ.Id), "step %d", stepIndex)
 				if step.typ == defines.MYSQL_TYPE_NEWDECIMAL && !step.isNull {
-					require.Equal(t, int32(65), columns[0].Typ.Width)
-					require.Equal(t, int32(30), columns[0].Typ.Scale)
 					require.Len(t, metadataTypes, 1)
-					require.Equal(t, columns[0].Typ, metadataTypes[0])
+					require.Equal(t, int32(types.T_decimal256), metadataTypes[0].Id)
+					require.Equal(t, int32(65), metadataTypes[0].Width)
+					require.Equal(t, int32(30), metadataTypes[0].Scale)
 				}
 			}
 			require.Empty(t, prepareStmt.paramBindingDependencies)
 			require.Equal(t, []bool{true}, prepareStmt.paramResultMetadataDependencies)
 			require.Len(t, metadataTypes, 1)
-			require.Equal(t, test.steps[len(test.steps)-1].want, types.T(metadataTypes[0].Id))
+			last := test.steps[len(test.steps)-1]
+			if last.typ == defines.MYSQL_TYPE_NEWDECIMAL && !last.isNull {
+				require.Equal(t, types.T_decimal256, types.T(metadataTypes[0].Id))
+			} else {
+				require.Equal(t, last.want, types.T(metadataTypes[0].Id))
+			}
 		})
 	}
+}
+
+func TestStablePreparedResultMetadataColumnsOnlyNormalizesDecimalOutputs(t *testing.T) {
+	columns := []*plan.ColDef{
+		{Typ: plan.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 2}},
+		{Typ: plan.Type{Id: int32(types.T_float64)}},
+		{Typ: plan.Type{Id: int32(types.T_decimal128), Width: 10, Scale: 2}},
+	}
+	actual := stablePreparedResultMetadataColumns(
+		columns,
+		[][]bool{{true, false}, {true, true}, {false, true}},
+		[]vector.PrepareParamKind{vector.PrepareParamDecimal, vector.PrepareParamFloat},
+	)
+	require.Equal(t, plan.Type{
+		Id: int32(types.T_decimal256), Width: 65, Scale: 30,
+	}, actual[0].Typ)
+	require.Equal(t, columns[1].Typ, actual[1].Typ)
+	require.Equal(t, columns[2].Typ, actual[2].Typ)
+	require.Equal(t, int32(types.T_decimal64), columns[0].Typ.Id)
 }
 
 func TestUnionPreparedDecimalParamsRefreshResultMetadata(t *testing.T) {
@@ -1176,10 +1200,12 @@ func TestUnionPreparedDecimalParamsRefreshResultMetadata(t *testing.T) {
 	require.Equal(t, []bool{true, true}, prepareStmt.paramResultMetadataDependencies)
 	columns := plan2.GetResultColumnsFromPlan(queryPlan)
 	require.Len(t, columns, 1)
-	require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
-	require.Equal(t, int32(65), columns[0].Typ.Width)
-	require.Equal(t, int32(30), columns[0].Typ.Scale)
-	require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
+	require.Equal(t, int32(types.T_decimal128), columns[0].Typ.Id)
+	require.Equal(t, int32(29), columns[0].Typ.Width)
+	require.Equal(t, int32(9), columns[0].Typ.Scale)
+	require.Equal(t, int32(types.T_decimal256), metadataTypes[0].Id)
+	require.Equal(t, int32(65), metadataTypes[0].Width)
+	require.Equal(t, int32(30), metadataTypes[0].Scale)
 }
 
 func TestUnionImplicitCastPreparedParamRefreshesResultMetadata(t *testing.T) {
@@ -1190,7 +1216,7 @@ func TestUnionImplicitCastPreparedParamRefreshesResultMetadata(t *testing.T) {
 		want      types.T
 	}{
 		{"double", defines.MYSQL_TYPE_DOUBLE, "1.5", types.T_float64},
-		{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", types.T_decimal256},
+		{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, "12345.6789", types.T_decimal64},
 		{"string", defines.MYSQL_TYPE_VAR_STRING, "12345.6789", types.T_text},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1223,7 +1249,13 @@ func TestUnionImplicitCastPreparedParamRefreshesResultMetadata(t *testing.T) {
 			columns := plan2.GetResultColumnsFromPlan(queryPlan)
 			require.Len(t, columns, 1)
 			require.Equal(t, test.want, types.T(columns[0].Typ.Id))
-			require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
+			if test.mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
+				require.Equal(t, int32(types.T_decimal256), metadataTypes[0].Id)
+				require.Equal(t, int32(65), metadataTypes[0].Width)
+				require.Equal(t, int32(30), metadataTypes[0].Scale)
+			} else {
+				require.Equal(t, []plan.Type{columns[0].Typ}, metadataTypes)
+			}
 		})
 	}
 }
@@ -1240,7 +1272,7 @@ func TestControlFlowPreparedParamRefreshesResultMetadata(t *testing.T) {
 			want      types.T
 		}{
 			{"double", defines.MYSQL_TYPE_DOUBLE, "1.5", types.T_float64},
-			{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, "1.25", types.T_decimal256},
+			{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, "1.25", types.T_decimal64},
 		} {
 			t.Run(sql+"/"+binding.name, func(t *testing.T) {
 				ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 212, sql)

@@ -186,6 +186,8 @@ func TestPreparedParamResultMetadataDependencies(t *testing.T) {
 	require.NotNil(t, prepare)
 	require.Equal(t, []bool{true, false, false},
 		PreparedParamResultMetadataDependencies(prepare.Plan, 3))
+	require.Equal(t, [][]bool{{true, false, false}, nil, nil},
+		PreparedParamResultMetadataDependencyColumns(prepare.Plan, 3))
 	require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 3))
 }
 
@@ -245,6 +247,10 @@ func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testi
 			require.NotNil(t, prepare)
 			require.Equal(t, test.want,
 				PreparedParamResultMetadataDependencies(prepare.Plan, 1))
+			if test.name == "explicit cast terminates" {
+				require.Equal(t, []bool{true},
+					PreparedParamCommonTypeDependencies(prepare.Plan, 1))
+			}
 		})
 	}
 }

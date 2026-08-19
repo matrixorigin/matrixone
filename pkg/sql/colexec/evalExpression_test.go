@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -457,6 +458,45 @@ func TestParamExpressionExecutorParsesFixedNumericTargets(t *testing.T) {
 		case bool:
 			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
 		}
+		executor.Free()
+	}
+}
+
+func TestParamExpressionExecutorPreservesNativeDecimalExecutionDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		value string
+		typ   types.Type
+	}{
+		{strings.Repeat("9", 36), types.New(types.T_decimal128, 36, 0)},
+		{strings.Repeat("9", 65), types.New(types.T_decimal256, 65, 0)},
+		{strings.Repeat("9", 66), types.New(types.T_decimal256, 66, 0)},
+		{strings.Repeat("9", 76), types.New(types.T_decimal256, 76, 0)},
+		{"0." + strings.Repeat("0", 30) + "1", types.New(types.T_decimal128, 31, 31)},
+		{"0." + strings.Repeat("0", 39) + "1", types.New(types.T_decimal256, 40, 40)},
+		{"1.25", types.New(types.T_decimal64, 3, 2)},
+	}
+	params := vector.NewVec(types.T_text.ToType())
+	for _, test := range tests {
+		require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, proc.Mp()))
+	}
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { params.Free(proc.Mp()) })
+
+	for pos, test := range tests {
+		executor := NewParamExpressionExecutor(proc.Mp(), pos, test.typ)
+		vec, err := executor.Eval(proc, nil, nil)
+		require.NoError(t, err, test.value)
+		var actual string
+		switch test.typ.Oid {
+		case types.T_decimal64:
+			actual = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0).Format(test.typ.Scale)
+		case types.T_decimal128:
+			actual = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0).Format(test.typ.Scale)
+		case types.T_decimal256:
+			actual = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0).Format(test.typ.Scale)
+		}
+		require.Equal(t, test.value, actual)
 		executor.Free()
 	}
 }

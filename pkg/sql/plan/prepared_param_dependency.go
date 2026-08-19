@@ -49,6 +49,15 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 				r.collectDirectParams(arg)
 			}
 		}
+		if functionID == function.IFF || functionID == function.CASE {
+			for i, arg := range impl.F.Args {
+				isValue := functionID == function.IFF && i > 0 ||
+					functionID == function.CASE && (i%2 == 1 || i == len(impl.F.Args)-1)
+				if isValue {
+					r.collectExplicitCastParams(arg)
+				}
+			}
+		}
 		for _, arg := range impl.F.Args {
 			r.visit(arg)
 		}
@@ -77,6 +86,24 @@ func (r *preparedParamCommonTypeDependencyRule) visit(expr *Expr) {
 				r.visit(frame.End.Val)
 			}
 		}
+	}
+}
+
+func (r *preparedParamCommonTypeDependencyRule) collectExplicitCastParams(expr *Expr) {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return
+	}
+	functionID, _ := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	if functionID != function.CAST || len(expr.GetF().Args) == 0 {
+		return
+	}
+	inner := expr.GetF().Args[0].GetF()
+	if inner == nil || inner.Func == nil || len(inner.Args) == 0 {
+		return
+	}
+	innerID, _ := function.DecodeOverloadID(inner.Func.Obj)
+	if innerID == function.CAST {
+		collectPlanExprParamPositions(inner.Args[0], r.positions)
 	}
 }
 
@@ -195,6 +222,26 @@ func PreparedParamCommonTypeDependencies(p *Plan, paramCount int) []bool {
 // PreparedParamResultMetadataDependencies returns parameter positions whose
 // runtime type directly determines a result column's protocol metadata.
 func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
+	columnDependencies := PreparedParamResultMetadataDependencyColumns(p, paramCount)
+	var dependencies []bool
+	for _, column := range columnDependencies {
+		for pos, dependent := range column {
+			if dependent {
+				if dependencies == nil {
+					dependencies = make([]bool, paramCount)
+				}
+				dependencies[pos] = true
+			}
+		}
+	}
+	return dependencies
+}
+
+// PreparedParamResultMetadataDependencyColumns returns the parameter positions
+// that determine each result column's protocol metadata. The per-column shape
+// lets the protocol layer stabilize only the affected DECIMAL columns without
+// changing the physical types used by the plan and expression executor.
+func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]bool {
 	if p == nil || paramCount <= 0 {
 		return nil
 	}
@@ -213,97 +260,100 @@ func PreparedParamResultMetadataDependencies(p *Plan, paramCount int) []bool {
 	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
 		return nil
 	}
-	var dependencies []bool
-	visited := make(map[[3]int32]bool)
-	var traceOutput func(int32, int32, bool)
-	var traceExpr func(int32, *Expr, bool)
-	markParam := func(param *planpb.ParamRef) {
-		if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
-			return
-		}
-		if dependencies == nil {
-			dependencies = make([]bool, paramCount)
-		}
-		dependencies[param.Pos] = true
-	}
-	traceExpr = func(currentNodeID int32, expr *Expr, allowSetCast bool) {
-		if expr == nil {
-			return
-		}
-		if param := expr.GetP(); param != nil {
-			markParam(param)
-			return
-		}
-		if fn := expr.GetF(); fn != nil && fn.Func != nil {
-			switch fn.Func.GetObjName() {
-			case "if":
-				for i := 1; i < len(fn.Args); i++ {
-					traceExpr(currentNodeID, fn.Args[i], true)
-				}
-				return
-			case "case":
-				for i := 1; i < len(fn.Args); i += 2 {
-					traceExpr(currentNodeID, fn.Args[i], true)
-				}
-				if len(fn.Args)%2 == 1 {
-					traceExpr(currentNodeID, fn.Args[len(fn.Args)-1], true)
-				}
+	root := query.Nodes[nodeID]
+	columnDependencies := make([][]bool, len(root.ProjectList))
+	for columnPos, rootExpr := range root.ProjectList {
+		visited := make(map[[3]int32]bool)
+		var dependencies []bool
+		var traceOutput func(int32, int32, bool)
+		var traceExpr func(int32, *Expr, bool)
+		markParam := func(param *planpb.ParamRef) {
+			if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
 				return
 			}
+			if dependencies == nil {
+				dependencies = make([]bool, paramCount)
+			}
+			dependencies[param.Pos] = true
 		}
-		if allowSetCast {
-			fn := expr.GetF()
-			if fn != nil {
-				if fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		traceExpr = func(currentNodeID int32, expr *Expr, allowSetCast bool) {
+			if expr == nil {
+				return
+			}
+			if param := expr.GetP(); param != nil {
+				markParam(param)
+				return
+			}
+			if fn := expr.GetF(); fn != nil && fn.Func != nil {
+				switch fn.Func.GetObjName() {
+				case "if":
+					for i := 1; i < len(fn.Args); i++ {
+						traceExpr(currentNodeID, fn.Args[i], true)
+					}
+					return
+				case "case":
+					for i := 1; i < len(fn.Args); i += 2 {
+						traceExpr(currentNodeID, fn.Args[i], true)
+					}
+					if len(fn.Args)%2 == 1 {
+						traceExpr(currentNodeID, fn.Args[len(fn.Args)-1], true)
+					}
 					return
 				}
-				_, overload := function.DecodeOverloadID(fn.Func.GetObj())
-				if overload == 0 {
-					traceExpr(currentNodeID, fn.Args[0], false)
+			}
+			if allowSetCast {
+				fn := expr.GetF()
+				if fn != nil {
+					if fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+						return
+					}
+					_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+					if overload == 0 {
+						traceExpr(currentNodeID, fn.Args[0], false)
+					}
+					return
+				}
+			}
+			ref := expr.GetCol()
+			if ref == nil || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
+				return
+			}
+			node := query.Nodes[currentNodeID]
+			if node == nil || len(node.Children) != 1 {
+				return
+			}
+			traceOutput(node.Children[0], ref.ColPos, allowSetCast)
+		}
+		traceOutput = func(currentNodeID, colPos int32, allowSetCast bool) {
+			allowSetCastKey := int32(0)
+			if allowSetCast {
+				allowSetCastKey = 1
+			}
+			key := [3]int32{currentNodeID, colPos, allowSetCastKey}
+			if visited[key] || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
+				return
+			}
+			visited[key] = true
+			node := query.Nodes[currentNodeID]
+			if node == nil {
+				return
+			}
+			switch node.NodeType {
+			case planpb.Node_UNION, planpb.Node_UNION_ALL,
+				planpb.Node_INTERSECT, planpb.Node_INTERSECT_ALL,
+				planpb.Node_MINUS, planpb.Node_MINUS_ALL:
+				for _, childID := range node.Children {
+					traceOutput(childID, colPos, true)
 				}
 				return
 			}
-		}
-		ref := expr.GetCol()
-		if ref == nil || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
-			return
-		}
-		node := query.Nodes[currentNodeID]
-		if node == nil || len(node.Children) != 1 {
-			return
-		}
-		traceOutput(node.Children[0], ref.ColPos, allowSetCast)
-	}
-	traceOutput = func(currentNodeID, colPos int32, allowSetCast bool) {
-		allowSetCastKey := int32(0)
-		if allowSetCast {
-			allowSetCastKey = 1
-		}
-		key := [3]int32{currentNodeID, colPos, allowSetCastKey}
-		if visited[key] || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
-			return
-		}
-		visited[key] = true
-		node := query.Nodes[currentNodeID]
-		if node == nil {
-			return
-		}
-		switch node.NodeType {
-		case planpb.Node_UNION, planpb.Node_UNION_ALL,
-			planpb.Node_INTERSECT, planpb.Node_INTERSECT_ALL,
-			planpb.Node_MINUS, planpb.Node_MINUS_ALL:
-			for _, childID := range node.Children {
-				traceOutput(childID, colPos, true)
+			if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+				return
 			}
-			return
+			traceExpr(currentNodeID, node.ProjectList[colPos], allowSetCast)
 		}
-		if colPos < 0 || int(colPos) >= len(node.ProjectList) {
-			return
-		}
-		traceExpr(currentNodeID, node.ProjectList[colPos], allowSetCast)
+		traceExpr(nodeID, rootExpr, false)
+		columnDependencies[columnPos] = dependencies
 	}
-	for _, expr := range query.Nodes[nodeID].ProjectList {
-		traceExpr(nodeID, expr, false)
-	}
-	return dependencies
+	return columnDependencies
 }
