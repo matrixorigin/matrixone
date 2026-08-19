@@ -990,15 +990,15 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
-			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000",
+			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000, 4611686018427387904",
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(),
 					[]string{"ab"}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-1, 0, 1, 3, 0, 1000000000000}, []bool{false, false, false, false, true, false}),
+					[]int64{-1, 0, 1, 3, 0, 1000000000000, 1 << 62}, []bool{false, false, false, false, true, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", "", "ab", "ababab", "", ""}, []bool{false, false, false, false, true, true}),
+				[]string{"", "", "ab", "ababab", "", "", ""}, []bool{false, false, false, false, true, true, true}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInRepeat)
 		succeed, info := tcc.Run()
