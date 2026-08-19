@@ -31,13 +31,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
 type issue25753TraceConn struct {
 	net.Conn
-	mu    sync.Mutex
-	reads []byte
+	mu                     sync.Mutex
+	reads                  []byte
+	rewriteNextDecimalType bool
+	rewroteDecimalType     bool
 }
 
 func (c *issue25753TraceConn) Read(data []byte) (int, error) {
@@ -48,6 +51,68 @@ func (c *issue25753TraceConn) Read(data []byte) (int, error) {
 		c.mu.Unlock()
 	}
 	return n, err
+}
+
+func (c *issue25753TraceConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	if c.rewriteNextDecimalType {
+		modified := append([]byte(nil), data...)
+		if issue25753RewriteFirstParamAsDecimal(modified) {
+			data = modified
+			c.rewriteNextDecimalType = false
+			c.rewroteDecimalType = true
+		}
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(data)
+}
+
+func (c *issue25753TraceConn) rewriteNextParamAsDecimal() {
+	c.mu.Lock()
+	c.rewriteNextDecimalType = true
+	c.rewroteDecimalType = false
+	c.mu.Unlock()
+}
+
+func (c *issue25753TraceConn) didRewriteParamAsDecimal() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewroteDecimalType
+}
+
+// issue25753RewriteFirstParamAsDecimal keeps the driver's length-encoded value
+// and changes only its COM_STMT_EXECUTE type descriptor. This exercises the
+// same wire shape used by clients that bind a direct DECIMAL parameter, while
+// retaining the driver's real prepare/execute/result decoding path.
+func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		paramCount       = 1
+	)
+
+	for pos := 0; pos+packetHeaderSize <= len(data); {
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + packetHeaderSize + payloadLen
+		if end > len(data) {
+			return false
+		}
+		payload := data[pos+packetHeaderSize : end]
+		const nullBitmapLen = (paramCount + 7) / 8
+		const executeHeaderLen = 1 + 4 + 1 + 4
+		newTypesFlagPos := executeHeaderLen + nullBitmapLen
+		typePos := newTypesFlagPos + 1
+		if len(payload) > typePos+1 &&
+			payload[0] == stmtExecute &&
+			payload[newTypesFlagPos] == 1 &&
+			(payload[typePos] == byte(defines.MYSQL_TYPE_VAR_STRING) ||
+				payload[typePos] == byte(defines.MYSQL_TYPE_STRING)) {
+			payload[typePos] = byte(defines.MYSQL_TYPE_NEWDECIMAL)
+			return true
+		}
+		pos = end
+	}
+	return false
 }
 
 func (c *issue25753TraceConn) prepareStatementID(t *testing.T) uint32 {
@@ -145,6 +210,42 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 					_ = stmt.Close()
 				}
 			}()
+
+			directStmt, err := conn.PrepareContext(ctx, "select ? as result")
+			require.NoError(t, err)
+			defer directStmt.Close()
+
+			assertDirectNumeric := func(value any, databaseType string, scanTarget any) {
+				t.Helper()
+				rows, queryErr := directStmt.QueryContext(ctx, value)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, databaseType, columnTypes[0].DatabaseTypeName())
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(scanTarget))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}
+
+			// A direct numeric placeholder must publish and materialize the same
+			// type. Previously the metadata was BIGINT while the value vector was
+			// VARCHAR, which made binary-row decoding fail in GetInt64.
+			var directInteger int64
+			assertDirectNumeric(int64(-42), "BIGINT", &directInteger)
+			require.Equal(t, int64(-42), directInteger)
+
+			// The Go driver normally sends decimal-looking strings as VAR_STRING;
+			// rewrite only the wire type to exercise a real DECIMAL COM_STMT bind.
+			traceConn.rewriteNextParamAsDecimal()
+			var directDecimal string
+			assertDirectNumeric("-1.5", "DECIMAL", &directDecimal)
+			require.True(t, traceConn.didRewriteParamAsDecimal(),
+				"test did not send a direct MYSQL_TYPE_NEWDECIMAL parameter")
+			require.Equal(t, "-1.5", directDecimal)
 
 			assertValue := func(left, right any, expected string) {
 				t.Helper()
