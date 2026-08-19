@@ -307,7 +307,7 @@ func TestBuildCreateTablePreservesTextCharset(t *testing.T) {
 
 func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	for _, sql := range []string{
-		"create table t(v varchar(8)) collate utf8mb4_0900_ai_ci",
+		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci",
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
 		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
 		"create table t(v varchar(8) collate utf8_unicode_ci)",
@@ -320,6 +320,39 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 			require.ErrorContains(t, err, "unsupported collation")
 		})
 	}
+}
+
+func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
+		create table t_charset_mix (
+			id bigint not null auto_increment,
+			c_utf8mb4_ci varchar(100) character set utf8mb4 collate utf8mb4_0900_ai_ci null,
+			c_utf8mb4_bin varchar(100) character set utf8mb4 collate utf8mb4_bin null,
+			c_utf8mb4_general varchar(100) character set utf8mb4 collate utf8mb4_general_ci null,
+			c_latin1 varchar(100) character set latin1 collate latin1_swedish_ci null,
+			c_ascii varchar(100) character set ascii collate ascii_general_ci null,
+			c_binary varbinary(100) null,
+			primary key (id)
+		) engine=InnoDB default charset=utf8mb4`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	ctx := NewMockCompilerContext(false)
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, uint32(types.CharsetUTF8), tableDef.DefaultCharset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(tableDef.Cols, "c_utf8mb4_bin").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_general").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_latin1").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_ascii").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetBinary), FindColumn(tableDef.Cols, "c_binary").Typ.Charset)
+
+	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.NotContains(t, showSQL, "0900")
+	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
 }
 
 func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {
