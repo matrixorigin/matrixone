@@ -54,6 +54,14 @@ execute pr27011_replace_stmt;
 deallocate prepare pr27011_replace_stmt;
 select * from history_v;
 
+create or replace view history_v as select 22 as a;
+create or replace view history_v as select * from history_v {timestamp = 9223372036854775807};
+select * from history_v;
+create or replace view history_v as select * from history_v {MO_TS = '9223372036854775807-0'};
+select * from history_v;
+create or replace view history_v as select * from history_v {as of timestamp '2262-04-11 23:47:16'};
+select * from history_v;
+
 drop view history_v;
 drop table history_t;
 drop snapshot pr27011_view_history;

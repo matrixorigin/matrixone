@@ -58,6 +58,7 @@ type viewReplacementCompilerContext struct {
 	database           string
 	view               string
 	historicalSnapshot *Snapshot
+	timestampValid     bool
 }
 
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {
@@ -75,7 +76,7 @@ func (c *viewReplacementCompilerContext) ResolveSnapshotWithSnapshotName(string)
 }
 
 func (c *viewReplacementCompilerContext) CheckTimeStampValid(int64) (bool, error) {
-	return true, nil
+	return c.timestampValid, nil
 }
 
 type captureSQLExecutor struct {
@@ -816,6 +817,7 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 }
 
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
+	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
 	newViewDef := func(t *testing.T, sql string) *plan.TableDef {
 		t.Helper()
 		viewData, err := json.Marshal(ViewData{
@@ -833,26 +835,65 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	for _, test := range []struct {
 		name            string
 		sql             string
-		wantErr         bool
+		wantErr         string
 		wantIfNotExists bool
+		timestampValid  bool
 	}{
 		{
 			name:    "direct reference",
 			sql:     "create or replace view v as select n_nationkey from v",
-			wantErr: true,
+			wantErr: "internal error: there is a recursive reference to the view v",
 		},
 		{
 			name:    "indirect reference",
 			sql:     "create or replace view v as select n_nationkey from v2",
-			wantErr: true,
+			wantErr: "internal error: there is a recursive reference to the view v",
 		},
 		{
 			name: "historical snapshot reference",
 			sql:  "create or replace view v as select n_nationkey from v {snapshot = 'sp'}",
 		},
 		{
-			name: "historical timestamp reference",
-			sql:  "create or replace view v as select n_nationkey from v {timestamp = '2020-01-01 00:00:00'}",
+			name:           "historical timestamp reference",
+			sql:            "create or replace view v as select n_nationkey from v {timestamp = '2020-01-01 00:00:00'}",
+			timestampValid: true,
+		},
+		{
+			name: "recent timestamp reference",
+			sql:  fmt.Sprintf("create or replace view v as select n_nationkey from v {timestamp = '%s'}", recentTimestamp),
+		},
+		{
+			name: "historical MO_TS reference",
+			sql:  "create or replace view v as select n_nationkey from v {MO_TS = '1577836800000000000-0'}",
+		},
+		{
+			name: "historical AS OF timestamp reference",
+			sql:  "create or replace view v as select n_nationkey from v {as of timestamp '2020-01-01 00:00:00'}",
+		},
+		{
+			name:    "future integer timestamp",
+			sql:     "create or replace view v as select n_nationkey from v {timestamp = 9223372036854775807}",
+			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807",
+		},
+		{
+			name:    "future MO_TS",
+			sql:     "create or replace view v as select n_nationkey from v {MO_TS = '9223372036854775807-0'}",
+			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807-0",
+		},
+		{
+			name:    "future integer MO_TS",
+			sql:     "create or replace view v as select n_nationkey from v {MO_TS = 9223372036854775807}",
+			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 9223372036854775807",
+		},
+		{
+			name:    "future AS OF timestamp",
+			sql:     "create or replace view v as select n_nationkey from v {as of timestamp '2262-04-11 23:47:16'}",
+			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 2262-04-11 23:47:16",
+		},
+		{
+			name:    "past timestamp without snapshot",
+			sql:     "create or replace view v as select n_nationkey from v {timestamp = '2020-01-01 00:00:00'}",
+			wantErr: "invalid argument invalid timestamp value, no corresponding snapshot , bad value 2020-01-01 00:00:00",
 		},
 		{
 			name:            "if not exists keeps body as no-op",
@@ -874,6 +915,7 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 				historicalSnapshot: &Snapshot{
 					TS: &timestamp.Timestamp{PhysicalTime: 1},
 				},
+				timestampValid: test.timestampValid,
 			}
 
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
@@ -881,8 +923,8 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			defer stmt.Free()
 
 			p, err := BuildPlan(ctx, stmt, false)
-			if test.wantErr {
-				require.EqualError(t, err, "internal error: there is a recursive reference to the view v")
+			if test.wantErr != "" {
+				require.EqualError(t, err, test.wantErr)
 			} else {
 				require.NoError(t, err)
 				createView := p.GetDdl().GetCreateView()
