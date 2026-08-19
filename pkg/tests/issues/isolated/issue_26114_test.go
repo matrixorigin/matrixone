@@ -62,6 +62,114 @@ func execIssue26114SQLMaybe(ctx context.Context, db *sql.DB, statement string) {
 	_, _ = db.ExecContext(ctx, statement)
 }
 
+// StartTestCluster returns after the CN service is listening, while the
+// asynchronous system bootstrap can still be creating the task tables. A
+// CREATE ACCOUNT initializes a complete tenant catalog and competes with that
+// bootstrap for HAKeeper/logtail work. Wait for the bootstrap marker tables
+// before issuing account DDL so this isolated regression exercises branch
+// ownership and quota behavior rather than startup ordering.
+func waitIssue26114Bootstrap(ctx context.Context, db *sql.DB) error {
+	want := map[string]struct{}{
+		"sys_async_task":  {},
+		"sys_cron_task":   {},
+		"sys_daemon_task": {},
+		"sql_task":        {},
+		"sql_task_run":    {},
+	}
+
+	for {
+		rows, err := db.QueryContext(ctx, "show tables from mo_task")
+		if err == nil {
+			err = func() error {
+				defer rows.Close()
+				for rows.Next() {
+					var name string
+					if err := rows.Scan(&name); err != nil {
+						return err
+					}
+					delete(want, strings.ToLower(name))
+				}
+				return rows.Err()
+			}()
+			if err == nil && len(want) == 0 {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func createIssue26114Account(
+	t *testing.T,
+	ctx context.Context,
+	db *sql.DB,
+	accountName string,
+	password string,
+) int32 {
+	t.Helper()
+	accountName = strings.ToLower(accountName)
+	statement := fmt.Sprintf(
+		"create account %s ADMIN_NAME 'root' IDENTIFIED BY '%s'",
+		accountName,
+		password,
+	)
+	lookup := "select account_id from mo_catalog.mo_account where account_name = ? and admin_name = 'root'"
+	var lastErr error
+
+	for attempt := 0; attempt < 12; attempt++ {
+		_, createErr := db.ExecContext(ctx, statement)
+		var accountID int32
+		lookupErr := db.QueryRowContext(ctx, lookup, accountName).Scan(&accountID)
+		if lookupErr == nil {
+			return accountID
+		}
+		lastErr = lookupErr
+		if createErr != nil {
+			lastErr = createErr
+			if !isIssue26114TransientError(createErr) {
+				require.NoErrorf(t, createErr, "create account %s", accountName)
+				return 0
+			}
+		}
+
+		timer := time.NewTimer(time.Duration(attempt+1) * 500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			require.NoError(t, ctx.Err())
+			return 0
+		case <-timer.C:
+		}
+	}
+
+	require.NoErrorf(t, lastErr, "create account %s after retries", accountName)
+	return 0
+}
+
+func isIssue26114TransientError(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, token := range []string{
+		"timeout",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"unexpected eof",
+		"writeto",
+		"already exists",
+		"duplicate",
+	} {
+		if strings.Contains(message, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 	runIssue26114ClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -75,6 +183,7 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 		defer sysDB.Close()
 		sysDB.SetMaxOpenConns(4)
 		execIssue26114SQLRequire(t, ctx, sysDB, "set role moadmin")
+		require.NoError(t, waitIssue26114Bootstrap(ctx, sysDB))
 
 		const (
 			accountName   = "issue_26114_target"
@@ -96,7 +205,7 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 		}()
 
 		execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
-		accountID := testutils.CreateAccount(t, c, accountName, "111")
+		accountID := createIssue26114Account(t, ctx, sysDB, accountName, "111")
 		execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
 		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', 0)", accountID))
@@ -193,6 +302,7 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 		require.NoError(t, err)
 		defer sysDB.Close()
 		execIssue26114SQLRequire(t, ctx, sysDB, "set role moadmin")
+		require.NoError(t, waitIssue26114Bootstrap(ctx, sysDB))
 
 		const (
 			accountName = "issue_26114_legacy_target"
@@ -209,7 +319,7 @@ func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.
 		}()
 
 		execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
-		accountID := testutils.CreateAccount(t, c, accountName, "111")
+		accountID := createIssue26114Account(t, ctx, sysDB, accountName, "111")
 		execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
 		execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
 			"select mo_feature_limit_upsert(%d, 'branch', '', -1)", accountID))

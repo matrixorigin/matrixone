@@ -186,6 +186,10 @@ func mergeableLockTargets(left, right lockTarget) bool {
 		left.refreshTimestampIndexInBatch == right.refreshTimestampIndexInBatch
 }
 
+// getHasNewVersionInRangeFunc returns the configured checker when one is
+// supplied, and otherwise uses the normal lock checker. The callback is
+// optional for lock operators created by the planner; merged targets must not
+// dereference a nil callback while checking each target's relation.
 func (lockOp *LockOp) getHasNewVersionInRangeFunc() hasNewVersionInRangeFunc {
 	if lockOp.ctr.hasNewVersionInRange != nil {
 		return lockOp.ctr.hasNewVersionInRange
@@ -268,10 +272,9 @@ func performLock(
 			continue
 		}
 		group := []int{idx}
-		// A shared target group would be upgraded to a full range lock. The
-		// lock service cannot merge that range when another transaction already
-		// holds a shared range, which is common for concurrent foreign-key
-		// validation. Keep shared targets as independent row locks instead.
+		// Shared targets must remain independent row locks. Combining them into
+		// a full range lock can require lockservice to merge ranges that are
+		// already held by multiple foreign-key validation transactions.
 		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
 			target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
