@@ -11395,6 +11395,87 @@ func TestStringTimeExtractDatetimeSeparatorAndSignedSuffixBoundaries(t *testing.
 	}
 }
 
+func TestStringTimeExtractReviewerOwnershipMatrix(t *testing.T) {
+	// Keep this matrix orthogonal to the broad generated oracle matrix:
+	// each row varies one ownership boundary (field width, one/two trailing
+	// separators, suffix class/width, token termination, or date candidate)
+	// while retaining the neighboring control. The expected values were
+	// captured from MySQL 8.4.10 for HOUR/MINUTE/SECOND string coercion.
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "12:12:12: +", want: "12/12/12"},
+		{input: "12:12:12: + ", want: "0/0/0"},
+		{input: "12:12:12: -", want: "12/12/12"},
+		{input: "12:12:12: - ", want: "0/0/0"},
+		{input: "1:01:01: +", want: "1/1/1"},
+		{input: "1:01:01: + ", want: "1/1/1"},
+		{input: "1:01:01: -", want: "1/1/1"},
+		{input: "1:01:01: - ", want: "1/1/1"},
+		{input: "1:01:01:: +", want: "1/1/1"},
+		{input: "1:01:01:: + ", want: "0/0/0"},
+		{input: "1:01:01:: -", want: "1/1/1"},
+		{input: "1:01:01:: - ", want: "0/0/0"},
+		{input: "12:12:12:: +", want: "0/0/0"},
+		{input: "12:12:12:: + ", want: "0/0/0"},
+		{input: "12:12:12:: -", want: "0/0/0"},
+		{input: "12:12:12:: - ", want: "0/0/0"},
+		{input: "1:1:1: + ", want: "1/1/1"},
+		{input: "1:1:1: - ", want: "1/1/1"},
+		{input: "12:1:1: + ", want: "12/1/1"},
+		{input: "12:1:1: - ", want: "12/1/1"},
+		{input: "01:01:34 +01", want: "NULL"},
+		{input: "01:01:34 +01 ", want: "1/1/34"},
+		{input: "01:01:34 -01", want: "NULL"},
+		{input: "01:01:34 -01 ", want: "1/1/34"},
+		{input: "01:01:34 +123", want: "NULL"},
+		{input: "01:01:34 +123 ", want: "1/1/34"},
+		{input: "01:01:34 -123", want: "NULL"},
+		{input: "01:01:34 -123 ", want: "1/1/34"},
+		{input: "1:01:34: +1", want: "1/1/34"},
+		{input: "1:01:34:: +1", want: "NULL"},
+		{input: "1:1:34:: +1", want: "1/1/34"},
+		{input: "1:01:4:: +1", want: "1/1/4"},
+		{input: "0:00:34:: +1", want: "NULL"},
+		{input: "9:59:59:: +1", want: "NULL"},
+		{input: "1:01:34:: +1 ", want: "1/1/34"},
+		{input: "12:34::56 +1 x", want: "12/34/0"},
+		{input: "1:01:01: abc", want: "0/0/0"},
+		{input: "1:01:01: 000", want: "0/0/0"},
+		{input: "12:12:12: abc", want: "0/0/0"},
+		{input: "12:12:12: 000", want: "0/0/0"},
+		{input: "1:01:01 abc", want: "1/1/1"},
+		{input: "1:01:01 000", want: "1/1/1"},
+		{input: "12:12:12 abc", want: "0/0/0"},
+		{input: "12:12:12 000", want: "0/0/0"},
+		{input: "01:01:01:: +", want: "0/0/0"},
+		{input: "2024-12-20 +", want: "0/0/0"},
+		{input: "2024-12-20 -", want: "0/0/0"},
+		{input: "2024-12-20 :1", want: "1/0/0"},
+		{input: "1-2-3 4:5:6", want: "0/0/1"},
+		{input: "12-2-3 4:5:6", want: "4/5/6"},
+		{input: "123-2-3 4:5:6", want: "4/5/6"},
+		{input: "12345-2-3 4:5:6", want: "NULL"},
+		{input: " 12:12:12: + ", want: "0/0/0"},
+		{input: " 1:01:01: + ", want: "1/1/1"},
+		{input: " 1:01:01: abc", want: "0/0/0"},
+		{input: " 12:34::56 x", want: "12/34/0"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
 func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
 	inputs := []string{
 		"01:01: abc", "1:1: abc", "12:34: 123",
