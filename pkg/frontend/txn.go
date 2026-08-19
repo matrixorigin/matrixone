@@ -685,7 +685,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt),
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
 	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
@@ -1033,16 +1033,18 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 }
 
 // statementConsumesNextTxnIsolation marks semantic transaction admission.
-// SET and PREPARE statements can create an implementation-only frontend
-// transaction for expression evaluation, catalog writes, or compilation; that
-// temporary owner must never consume a NEXT override intended for the next
-// application transaction.
-func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
+// SET statements and autocommit PREPARE statements can create an
+// implementation-only frontend transaction; those temporary owners must never
+// consume a NEXT override intended for the next application transaction. With
+// autocommit disabled, PREPARE owns the user transaction that remains active
+// after the statement, so it must consume the NEXT override consistently with
+// the transaction it creates.
+func statementConsumesNextTxnIsolation(stmt tree.Statement, autoCommit bool) bool {
 	switch stmt.(type) {
 	case *tree.SetVar, *tree.SetTransaction:
 		return false
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
-		return false
+		return !autoCommit
 	default:
 		return true
 	}

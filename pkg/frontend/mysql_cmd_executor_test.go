@@ -872,7 +872,10 @@ func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
 
 				handler := ses.GetTxnHandler()
 				handler.mu.Lock()
-				err = handler.createTxnOpUnsafe(&ExecCtx{reqCtx: ctx, ses: ses, stmt: testCase.stmt})
+				err = handler.createTxnOpUnsafe(&ExecCtx{
+					reqCtx: ctx, ses: ses, stmt: testCase.stmt,
+					txnOpt: FeTxnOption{autoCommit: true},
+				})
 				op := handler.txnOp
 				handler.txnOp = nil
 				handler.mu.Unlock()
@@ -896,6 +899,63 @@ func TestPrepareDoesNotConsumeNextTransactionIsolation(t *testing.T) {
 				require.NoError(t, applicationOp.Rollback(ctx))
 				_, hasNextIsolation = handler.nextTxnIsolationSnapshot()
 				require.False(t, hasNextIsolation)
+			})
+		}
+	})
+}
+
+func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		for _, testCase := range []struct {
+			name string
+			stmt tree.Statement
+		}{
+			{name: "statement", stmt: tree.NewPrepareStmt("s", &tree.Select{})},
+			{name: "string", stmt: tree.NewPrepareString("s_string", "select ?")},
+			{name: "variable", stmt: tree.NewPrepareVar("s_variable", tree.NewVarExpr("sql", false, false, nil))},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				originalTxnClient := getPu("").TxnClient
+				defer func() { getPu("").TxnClient = originalTxnClient }()
+				getPu("").TxnClient = realTxnClient
+
+				handler := ses.GetTxnHandler()
+				handler.setSessionTxnIsolation(txn.TxnIsolation_RC)
+				require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+				execCtx := &ExecCtx{
+					reqCtx: ctx,
+					ses:    ses,
+					stmt:   testCase.stmt,
+					txnOpt: FeTxnOption{
+						autoCommit:            false,
+						activeTxnAtStartKnown: true,
+						activeTxnAtStart:      false,
+					},
+				}
+				t.Cleanup(testCase.stmt.Free)
+
+				handler.mu.Lock()
+				handler.optionBits = OPTION_NOT_AUTOCOMMIT
+				handler.serverStatus = uint32(SERVER_STATUS_IN_TRANS)
+				err := handler.createTxnOpUnsafe(execCtx)
+				handler.mu.Unlock()
+				require.NoError(t, err)
+				require.NoError(t, handler.Commit(execCtx))
+				require.True(t, handler.InActiveTxn())
+				require.Equal(t, txn.TxnIsolation_SI, handler.GetTxn().Txn().Isolation)
+				_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+				require.False(t, hasNextIsolation)
+
+				handler.mu.Lock()
+				op := handler.txnOp
+				handler.txnOp = nil
+				handler.mu.Unlock()
+				require.NoError(t, op.Rollback(ctx))
+				require.False(t, handler.InActiveTxn())
 			})
 		}
 	})
