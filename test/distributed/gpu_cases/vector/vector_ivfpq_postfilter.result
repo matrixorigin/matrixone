@@ -30,14 +30,14 @@ insert into t values
 (20, '[20,20,20,20,20,20,20,20]', 20, 120);
 create index ix using ivfpq on t (v) op_type 'vector_l2_ops' lists=2 m=8 bits_per_code=8 INCLUDE (c_inc);
 show create table t;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,0,0]  ¦  Create Table[12,236,0]  𝄀
 t  ¦  CREATE TABLE `t` (
   `id` bigint NOT NULL,
   `v` vecf32(8) DEFAULT NULL,
   `c_inc` int DEFAULT NULL,
   `c_noinc` int DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `ix` USING ivfpq (`v`) lists = 2  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  INCLUDE (c_inc) 
+  KEY `ix` USING ivfpq (`v`) lists = 2  m = 8  op_type 'vector_l2_ops'  quantization 'float32'  distribution_mode 'single'  bits_per_code = 8  INCLUDE (`c_inc`)
 )
 select id, c_noinc from t order by l2_distance(v, '[12,12,12,12,12,12,12,12]') asc limit 20;
 ➤ id[-5,64,0]  ¦  c_noinc[4,32,0]  𝄀

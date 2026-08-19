@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -94,6 +95,33 @@ func TestAppendCheckpointRollback(t *testing.T) {
 		"the checkpoint predates the explicit provenance assignment")
 	require.False(t, vec.GetGrouping().Contains(2))
 	require.True(t, vec.GetSorted())
+}
+
+func TestAppendCheckpointScratch(t *testing.T) {
+	checkpoints, required, err := AppendCheckpointScratch(nil, 2)
+	require.NoError(t, err)
+	require.Nil(t, checkpoints)
+	require.Positive(t, required)
+
+	storage := make([]byte, required)
+	checkpoints, exact, err := AppendCheckpointScratch(storage, 2)
+	require.NoError(t, err)
+	require.Equal(t, required, exact)
+	require.Len(t, checkpoints, 2)
+
+	checkpoints, required, err = AppendCheckpointScratch(nil, 0)
+	require.NoError(t, err)
+	require.Nil(t, checkpoints)
+	require.Zero(t, required)
+
+	_, _, err = AppendCheckpointScratch(nil, -1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
+	_, _, err = AppendCheckpointScratch(nil, math.MaxInt)
+	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
+
+	unaligned := make([]byte, exact+1)[1:]
+	_, _, err = AppendCheckpointScratch(unaligned, 2)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
 }
 
 func TestCapacityForUntypedNull(t *testing.T) {
@@ -5165,6 +5193,140 @@ func TestPrepareParamKindMetadataBoundaryLifecycle(t *testing.T) {
 	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(vec.Length()))
 }
 
+func TestPreflightSetPrepareParamKindAtPreservesLogicalRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2, 3}, nil, mp))
+	vec.SetPrepareParamKind(PrepareParamInteger)
+
+	require.NoError(t,
+		vec.PreflightSetPrepareParamKindAt(1, PrepareParamFloat, mp))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(2))
+	allocated := mp.CurrNB()
+
+	require.NoError(t,
+		vec.SetPrepareParamKindAtWithMP(1, PrepareParamFloat, mp))
+	require.Equal(t, allocated, mp.CurrNB())
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(2))
+}
+
+func TestPreflightSetPrepareParamKindAtFutureLength(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	require.NoError(t, vec.PreExtend(3, mp))
+	vec.SetPrepareParamKind(PrepareParamInteger)
+
+	require.NoError(t, vec.PreflightSetPrepareParamKindAtLength(
+		2, 3, PrepareParamFloat, mp))
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	allocated := mp.CurrNB()
+
+	vec.SetLength(3)
+	require.NoError(t,
+		vec.SetPrepareParamKindAtWithMP(2, PrepareParamFloat, mp))
+	require.Equal(t, allocated, mp.CurrNB())
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(2))
+}
+
+func TestPreflightSetPrepareParamKindsAtFutureLengthObservesWholeBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.PreExtend(3, mp))
+	vec.SetAllNulls(3)
+	vec.SetLength(0)
+
+	require.NoError(t, vec.PreflightSetPrepareParamKindsAtLength(
+		[]int{0, 1},
+		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat},
+		2,
+		mp,
+	))
+	require.Zero(t, vec.Length())
+	require.NotNil(t, vec.GetPrepareParamKinds())
+	allocated := mp.CurrNB()
+
+	vec.SetLength(2)
+	vec.UnsetNull(0)
+	vec.UnsetNull(1)
+	require.NoError(t, vec.SetPrepareParamKindAtWithMP(0, PrepareParamInteger, mp))
+	require.NoError(t, vec.SetPrepareParamKindAtWithMP(1, PrepareParamFloat, mp))
+	require.Equal(t, allocated, mp.CurrNB())
+	require.Equal(t, PrepareParamInteger, vec.GetPrepareParamKindAt(0))
+	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(1))
+}
+
+func TestPreflightSetPrepareParamKindsKeepsUniformFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, vec.PreExtend(2, mp))
+	before := mp.CurrNB()
+	require.NoError(t, vec.PreflightSetPrepareParamKindsAtLength(
+		[]int{0, 1},
+		[]PrepareParamKind{PrepareParamDecimal, PrepareParamDecimal},
+		2,
+		mp,
+	))
+	require.Equal(t, before, mp.CurrNB())
+	require.Nil(t, vec.GetPrepareParamKinds())
+}
+
+func TestNullWinnerPreservesPreflightedPrepareParamCapacity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixed(vec, int64(1), false, mp))
+	vec.SetPrepareParamKind(PrepareParamInteger)
+	require.NoError(t, vec.PreflightSetPrepareParamKindsAtLength(
+		[]int{0, 0},
+		[]PrepareParamKind{PrepareParamFloat, PrepareParamDecimal},
+		1,
+		mp,
+	))
+	require.NotNil(t, vec.GetPrepareParamKinds())
+	admitted := mp.CurrNB()
+
+	vec.SetNullPreservingPrepareParamCapacity(0)
+	vec.UnsetNull(0)
+	require.NoError(t,
+		vec.SetPrepareParamKindAtWithMP(0, PrepareParamFloat, mp))
+	require.NoError(t,
+		vec.SetPrepareParamKindAtWithMP(0, PrepareParamDecimal, mp))
+	require.Equal(t, admitted, mp.CurrNB())
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+
+	vec.NormalizePrepareParamKinds()
+	require.Nil(t, vec.GetPrepareParamKinds())
+	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(0))
+	require.Less(t, mp.CurrNB(), admitted)
+}
+
 func TestAppendPrepareParamKindsContinueAfterDivergence(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())
@@ -5532,6 +5694,90 @@ func TestPrepareParamKindWindowRetainsSidecarOnlyForDivergence(t *testing.T) {
 	require.Equal(t, PrepareParamInteger, mixed.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamDecimal, mixed.GetPrepareParamKindAt(2))
 	mixed.Free(mp)
+}
+
+func TestSelectedBatchPreflightProtocol(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_varchar.ToType())
+	destination := NewVec(types.T_varchar.ToType())
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	for _, value := range []string{
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 80),
+		strings.Repeat("c", 96),
+	} {
+		require.NoError(t, AppendBytes(source, []byte(value), false, mp))
+	}
+	flags := []uint8{1, 0, 1}
+	require.ErrorIs(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		mpool.ErrAllocationAccountInvariant)
+
+	require.NoError(t, destination.PreExtendSelectedBatch(
+		source, 0, len(flags), flags, 2, mp))
+	admitted := mp.CurrNB()
+	require.NoError(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp))
+	require.Equal(t, admitted, mp.CurrNB(),
+		"publication must use only capacity admitted by preflight")
+	require.Equal(t, 2, destination.Length())
+	require.Equal(t, source.GetBytesAt(0), destination.GetBytesAt(0))
+	require.Equal(t, source.GetBytesAt(2), destination.GetBytesAt(1))
+	require.ErrorIs(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		mpool.ErrAllocationAccountInvariant,
+		"the proof is consumed exactly once")
+
+	destination.ResetWithSameType()
+	require.NoError(t, destination.PreExtendSelectedBatch(
+		source, 0, len(flags), flags, 2, mp))
+	destination.CancelSelectedBatchPreflight()
+	require.ErrorIs(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		mpool.ErrAllocationAccountInvariant)
+
+	require.ErrorIs(t, destination.PreExtendSelectedBatch(
+		source, 0, len(flags), []uint8{1, 2, 0}, 2, mp),
+		mpool.ErrAllocationAccountInvalid)
+	require.ErrorIs(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp),
+		mpool.ErrAllocationAccountInvariant,
+		"a failed preflight must not leave a publishable proof")
+
+	destination.ResetWithSameType()
+	require.NoError(t, destination.PreExtendSelectedBatchValidated(
+		source, 0, len(flags), flags, 2, mp))
+	require.NoError(t,
+		destination.UnionBatchPreflighted(source, 0, len(flags), flags, mp))
+	require.Equal(t, 2, destination.Length())
+
+	constant, err := NewConstBytes(
+		types.T_varchar.ToType(), []byte(strings.Repeat("constant", 8)),
+		len(flags)+4, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	destination.ResetWithSameType()
+	require.NoError(t, destination.PreExtendSelectedBatchValidated(
+		constant, 2, len(flags), flags, 2, mp))
+	require.NoError(t,
+		destination.UnionBatchPreflighted(constant, 2, len(flags), flags, mp))
+	require.Equal(t, 2, destination.Length())
+	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(0))
+	require.Equal(t, constant.GetBytesAt(0), destination.GetBytesAt(1))
+
+	require.ErrorIs(t, destination.PreExtendSelectedBatch(
+		destination, 0, 2, []uint8{1, 0}, 3, mp),
+		mpool.ErrAllocationAccountInvalid,
+		"a preflight proof cannot retain an aliased source for publication")
+	require.ErrorIs(t, destination.UnionBatchPreflighted(
+		destination, 0, 2, []uint8{1, 0}, mp),
+		mpool.ErrAllocationAccountInvariant,
+		"a rejected aliased preflight must not leave a publishable proof")
 }
 
 func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {

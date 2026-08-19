@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -134,7 +133,7 @@ func TestTakeSpillBuildPayloadRejectsWrongBudgetRef(t *testing.T) {
 func TestTakeSpillBuildPayloadRejectsGlobalRowMismatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	fd, err := os.CreateTemp(t.TempDir(), "payload-row-mismatch")
@@ -191,13 +190,13 @@ func TestClassifyRowsConservesRows(t *testing.T) {
 		make([]int32, 1),
 		make([]int32, SpillNumBuckets*2),
 		make([]int32, SpillNumBuckets*2+1),
-	), process.ErrHashBuildBudgetInvalid)
+	), process.ErrExecutionResourceInvalid)
 }
 
 func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	budget := process.MustNewHashBuildBudget(8<<20, 8<<20)
+	budget := process.MustNewExecutionResourceBudget(8<<20, 8<<20)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 
@@ -217,7 +216,7 @@ func TestAccountedBucketReaderRoundTripAndCorruption(t *testing.T) {
 	require.NoError(t, err)
 	allocation, err := NewSpillAllocationAccount(
 		account,
-		hashbuild.HashBuildAllocationOwner,
+		mpool.AllocationOwnerHashBuild,
 	)
 	require.NoError(t, err)
 	reader := &BucketReader{

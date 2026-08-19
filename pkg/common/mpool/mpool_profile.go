@@ -48,7 +48,7 @@ var globalProfileShards [numProfileShards]profileShard
 // Accounted allocations already carry stable, bounded provenance. Reusing one
 // synthetic sample per owner/site avoids collecting and hashing the same
 // runtime stack for every vector growth in a hash build.
-var accountedProfileSamples [AllocationOwnerMax + 1][256]atomic.Pointer[malloc.HeapSampleValues]
+var accountedProfileSamples [AllocationOwnerCatalogMax + 1][256]atomic.Pointer[malloc.HeapSampleValues]
 
 func init() {
 	for i := range globalProfileShards {
@@ -114,7 +114,8 @@ func accountedProfileSample(
 		return values
 	}
 	values := malloc.GlobalProfiler().SampleNamed(fmt.Sprintf(
-		"| mpool accounted owner=%d site=%d |",
+		"| mpool accounted owner=%s(%d) site=%d |",
+		owner,
 		owner,
 		site,
 	))

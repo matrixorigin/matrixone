@@ -137,7 +137,7 @@ func TestRecoveryProjectionRejectsMissingPhysicalRows(t *testing.T) {
 			source.SetRowCount(test.rows)
 
 			_, err := projectedSelectedRange(source, 0, test.rows)
-			require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+			require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 
 			source.Clean(mp)
 			require.Zero(t, mp.CurrNB())

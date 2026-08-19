@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTransferPage(t *testing.T) {
+	ctx := context.Background()
 	sid := objectio.NewSegmentid()
 	src := common.ID{
 		BlockID: *objectio.NewBlockid(sid, 1, 0),
@@ -37,8 +39,9 @@ func TestTransferPage(t *testing.T) {
 	}
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
-	assert.NoError(t, err)
+	tmpFS, err := fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
 	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
@@ -57,8 +60,9 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	tmpFS, err = fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
-	assert.NoError(t, err)
+	tmpFS, err = fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
 	memo2 := NewTransferHashPage(&src, now, false, tmpFS, ttl, diskTTL, createdObjs)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
@@ -94,8 +98,9 @@ func TestTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
-	assert.NoError(t, err)
+	tmpFS, err := fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
 	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
 	transferMap := make(api.TransferMap, 10)
 	for i := 0; i < 10; i++ {
@@ -119,7 +124,9 @@ func TestTransferTable(t *testing.T) {
 
 	table.RunTTL()
 	assert.Equal(t, 1, table.Len())
-	time.Sleep(2 * time.Second)
+	// Advance the page's logical age instead of making the test depend on wall
+	// clock scheduling. The first RunTTL above still covers the unexpired path.
+	page1.SetBornTS(time.Now().Add(-page1.diskTTL - time.Second))
 	table.RunTTL()
 	assert.Equal(t, 0, table.Len())
 
@@ -129,14 +136,16 @@ func TestTransferTable(t *testing.T) {
 }
 
 func TestTransferPageTrainDetachedOwnsCopy(t *testing.T) {
+	ctx := context.Background()
 	sid := objectio.NewSegmentid()
 	src := common.ID{
 		BlockID: *objectio.NewBlockid(sid, 1, 0),
 	}
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
-	assert.NoError(t, err)
+	tmpFS, err := fileservice.NewTmpFileService("tmp", t.TempDir(), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+	defer tmpFS.Close(ctx)
 
 	page := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	defer page.Close()

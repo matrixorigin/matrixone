@@ -15,8 +15,6 @@
 package mergeorder
 
 import (
-	"bufio"
-	"bytes"
 	"io"
 	"os"
 
@@ -29,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,7 +37,6 @@ import (
 const maxBatchSizeToSend = 64 * mpool.MB
 const defaultCacheBatchSize = 16
 const spillMergeFanIn = 32
-const spillIOBufferSize = 4 * 1024 * 1024
 const spillMagic = 0x12345678DEADBEEF
 const spillAppendDisableThreshold = int64(16 * common.MiB)
 const spillAppendTargetMin = int64(32 * common.MiB)
@@ -48,7 +47,15 @@ const maxDrainChunkRows = 256
 const maxVarlenDrainChunkRows = 32
 const maxWinnerChunkRows = 64
 
+// Bound resident batch/index metadata to two external-merge fan-in levels.
+const maxResidentBatches = spillMergeFanIn * spillMergeFanIn
+
 var _ vm.Operator = new(MergeOrder)
+
+var _ interface {
+	SetAllocationAccount(*mpool.AllocationAccount) error
+	ClearAllocationAccount(*mpool.AllocationAccount) error
+} = new(MergeOrder)
 
 const (
 	receiving = iota
@@ -114,6 +121,13 @@ type container struct {
 
 	buf *batch.Batch
 
+	allocationAccount    *mpool.AllocationAccount
+	retainedAllocation   *vector.AllocationAccountSelection
+	expressionAllocation *vector.AllocationAccountSelection
+	outputAllocation     *vector.AllocationAccountSelection
+	spillAllocation      *spillutil.SpillAllocationAccount
+	budget               *process.ExecutionResourceGeneration
+
 	inMemoryHeap    *inMemoryMergeHeap
 	inMemoryHeapPos []int
 
@@ -127,26 +141,40 @@ type container struct {
 	spillColPos        []int32
 	spillRuns          []*spillRun
 	spillReaders       []*spillRunReader
-	spillWriteBuf      bytes.Buffer
 	spillActiveRun     *spillRun
-	spillActiveWriter  *bufio.Writer
+	spillActiveWriter  spillWriteFlusher
 	spillActiveBytes   int64
 	spillAppendEnabled bool
 	spillAppendTarget  int64
 	spillTailCols      []*vector.Vector
 	spillTailReady     bool
-	spillIncomingCols  []*vector.Vector
 }
 
 type spillRun struct {
 	file       *os.File
 	rowCount   int64
 	batchCount int
+	fdToken    *process.ExecutionSpillFDReservation
+	diskToken  *process.ExecutionSpillDiskReservation
+}
+
+type spillWriteFlusher interface {
+	io.Writer
+	Flush() error
+	Free()
+}
+
+type spillReader interface {
+	io.Reader
+	Buffered() int
+	Free()
 }
 
 type spillRunReader struct {
 	file        *os.File
-	reader      *bufio.Reader
+	reader      spillReader
+	fdToken     *process.ExecutionSpillFDReservation
+	diskToken   *process.ExecutionSpillDiskReservation
 	batch       *batch.Batch
 	keyBatch    *batch.Batch
 	orderCols   []*vector.Vector
@@ -160,6 +188,8 @@ type spillRunReader struct {
 func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	mergeOrder.cleanBatchAndCol(proc)
 	ctr := &mergeOrder.ctr
+	clear(ctr.batchList)
+	clear(ctr.orderCols)
 	ctr.batchList = ctr.batchList[:0]
 	ctr.orderCols = ctr.orderCols[:0]
 	ctr.indexList = nil
@@ -170,19 +200,27 @@ func (mergeOrder *MergeOrder) Reset(proc *process.Process, pipelineFailed bool, 
 
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {
-			ctr.executors[i].ResetForNextQuery()
+			if ctr.allocationAccount != nil {
+				ctr.executors[i].Free()
+				ctr.executors[i] = nil
+			} else {
+				ctr.executors[i].ResetForNextQuery()
+			}
 		}
+	}
+	if ctr.allocationAccount != nil {
+		ctr.executors = nil
 	}
 	if ctr.buf != nil {
 		if ctr.buf.HasAllocationAccount() {
-			// The final merge batch may directly own a child execution's result.
-			// Accounted storage cannot survive that execution's Reset boundary.
+			// Accounted output cannot survive its statement-attempt boundary.
 			ctr.buf.Clean(proc.Mp())
 			ctr.buf = nil
 		} else {
 			ctr.buf.CleanOnlyData()
 		}
 	}
+	ctr.budget = nil
 }
 
 func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -190,6 +228,7 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 	ctr := &mergeOrder.ctr
 	ctr.batchList = nil
 	ctr.orderCols = nil
+	ctr.indexList = nil
 	ctr.inMemoryHeap = nil
 	ctr.inMemoryHeapPos = nil
 	ctr.cleanupSpill(proc)
@@ -204,7 +243,114 @@ func (mergeOrder *MergeOrder) Free(proc *process.Process, pipelineFailed bool, e
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
 	}
+	ctr.budget = nil
+}
 
+func (mergeOrder *MergeOrder) SetAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if mergeOrder == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return mergeOrder.ctr.setAllocationAccount(account)
+}
+
+func (mergeOrder *MergeOrder) ClearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if mergeOrder == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	return mergeOrder.ctr.clearAllocationAccount(account)
+}
+
+func (ctr *container) setAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || account == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if ctr.allocationAccount != nil {
+		if ctr.allocationAccount == account {
+			return nil
+		}
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(ctr.batchList) != 0 || len(ctr.executors) != 0 || ctr.buf != nil ||
+		ctr.spillActiveRun != nil || len(ctr.spillRuns) != 0 ||
+		len(ctr.spillReaders) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	retained, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerOrder,
+		ordersites.MergeOrderRetainedData,
+		ordersites.MergeOrderRetainedArea,
+		ordersites.MergeOrderRetainedNulls,
+		ordersites.MergeOrderRetainedGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	expression, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerOrder,
+		ordersites.MergeOrderExpressionData,
+		ordersites.MergeOrderExpressionArea,
+		ordersites.MergeOrderExpressionNulls,
+		ordersites.MergeOrderExpressionGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	output, err := vector.NewAllocationAccountSelection(
+		account,
+		mpool.AllocationOwnerOrder,
+		ordersites.MergeOrderOutputData,
+		ordersites.MergeOrderOutputArea,
+		ordersites.MergeOrderOutputNulls,
+		ordersites.MergeOrderOutputGrouping,
+	)
+	if err != nil {
+		return err
+	}
+	spill, err := spillutil.NewSpillAllocationAccount(
+		account,
+		mpool.AllocationOwnerOrder,
+	)
+	if err != nil {
+		return err
+	}
+	ctr.allocationAccount = account
+	ctr.retainedAllocation = retained
+	ctr.expressionAllocation = expression
+	ctr.outputAllocation = output
+	ctr.spillAllocation = spill
+	return nil
+}
+
+func (ctr *container) clearAllocationAccount(
+	account *mpool.AllocationAccount,
+) error {
+	if ctr == nil || ctr.allocationAccount == nil {
+		return nil
+	}
+	if ctr.allocationAccount != account {
+		return mpool.ErrAllocationAccountMismatch
+	}
+	if len(ctr.batchList) != 0 || len(ctr.orderCols) != 0 ||
+		len(ctr.executors) != 0 || ctr.buf != nil || ctr.spillActiveRun != nil ||
+		len(ctr.spillRuns) != 0 || len(ctr.spillReaders) != 0 ||
+		ctr.spillActiveWriter != nil || len(ctr.spillTailCols) != 0 {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	ctr.allocationAccount = nil
+	ctr.retainedAllocation = nil
+	ctr.expressionAllocation = nil
+	ctr.outputAllocation = nil
+	ctr.spillAllocation = nil
+	ctr.budget = nil
+	return nil
 }
 
 func (mergeOrder *MergeOrder) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -227,21 +373,16 @@ func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 func (ctr *container) cleanupSpill(proc *process.Process) {
 	// An active run has not been committed to spillRuns yet. Cleanup discards
 	// it, so flushing would only perform useless I/O after cancellation/error.
-	ctr.spillActiveWriter = nil
-	if ctr.spillActiveRun != nil && ctr.spillActiveRun.file != nil {
-		ctr.spillActiveRun.file.Close()
-		ctr.spillActiveRun.file = nil
+	if ctr.spillActiveWriter != nil {
+		ctr.spillActiveWriter.Free()
+		ctr.spillActiveWriter = nil
+	}
+	if ctr.spillActiveRun != nil {
+		ctr.spillActiveRun.close()
 	}
 	ctr.spillActiveRun = nil
 	ctr.spillActiveBytes = 0
-	ctr.spillTailReady = false
-	for i := range ctr.spillTailCols {
-		if ctr.spillTailCols[i] != nil {
-			ctr.spillTailCols[i].Free(proc.Mp())
-		}
-	}
-	ctr.spillTailCols = nil
-	ctr.spillIncomingCols = nil
+	ctr.clearSpillTailColumns(proc.Mp())
 	for i := range ctr.spillReaders {
 		ctr.spillReaders[i].close(proc)
 	}
@@ -250,15 +391,34 @@ func (ctr *container) cleanupSpill(proc *process.Process) {
 	ctr.spillRuns = nil
 	ctr.spilling = false
 	ctr.spillMemUsage = 0
-	ctr.spillWriteBuf.Reset()
+	ctr.spillFS = nil
+	clear(ctr.spillKeyCols)
+	ctr.spillKeyCols = nil
 }
 
 func closeSpillRuns(runs []*spillRun) {
 	for i := range runs {
-		if runs[i] != nil && runs[i].file != nil {
-			runs[i].file.Close()
-			runs[i].file = nil
+		if runs[i] != nil {
+			runs[i].close()
 		}
+	}
+}
+
+func (r *spillRun) close() {
+	if r == nil {
+		return
+	}
+	if r.file != nil {
+		_ = r.file.Close()
+		r.file = nil
+	}
+	if r.diskToken != nil {
+		r.diskToken.Release()
+		r.diskToken = nil
+	}
+	if r.fdToken != nil {
+		r.fdToken.Release()
+		r.fdToken = nil
 	}
 }
 
@@ -342,6 +502,17 @@ func (r *spillRunReader) close(proc *process.Process) {
 		r.file.Close()
 		r.file = nil
 	}
+	if r.reader != nil {
+		r.reader.Free()
+	}
+	if r.diskToken != nil {
+		r.diskToken.Release()
+		r.diskToken = nil
+	}
+	if r.fdToken != nil {
+		r.fdToken.Release()
+		r.fdToken = nil
+	}
 	r.reader = nil
 	r.rowIdx = 0
 	r.heapIdx = -1
@@ -350,14 +521,26 @@ func (r *spillRunReader) close(proc *process.Process) {
 	r.avgRowBytes = 0
 }
 
-func (r *spillRunReader) reset(file *os.File) {
+func (r *spillRunReader) reset(
+	proc *process.Process,
+	ctr *container,
+	file *os.File,
+) error {
+	if r.reader != nil {
+		r.reader.Free()
+	}
 	r.file = file
 	r.rowIdx = 0
-	if r.reader == nil {
-		r.reader = bufio.NewReaderSize(file, spillIOBufferSize)
-	} else {
-		r.reader.Reset(file)
+	reader, err := spillutil.NewAccountedFileReader(
+		proc.Mp(),
+		ctr.spillAllocation,
+		file,
+	)
+	if err != nil {
+		return err
 	}
+	r.reader = reader
+	return nil
 }
 
 func (r *spillRunReader) refreshDrainProfile() {
@@ -403,9 +586,19 @@ func (r *spillRunReader) readNextBatch(proc *process.Process, ctr *container) (b
 	}
 	if r.batch == nil {
 		r.batch = batch.NewOffHeapWithSize(0)
+		if ctr.spillAllocation != nil {
+			if err := ctr.spillAllocation.ConfigureDecodedBatch(r.batch); err != nil {
+				return false, err
+			}
+		}
 	}
 	if r.keyBatch == nil {
 		r.keyBatch = batch.NewOffHeapWithSize(0)
+		if ctr.spillAllocation != nil {
+			if err := ctr.spillAllocation.ConfigureDecodedBatch(r.keyBatch); err != nil {
+				return false, err
+			}
+		}
 	}
 
 	bat, keyBatch, err := readSpillBatches(proc, r.reader, r.batch, r.keyBatch)

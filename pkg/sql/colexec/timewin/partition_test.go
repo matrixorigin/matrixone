@@ -15,6 +15,8 @@
 package timewin
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -51,6 +53,133 @@ func mustDatetime(t *testing.T, s string) types.Datetime {
 	return d
 }
 
+func mustDatetimeScale(t *testing.T, s string, scale int32) types.Datetime {
+	t.Helper()
+	d, err := types.ParseDatetime(s, scale)
+	require.NoError(t, err)
+	return d
+}
+
+func datetimeBound(t testing.TB, s string) *plan.Expr {
+	t.Helper()
+	d, err := types.ParseDatetime(s, 6)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Datetimeval{Datetimeval: int64(d)},
+		}},
+	}
+}
+
+func timestampBound(t testing.TB, loc *time.Location, s string) *plan.Expr {
+	t.Helper()
+	ts, err := types.ParseTimestamp(loc, s, 6)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Timestampval{Timestampval: int64(ts)},
+		}},
+	}
+}
+
+func dateBound(t testing.TB, s string) *plan.Expr {
+	t.Helper()
+	d, err := types.ParseDateCast(s)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_date)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Dateval{Dateval: int32(d)},
+		}},
+	}
+}
+
+func timeBound(t testing.TB, s string) *plan.Expr {
+	t.Helper()
+	value, err := types.ParseTime(s, 6)
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_time), Scale: 6},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Timeval{Timeval: int64(value)},
+		}},
+	}
+}
+
+func yearBound(t testing.TB, year string) *plan.Expr {
+	t.Helper()
+	from := types.T_varchar.ToType()
+	to := types.T_year.ToType()
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_year)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_varchar)},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{Sval: year},
+					}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_year)},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		}},
+	}
+}
+
+func castTemporalBoundToDatetime(t testing.TB, expr *plan.Expr) *plan.Expr {
+	t.Helper()
+	from := types.NewWithCharset(
+		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+	to := types.T_datetime.ToTypeWithScale(6)
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				expr,
+				{
+					Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		}},
+	}
+}
+
+func preparedDatetimeBound(t testing.TB, pos int32) *plan.Expr {
+	t.Helper()
+	from := types.T_text.ToType()
+	to := types.T_datetime.ToTypeWithScale(6)
+	cast, err := function.GetFunctionByName(context.Background(), "cast", []types.Type{from, to})
+	require.NoError(t, err)
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: cast.GetEncodedOverloadID(), ObjName: "cast"},
+			Args: []*plan.Expr{
+				{
+					Typ:  plan.Type{Id: int32(types.T_text)},
+					Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+				},
+				{
+					Typ:  plan.Type{Id: int32(types.T_datetime), Scale: 6},
+					Expr: &plan.Expr_T{T: &plan.TargetType{}},
+				},
+			},
+		}},
+	}
+}
+
 // makePartInput builds a batch shaped (ts datetime, val int32, part int64).
 func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 	t.Helper()
@@ -71,7 +200,7 @@ func makePartInput(t *testing.T, mp *mpool.MPool, rows []row) *batch.Batch {
 	return bat
 }
 
-func newPartArg(t *testing.T, proc *process.Process, sliding types.Datetime, withPartition bool) *TimeWin {
+func newPartArg(t testing.TB, proc *process.Process, sliding types.Datetime, withPartition bool) *TimeWin {
 	t.Helper()
 	arg := &TimeWin{
 		WStart: true,
@@ -91,6 +220,20 @@ func newPartArg(t *testing.T, proc *process.Process, sliding types.Datetime, wit
 		partExpr.Typ = plan.Type{Id: int32(types.T_int64)}
 		arg.PartitionBy = []*plan.Expr{partExpr}
 	}
+	return arg
+}
+
+func newBoundedPartArg(
+	t testing.TB,
+	proc *process.Process,
+	start, finish string,
+	withPartition bool,
+) *TimeWin {
+	t.Helper()
+	arg := newPartArg(t, proc, makeInterval(), withPartition)
+	arg.GapFill = true
+	arg.GapFillStart = datetimeBound(t, start)
+	arg.GapFillEnd = datetimeBound(t, finish)
 	return arg
 }
 
@@ -205,7 +348,7 @@ func TestTimeWinBroadcastsPreparedPartitionKind(t *testing.T) {
 
 // runPartArg drives the operator to exhaustion and returns (wstart, max, part)
 // per output row.
-func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
+func runPartArg(t testing.TB, arg *TimeWin, proc *process.Process, in *batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
 	t.Helper()
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
 	arg.Children = nil
@@ -247,6 +390,42 @@ func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Bat
 	return
 }
 
+func runTemporalBoundArg(t testing.TB, arg *TimeWin, proc *process.Process, inputs ...*batch.Batch) (starts []types.Datetime, sums []int64) {
+	t.Helper()
+	arg.Children = nil
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+	require.NoError(t, arg.Prepare(proc))
+
+	for {
+		res, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if res.Batch == nil {
+			break
+		}
+		n := res.Batch.Vecs[0].Length()
+		sums = append(sums, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[0])[:n]...)
+		startVec := res.Batch.Vecs[1]
+		switch startVec.GetType().Oid {
+		case types.T_date:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Date](startVec)[:n] {
+				starts = append(starts, value.ToDatetime())
+			}
+		case types.T_datetime:
+			starts = append(starts, vector.MustFixedColNoTypeCheck[types.Datetime](startVec)[:n]...)
+		case types.T_timestamp:
+			for _, value := range vector.MustFixedColNoTypeCheck[types.Timestamp](startVec)[:n] {
+				starts = append(starts, value.ToDatetime(proc.GetSessionInfo().TimeZone))
+			}
+		default:
+			t.Fatalf("unexpected bounded time-window output type %s", startVec.GetType().Oid)
+		}
+		if res.Status == vm.ExecStop {
+			break
+		}
+	}
+	return
+}
+
 func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sliding, err := calcDatetime(5, types.Second)
@@ -264,6 +443,151 @@ func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinSlidingMicrosecondWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	interval, err := calcDatetime(1000, types.MicroSecond)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(500, types.MicroSecond)
+	require.NoError(t, err)
+
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000100", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000900", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001100", 6),
+	}, nil, proc.Mp()))
+	in.SetRowCount(3)
+
+	arg := newPartArg(t, proc, sliding, false)
+	arg.Interval = interval
+	arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+
+	require.Equal(t, []types.Datetime{
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000000", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.000500", 6),
+		mustDatetimeScale(t, "2026-08-12 10:00:00.001000", 6),
+	}, starts)
+	require.Equal(t, []int64{30, 50, 30}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillZeroTemporalLiteralFallsBackToObservedRange(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	arg := newBoundedPartArg(
+		t, proc,
+		"0000-00-00 00:00:00", "0001-01-01 00:00:05",
+		false,
+	)
+
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+	require.False(t, arg.ctr.boundedGapFill)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinMicrosecondBoundariesPreservePrecisionAcrossInputScales(t *testing.T) {
+	for _, scale := range []int32{0, 3, 6} {
+		t.Run(types.T_datetime.ToTypeWithScale(scale).String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			oneMicrosecond, err := calcDatetime(1, types.MicroSecond)
+			require.NoError(t, err)
+
+			in := batch.New([]string{"ts", "val"})
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(scale))
+			in.Vecs[1] = testutil.MakeInt32Vector([]int32{10}, nil, proc.Mp())
+			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+				mustDatetimeScale(t, "2026-08-12 10:00:00", scale),
+			}, nil, proc.Mp()))
+			in.SetRowCount(1)
+
+			arg := newPartArg(t, proc, oneMicrosecond, false)
+			arg.WEnd = true
+			arg.Interval = oneMicrosecond
+			arg.TsType = plan.Type{Id: int32(types.T_datetime), Scale: 6}
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{in})
+			arg.Children = nil
+			arg.AppendChild(op)
+			require.NoError(t, arg.Prepare(proc))
+
+			res, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, res.Batch)
+			require.GreaterOrEqual(t, len(res.Batch.Vecs), 3)
+
+			startVec := res.Batch.Vecs[1]
+			endVec := res.Batch.Vecs[2]
+			require.Equal(t, int32(6), startVec.GetType().Scale)
+			require.Equal(t, int32(6), endVec.GetType().Scale)
+			start := vector.MustFixedColNoTypeCheck[types.Datetime](startVec)[0]
+			end := vector.MustFixedColNoTypeCheck[types.Datetime](endVec)[0]
+			require.Equal(t, types.Datetime(1), end-start)
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedGapFillPreparedZeroFallbackReevaluatesAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("0000-00-00 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	arg := newBoundedPartArg(
+		t, proc,
+		"0000-00-00 00:00:00", "0001-01-01 00:00:05",
+		false,
+	)
+	arg.GapFillStart = preparedDatetimeBound(t, 0)
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+	require.False(t, arg.ctr.boundedGapFill)
+
+	arg.Reset(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("0001-01-01 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	starts, sums, _ = runPartArgBats(t, arg, proc, nil)
+	require.Equal(t, []types.Datetime{types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{0}, sums)
+	require.True(t, arg.ctr.boundedGapFill)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -384,16 +708,489 @@ func TestGapFillGeneratesOnlyInteriorBuckets(t *testing.T) {
 	}
 }
 
+func TestBoundedGapFillCoversLeadingAndTrailingBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), []row{
+		{"2023-08-01 00:00:10", 20, 0},
+		{"2023-08-01 00:00:20", 40, 0},
+	})
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:30",
+		false,
+	)
+
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	wantStarts := make([]types.Datetime, 6)
+	for i := range wantStarts {
+		wantStarts[i] = mustDatetime(t, "2023-08-01 00:00:00") + types.Datetime(i)*makeInterval()
+	}
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, []int64{0, 0, 20, 0, 40, 0}, sums)
+	for row, wantNull := range []bool{true, true, false, true, false, true} {
+		require.Equal(t, wantNull, arg.ctr.bat.Vecs[0].IsNull(uint64(row)))
+	}
+	require.Equal(t, int64(6), arg.ctr.partitionWindows)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillPreservesSlidingWindowOverlap(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), []row{
+		{"2023-08-01 00:00:07", 10, 0},
+	})
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:20",
+		false,
+	)
+	arg.Interval = 10 * types.Datetime(types.MicroSecsPerSec)
+	arg.Sliding = 5 * types.Datetime(types.MicroSecsPerSec)
+
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+		mustDatetime(t, "2023-08-01 00:00:15"),
+	}, starts)
+	require.Equal(t, []int64{10, 10, 0, 0}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillSlidingReplaysAllBoundaryTiesAcrossBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := []row{
+		{"2023-08-01 00:00:03", 6, 0},
+		{"2023-08-01 00:00:07", 4, 0},
+		{"2023-08-01 00:00:08", 6, 0},
+		{"2023-08-01 00:00:12", 7, 0},
+		{"2023-08-01 00:00:12", 1, 0},
+		{"2023-08-01 00:00:12", 1, 0},
+		{"2023-08-01 00:00:12", 4, 0},
+		{"2023-08-01 00:00:14", 7, 0},
+	}
+	bats := []*batch.Batch{
+		makePartInput(t, proc.Mp(), rows[:5]),
+		makePartInput(t, proc.Mp(), rows[5:]),
+	}
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:03", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.Interval = 4 * types.Datetime(types.MicroSecsPerSec)
+	arg.Sliding = 3 * types.Datetime(types.MicroSecsPerSec)
+
+	starts, sums, _ := runPartArgBats(t, arg, proc, bats)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:03"),
+		mustDatetime(t, "2023-08-01 00:00:06"),
+		mustDatetime(t, "2023-08-01 00:00:09"),
+		mustDatetime(t, "2023-08-01 00:00:12"),
+	}, starts)
+	require.Equal(t, []int64{6, 6, 10, 13, 20}, sums)
+
+	arg.Free(proc, false, nil)
+	for _, bat := range bats {
+		bat.Clean(proc.Mp())
+	}
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone := time.FixedZone("UTC+08", 8*60*60)
+	proc.GetSessionInfo().TimeZone = zone
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.GapFillStart = timestampBound(t, zone, "2023-08-01 00:00:00")
+	arg.GapFillEnd = timestampBound(t, zone, "2023-08-01 00:00:15")
+	arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+
+	// The planner feeds TimeWin DATETIME keys produced by mo_win_truncate. For a
+	// TIMESTAMP source these carry the raw instant microseconds, not local wall
+	// clock microseconds. Include an observed row to ensure inferred bounds use
+	// that same coordinate instead of merely producing correctly labelled gaps.
+	observed, err := types.ParseTimestamp(zone, "2023-08-01 00:00:05", 6)
+	require.NoError(t, err)
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Datetime(observed), false, proc.Mp()))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	in.SetRowCount(1)
+
+	starts, sums := runTemporalBoundArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+	}, starts)
+	require.Equal(t, []int64{0, 7, 0}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newBoundedPartArg(
+		t, proc,
+		"1992-01-01 00:00:00", "1992-01-03 00:00:00",
+		false,
+	)
+	arg.GapFillStart = dateBound(t, "1992-01-01")
+	arg.GapFillEnd = dateBound(t, "1992-01-03")
+	day := types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+	arg.Interval = day
+	arg.Sliding = day
+	arg.TsType = plan.Type{Id: int32(types.T_date)}
+
+	starts, sums := runTemporalBoundArg(t, arg, proc)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "1992-01-01 00:00:00"),
+		mustDatetime(t, "1992-01-02 00:00:00"),
+	}, starts)
+	require.Equal(t, []int64{0, 0}, sums)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillExecutesNormalizedTimeAndYearBounds(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		start    *plan.Expr
+		finish   *plan.Expr
+		wantRows int
+		interval types.Datetime
+	}{
+		{
+			name:     "time",
+			start:    timeBound(t, "00:00:00"),
+			finish:   timeBound(t, "00:00:15"),
+			wantRows: 3,
+			interval: 5 * types.Datetime(types.MicroSecsPerSec),
+		},
+		{
+			name:     "year",
+			start:    yearBound(t, "2023"),
+			finish:   yearBound(t, "2024"),
+			wantRows: 0,
+			interval: types.Datetime(types.SecsPerDay * types.MicroSecsPerSec),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := newBoundedPartArg(
+				t, proc,
+				"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+				false,
+			)
+			arg.GapFillStart = castTemporalBoundToDatetime(t, tc.start)
+			arg.GapFillEnd = castTemporalBoundToDatetime(t, tc.finish)
+			arg.Interval = tc.interval
+			arg.Sliding = tc.interval
+
+			starts, _, _ := runPartArgBats(t, arg, proc, nil)
+			require.Len(t, starts, tc.wantRows)
+
+			arg.Free(proc, false, nil)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+
+	starts, sums, parts := runPartArgBats(t, arg, proc, nil)
+	wantStarts := []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+	}
+	require.Equal(t, wantStarts, starts)
+	require.Equal(t, []int64{0, 0, 0}, sums)
+	for row := range wantStarts {
+		require.True(t, arg.ctr.bat.Vecs[0].IsNull(uint64(row)), "row %d must be an empty aggregate", row)
+	}
+	require.Empty(t, parts)
+	require.Equal(t, int64(3), arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestUnboundedGapFillEmptyInputDoesNotSynthesizeRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newPartArg(t, proc, makeInterval(), false)
+	arg.GapFill = true
+
+	starts, sums, parts := runPartArgBats(t, arg, proc, nil)
+	require.Empty(t, starts)
+	require.Empty(t, sums)
+	require.Empty(t, parts)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillSkipsEmptyChildBatches(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), nil)
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+	}, starts)
+	require.Equal(t, []int64{0, 0, 0}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillValidatesDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		start        string
+		finish       string
+		dropFinish   bool
+		wantError    string
+		wantRowCount int
+	}{
+		{name: "aligned empty", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:00"},
+		{name: "unaligned empty", start: "2023-08-01 00:00:02", finish: "2023-08-01 00:00:02"},
+		{name: "reversed", start: "2023-08-01 00:00:05", finish: "2023-08-01 00:00:00"},
+		{name: "unpaired", start: "2023-08-01 00:00:00", finish: "2023-08-01 00:00:05", dropFinish: true, wantError: "both start and finish"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := newBoundedPartArg(t, proc, tc.start, tc.finish, false)
+			if tc.dropFinish {
+				arg.GapFillEnd = nil
+			}
+
+			if tc.wantError != "" {
+				require.ErrorContains(t, arg.Prepare(proc), tc.wantError)
+			} else {
+				starts, _, _ := runPartArgBats(t, arg, proc, nil)
+				require.Len(t, starts, tc.wantRowCount)
+			}
+
+			arg.Free(proc, false, nil)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedGapFillTreatsPreparedNullBoundAsEmptyAndReevaluatesAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+	arg.GapFillStart = preparedDatetimeBound(t, 0)
+	starts, _, _ := runPartArgBats(t, arg, proc, nil)
+	require.Empty(t, starts)
+
+	arg.Reset(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+
+	params = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(
+		params, []byte("2023-08-01 00:00:00"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	starts, _, _ = runPartArgBats(t, arg, proc, nil)
+	require.Len(t, starts, 3)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillReuseAfterReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		false,
+	)
+
+	starts1, sums1, _ := runPartArgBats(t, arg, proc, nil)
+	arg.Reset(proc, false, nil)
+	starts2, sums2, _ := runPartArgBats(t, arg, proc, nil)
+	require.Equal(t, starts1, starts2)
+	require.Equal(t, sums1, sums2)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillEmptyInputAcrossInternalFlushes(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	windowCount := 2*maxTimeWindowRows + 5
+	finish := start.Add(time.Duration(windowCount) * 5 * time.Second)
+	arg := newBoundedPartArg(
+		t, proc,
+		start.Format("2006-01-02 15:04:05"),
+		finish.Format("2006-01-02 15:04:05"),
+		false,
+	)
+
+	starts, sums, _ := runPartArgBats(t, arg, proc, nil)
+	requireStrictWindowSequence(t, starts, makeInterval(), windowCount)
+	require.Len(t, sums, windowCount)
+	for _, sum := range sums {
+		require.Zero(t, sum)
+	}
+	require.Equal(t, int64(windowCount), arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillObservedRowAcrossInternalFlushes(t *testing.T) {
+	for _, observedWindow := range []int{maxTimeWindowRows, maxTimeWindowRows + 2} {
+		t.Run(fmt.Sprintf("observed_window_%d", observedWindow), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+			windowCount := 2*maxTimeWindowRows + 5
+			finish := start.Add(time.Duration(windowCount) * 5 * time.Second)
+			in := makePartInput(t, proc.Mp(), []row{{
+				ts:  start.Add(time.Duration(observedWindow) * 5 * time.Second).Format("2006-01-02 15:04:05"),
+				val: 42,
+			}})
+			arg := newBoundedPartArg(
+				t, proc,
+				start.Format("2006-01-02 15:04:05"),
+				finish.Format("2006-01-02 15:04:05"),
+				false,
+			)
+
+			starts, sums, _ := runPartArg(t, arg, proc, in)
+			requireStrictWindowSequence(t, starts, makeInterval(), windowCount)
+			require.Len(t, sums, windowCount)
+			for window, sum := range sums {
+				if window == observedWindow {
+					require.Equal(t, int64(42), sum)
+				} else {
+					require.Zero(t, sum)
+				}
+			}
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedGapFillAppliesDomainPerObservedPartition(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	in := makePartInput(t, proc.Mp(), []row{
+		{"2023-08-01 00:00:05", 10, 1},
+		{"2023-08-01 00:00:10", 20, 2},
+	})
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-08-01 00:00:00", "2023-08-01 00:00:15",
+		true,
+	)
+
+	starts, sums, parts := runPartArg(t, arg, proc, in)
+	require.Equal(t, []types.Datetime{
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+		mustDatetime(t, "2023-08-01 00:00:00"),
+		mustDatetime(t, "2023-08-01 00:00:05"),
+		mustDatetime(t, "2023-08-01 00:00:10"),
+	}, starts)
+	require.Equal(t, []int64{0, 10, 0, 0, 0, 20}, sums)
+	require.Equal(t, []int64{1, 1, 1, 2, 2, 2}, parts)
+	require.Equal(t, int64(6), arg.ctr.gapFillWindows)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillRejectsOversizedDomainBeforeReading(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := newBoundedPartArg(
+		t, proc,
+		"2023-01-01 00:00:00", "2023-03-01 00:00:00",
+		false,
+	)
+	arg.Sliding = types.Datetime(types.MicroSecsPerSec)
+	arg.Interval = arg.Sliding
+
+	err := arg.Prepare(proc)
+	require.ErrorContains(t, err, "partition")
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestGapFillResourceAccountingLimits(t *testing.T) {
 	arg := &TimeWin{GapFill: true}
-	ctr := container{partitionWindows: maxGapFillRowsPerPartition + 1}
-	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "partition")
+	ctr := container{partitionWindows: maxGapFillRowsPerPartition}
+	require.ErrorContains(t, ctr.accountGapFillWindows(arg, 1), "partition")
 
 	ctr = container{gapFillWindows: maxGapFillRowsTotal}
-	require.ErrorContains(t, ctr.accountGapFillWindow(arg), "total")
+	require.ErrorContains(t, ctr.accountGapFillWindows(arg, 1), "total")
 
 	ctr = container{partitionWindows: maxGapFillRowsPerPartition - 1, gapFillWindows: maxGapFillRowsTotal - 1}
-	require.NoError(t, ctr.accountGapFillWindow(arg))
+	require.NoError(t, ctr.accountGapFillWindows(arg, 1))
 
 	// The post-flush transition owns the next GAPFILL window's accounting.
 	// Verify that its limit error reaches the operator caller instead of being
@@ -686,7 +1483,7 @@ func TestTimeWinIntervalPathReuseAfterReset(t *testing.T) {
 // runPartArgBats drives the operator over several child batches; the
 // partition state machine must behave identically no matter where the
 // batch boundaries fall.
-func runPartArgBats(t *testing.T, arg *TimeWin, proc *process.Process, bats []*batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
+func runPartArgBats(t testing.TB, arg *TimeWin, proc *process.Process, bats []*batch.Batch) (starts []types.Datetime, sums []int64, parts []int64) {
 	t.Helper()
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
@@ -720,6 +1517,43 @@ func runPartArgBats(t *testing.T, arg *TimeWin, proc *process.Process, bats []*b
 	return
 }
 
+func BenchmarkBoundedGapFillEmptyRange(b *testing.B) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
+	const windows = 100_000
+	finish := start.Add(windows * 5 * time.Second)
+	arg := newBoundedPartArg(
+		b, proc,
+		start.Format("2006-01-02 15:04:05"),
+		finish.Format("2006-01-02 15:04:05"),
+		false,
+	)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		arg.Children = nil
+		arg.AppendChild(colexec.NewMockOperator())
+		require.NoError(b, arg.Prepare(proc))
+		rows := 0
+		for {
+			result, err := vm.Exec(arg, proc)
+			require.NoError(b, err)
+			if result.Batch == nil {
+				break
+			}
+			rows += result.Batch.RowCount()
+		}
+		require.Equal(b, windows, rows)
+		if iteration+1 < b.N {
+			arg.Reset(proc, false, nil)
+		}
+	}
+	b.StopTimer()
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(b, int64(0), proc.Mp().CurrNB())
+}
+
 func makeFlushBoundaryRows(gap int, part int64) []row {
 	start := time.Date(2023, time.August, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(time.Duration(gap) * 5 * time.Second)
@@ -748,6 +1582,70 @@ func requireStrictWindowSequence(t *testing.T, starts []types.Datetime, sliding 
 	for i := 1; i < len(starts); i++ {
 		require.Equal(t, sliding, starts[i]-starts[i-1], "window %d must advance exactly one slide", i)
 	}
+}
+
+func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}))
+	require.Equal(t, int32(fill), ctr.status)
+	require.LessOrEqual(t, ctr.left, nextValue)
+	require.Greater(t, ctr.right, nextValue)
+}
+
+func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	interval, err := calcDatetime(10, types.Second)
+	require.NoError(t, err)
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	base := mustDatetime(t, "2023-08-01 00:00:00")
+	nextValue := base + types.Datetime(maxTimeWindowRows+100)*sliding
+
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixed(ts, nextValue, false, proc.Mp()))
+	defer ts.Free(proc.Mp())
+
+	ctr := &container{
+		tsVec:       []*vector.Vector{ts},
+		left:        base,
+		right:       base + interval,
+		nextLeft:    base + sliding,
+		nextRight:   base + sliding + interval,
+		withoutFill: true,
+		status:      fill,
+	}
+
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}))
+	require.Equal(t, int32(nextWindow), ctr.status)
+	require.Equal(t, base, ctr.left)
+	require.Equal(t, base+interval, ctr.right)
 }
 
 // The boundary window is already included in the flushed generation. The

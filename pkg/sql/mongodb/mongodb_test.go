@@ -1011,6 +1011,65 @@ func TestConverterDecimalBinaryAndInternalJSONEncoding(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConverterJSONValues(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("123.456")
+	require.NoError(t, err)
+	objectID := bson.NewObjectID()
+	instant := time.Date(2026, 8, 18, 9, 10, 11, 123000000, time.UTC)
+
+	tests := []struct {
+		name     string
+		value    any
+		missing  bool
+		wantJSON string
+		wantNull bool
+	}{
+		{name: "string", value: "text", wantJSON: `"text"`},
+		{name: "empty string", value: "", wantJSON: `""`},
+		{name: "int32", value: int32(32), wantJSON: `{"$numberInt":"32"}`},
+		{name: "int64", value: int64(64), wantJSON: `{"$numberLong":"64"}`},
+		{name: "double", value: 1.5, wantJSON: `{"$numberDouble":"1.5"}`},
+		{name: "decimal128", value: decimal, wantJSON: `{"$numberDecimal":"123.456"}`},
+		{name: "bool", value: true, wantJSON: `true`},
+		{name: "date", value: instant, wantJSON: fmt.Sprintf(`{"$date":{"$numberLong":"%d"}}`, instant.UnixMilli())},
+		{name: "binary", value: bson.Binary{Data: []byte{1, 2, 3}}, wantJSON: `{"$binary":{"base64":"AQID","subType":"00"}}`},
+		{name: "objectID", value: objectID, wantJSON: fmt.Sprintf(`{"$oid":"%s"}`, objectID.Hex())},
+		{name: "document", value: bson.D{{Key: "nested", Value: int32(1)}}, wantJSON: `{"nested":{"$numberInt":"1"}}`},
+		{name: "array", value: bson.A{int32(1), "two"}, wantJSON: `[{"$numberInt":"1"},"two"]`},
+		{name: "null", value: nil, wantNull: true},
+		{name: "missing", missing: true, wantNull: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			converter, err := NewConverter(t.Context(), []ColumnMapping{{
+				Name: "value", TypeID: int32(types.T_json),
+			}}, 1024)
+			require.NoError(t, err)
+			mp := mpool.MustNewZero()
+			bat := converter.NewBatch()
+			t.Cleanup(func() {
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+
+			doc := bson.D{{Key: "value", Value: tc.value}}
+			if tc.missing {
+				doc = bson.D{{Key: "other", Value: int32(1)}}
+			}
+			raw, err := bson.Marshal(doc)
+			require.NoError(t, err)
+			require.NoError(t, converter.AppendDocument(t.Context(), bat, raw, mp))
+			require.Equal(t, 1, bat.RowCount())
+			if tc.wantNull {
+				require.True(t, bat.Vecs[0].GetNulls().Contains(0))
+				return
+			}
+			require.JSONEq(t, tc.wantJSON, types.DecodeJson(bat.Vecs[0].GetBytesAt(0)).String())
+		})
+	}
+}
+
 func TestConverterCoversSupportedScalarFamilies(t *testing.T) {
 	mp := mpool.MustNewZero()
 	decimal, err := bson.ParseDecimal128("12.345")
@@ -1202,6 +1261,35 @@ func TestConnectionValidationAndRedaction(t *testing.T) {
 	require.Equal(t, "mongodb://db.example:27017/x?password=******&token=******&password=******", redacted)
 	redacted = Redact("server selection failed for mongodb+srv://bob:p%40ss@db.example/x token=raw-token")
 	require.Equal(t, "server selection failed for mongodb+srv://db.example/x token=******", redacted)
+}
+
+func TestDefaultRuntimeConfigEnablesAllAccountsWithoutNetworkAccess(t *testing.T) {
+	cfg := DefaultRuntimeConfig()
+	require.True(t, cfg.EnabledFor(0))
+	require.True(t, cfg.EnabledFor(7))
+	require.False(t, cfg.EnablePerAccount)
+	require.False(t, cfg.AllowLoopback)
+	require.Empty(t, cfg.AllowedHostSuffixes)
+	require.Empty(t, cfg.AllowedCIDRs)
+
+	base := Connection{
+		Name: "c", CredentialSecretRef: "secret://mongodb/reader",
+		AuthMechanism: "SCRAM-SHA-256", TLSMode: "required",
+		ReadPreference: "primary", ReadConcern: "majority",
+	}
+	for name, endpoint := range map[string]string{
+		"hostname":       "db.mongo.example:27017",
+		"literal IP":     "10.10.1.5:27017",
+		"loopback":       "127.0.0.1:27017",
+		"link local":     "169.254.10.20:27017",
+		"cloud metadata": "100.100.100.200:27017",
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection := base
+			connection.Hosts = endpoint
+			require.Error(t, ValidateConnection(t.Context(), connection, cfg))
+		})
+	}
 }
 
 func TestDriverOptionsFailClosedOnIncompleteResolvedSecrets(t *testing.T) {

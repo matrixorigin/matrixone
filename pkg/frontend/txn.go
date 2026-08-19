@@ -83,6 +83,60 @@ func isTxnCommitResultUnknown(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
 }
 
+// requestContextErr reports cancellation of the request that owns the
+// statement.  A request can be cancelled when the client disconnects while
+// execution is still finishing.  In that case the statement may have
+// returned successfully, but committing it would make a cancelled DML
+// visible after the client has already received an error.
+func requestContextErr(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.reqCtx == nil {
+		return nil
+	}
+	err := execCtx.reqCtx.Err()
+	if err == nil {
+		return nil
+	}
+	// KILL QUERY (and KILL CONNECTION) deliberately cancel the request
+	// context while keeping the connection available for the former.  Their
+	// existing protocol contract is to finish a read-only query without
+	// turning it into a transaction error.  A client disconnect first marks
+	// the routine as closing in beginClose, so a cancelled DML remains fenced.
+	if errors.Is(err, context.Canceled) && isReadOnlyTransaction(execCtx) {
+		if ses, ok := execCtx.ses.(*Session); ok {
+			if rt := ses.getRoutine(); rt != nil && !rt.closing.Load() {
+				return nil
+			}
+		}
+	}
+	return err
+}
+
+// isReadOnlyTransaction reports the write state that has actually reached the
+// transaction workspace.  The statement kind alone is insufficient: DQL
+// functions such as nextval and setval execute derived updates in the same
+// transaction.  Treat a missing transaction as read-only because there is no
+// transaction state that can be committed; fail closed for an active operator
+// with a missing workspace.
+func isReadOnlyTransaction(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.ses == nil {
+		return false
+	}
+	txnHandler := execCtx.ses.GetTxnHandler()
+	if txnHandler == nil {
+		return false
+	}
+	txnOp := txnHandler.GetTxn()
+	return isReadOnlyTxnOp(txnOp)
+}
+
+func isReadOnlyTxnOp(txnOp TxnOperator) bool {
+	if txnOp == nil {
+		return true
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && workspace.Readonly()
+}
+
 // execution succeeds during the transaction. commit the transaction
 func commitTxnFunc(ses FeSession,
 	execCtx *ExecCtx) (retErr error) {
@@ -115,6 +169,12 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	}
 
 	if execCtx.txnOpt.byCommit {
+		if execErr == nil {
+			execErr = requestContextErr(execCtx)
+		}
+		if execErr != nil {
+			return rollbackTxnFunc(ses, execErr, execCtx)
+		}
 		//commit the txn by the COMMIT statement
 		err = ses.GetTxnHandler().Commit(execCtx)
 		if err != nil {
@@ -131,13 +191,17 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
-			err = commitTxnFunc(ses, execCtx)
-			if err == nil {
-				return err
+			if requestErr := requestContextErr(execCtx); requestErr != nil {
+				execErr = requestErr
+			} else {
+				err = commitTxnFunc(ses, execCtx)
+				if err == nil {
+					return err
+				}
+				// if commitTxnFunc failed, we will roll back the transaction.
+				// if commit panic, rollback below executed at the second time.
+				execErr = err
 			}
-			// if commitTxnFunc failed, we will roll back the transaction.
-			// if commit panic, rollback below executed at the second time.
-			execErr = err
 		}
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
@@ -672,6 +736,11 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 		if err != nil {
 			return err
 		}
+	} else if owner := upstreamUserSession(execCtx.ses); owner != nil {
+		owner.commitTempTableStatement(
+			tempTableTxnKey(th.txnOp),
+			tempTableStatementKey(execCtx.ses, th.shareTxn),
+		)
 	}
 	//do nothing
 	return nil
@@ -701,8 +770,17 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 
 	storage := th.storage
+	commitCtx := th.txnCtx
+	// A terminal commit for a DML statement belongs to the statement request,
+	// so a client disconnect can still abort it before it becomes visible.  A
+	// read-only statement must retain the transaction context for its whole
+	// finalization: KILL QUERY cancels reqCtx by design, and that cancellation
+	// may race with Commit after the initial requestContextErr check.
+	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyTxnOp(th.txnOp) {
+		commitCtx = execCtx.reqCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		commitCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseCommitUnsafe,
 	)
@@ -746,6 +824,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
+		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
@@ -780,6 +859,16 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 			}
 		}
 		execCtx.ses.updateLastCommitTS(commitTs)
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			if err == nil || commitResultUnknown {
+				// An unknown commit result may have persisted the physical
+				// relation. Preserve its alias so connection cleanup can still
+				// remove it; only known discarded transactions are restored.
+				owner.commitTempTableTransaction(tempTxnKey)
+			} else {
+				owner.rollbackTempTableTransaction(tempTxnKey)
+			}
+		}
 		if commitResultUnknown {
 			// ErrTxnUnknown is terminal for this frontend handle. The operator
 			// has already finalized its workspace non-destructively; retaining it
@@ -856,6 +945,12 @@ func (th *TxnHandler) rollback(
 				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
 			}
+			if owner := upstreamUserSession(execCtx.ses); owner != nil {
+				owner.rollbackTempTableStatement(
+					tempTableTxnKey(th.txnOp),
+					tempTableStatementKey(execCtx.ses, th.shareTxn),
+				)
+			}
 		}
 	}
 	return err
@@ -872,6 +967,14 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 		return false
 	}
 	if statementContainsTransactionCharacteristic(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
+	// SET changes session state and must preserve an explicit transaction that
+	// was already active. The frontend still creates a temporary transaction
+	// for a standalone SET, so finish that transaction when there was no active
+	// user transaction at statement start. SET autocommit=1 is handled by
+	// TxnHandler.SetAutocommit, which commits the OFF -> ON transition directly.
+	if IsParameterModificationStatement(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
@@ -999,6 +1102,7 @@ func (th *TxnHandler) rollbackUnsafe(
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		tempTxnKey := tempTableTxnKey(th.txnOp)
 		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
@@ -1007,6 +1111,9 @@ func (th *TxnHandler) rollbackUnsafe(
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
+		}
+		if owner := upstreamUserSession(execCtx.ses); owner != nil {
+			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
 	}
 	th.invalidateTxnUnsafe()

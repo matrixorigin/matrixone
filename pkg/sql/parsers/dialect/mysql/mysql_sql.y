@@ -143,6 +143,7 @@ func sqlTaskInt64(v any) int64 {
     unionTypeRecord *tree.UnionTypeRecord
     parenTableExpr *tree.ParenTableExpr
     identifierList tree.IdentifierList
+    insertColumns tree.InsertColumns
     joinCond tree.JoinCond
     selectLockInfo *tree.SelectLockInfo
 
@@ -343,7 +344,9 @@ func sqlTaskInt64(v any) int64 {
 %nonassoc LOWER_THAN_COMMA
 %nonassoc LOWER_THAN_WITH
 %nonassoc WITH
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT
+%nonassoc <str> OFFSET
+%token <str> FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER OVERWRITE
@@ -691,11 +694,13 @@ func sqlTaskInt64(v any) int64 {
 %type <nullsPosition> nulls_first_last_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt within_group_opt
-%type <limit> limit_opt limit_clause
+%type <limit> limit_opt limit_clause query_limit_opt offset_clause
 %type <rankOption> rank_opt
-%type <str> insert_column optype_opt
+%type <unresolvedName> insert_target_column
+%type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
+%type <insertColumns> insert_column_list
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
 %type <joinCond> join_condition join_condition_opt
@@ -5751,6 +5756,9 @@ replace_stmt:
     {
         rep := $5
         rep.Table = $3
+		target := $3.(*tree.TableName)
+		rep.TargetDatabaseName = target.SchemaName
+		rep.TargetTableName = target.ObjectName
         rep.PartitionNames = $4
         rep.Returning = $6
         $$ = rep
@@ -5773,7 +5781,8 @@ replace_data:
 |   '(' insert_column_list ')' replace_table_source
     {
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5787,7 +5796,8 @@ replace_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -5801,7 +5811,8 @@ replace_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Replace{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -5812,24 +5823,27 @@ replace_data:
 			goto ret1
 		}
 		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
 		var valueList tree.Exprs
 		for _, a := range $2 {
 			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
 			valueList = append(valueList, a.Expr)
 		}
 		vc := tree.NewValuesClause([]tree.Exprs{valueList})
 		$$ = &tree.Replace{
 			Columns: identList,
+			ColumnNames: columnNames,
 			Rows: tree.NewSelect(vc, nil, nil),
 			IsSetFormat: true,
 		}
 	}
 
 replace_table_source:
-    TABLE table_name order_by_opt limit_opt
+    TABLE table_name order_by_opt query_limit_opt
     {
-        // MySQL treats TABLE as a query source, so ORDER BY and LIMIT belong to
-        // the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
+        // MySQL treats TABLE as a query source, so ORDER BY and pagination
+        // belong to the SELECT wrapper produced by the TABLE-to-SELECT rewrite.
         $$ = tree.NewSelect(makeSelectStarFromTable($2), $3, $4)
     }
 
@@ -5846,6 +5860,9 @@ insert_no_with_stmt:
     {
         ins := $4
         ins.Table = $2
+		target := $2.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $3 != nil {
             ins.PartitionNames = $3.Names
             ins.PartitionValues = $3.Values
@@ -5858,6 +5875,9 @@ insert_no_with_stmt:
     {
         ins := $5
         ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $4 != nil {
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
@@ -5870,6 +5890,9 @@ insert_no_with_stmt:
     {
         ins := $5
         ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
         if $4 != nil {
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
@@ -5948,7 +5971,7 @@ merge_when_clause:
             Action: tree.MergeActionDelete,
         }
     }
-|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' insert_column_list ')' VALUES '(' expression_list ')'
+|   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
     {
         $$ = &tree.MergeClause{
             Matched: false,
@@ -6015,7 +6038,8 @@ insert_data:
     {
         vc := tree.NewValuesClause($5)
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -6029,7 +6053,8 @@ insert_data:
 |   '(' insert_column_list ')' select_stmt
     {
         $$ = &tree.Insert{
-            Columns: $2,
+            Columns: $2.Identifiers,
+            ColumnNames: $2.Names,
             Rows: $4,
         }
     }
@@ -6039,15 +6064,18 @@ insert_data:
             yylex.Error("the set list of insert can not be empty")
             goto ret1
         }
-        var identList tree.IdentifierList
+		var identList tree.IdentifierList
+		var columnNames []*tree.UnresolvedName
         var valueList tree.Exprs
         for _, a := range $2 {
-            identList = append(identList, a.Column)
+			identList = append(identList, a.Column)
+			columnNames = append(columnNames, a.ColumnName)
             valueList = append(valueList, a.Expr)
         }
         vc := tree.NewValuesClause([]tree.Exprs{valueList})
         $$ = &tree.Insert{
-            Columns: identList,
+			Columns: identList,
+			ColumnNames: columnNames,
             Rows: tree.NewSelect(vc, nil, nil),
         }
     }
@@ -6080,32 +6108,63 @@ set_value_list:
     }
 
 set_value:
-    insert_column '=' expr_or_default
+    insert_target_column '=' expr_or_default
     {
         $$ = &tree.Assignment{
-            Column: tree.Identifier($1),
+            Column: tree.Identifier($1.ColName()),
+            ColumnName: $1,
             Expr: $3,
         }
     }
 
 insert_column_list:
-    insert_column
+    insert_target_column
     {
-        $$ = tree.IdentifierList{tree.Identifier($1)}
+        $$ = tree.InsertColumns{
+            Identifiers: tree.IdentifierList{tree.Identifier($1.ColName())},
+            Names: []*tree.UnresolvedName{$1},
+        }
     }
-|   insert_column_list ',' insert_column
+|   insert_column_list ',' insert_target_column
     {
-        $$ = append($1, tree.Identifier($3))
+		$$ = $1
+        $$.Identifiers = append($1.Identifiers, tree.Identifier($3.ColName()))
+        $$.Names = append($1.Names, $3)
     }
 
-insert_column:
+insert_target_column:
     ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $$ = tree.NewUnresolvedName(yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin()))
     }
 |   ident '.' ident
     {
-        $$ = yylex.(*Lexer).GetDbOrTblName($3.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        $$ = tree.NewUnresolvedName(tblName, $3)
+    }
+|   ident '.' ident '.' ident
+    {
+        dbName := yylex.(*Lexer).GetDbOrTblNameCStr($1.Origin())
+        tblName := yylex.(*Lexer).GetDbOrTblNameCStr($3.Origin())
+        $$ = tree.NewUnresolvedName(dbName, tblName, $5)
+    }
+
+merge_insert_column_list:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+    }
+|   ident '.' ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier($3.Compare())}
+    }
+|   merge_insert_column_list ',' ident
+    {
+        $$ = append($1, tree.Identifier($3.Compare()))
+    }
+|   merge_insert_column_list ',' ident '.' ident
+    {
+        $$ = append($1, tree.Identifier($5.Compare()))
     }
 
 values_list:
@@ -6388,7 +6447,7 @@ select_stmt:
     }
 
 select_no_parens:
-    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
     }
@@ -6400,7 +6459,19 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+|   select_with_parens offset_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $1, Limit: $2, RankOption: $3, Ep: $4}
+    }
+|   select_with_parens time_window offset_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, Limit: $3, RankOption: $4, Ep: $5}
+    }
+|   select_with_parens time_window_opt order_by_clause offset_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6}
+    }
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo:$8, With: $1}
     }
@@ -6409,6 +6480,14 @@ select_no_parens:
         $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
     }
 |   with_clause select_with_parens order_by_opt limit_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
+    }
+|   with_clause select_with_parens offset_clause rank_opt export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $2, Limit: $3, RankOption: $4, Ep: $5, With: $1}
+    }
+|   with_clause select_with_parens order_by_clause offset_clause rank_opt export_data_param_opt
     {
         $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, With: $1}
     }
@@ -6569,6 +6648,19 @@ limit_opt:
         $$ = $1
     }
 
+query_limit_opt:
+    {
+        $$ = nil
+    }
+|   limit_clause
+    {
+        $$ = $1
+    }
+|   offset_clause
+    {
+        $$ = $1
+    }
+
 limit_clause:
     LIMIT expression
     {
@@ -6581,6 +6673,12 @@ limit_clause:
 |   LIMIT expression OFFSET expression
     {
         $$ = &tree.Limit{Offset: $4, Count: $2}
+    }
+
+offset_clause:
+    OFFSET expression
+    {
+        $$ = &tree.Limit{Offset: $2}
     }
 
 rank_opt:
@@ -6792,7 +6890,7 @@ simple_select:
 // TABLE is a query term in MySQL. Keep it separate from replace_table_source,
 // and preserve top-level VALUES as the existing ValuesStatement AST.
 table_query_subquery:
-    '(' table_query_expr order_by_opt limit_opt ')'
+    '(' table_query_expr order_by_opt query_limit_opt ')'
     {
         $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
     }
@@ -6831,7 +6929,7 @@ table_query_term:
     }
 
 values_query_subquery:
-    '(' values_query_expr order_by_opt limit_opt ')'
+    '(' values_query_expr order_by_opt query_limit_opt ')'
     {
         $$ = &tree.ParenSelect{Select: tree.NewSelect($2, $3, $4)}
     }
@@ -7361,7 +7459,7 @@ dedup_join:
     }
 
 values_stmt:
-    VALUES row_constructor_list order_by_opt limit_opt
+    VALUES row_constructor_list order_by_opt query_limit_opt
     {
         $$ = &tree.ValuesStatement{
             Rows: $2,
@@ -7486,7 +7584,9 @@ table_factor:
 	}
 
 table_subquery:
-    select_with_parens %prec SUBQUERY_AS_EXPR
+    // The scanner returns ID when OFFSET is an implicit alias. A real OFFSET
+    // token must shift into select_no_parens' parenthesized-query clause.
+    select_with_parens %prec WITH
     {
     	$$ = &tree.ParenTableExpr{Expr: $1.(*tree.ParenSelect).Select}
     }
@@ -13103,14 +13203,13 @@ function_call_generic:
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
-|   VALUES '(' insert_column ')'
+|   VALUES '(' column_name_unresolved ')'
     {
-        column := tree.NewUnresolvedColName($3)
         name := tree.NewUnresolvedColName($1)
     	$$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{column},
+            Exprs: tree.Exprs{$3},
         }
     }
 
@@ -14676,11 +14775,11 @@ perform_stmt:
     }
 
 perform_select:
-    simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+    simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $1, TimeWindow: $2, OrderBy: $3, Limit: $4, RankOption: $5, Ep: $6, SelectLockInfo: $7}
     }
-|   with_clause simple_select time_window_opt order_by_opt limit_opt rank_opt export_data_param_opt select_lock_opt
+|   with_clause simple_select time_window_opt order_by_opt query_limit_opt rank_opt export_data_param_opt select_lock_opt
     {
         $$ = &tree.Select{Select: $2, TimeWindow: $3, OrderBy: $4, Limit: $5, RankOption: $6, Ep: $7, SelectLockInfo: $8, With: $1}
     }

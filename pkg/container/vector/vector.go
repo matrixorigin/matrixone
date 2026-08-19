@@ -122,6 +122,14 @@ type Vector struct {
 	// off-heap data and area allocations. Physical MPool metadata owns release.
 	allocationAccount *AllocationAccountSelection
 
+	// preflightAreaBytes is the exact non-inline payload admitted by
+	// PreExtendSelectedBatch for the next UnionBatchPreflighted publication.
+	// Keeping the proof with the destination removes operator-side parallel
+	// metadata and makes the preflight/publication pair self-contained.
+	preflightAreaBytes int
+	preflightAreaReady bool
+	preflightRowCount  int
+
 	// areaDisjoint proves that every live non-inline varlena descriptor owns a
 	// distinct range in area. Spill projections use it to avoid scanning normal
 	// append-built vectors; operations that can introduce aliases clear it.
@@ -190,6 +198,9 @@ func (v *Vector) Reset(typ types.Type) {
 	v.nsp.Clear()
 	v.gsp.Clear()
 	v.sorted = false
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -205,6 +216,9 @@ func (v *Vector) ResetWithSameType() {
 	v.nsp.Reset()
 	v.gsp.Reset()
 	v.sorted = false
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -227,6 +241,9 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	v.gsp.Clear()
 	v.length = 0
 	v.sorted = false
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
 	v.isBin = false
 	v.resetBinaryString()
 	v.areaDisjoint = true
@@ -306,6 +323,31 @@ type AppendCheckpoint struct {
 	binaryString            bool
 	hadBinaryStringRows     bool
 	binaryStringRowsUniform bool
+}
+
+// AppendCheckpointScratch interprets allocator-backed byte storage as append
+// checkpoints. It keeps the checkpoint layout private to vector while letting
+// wide batch operators account scratch by its real physical capacity.
+func AppendCheckpointScratch(storage []byte, count int) ([]AppendCheckpoint, int, error) {
+	if count < 0 {
+		return nil, 0, mpool.ErrAllocationAccountInvalid
+	}
+	size := int(unsafe.Sizeof(AppendCheckpoint{}))
+	if count != 0 && count > math.MaxInt/size {
+		return nil, 0, mpool.ErrAllocationAllocatorLimit
+	}
+	required := count * size
+	if len(storage) < required {
+		return nil, required, nil
+	}
+	if count == 0 {
+		return nil, 0, nil
+	}
+	if uintptr(unsafe.Pointer(&storage[0]))%unsafe.Alignof(AppendCheckpoint{}) != 0 {
+		return nil, required, mpool.ErrAllocationAccountInvalid
+	}
+	return unsafe.Slice(
+		(*AppendCheckpoint)(unsafe.Pointer(&storage[0])), count), required, nil
 }
 
 func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
@@ -871,6 +913,124 @@ func (v *Vector) SetPrepareParamKindAtWithMP(row int, kind PrepareParamKind, mp 
 	return nil
 }
 
+// PreflightSetPrepareParamKindAt reserves the sidecar that a later
+// SetPrepareParamKindAtWithMP can require without changing any row's logical
+// provenance. Correlated-state owners use it before publishing a multi-vector
+// update so a sidecar allocation cannot fail after some values were replaced.
+func (v *Vector) PreflightSetPrepareParamKindAt(
+	row int,
+	kind PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	return v.PreflightSetPrepareParamKindAtLength(row, v.length, kind, mp)
+}
+
+// PreflightSetPrepareParamKindAtLength reserves the provenance sidecar for a
+// row that will become visible when the vector reaches finalLength. It does
+// not publish the new logical length. Aggregate Group preflight uses this for
+// standby state so GroupGrow and the subsequent winner update cannot allocate
+// after the hash-table mutation begins.
+func (v *Vector) PreflightSetPrepareParamKindAtLength(
+	row int,
+	finalLength int,
+	kind PrepareParamKind,
+	mp *mpool.MPool,
+) error {
+	if v == nil || row < 0 {
+		return nil
+	}
+	if v.IsConst() {
+		row = 0
+	}
+	if finalLength < v.length || row >= finalLength {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if v.prepareParamKinds != nil {
+		return v.preExtendPrepareParamKinds(finalLength, mp)
+	}
+	if !v.prepareParamKindSeen || v.prepareParamKind == kind ||
+		v.length == 0 || v.AllNull() {
+		return nil
+	}
+	kinds, owner, err := v.allocatePrepareParamKinds(finalLength, mp)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < v.length; i++ {
+		kinds[i] = v.prepareParamKind
+	}
+	v.prepareParamKinds = kinds
+	v.prepareParamKinds = v.prepareParamKinds[:v.length]
+	v.prepareParamKindsMP = owner
+	v.prepareParamKind = PrepareParamNone
+	v.prepareParamKindSeen = true
+	return nil
+}
+
+// PreflightSetPrepareParamKindsAtLength reserves the provenance sidecar for a
+// bounded sequence of later row updates.  Unlike calling the single-row
+// preflight repeatedly, this method also observes conflicts between updates
+// to an empty/all-NULL vector.  That distinction matters for aggregate
+// standby chunks: several groups can establish different source categories
+// only after GroupGrow makes their rows visible.
+//
+// The method deliberately models the sequence of SetPrepareParamKindAtWithMP
+// calls, including transient winner replacements.  A sidecar allocated by
+// such a sequence is retained, so omitting an intermediate category could
+// otherwise allow an allocation after the caller has published correlated
+// state.
+func (v *Vector) PreflightSetPrepareParamKindsAtLength(
+	rows []int,
+	kinds []PrepareParamKind,
+	finalLength int,
+	mp *mpool.MPool,
+) error {
+	if v == nil || len(rows) == 0 {
+		return nil
+	}
+	if len(rows) != len(kinds) || finalLength < v.length {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for _, row := range rows {
+		if row < 0 || row >= finalLength {
+			return mpool.ErrAllocationAccountInvalid
+		}
+	}
+	if v.prepareParamKinds != nil {
+		return v.preExtendPrepareParamKinds(finalLength, mp)
+	}
+
+	seen := v.length > 0 && !v.AllNull()
+	kind := v.prepareParamKind
+	if !v.prepareParamKindSeen {
+		kind = PrepareParamNone
+	}
+	for _, candidate := range kinds {
+		if !seen {
+			kind = candidate
+			seen = true
+			continue
+		}
+		if kind == candidate {
+			continue
+		}
+
+		allocated, owner, err := v.allocatePrepareParamKinds(finalLength, mp)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < v.length; i++ {
+			allocated[i] = kind
+		}
+		v.prepareParamKinds = allocated[:v.length]
+		v.prepareParamKindsMP = owner
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = true
+		return nil
+	}
+	return nil
+}
+
 func (v *Vector) resetPrepareParamKind() {
 	v.prepareParamKind = PrepareParamNone
 	v.prepareParamKindSeen = false
@@ -901,12 +1061,13 @@ func (v *Vector) allocatePrepareParamKinds(n int, mp *mpool.MPool) ([]PreparePar
 		if owner == nil {
 			return nil, nil, mpool.ErrAllocationAccountInvalid
 		}
-		kinds, err := mpool.MakeSliceAccounted[PrepareParamKind](
+		kinds, err := mpool.MakeSliceAccountedWithCapacityClass[PrepareParamKind](
 			n,
 			owner,
 			v.allocationAccount.account,
 			v.allocationAccount.owner,
 			v.allocationAccount.dataSite,
+			v.allocationAccount.capacityClass,
 		)
 		return kinds, owner, err
 	}
@@ -1625,9 +1786,25 @@ func (v *Vector) PreflightUnionBatchPrepareParamKinds(
 	if flags != nil {
 		addCnt = 0
 		for _, selected := range flags {
+			if selected > 1 {
+				return mpool.ErrAllocationAccountInvalid
+			}
 			addCnt += int(selected)
 		}
 	}
+	return v.preflightUnionBatchPrepareParamKinds(
+		w, offset, cnt, flags, addCnt, mp,
+	)
+}
+
+func (v *Vector) preflightUnionBatchPrepareParamKinds(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	addCnt int,
+	mp *mpool.MPool,
+) error {
 	finalLength := v.length + addCnt
 	if finalLength < v.length {
 		return moerr.NewInternalErrorNoCtxf(
@@ -2707,6 +2884,58 @@ func (v *Vector) SetNull(i uint64) {
 	}
 }
 
+// SetNullPreservingPrepareParamCapacity marks a row NULL without releasing a
+// prepared-parameter sidecar. Transactional data movers use it after they have
+// admitted all allocations for a work unit: a transient all-NULL state must
+// not discard capacity needed by a later row update in that same unit. Call
+// NormalizePrepareParamKinds after the work unit to restore the scalar form
+// when the surviving non-NULL rows are uniform.
+func (v *Vector) SetNullPreservingPrepareParamCapacity(i uint64) {
+	v.nsp.Add(i)
+	v.clearPrepareParamKindAt(int(i))
+}
+
+// NormalizePrepareParamKinds collapses retained row provenance to the scalar
+// representation when all non-NULL rows agree. It never allocates.
+func (v *Vector) NormalizePrepareParamKinds() {
+	if v == nil {
+		return
+	}
+	if v.prepareParamKinds == nil {
+		if v.AllNull() {
+			v.resetPrepareParamKind()
+		}
+		return
+	}
+	var (
+		first PrepareParamKind
+		seen  bool
+	)
+	for row, kind := range v.prepareParamKinds {
+		if row >= v.length {
+			break
+		}
+		if v.IsNull(uint64(row)) {
+			continue
+		}
+		if !seen {
+			first, seen = kind, true
+			continue
+		}
+		if first != kind {
+			return
+		}
+	}
+	v.releasePrepareParamKinds()
+	if !seen {
+		v.prepareParamKind = PrepareParamNone
+		v.prepareParamKindSeen = false
+		return
+	}
+	v.prepareParamKind = first
+	v.prepareParamKindSeen = true
+}
+
 func (v *Vector) UnsetNull(i uint64) {
 	v.nsp.Del(i)
 }
@@ -2915,6 +3144,9 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.resetPrepareParamKind()
 	v.prepareParamKindsMP = nil
 	v.allocationAccount = nil
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
 	v.areaDisjoint = true
 
 	// if !v.OnUsed || v.OnPut {
@@ -3737,6 +3969,181 @@ func (v *Vector) PreExtendWithArea(rows int, extraAreaSize int, mp *mpool.MPool)
 	v.area = area1
 
 	return nil
+}
+
+// PreExtendSelectedBatch reserves every physical allocation needed by the
+// matching UnionBatchPreflighted call. It performs the selected varlena payload
+// scan once and retains the exact proof on the destination so publication can
+// skip its otherwise duplicate pregrow scan.
+func (v *Vector) PreExtendSelectedBatch(
+	w *Vector,
+	offset int,
+	cnt int,
+	flags []uint8,
+	targetRows int,
+	mp *mpool.MPool,
+) error {
+	return v.preExtendSelectedBatch(
+		w, offset, cnt, flags, targetRows, false, mp,
+	)
+}
+
+// PreExtendSelectedBatchValidated is the Group-internal variant for a
+// selection whose 0/1 shape and selected-row count were already proved by the
+// hash insertion plan. It retains the generic preflight's bounds and capacity
+// checks while avoiding repeated validation for every group-key column.
+func (v *Vector) PreExtendSelectedBatchValidated(
+	w *Vector,
+	offset int,
+	cnt int,
+	flags []uint8,
+	targetRows int,
+	mp *mpool.MPool,
+) error {
+	return v.preExtendSelectedBatch(
+		w, offset, cnt, flags, targetRows, true, mp,
+	)
+}
+
+func (v *Vector) preExtendSelectedBatch(
+	w *Vector,
+	offset int,
+	cnt int,
+	flags []uint8,
+	targetRows int,
+	selectionValidated bool,
+	mp *mpool.MPool,
+) error {
+	if v == nil || w == nil || offset < 0 || cnt < 0 || targetRows < 0 ||
+		len(flags) != cnt || !w.CoversLogicalRows(offset, cnt) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	v.preflightAreaReady = false
+	v.preflightAreaBytes = 0
+	v.preflightRowCount = 0
+	// The preflight proof cannot retain an aliased source for publication.
+	// Reject it here instead of letting UnionBatchPreflighted allocate a clone
+	// after the caller has committed its surrounding state transition.
+	if v.typ.IsVarlen() &&
+		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+		return mpool.ErrAllocationAccountInvalid
+	}
+
+	selectedRows := 0
+	if selectionValidated {
+		if targetRows < v.length {
+			return mpool.ErrAllocationAccountInvalid
+		}
+		selectedRows = targetRows - v.length
+	}
+	selectedAreaBytes := 0
+	var values []types.Varlena
+	varlen := w.GetType().IsVarlen() && !w.IsConstNull()
+	if varlen {
+		ToSliceNoTypeCheck(w, &values)
+	}
+	hasNull := varlen && !w.IsConst() && !w.GetNulls().EmptyByFlag()
+	if !selectionValidated || varlen && !w.IsConst() {
+		for row, flag := range flags {
+			if !selectionValidated && flag > 1 {
+				return mpool.ErrAllocationAccountInvalid
+			}
+			if flag == 0 {
+				continue
+			}
+			if !selectionValidated {
+				selectedRows++
+			}
+			if !varlen || w.IsConst() ||
+				hasNull && w.GetNulls().Contains(uint64(offset+row)) ||
+				values[offset+row].IsSmall() {
+				continue
+			}
+			_, length := values[offset+row].OffsetLen()
+			if int(length) > math.MaxInt-selectedAreaBytes {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			selectedAreaBytes += int(length)
+		}
+	}
+	if targetRows < v.length ||
+		!selectionValidated && selectedRows != targetRows-v.length {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if varlen && w.IsConst() && selectedRows != 0 && !values[0].IsSmall() {
+		_, length := values[0].OffsetLen()
+		selectedAreaBytes = int(length)
+	}
+
+	if w.HasNull() {
+		if err := v.PreExtendNulls(targetRows, mp); err != nil {
+			return err
+		}
+	}
+	if w.HasGrouping() {
+		if err := v.PreExtendGrouping(targetRows, mp); err != nil {
+			return err
+		}
+	}
+	// Publication extends fixed descriptors before it copies payload. Admit the
+	// descriptor backing here as part of the same physical work unit.
+	if targetRows > v.length && targetRows > v.Capacity() {
+		if err := v.PreExtend(targetRows-v.length, mp); err != nil {
+			return err
+		}
+	}
+	if err := v.preflightUnionBatchPrepareParamKinds(
+		w, int64(offset), cnt, flags, selectedRows, mp,
+	); err != nil {
+		return err
+	}
+	if err := v.PreflightUnionBatchBinaryString(
+		w, int64(offset), cnt, flags, mp,
+	); err != nil {
+		return err
+	}
+	if selectedAreaBytes > cap(v.area)-len(v.area) {
+		if err := v.PreExtendWithArea(0, selectedAreaBytes, mp); err != nil {
+			return err
+		}
+	}
+	v.preflightAreaBytes = selectedAreaBytes
+	v.preflightRowCount = targetRows
+	v.preflightAreaReady = true
+	return nil
+}
+
+// CancelSelectedBatchPreflight drops an unpublished selection proof. It never
+// releases admitted backing storage; a later work unit may reuse that capacity.
+func (v *Vector) CancelSelectedBatchPreflight() {
+	if v == nil {
+		return
+	}
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
+}
+
+// UnionBatchPreflighted publishes a selection after PreExtendSelectedBatch.
+// It consumes the destination-owned proof exactly once.
+func (v *Vector) UnionBatchPreflighted(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	mp *mpool.MPool,
+) error {
+	if v == nil || !v.preflightAreaReady {
+		return mpool.ErrAllocationAccountInvariant
+	}
+	selectedAreaBytes := v.preflightAreaBytes
+	preflightRowCount := v.preflightRowCount
+	v.preflightAreaBytes = 0
+	v.preflightAreaReady = false
+	v.preflightRowCount = 0
+	return v.unionBatch(
+		w, offset, cnt, flags, mp,
+		selectedAreaBytes, preflightRowCount, true)
 }
 
 // Dup use to copy an identical vector
@@ -6283,17 +6690,40 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	return v.unionBatch(w, offset, cnt, flags, mp, 0, 0, false)
+}
+
+func (v *Vector) unionBatch(
+	w *Vector,
+	offset int64,
+	cnt int,
+	flags []uint8,
+	mp *mpool.MPool,
+	selectedAreaBytes int,
+	preflightRowCount int,
+	preflighted bool,
+) error {
 	areaWasDisjoint := v.areaDisjoint
+	if selectedAreaBytes < 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
-	addCnt := 0
-	if flags == nil {
-		addCnt = cnt
-	} else {
+	var addCnt int
+	if preflighted {
+		if preflightRowCount < v.length {
+			return allocationAccountInvalid(
+				"preflighted vector row count is invalid")
+		}
+		addCnt = preflightRowCount - v.length
+	} else if flags != nil {
+		addCnt = 0
 		for i := range flags {
 			addCnt += int(flags[i])
 		}
+	} else {
+		addCnt = cnt
 	}
 
 	if addCnt == 0 {
@@ -6317,21 +6747,31 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		return v.UnionBatch(preserved, 0, cnt, flags, mp)
 	}
 	oldLen := v.length
-	if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
-		return err
-	}
-	if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
-		return err
+	if !preflighted {
+		if err := v.PreflightUnionBatchPrepareParamKinds(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
+		if err := v.PreflightUnionBatchBinaryString(w, offset, cnt, flags, mp); err != nil {
+			return err
+		}
 	}
 
-	if err := extendWithBitmaps(
-		v,
-		addCnt,
-		mp,
-		w.IsConstNull() || !w.nsp.EmptyByFlag(),
-		w.IsGrouping() || !w.gsp.EmptyByFlag(),
-	); err != nil {
-		return err
+	if preflighted {
+		if preflightRowCount != v.length+addCnt ||
+			preflightRowCount*v.typ.TypeSize() > cap(v.data) {
+			return allocationAccountInvalid(
+				"preflighted vector row capacity is insufficient")
+		}
+	} else {
+		if err := extendWithBitmaps(
+			v,
+			addCnt,
+			mp,
+			w.IsConstNull() || !w.nsp.EmptyByFlag(),
+			w.IsGrouping() || !w.gsp.EmptyByFlag(),
+		); err != nil {
+			return err
+		}
 	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
@@ -6392,10 +6832,6 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if err != nil {
 				return err
 			}
-			// The fast path copies the source area once into a non-overlapping
-			// destination range and only rebases descriptors. Therefore it
-			// preserves the proof exactly when both existing destination and
-			// source were already proven disjoint.
 			v.areaDisjoint = areaWasDisjoint && w.VarlenaAreaIsDisjoint()
 			if fast {
 				if err := v.propagatePrepareParamKindsBatch(w, oldLen, offset, cnt, flags, mp); err != nil {
@@ -6414,7 +6850,7 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		// vector can retain a stale non-inline header in a null slot — counting those
 		// would reserve area for dead payload (large needless mp.Grow / alloc
 		// failure), so exclude them to match what's actually appended.
-		{
+		if !preflighted {
 			total := 0
 			hasNull := !w.nsp.EmptyByFlag()
 			if flags == nil {
@@ -6444,6 +6880,10 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 			if err = pregrowVarlenaArea(v, total, mp); err != nil {
 				return err
 			}
+		} else if selectedAreaBytes > cap(v.area)-len(v.area) {
+			return allocationAccountInvalid(
+				"preflighted vector area capacity is insufficient",
+			)
 		}
 
 		if !w.nsp.EmptyByFlag() {
@@ -9520,6 +9960,11 @@ func BuildVarlenaFromByteJsonEncoded(
 	enc bytejson.ByteJsonDataEncoder,
 	m *mpool.MPool,
 ) error {
+	if validator, ok := enc.(bytejson.ByteJsonDataValidator); ok {
+		if err := validator.ValidateData(); err != nil {
+			return err
+		}
+	}
 	dataSize := uint64(enc.DataSize())
 	storageSize := dataSize + 1
 	maxInt := uint64(^uint(0) >> 1)

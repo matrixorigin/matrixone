@@ -56,6 +56,7 @@ func TestPayloadFieldIteratorAndErrors(t *testing.T) {
 		errMsg  string
 	}{
 		{name: "truncated-null-flag", payload: nil, errMsg: "truncated null flag"},
+		{name: "invalid-null-flag", payload: []byte{2}, errMsg: "invalid null flag"},
 		{name: "truncated-size", payload: []byte{1}, errMsg: "truncated size"},
 		{name: "truncated-field-bytes", payload: append([]byte{1}, []byte{4, 0, 0, 0, 'x'}...), errMsg: "truncated field bytes"},
 		{name: "trailing-bytes", payload: append(appendPayloadField(nil, []byte("x"), false), 'z'), errMsg: "trailing bytes"},
@@ -174,6 +175,7 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "ts", typ: types.T_TS.ToType(), data: tsVal[:], want: tsVal.ToString()},
 		{name: "rowid", typ: types.T_Rowid.ToType(), data: rowidVal[:], want: rowidVal.String()},
 		{name: "blockid", typ: types.T_Blockid.ToType(), data: blockidVal[:], want: fmt.Sprint(blockidVal)},
+		{name: "short-fixed-payload", typ: types.T_int64.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "too-long", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16+1), wantErr: "too long"},
 		{name: "unsupported", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "unsupported type"},
 	}

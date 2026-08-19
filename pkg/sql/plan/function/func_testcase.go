@@ -64,6 +64,7 @@ type FunctionTestCase struct {
 	expected   FunctionTestResult
 	fn         fEvalFn
 	fnLength   int
+	selectList *FunctionSelectList
 }
 
 // FunctionTestInput
@@ -157,6 +158,15 @@ func NewFunctionTestCase(
 	return f
 }
 
+// WithSelectList sets the FunctionSelectList handed to the evaluated function. The
+// expression framework supplies one whenever short-circuit evaluation has masked rows off;
+// without it a test can only ever exercise the evaluate-every-row path, which is exactly
+// where a batched fast path can wrongly evaluate (and raise errors from) a masked row.
+func (fc FunctionTestCase) WithSelectList(selectList *FunctionSelectList) FunctionTestCase {
+	fc.selectList = selectList
+	return fc
+}
+
 func (fc *FunctionTestCase) GetResultVectorDirectly() *vector.Vector {
 	return fc.result.GetResultVector()
 }
@@ -168,7 +178,7 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		panic(err)
 	}
 
-	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, nil)
+	err = fc.fn(fc.parameters, fc.result, fc.proc, fc.fnLength, fc.selectList)
 	if err != nil {
 		if fc.expected.wantErr {
 			return true, ""
