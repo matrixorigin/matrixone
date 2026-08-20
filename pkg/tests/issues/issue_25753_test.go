@@ -301,6 +301,34 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			assertValue("9007199254740993", int64(17), "9007199254741011")
 			assertValue(uint64(9007199254740993), "29", "9007199254741023")
 
+			// CTAS is a binary prepared DDL path: the table definition is cloned
+			// for execution, then its CreateAsSelectSql is compiled as a follow-up
+			// INSERT. The runtime parameter must reach that INSERT, not merely
+			// create an empty table.
+			const ctasDB = "issue25753_prepared_ctas_db"
+			const ctasTable = ctasDB + ".issue25753_prepared_ctas"
+			_, err = conn.ExecContext(ctx, "drop database if exists "+ctasDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create database "+ctasDB)
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "drop database if exists "+ctasDB)
+			}()
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
+			ctasStmt, err := conn.PrepareContext(ctx,
+				"create table "+ctasTable+" as select ? as value")
+			require.NoError(t, err)
+			_, err = ctasStmt.ExecContext(ctx, int64(42))
+			require.NoError(t, err)
+			require.NoError(t, ctasStmt.Close())
+			var ctasValue int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select value from "+ctasTable).Scan(&ctasValue))
+			require.Equal(t, int64(42), ctasValue)
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
+
 			rows, err := stmt.QueryContext(ctx, nil, int64(0))
 			require.NoError(t, err)
 			defer rows.Close()

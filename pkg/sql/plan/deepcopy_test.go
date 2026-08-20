@@ -317,6 +317,53 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
 }
 
+func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T) {
+	source := &planpb.DataDefinition{
+		DdlType: planpb.DataDefinition_CREATE_TABLE,
+		Definition: &planpb.DataDefinition_CreateTable{
+			CreateTable: &planpb.CreateTable{
+				Database:          "db",
+				CreateAsSelectSql: "insert into `db`.`ctas` select ?",
+				UpdateFkSqls:      []string{"insert into mo_foreign_keys ..."},
+				RawSQL:            "create table `db`.`ctas` as select ?",
+				FkDbs:             []string{"db"},
+				FkTables:          []string{"parent"},
+				FkCols:            []*planpb.FkColName{{Cols: []string{"parent_id"}}},
+				FksReferToMe: []*planpb.ForeignKeyInfo{{
+					Db:    "db",
+					Table: "child",
+					Cols:  &planpb.FkColName{Cols: []string{"id"}},
+					Def: &planpb.ForeignKeyDef{
+						Name:        "fk_child_parent",
+						ForeignTbl:  17,
+						ForeignCols: []uint64{3},
+					},
+				}},
+			},
+		},
+	}
+
+	cloned := DeepCopyDataDefinition(source)
+	require.Equal(t, source, cloned)
+	createTable := cloned.GetCreateTable()
+	require.NotSame(t, source.GetCreateTable(), createTable)
+	require.NotSame(t, source.GetCreateTable().FkCols[0], createTable.FkCols[0])
+	require.NotSame(t, source.GetCreateTable().FksReferToMe[0], createTable.FksReferToMe[0])
+	require.NotSame(t, source.GetCreateTable().FksReferToMe[0].Def,
+		createTable.FksReferToMe[0].Def)
+
+	createTable.CreateAsSelectSql = "changed"
+	createTable.UpdateFkSqls[0] = "changed"
+	createTable.RawSQL = "changed"
+	createTable.FkCols[0].Cols[0] = "changed"
+	createTable.FksReferToMe[0].Def.Name = "changed"
+	require.Equal(t, "insert into `db`.`ctas` select ?", source.GetCreateTable().CreateAsSelectSql)
+	require.Equal(t, "insert into mo_foreign_keys ...", source.GetCreateTable().UpdateFkSqls[0])
+	require.Equal(t, "create table `db`.`ctas` as select ?", source.GetCreateTable().RawSQL)
+	require.Equal(t, "parent_id", source.GetCreateTable().FkCols[0].Cols[0])
+	require.Equal(t, "fk_child_parent", source.GetCreateTable().FksReferToMe[0].Def.Name)
+}
+
 func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
 	source := &planpb.Node{
 		NodeType:               planpb.Node_FILTER,

@@ -809,22 +809,8 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 		}
 
 	case *plan.DataDefinition_CreateTable:
-		CreateTable := &plan.CreateTable{
-			Replace:     df.CreateTable.Replace,
-			IfNotExists: df.CreateTable.IfNotExists,
-			Temporary:   df.CreateTable.Temporary,
-			Database:    df.CreateTable.Database,
-			TableDef:    DeepCopyTableDef(df.CreateTable.TableDef, true),
-			IndexTables: DeepCopyTableDefList(df.CreateTable.GetIndexTables()),
-			FkDbs:       slices.Clone(df.CreateTable.FkDbs),
-			FkTables:    slices.Clone(df.CreateTable.FkTables),
-			FkCols:      make([]*plan.FkColName, len(df.CreateTable.FkCols)),
-		}
-		for i, val := range df.CreateTable.FkCols {
-			CreateTable.FkCols[i] = &plan.FkColName{Cols: slices.Clone(val.Cols)}
-		}
 		newDf.Definition = &plan.DataDefinition_CreateTable{
-			CreateTable: CreateTable,
+			CreateTable: DeepCopyCreateTable(df.CreateTable),
 		}
 
 	case *plan.DataDefinition_AlterTable:
@@ -887,17 +873,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	case *plan.DataDefinition_CreateIndex:
 		newDf.Definition = &plan.DataDefinition_CreateIndex{
 			CreateIndex: &plan.CreateIndex{
-				Database: df.CreateIndex.Database,
-				Table:    df.CreateIndex.Table,
-				TableDef: DeepCopyTableDef(df.CreateIndex.TableDef, true),
-				Index: &plan.CreateTable{
-					IfNotExists: df.CreateIndex.Index.IfNotExists,
-					Temporary:   df.CreateIndex.Index.Temporary,
-					Database:    df.CreateIndex.Index.Database,
-					Replace:     df.CreateIndex.Index.Replace,
-					TableDef:    DeepCopyTableDef(df.CreateIndex.Index.TableDef, true),
-					IndexTables: DeepCopyTableDefList(df.CreateIndex.Index.GetIndexTables()),
-				},
+				Database:              df.CreateIndex.Database,
+				Table:                 df.CreateIndex.Table,
+				TableDef:              DeepCopyTableDef(df.CreateIndex.TableDef, true),
+				Index:                 DeepCopyCreateTable(df.CreateIndex.Index),
 				OriginTablePrimaryKey: df.CreateIndex.OriginTablePrimaryKey,
 				TableExist:            df.CreateIndex.TableExist,
 			},
@@ -964,6 +943,18 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 	}
 
 	return newDf
+}
+
+// DeepCopyCreateTable clones the complete CreateTable message, including the
+// execution-only fields used after the table metadata is created. In
+// particular, CTAS execution depends on CreateAsSelectSql, while foreign-key
+// bookkeeping and partition execution depend on the other fields that used to
+// be omitted by the hand-written subset copy.
+func DeepCopyCreateTable(src *plan.CreateTable) *plan.CreateTable {
+	if src == nil {
+		return nil
+	}
+	return proto.Clone(src).(*plan.CreateTable)
 }
 
 func DeepCopyFkey(fkey *ForeignKeyDef) *ForeignKeyDef {
