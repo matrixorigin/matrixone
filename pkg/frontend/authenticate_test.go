@@ -11863,6 +11863,8 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
 		require.Contains(t, bh.executedSQLs[1], "select 42,0,0,0")
 		require.Contains(t, bh.executedSQLs[1], "d.dependency_generation")
+		require.Contains(t, bh.executedSQLs[1], "d.source_relation_kind")
+		require.NotContains(t, bh.executedSQLs[1], "'','','','','REVALIDATE_SCAN'")
 		require.Contains(t, bh.executedSQLs[1],
 			"in ('REVALIDATE_REQUIRED','REVALIDATE_SCAN','ACTIVATED','LEGACY_SCAN')")
 	})

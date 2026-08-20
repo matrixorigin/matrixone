@@ -140,6 +140,20 @@ func TestSeedMissingViewMetadataUsesOnlyUserViewsWithoutState(t *testing.T) {
 	require.Contains(t, sql, "t.reldatabase not in ('")
 }
 
+func TestReconcileAccountViewMetadataRemovesOrphansAndSeedsMissingViews(t *testing.T) {
+	sqls := ReconcileAccountViewMetadataSQL(42, 77)
+	require.Len(t, sqls, 3)
+	for _, sql := range sqls[:2] {
+		require.Contains(t, sql, "account_id=42")
+		require.Contains(t, sql, "target_relation_id<>0")
+		require.Contains(t, sql, "not exists")
+		require.Contains(t, sql, "t.relkind='v'")
+	}
+	require.Contains(t, sqls[2], "where t.account_id=42")
+	require.Contains(t, sqls[2], "77,0,'DISCOVERING'")
+	require.Contains(t, sqls[2], "r.target_relation_id is null")
+}
+
 func TestConflictingRecoveryTargetGetsGenerationFencedBackoff(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	selected := executor.NewMemResult([]types.Type{
@@ -950,13 +964,40 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[7],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
 	require.Contains(t, exec.sqls[7], "source_account_id=0")
-	require.Contains(t, exec.sqls[7], "where account_id=0")
+	require.NotContains(t, exec.sqls[7], "where account_id=0")
+	require.Contains(t, exec.sqls[7], "where target_relation_id=0")
 	for _, sql := range exec.sqls {
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
 		require.Len(t, statements, 1)
 		statements[0].Free()
 	}
+}
+
+func TestRunViewMetadataRecoveryAdvancesRequiredSentinels(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	required := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+	required.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(required, 0,
+		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+	marker := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+	}, proc.Mp())
+	marker.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(marker, 0,
+		[]uint32{viewMetadataRevalidationSeedComplete}))
+	require.NoError(t, executor.AppendStringRows(marker, 1,
+		[]string{catalog.ViewRefreshStatusRevalidateRequired}))
+	require.NoError(t, executor.AppendFixedRows(marker, 2, []uint64{7}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		required.GetResult(), {}, marker.GetResult(), {},
+	}}
+	require.NoError(t, RunViewMetadataRecovery(context.Background(), exec, "worker"))
+	require.Len(t, exec.sqls, 4)
+	require.Contains(t, exec.sqls[0], "select source_relation_kind")
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, exec.sqls[1])
+	require.Contains(t, exec.sqls[3], "where target_relation_id=0")
+	require.NotContains(t, exec.sqls[3], "where account_id=0")
 }
 
 func TestRequireViewMetadataRevalidationFastReturnsWhenAlreadyRequired(t *testing.T) {

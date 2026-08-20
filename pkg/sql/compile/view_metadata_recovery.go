@@ -201,7 +201,7 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 		result, err := txn.Exec(fmt.Sprintf(
 			"update %s.%s set source_account_id=0,source_database_name='',source_relation_name='',"+
 				"source_relation_kind='%s',dependency_generation=dependency_generation+1 "+
-				"where account_id=0 and target_relation_id=0 and dependency_ordinal=0 "+
+				"where target_relation_id=0 and dependency_ordinal=0 "+
 				"and source_relation_kind='%s'",
 			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES,
 			catalog.ViewRefreshStatusRevalidateScan,
@@ -226,8 +226,11 @@ func RunViewMetadataRecovery(
 	defer cancel()
 	ctx = callCtx
 	blocked, err := viewMetadataRevalidationStillRequired(ctx, sqlExecutor)
-	if err != nil || blocked {
+	if err != nil {
 		return err
+	}
+	if blocked {
+		return StartViewMetadataRevalidation(ctx, sqlExecutor, workerID)
 	}
 	excludedTargets := make([]viewRefreshTarget, 0, viewMetadataRecoveryPageSize)
 	call := func(discover bool) (bool, error) {

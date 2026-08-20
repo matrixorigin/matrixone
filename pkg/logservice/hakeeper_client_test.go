@@ -595,9 +595,10 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		cc.mu.client = nil
 
 		hb := pb.CNStoreHeartbeat{
-			UUID:           s.ID(),
-			ServiceAddress: "addr1",
-			CommitID:       "c123",
+			UUID:                         s.ID(),
+			ServiceAddress:               "addr1",
+			CommitID:                     "c123",
+			ViewMetadataRefreshSupported: true,
 		}
 		_, err = c1.SendCNHeartbeat(ctx, hb)
 		require.NoError(t, err)
@@ -630,11 +631,12 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 		cd, err := c1.GetClusterDetails(ctx)
 		require.NoError(t, err)
 		cn := pb.CNStore{
-			UUID:           s.ID(),
-			ServiceAddress: "addr1",
-			WorkState:      metadata.WorkState_Working,
-			UpTime:         cd.CNStores[0].UpTime,
-			CommitID:       hb.CommitID,
+			UUID:                         s.ID(),
+			ServiceAddress:               "addr1",
+			WorkState:                    metadata.WorkState_Working,
+			UpTime:                       cd.CNStores[0].UpTime,
+			CommitID:                     hb.CommitID,
+			ViewMetadataRefreshSupported: true,
 		}
 		tn := pb.TNStore{
 			UUID:                 s.ID(),

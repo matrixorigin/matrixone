@@ -167,6 +167,37 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 	})
 }
 
+func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	cluster := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
+		ViewMetadataRefreshSupported: true,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, cluster)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, reconcileAccountViewMetadata(context.Background(), ses, bh, 42))
+	require.Len(t, bh.executedSQLs, 4)
+	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
+	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[3], "where t.account_id=42")
+	require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
+	require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+}
+
 type failSecondBackgroundExec struct {
 	*backgroundExecTest
 	err error

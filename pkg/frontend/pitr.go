@@ -1084,6 +1084,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			if rtnErr != nil {
 				return rtnErr
 			}
+			if rtnErr = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); rtnErr != nil {
+				return rtnErr
+			}
 
 			if rtnErr = CancelCheck(ctx); rtnErr != nil {
 				return
@@ -1205,6 +1208,9 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			tenantInfo.GetTenantID(),
 			tenantInfo.GetTenantID(),
 		); err != nil {
+			return
+		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID()); err != nil {
 			return
 		}
 	}

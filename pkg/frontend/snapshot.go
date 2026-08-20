@@ -884,6 +884,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		if err = restoreSystemCatalogsAfterObjects(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount, toAccountId); err != nil {
 			return stats, err
 		}
+		if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+			return stats, err
+		}
 	}
 	if stmt.Level == tree.RESTORELEVELACCOUNT && toAccountId == catalog.System_Account {
 		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
@@ -2988,6 +2991,9 @@ func restoreToAccountUsingCluster(
 	if err != nil {
 		return err
 	}
+	if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
+		return err
+	}
 	if toAccountId == catalog.System_Account {
 		if err = seedMissingViewMetadataAfterCatalogReset(ctx, ses, bh); err != nil {
 			return err
@@ -3023,6 +3029,27 @@ func invalidateAccountViewMetadata(
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx),
 		compile.AccountViewMetadataInvalidationSQL(accountID, uint64(time.Now().UnixNano())))
+}
+
+func reconcileAccountViewMetadata(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+) error {
+	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		return nil
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+		return err
+	}
+	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {
