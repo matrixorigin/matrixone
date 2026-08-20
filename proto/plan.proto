@@ -1083,9 +1083,14 @@ message Node {
   // must not retain incoming keys in its hashmap.
   bool dedup_input_keys_unique = 83;
 
+  // JOIN only: the planner proved that the join is consumed by a scalar,
+  // single COUNT(*) aggregate which understands a zero-column batch whose
+  // row count carries the complete join multiplicity.
+  bool emit_compressed_row_count = 84;
+
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
-  int32 asof_right_col = 84;
+  int32 asof_right_col = 85;
 }
 
 message SnapshotExtraInfo {

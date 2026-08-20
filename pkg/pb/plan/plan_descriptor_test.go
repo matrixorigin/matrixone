@@ -74,10 +74,10 @@ func TestPlanDescriptorContainsAsofFields(t *testing.T) {
 			continue
 		}
 		for _, field := range message.GetField() {
-			if field.GetName() == "asof_right_col" && field.GetNumber() == 84 {
+			if field.GetName() == "asof_right_col" && field.GetNumber() == 85 {
 				return
 			}
 		}
 	}
-	t.Fatal("plan descriptor missing Node.asof_right_col = 84")
+	t.Fatal("plan descriptor missing Node.asof_right_col = 85")
 }

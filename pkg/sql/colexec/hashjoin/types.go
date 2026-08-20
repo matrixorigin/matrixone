@@ -149,6 +149,9 @@ type HashJoin struct {
 
 	HashOnPK     bool
 	CanSkipProbe bool
+	// EmitCompressedRowCount is an explicit planner/executor contract. It is
+	// valid only when a scalar, single COUNT(*) directly consumes this join.
+	EmitCompressedRowCount bool
 
 	IsShuffle  bool
 	ShuffleIdx int32

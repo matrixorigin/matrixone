@@ -62,12 +62,12 @@ func TestHashJoinDescriptorContainsAsofRightCol(t *testing.T) {
 			continue
 		}
 		for _, field := range message.GetField() {
-			if field.GetName() == "asof_right_col" && field.GetNumber() == 16 {
+			if field.GetName() == "asof_right_col" && field.GetNumber() == 17 {
 				return
 			}
 		}
 	}
-	t.Fatal("pipeline descriptor missing HashJoin.asof_right_col = 16")
+	t.Fatal("pipeline descriptor missing HashJoin.asof_right_col = 17")
 }
 
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {

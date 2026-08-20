@@ -228,6 +228,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.CanSkipProbe = t.CanSkipProbe
+		op.EmitCompressedRowCount = t.EmitCompressedRowCount
 		op.IsShuffle = t.IsShuffle
 		if !t.IsShuffle {
 			mailbox := dupCtx.hashJoinMailboxes[t]
@@ -1436,6 +1437,7 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 		arg.HashOnPK = false
 	}
 	arg.CanSkipProbe = node.JoinType == plan.Node_SEMI && !node.IsRightJoin && left.NodeType == plan.Node_TABLE_SCAN
+	arg.EmitCompressedRowCount = node.EmitCompressedRowCount
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
 	arg.AsofRightCol = node.AsofRightCol
