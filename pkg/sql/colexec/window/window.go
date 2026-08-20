@@ -2401,12 +2401,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -2426,12 +2432,18 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 			if plus {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -2855,12 +2867,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doDateSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
 			} else {
 				fol, err := doDateAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Date], cmpl)
@@ -2889,12 +2907,18 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 			if sub {
 				fol, err := doDatetimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
 			} else {
 				fol, err := doDatetimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Datetime], cmpl)
@@ -3000,6 +3024,17 @@ func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bou
 // outOfDomainRangeBoundary maps a conceptual search key outside a numeric type
 // domain to its insertion boundary in the current SQL sort direction.
 func outOfDomainRangeBoundary(start, end int, aboveDomain, desc bool) int {
+\tif aboveDomain != desc {
+\t\treturn end
+\t}
+\treturn start
+}
+
+// temporalRangeOverflowBoundary maps a temporal search key outside the type
+// domain to the insertion point it would have if that key were representable.
+// A key above the domain sorts after every ASC value and before every DESC
+// value; a key below the domain does the opposite.
+func temporalRangeOverflowBoundary(start, end int, aboveDomain, desc bool) int {
 	if aboveDomain != desc {
 		return end
 	}
