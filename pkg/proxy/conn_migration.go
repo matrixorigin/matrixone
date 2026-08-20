@@ -50,9 +50,23 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
+		if c.tun != nil && moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
+			c.tun.rejectPendingLongDataReconciliation()
+		}
 		return nil, moerr.AttachCause(ctx, err)
 	}
+	defer c.queryClient.Release(resp)
 	r := resp.MigrateConnFromResponse
+	if r == nil {
+		return nil, moerr.NewInternalError(parent, "bad response")
+	}
+	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
+		c.tun.rejectPendingLongDataReconciliation()
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if c.tun != nil {
+		r.PrepareStmts = c.tun.filterClosedStatementsForMigration(r.PrepareStmts)
+	}
 
 	c.log.Info("connection migrate from server", zap.String("server address", addr),
 		zap.String("tenant", string(c.clientInfo.Tenant)),
@@ -63,7 +77,6 @@ func (c *clientConn) migrateConnFromContext(
 		zap.Int64("goId", goid.Get()),
 	)
 
-	defer c.queryClient.Release(resp)
 	return r, nil
 }
 
@@ -235,14 +248,17 @@ func (c *clientConn) migrateConnContext(
 	if err != nil {
 		return err
 	}
-	if resp == nil {
-		return moerr.NewInternalError(ctx, "bad response")
-	}
 	if !resp.UserLevelLockReleaseSupported {
 		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
 	}
 	if len(resp.UserLevelLocks) > 0 {
 		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
-	return c.migrateConnToContext(ctx, sc, resp)
+	if err := c.migrateConnToContext(ctx, sc, resp); err != nil {
+		return err
+	}
+	if c.tun != nil {
+		c.tun.clearMigratedStatementState()
+	}
+	return nil
 }
