@@ -5667,7 +5667,7 @@ func supportsRemoteAsofJoin(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion22
+	return ok && protocolVersion >= defines.MORPCVersion23
 }
 
 func supportsRemoteTargetAwareUpdate(service string) bool {

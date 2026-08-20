@@ -890,8 +890,8 @@ func (ctr *container) findAsofPredecessor(
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		return candidate, qualified, evalErr
 	}
-	indexPos := sort.Search(len(ctr.asofIndexes), func(i int) bool { return ctr.asofIndexes[i].key >= groupKey })
-	ok := indexPos < len(ctr.asofIndexes) && ctr.asofIndexes[indexPos].key == groupKey
+	indexPos := sort.Search(ctr.asofIndexCount, func(i int) bool { return ctr.asofIndexes[i].key >= groupKey })
+	ok := indexPos < ctr.asofIndexCount && ctr.asofIndexes[indexPos].key == groupKey
 	var ordered []int32
 	if ok {
 		ordered = ctr.asofIndexes[indexPos].values
@@ -900,14 +900,9 @@ func (ctr *container) findAsofPredecessor(
 		// A build bucket with a changed row set cannot reuse the previous
 		// ordering. This also protects prepared/test reuse from stale ordinals.
 		mpool.FreeSlice(proc.Mp(), ordered)
-		newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](len(ctr.asofIndexes)-1, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
-		if allocErr != nil {
-			return -1, false, allocErr
-		}
-		copy(newIndexes, ctr.asofIndexes[:indexPos])
-		copy(newIndexes[indexPos:], ctr.asofIndexes[indexPos+1:])
-		mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
-		ctr.asofIndexes = newIndexes
+		copy(ctr.asofIndexes[indexPos:], ctr.asofIndexes[indexPos+1:ctr.asofIndexCount])
+		ctr.asofIndexCount--
+		ctr.asofIndexes[ctr.asofIndexCount] = asofIndex{}
 		ok = false
 	}
 	if !ok {
@@ -939,16 +934,23 @@ func (ctr *container) findAsofPredecessor(
 			return left > right
 		})
 		if !ok {
-			newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](len(ctr.asofIndexes)+1, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
-			if allocErr != nil {
-				mpool.FreeSlice(proc.Mp(), ordered)
-				return -1, false, allocErr
+			if ctr.asofIndexCount == len(ctr.asofIndexes) {
+				capacity := len(ctr.asofIndexes) * 2
+				if capacity == 0 {
+					capacity = 8
+				}
+				newIndexes, allocErr := mpool.MakeSliceAccounted[asofIndex](capacity, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+				if allocErr != nil {
+					mpool.FreeSlice(proc.Mp(), ordered)
+					return -1, false, allocErr
+				}
+				copy(newIndexes, ctr.asofIndexes[:ctr.asofIndexCount])
+				mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
+				ctr.asofIndexes = newIndexes
 			}
-			copy(newIndexes[:indexPos], ctr.asofIndexes[:indexPos])
-			newIndexes[indexPos] = asofIndex{key: groupKey, values: ordered}
-			copy(newIndexes[indexPos+1:], ctr.asofIndexes[indexPos:])
-			mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
-			ctr.asofIndexes = newIndexes
+			copy(ctr.asofIndexes[indexPos+1:ctr.asofIndexCount+1], ctr.asofIndexes[indexPos:ctr.asofIndexCount])
+			ctr.asofIndexes[indexPos] = asofIndex{key: groupKey, values: ordered}
+			ctr.asofIndexCount++
 		}
 	}
 

@@ -1594,7 +1594,7 @@ func validateRemoteJoinProtocol(proc *process.Process, joinType plan.Node_JoinTy
 	}
 	if proc == nil || !supportsRemoteAsofJoin(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"native ASOF join remote execution requires MORPC protocol version 22",
+			"native ASOF join remote execution requires MORPC protocol version 23",
 		)
 	}
 	return nil

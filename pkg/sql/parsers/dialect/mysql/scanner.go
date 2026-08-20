@@ -1002,7 +1002,7 @@ func (s *Scanner) asofQualifierInJoin(pos int) bool {
 			if end := strings.Index(s.buf[i+2:], "*/"); end >= 0 {
 				i += end + 4
 			} else {
-				return inOn
+				return !inOn
 			}
 			continue
 		}
@@ -1031,11 +1031,11 @@ func (s *Scanner) asofQualifierInJoin(pos int) bool {
 		if word == "asof" {
 			j := s.skipBlankAndCommentsFrom(i)
 			if j < len(s.buf) && s.buf[j] == '.' {
-				return false
+				return true
 			}
 		}
 	}
-	return inOn
+	return !inOn
 }
 
 func (s *Scanner) previousSignificantPos(pos int) int {

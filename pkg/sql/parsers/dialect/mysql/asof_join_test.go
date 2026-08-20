@@ -76,3 +76,11 @@ func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
 	left := join.Left.(*tree.AliasedTableExpr)
 	require.Equal(t, tree.Identifier("asof"), left.As.Alias)
 }
+
+func TestAsofJoinProducesAsofAst(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select * from l asof join r on l.k = r.k and l.ts >= r.ts", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+	require.Equal(t, tree.JOIN_TYPE_ASOF, join.JoinType)
+}

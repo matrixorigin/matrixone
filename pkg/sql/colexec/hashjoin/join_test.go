@@ -1265,6 +1265,48 @@ func TestFindAsofPredecessor(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	keyType := types.T_int32.ToType()
+	timeType := types.T_timestamp.ToType()
+	arg := &HashJoin{
+		JoinType:     plan.Node_ASOF_LEFT,
+		LeftTypes:    []types.Type{keyType, timeType},
+		RightTypes:   []types.Type{keyType, timeType},
+		EqConds:      [][]*plan.Expr{{newExpr(0, keyType)}, {newExpr(0, keyType)}},
+		NonEqCond:    makeAsofCondition(t, timeType, ">="),
+		AsofRightCol: 1,
+	}
+	installTestAllocation(t, arg)
+	require.NoError(t, arg.Prepare(proc))
+	left := batch.NewWithSize(2)
+	left.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	left.Vecs[1] = testutil.NewTimestampVector(1, timeType, proc.Mp(), false, nil, []string{"2026-01-01 10:00:00"})
+	left.SetRowCount(1)
+	right := batch.NewWithSize(2)
+	right.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	right.Vecs[1] = testutil.NewTimestampVector(2, timeType, proc.Mp(), false, nil, []string{"2026-01-01 09:00:00", "2026-01-01 08:00:00"})
+	right.SetRowCount(2)
+	arg.ctr.leftBat = left
+	arg.ctr.rightBats = []*batch.Batch{right}
+	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
+	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
+	for group := uint64(0); group < 64; group++ {
+		_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, group, []int32{0, 1})
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	require.Equal(t, 64, arg.ctr.asofIndexCount)
+	require.GreaterOrEqual(t, cap(arg.ctr.asofIndexes), arg.ctr.asofIndexCount)
+	arg.ctr.leftBat = nil
+	arg.ctr.rightBats = nil
+	arg.Free(proc, false, nil)
+	left.Clean(proc.Mp())
+	right.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
 	timeType := types.T_timestamp.ToType()
 	left := newExpr(1, timeType)

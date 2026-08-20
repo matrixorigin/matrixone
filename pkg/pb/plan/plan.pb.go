@@ -15062,7 +15062,7 @@ func init() {
 	proto.RegisterType((*AlterTableAutoIncrement)(nil), "plan.AlterTableAutoIncrement")
 }
 
-func init() { proto.RegisterFile("proto/plan.proto", fileDescriptor_22bd2bd1e47d7acf) }
+func init() { proto.RegisterFile("plan.proto", fileDescriptor_22bd2bd1e47d7acf) }
 
 var fileDescriptor_22bd2bd1e47d7acf = []byte{
 	// 15302 bytes of a gzipped FileDescriptorProto
