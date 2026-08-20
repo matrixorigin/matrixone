@@ -188,6 +188,120 @@ func TestIdentityUsesPublisherBeforeSnapshotTenant(t *testing.T) {
 	require.ErrorContains(t, err, "invalid publisher tenant")
 }
 
+func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	_, err := PrepareScalar(nil, proc)
+	require.ErrorContains(t, err, "incomplete metadata")
+	_, err = PrepareCorrelatedExecution(&plan.VectorIndexScan{}, proc)
+	require.ErrorContains(t, err, "incomplete metadata")
+	var nilExecution *Execution
+	require.Error(t, nilExecution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	require.Nil(t, nilExecution.Spec())
+	nilExecution.Close()
+	_, err = Identity(nil, 0, 1, 0)
+	require.ErrorContains(t, err, "missing metadata")
+
+	base := func() *plan.VectorIndexScan {
+		return &plan.VectorIndexScan{
+			Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+			SourceTable:    &plan.ObjectRef{},
+			QueryVector:    plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+			CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(2),
+		}
+	}
+
+	execution, err := PrepareCorrelatedExecution(base(), proc)
+	require.NoError(t, err)
+	_, _, err = execution.RequestAt(0, searchIdentityForTest())
+	require.ErrorContains(t, err, "no evaluated provider batch")
+	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	_, _, err = execution.RequestAt(1, searchIdentityForTest())
+	require.ErrorContains(t, err, "out of range")
+	execution.Close()
+
+	nullQuery := base()
+	nullQuery.QueryVector = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+			Value:  &plan.Literal_VecVal{},
+		}},
+	}
+	execution, err = PrepareCorrelatedExecution(nullQuery, proc)
+	require.NoError(t, err)
+	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	_, hasQuery, err := execution.RequestAt(0, searchIdentityForTest())
+	require.NoError(t, err)
+	require.False(t, hasQuery)
+	execution.Close()
+
+	wrongLimit := base()
+	wrongLimit.CandidateLimit = plan2.MakePlan2Int64ConstExprWithType(2)
+	execution, err = PrepareCorrelatedExecution(wrongLimit, proc)
+	require.NoError(t, err)
+	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	_, _, err = execution.RequestAt(0, searchIdentityForTest())
+	require.ErrorContains(t, err, "result limit did not evaluate to uint64")
+	execution.Close()
+
+	wrongFirstRound := base()
+	wrongFirstRound.FirstRoundLimit = plan2.MakePlan2Int64ConstExprWithType(1)
+	execution, err = PrepareCorrelatedExecution(wrongFirstRound, proc)
+	require.NoError(t, err)
+	require.NoError(t, execution.EvalBatch(batch.EmptyForConstFoldBatch, proc))
+	_, _, err = execution.RequestAt(0, searchIdentityForTest())
+	require.ErrorContains(t, err, "first-round limit did not evaluate to uint64")
+	execution.Close()
+}
+
+func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
+	identity := searchIdentityForTest()
+	_, _, err := RequestFromScalar(nil, identity, nil, false)
+	require.ErrorContains(t, err, "incomplete bound expressions")
+
+	nonLiteralQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{}}
+	_, _, err = RequestFromScalar(nonLiteralQuery, identity, nil, false)
+	require.ErrorContains(t, err, "query vector did not fold")
+
+	nullQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+	}}
+	_, hasQuery, err := RequestFromScalar(nullQuery, identity, nil, false)
+	require.NoError(t, err)
+	require.False(t, hasQuery)
+
+	query := plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{QueryVector: query}, identity, nil, false)
+	require.ErrorContains(t, err, "result limit did not fold")
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
+		QueryVector: query,
+		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+		}}},
+	}, identity, nil, false)
+	require.ErrorContains(t, err, "result limit did not fold")
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
+		QueryVector:    query,
+		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	}, identity, nil, false)
+	require.ErrorContains(t, err, "result limit is not uint64")
+
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
+		QueryVector:     query,
+		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
+		FirstRoundLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+	}, identity, nil, false)
+	require.ErrorContains(t, err, "first-round limit did not fold")
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
+		QueryVector:     query,
+		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
+		FirstRoundLimit: plan2.MakePlan2Int64ConstExprWithType(1),
+	}, identity, nil, false)
+	require.ErrorContains(t, err, "first-round limit is not uint64")
+}
+
 func searchIdentityForTest() searchplugin.ScanIdentity {
 	return searchplugin.ScanIdentity{PartitionCount: 1}
 }
