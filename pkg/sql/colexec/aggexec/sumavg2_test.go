@@ -330,6 +330,30 @@ func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {
 	require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
 }
 
+func TestWindowSlidingSumConstantInputAndEmptyRemoval(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int32.ToType()
+	input, err := vector.NewConstFixed(typ, int32(7), 2, mp)
+	require.NoError(t, err)
+	defer input.Free(mp)
+
+	exec, err := MakeAgg(mp, AggIdOfSum, false, typ)
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+
+	// A constant vector stores only row zero. Sliding add/remove must normalize
+	// the logical row index and restore the empty-frame NULL state afterwards.
+	require.NoError(t, AddWindowRow(exec, 1, []*vector.Vector{input}))
+	require.NoError(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+	require.Error(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	defer results[0].Free(mp)
+	require.True(t, results[0].IsNull(0))
+}
+
 func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_int64.ToType()

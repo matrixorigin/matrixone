@@ -1642,6 +1642,36 @@ func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingSumRejectsNonSequentialOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3})
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 1)
+	require.NoError(t, err)
+	first.Free(proc.Mp())
+	require.NotNil(t, ctr.runningAgg)
+
+	// A retained sliding state is valid only for the immediately following
+	// output range; skipping a row must fail and release that state.
+	_, err = ctr.processAggregateFuncRange(0, arg, proc, 2, 3)
+	require.ErrorContains(t, err, "sliding window output is not sequential")
+	require.Nil(t, ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestBoundedSlidingSumResetsAtPartitionBoundary(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := makeInt32Batch(proc.Mp(), []int32{1, 2, 3, 4, 10, 20, 30, 40})
