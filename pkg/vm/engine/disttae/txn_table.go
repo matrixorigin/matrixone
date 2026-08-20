@@ -1912,6 +1912,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		return err
 	}
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
+		ctx,
 		INSERT,
 		"",
 		tbl.accountId,
@@ -2148,12 +2149,12 @@ func (tbl *txnTable) SoftDeleteObject(ctx context.Context, objID *objectio.Objec
 	return nil
 }
 
-func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.getTxn().proc)
 	if err != nil {
 		return err
 	}
-	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
+	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(ctx, DELETE, "", tbl.accountId, tbl.db.databaseId, tbl.tableId,
 		tbl.db.databaseName, tbl.tableName, ibat, tbl.getTxn().tnStores[0], tbl.extraInfo.AutoIncrEpoch); err != nil {
 		ibat.Clean(tbl.getTxn().proc.Mp())
 		return err
@@ -2627,19 +2628,19 @@ func pkCommitTSMatchedInRange(
 		commitTSVec.IsConstNull() {
 		return false, false
 	}
-	timestamps := vector.MustFixedColWithTypeCheck[types.TS](commitTSVec)
+	rowCount := commitTSVec.Length()
 	var aborts []bool
 	if abortVec != nil && !abortVec.IsConstNull() {
 		if abortVec.GetType().Oid != types.T_bool {
 			return false, false
 		}
 		aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
-		if len(aborts) != len(timestamps) {
+		if len(aborts) != rowCount {
 			return false, false
 		}
 	}
 	for _, sel := range sels {
-		if sel < 0 || int(sel) >= len(timestamps) {
+		if sel < 0 || int(sel) >= rowCount {
 			return false, false
 		}
 		if commitTSVec.IsNull(uint64(sel)) {
@@ -2653,7 +2654,7 @@ func pkCommitTSMatchedInRange(
 				continue
 			}
 		}
-		ts := timestamps[sel]
+		ts := vector.GetFixedAtNoTypeCheck[types.TS](commitTSVec, int(sel))
 		if ts.GT(&from) && ts.LE(&to) {
 			return true, true
 		}

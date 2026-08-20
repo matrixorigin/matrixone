@@ -60,45 +60,143 @@ type BackupDeltaLocDataSource struct {
 	needShrink bool
 }
 
+const invalidBackupSpecialColumnPosition = math.MaxUint16
+
+// backupSpecialColumnLayout keeps the 4.2 backup helpers compatible with both
+// the legacy layout resolver and the v10 special-column metadata.
+type backupSpecialColumnLayout struct {
+	PhysicalAddr uint16
+	CommitTS     uint16
+	Abort        uint16
+}
+
+func (layout backupSpecialColumnLayout) Resolve(seqnum uint16) (uint16, bool) {
+	switch seqnum {
+	case objectio.SEQNUM_COMMITTS:
+		return layout.CommitTS, layout.CommitTS != invalidBackupSpecialColumnPosition
+	case objectio.SEQNUM_ABORT:
+		return layout.Abort, layout.Abort != invalidBackupSpecialColumnPosition
+	default:
+		return invalidBackupSpecialColumnPosition, false
+	}
+}
+
+func (layout backupSpecialColumnLayout) resolve(seqnum uint16) (uint16, bool) {
+	return layout.Resolve(seqnum)
+}
+
+func resolveBackupSpecialColumnLayout(block objectio.BlockObject) backupSpecialColumnLayout {
+	resolved := objectio.ResolveSpecialColumnLayout(block)
+	layout := backupSpecialColumnLayout{
+		PhysicalAddr: resolved.PhysicalAddr,
+		CommitTS:     resolved.CommitTS,
+		Abort:        resolved.Abort,
+	}
+	if layout.CommitTS == invalidBackupSpecialColumnPosition &&
+		block.GetColumnCount() == 3 &&
+		block.GetMaxSeqnum() == 2 &&
+		block.ColumnMeta(0).DataType() == uint8(types.T_Rowid) &&
+		block.ColumnMeta(2).DataType() == uint8(types.T_TS) {
+		// Legacy generic backup writers stored commitTS as the trailing
+		// ordinary column rather than declaring it as a special column.
+		layout.CommitTS = 2
+	}
+	return layout
+}
+
 func loadSpecialColumnLayout(
 	ctx context.Context,
 	fs fileservice.FileService,
 	location objectio.Location,
-) (objectio.SpecialColumnLayout, error) {
+) (backupSpecialColumnLayout, error) {
 	objectMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	if err != nil {
-		return objectio.SpecialColumnLayout{}, err
+		return backupSpecialColumnLayout{}, err
 	}
 	blockMeta := objectMeta.MustDataMeta().GetBlockMeta(uint32(location.ID()))
-	return objectio.ResolveSpecialColumnLayout(blockMeta), nil
+	return resolveBackupSpecialColumnLayout(blockMeta), nil
 }
 
 func visibleAppendableRows(
 	ctx context.Context,
 	bat *batch.Batch,
-	layout objectio.SpecialColumnLayout,
+	layout backupSpecialColumnLayout,
 	ts *types.TS,
 ) ([]int64, error) {
 	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
 	if !ok || int(commitPos) >= len(bat.Vecs) {
 		return nil, moerr.NewInternalError(ctx, "appendable object has no commit timestamp")
 	}
-	commitTSs := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[commitPos])
+	rowCount := bat.Vecs[0].Length()
+	if _, err := ioutil.ValidateTombstoneCommitTSColumn(rowCount, bat.Vecs[commitPos]); err != nil {
+		return nil, err
+	}
+	commitVec := bat.Vecs[commitPos]
 	var aborts []bool
 	if abortPos, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok && int(abortPos) < len(bat.Vecs) {
 		abortVec := bat.Vecs[abortPos]
 		if !abortVec.IsConstNull() {
+			if abortVec.GetType().Oid != types.T_bool || abortVec.Length() != rowCount {
+				return nil, moerr.NewInvalidInputNoCtx("appendable tombstone has invalid abort column")
+			}
+			for row := 0; row < rowCount; row++ {
+				if abortVec.IsNull(uint64(row)) {
+					return nil, moerr.NewInvalidInputNoCtxf("appendable tombstone abort row %d is null", row)
+				}
+			}
 			aborts = vector.MustFixedColWithTypeCheck[bool](abortVec)
 		}
 	}
-	rows := make([]int64, 0, len(commitTSs))
-	for row, commitTS := range commitTSs {
+	rows := make([]int64, 0, rowCount)
+	for row := 0; row < rowCount; row++ {
+		commitTS := vector.GetFixedAtNoTypeCheck[types.TS](commitVec, row)
 		if (aborts != nil && aborts[row]) || (ts != nil && commitTS.GT(ts)) {
 			continue
 		}
 		rows = append(rows, int64(row))
 	}
 	return rows, nil
+}
+
+// canonicalizeBackupTombstone removes appendable-only physical and abort
+// columns before a tombstone is written into a legacy backup object.
+func canonicalizeBackupTombstone(
+	ctx context.Context,
+	data *batch.Batch,
+	layout backupSpecialColumnLayout,
+) (*batch.Batch, error) {
+	commitPos, ok := layout.Resolve(objectio.SEQNUM_COMMITTS)
+	if !ok || int(commitPos) >= len(data.Vecs) {
+		return nil, moerr.NewInternalError(ctx, "appendable tombstone has no commit timestamp")
+	}
+	result := batch.NewWithSize(len(objectio.TombstoneSeqnums_DN_Created))
+	result.Vecs[objectio.TombstoneAttr_Rowid_Idx] = data.Vecs[objectio.TombstoneAttr_Rowid_Idx]
+	result.Vecs[objectio.TombstoneAttr_PK_Idx] = data.Vecs[objectio.TombstoneAttr_PK_Idx]
+	commitVec := data.Vecs[commitPos]
+	if commitVec.IsConst() {
+		materialized := vector.NewVec(*commitVec.GetType())
+		if err := materialized.UnionBatch(commitVec, 0, commitVec.Length(), nil, common.DebugAllocator); err != nil {
+			materialized.Free(common.DebugAllocator)
+			return nil, err
+		}
+		commitVec.Free(common.DebugAllocator)
+		commitVec = materialized
+	}
+	result.Vecs[objectio.TombstoneAttr_NA_CommitTs_Idx] = commitVec
+	result.SetRowCount(result.Vecs[0].Length())
+	for pos, vec := range data.Vecs {
+		if pos == objectio.TombstoneAttr_Rowid_Idx ||
+			pos == objectio.TombstoneAttr_PK_Idx ||
+			pos == int(commitPos) {
+			continue
+		}
+		if vec != nil {
+			vec.Free(common.DebugAllocator)
+		}
+	}
+	data.Vecs = nil
+	data.Attrs = nil
+	return result, nil
 }
 
 func NewBackupDeltaLocDataSource(
@@ -389,6 +487,10 @@ func trimTombstoneData(
 		}
 		if len(visibleRows) != bat.Vecs[0].Length() {
 			bat.Shrink(visibleRows, false)
+		}
+		bat, err = canonicalizeBackupTombstone(ctx, bat, layout)
+		if err != nil {
+			return err
 		}
 		bat = formatData(bat)
 		(*objectsData)[name].sortKey = sortKey
@@ -706,7 +808,13 @@ func ReWriteCheckpointAndBlockFromKey(
 			segment := objectName.SegmentId()
 			name := objectio.BuildObjectName(&segment, fileNum)
 			var writer *ioutil.BlockWriter
-			writer, err = ioutil.NewBlockWriter(dstFs, name.String())
+			if objectData.dataType == objectio.SchemaTombstone {
+				writer, err = ioutil.NewBlockWriterNew(
+					dstFs, name, 0, objectio.TombstoneSeqnums_DN_Created, true,
+				)
+			} else {
+				writer, err = ioutil.NewBlockWriter(dstFs, name.String())
+			}
 			if err != nil {
 				return err
 			}

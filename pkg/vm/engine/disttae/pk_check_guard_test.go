@@ -182,7 +182,7 @@ func TestPKCommitTSMatchedInRange(t *testing.T) {
 	constant, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(15, 0), 4, mp)
 	require.NoError(t, err)
 	defer constant.Free(mp)
-	changed, ok = pkCommitTSMatchedInRange(constant, []int64{3}, from, to)
+	changed, ok = pkCommitTSMatchedInRange(constant, nil, []int64{3}, from, to)
 	require.True(t, ok)
 	require.True(t, changed)
 }

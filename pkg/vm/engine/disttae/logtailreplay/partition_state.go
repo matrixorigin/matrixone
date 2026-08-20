@@ -1997,6 +1997,11 @@ func (p *PartitionState) countTombstoneStatsWithMerge(
 
 		if it.next() {
 			iterators = append(iterators, it)
+		} else if it.err != nil {
+			if it.release != nil {
+				it.release()
+			}
+			return stats, it.err
 		}
 	}
 

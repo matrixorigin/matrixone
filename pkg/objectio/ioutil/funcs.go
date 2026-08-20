@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -27,6 +28,44 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+type TombstoneCommitTSColumn struct {
+	vec *vector.Vector
+}
+
+func (c TombstoneCommitTSColumn) IsPresent() bool {
+	return c.vec != nil
+}
+
+func (c TombstoneCommitTSColumn) At(row int) types.TS {
+	return vector.GetFixedAtNoTypeCheck[types.TS](c.vec, row)
+}
+
+func ValidateTombstoneCommitTSColumn(expectedRows int, commitTSVec *vector.Vector) (TombstoneCommitTSColumn, error) {
+	if expectedRows < 0 {
+		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtxf("negative tombstone row count %d", expectedRows)
+	}
+	if commitTSVec == nil {
+		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtx("tombstone commit-ts column is missing")
+	}
+	if commitTSVec.GetType().Oid != types.T_TS {
+		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtxf(
+			"tombstone commit-ts column has type %s, expected TS", commitTSVec.GetType().String())
+	}
+	if commitTSVec.IsConstNull() || commitTSVec.Length() != expectedRows || commitTSVec.GetNulls().Any() {
+		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtx("tombstone commit-ts column is unavailable")
+	}
+	typeSize := int(commitTSVec.GetType().TypeSize())
+	backingRows := expectedRows
+	if commitTSVec.IsConst() && backingRows > 0 {
+		backingRows = 1
+	}
+	if typeSize <= 0 || backingRows > math.MaxInt/typeSize ||
+		len(commitTSVec.GetData()) < backingRows*typeSize {
+		return TombstoneCommitTSColumn{}, moerr.NewInvalidInputNoCtx("tombstone commit-ts backing data is invalid")
+	}
+	return TombstoneCommitTSColumn{vec: commitTSVec}, nil
+}
 
 func ListTSRangeFiles(
 	ctx context.Context,
@@ -435,19 +474,54 @@ func ReadDeletes(
 		cols = []uint16{
 			objectio.TombstoneAttr_Rowid_SeqNum,
 			objectio.TombstoneAttr_CommitTs_SeqNum,
-			objectio.TombstoneAttr_Abort_SeqNum,
 		}
-		typs = []types.Type{objectio.RowidType, objectio.TSType, types.T_bool.ToType()}
+		typs = []types.Type{objectio.RowidType, objectio.TSType}
+		meta, loadErr := objectio.FastLoadObjectMeta(ctx, &deltaLoc, false, fs)
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+		layout := objectio.ResolveSpecialColumnLayout(meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(deltaLoc.ID())))
+		if _, ok := layout.Resolve(objectio.SEQNUM_ABORT); ok {
+			cols = append(cols, objectio.TombstoneAttr_Abort_SeqNum)
+			typs = append(typs, types.T_bool.ToType())
+		}
 	}
 
 	if pkType != nil {
 		cols = append(cols[:1], append([]uint16{objectio.TombstoneAttr_PK_SeqNum}, cols[1:]...)...)
 		typs = append(typs[:1], append([]types.Type{*pkType}, typs[1:]...)...)
 	}
+	if len(cacheVectors) < len(cols) {
+		cacheVectors = append(cacheVectors, make(containers.Vectors, len(cols)-len(cacheVectors))...)
+	}
 
-	return LoadTombstoneColumns(
+	meta, release, err := LoadTombstoneColumns(
 		ctx, cols, typs, fs, deltaLoc, cacheVectors, nil, fileservice.Policy(0),
 	)
+	if err != nil || isPersistedByCN {
+		return meta, release, err
+	}
+	commitIdx := len(cols) - 1
+	if _, hasAbort := objectio.ResolveSpecialColumnLayout(
+		meta.GetBlockMeta(uint32(deltaLoc.ID())),
+	).Resolve(objectio.SEQNUM_ABORT); hasAbort {
+		commitIdx--
+	}
+	if commitIdx < 0 || commitIdx >= len(cacheVectors) {
+		if release != nil {
+			release()
+		}
+		return meta, nil, moerr.NewInvalidInputNoCtx("tombstone commit-ts column is unavailable")
+	}
+	if _, err = ValidateTombstoneCommitTSColumn(
+		cacheVectors[0].Length(), &cacheVectors[commitIdx],
+	); err != nil {
+		if release != nil {
+			release()
+		}
+		return meta, nil, err
+	}
+	return meta, release, nil
 }
 
 func EvalDeleteMaskFromDNCreatedTombstones(

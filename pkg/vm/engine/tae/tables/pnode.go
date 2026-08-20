@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -273,8 +274,9 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		return err
 	}
 	firstBlock := objDataMeta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0)
-	persistedByCN := objectio.ResolveSpecialColumnLayout(firstBlock).CommitTS ==
-		objectio.InvalidSpecialColumnPosition
+	persistedByCN := firstBlock.GetColumnCount() == 2 &&
+		objectio.ResolveSpecialColumnLayout(firstBlock).CommitTS ==
+			objectio.InvalidSpecialColumnPosition
 	for blkID := 0; blkID < node.object.meta.Load().BlockCnt(); blkID++ {
 		buf := bf.GetBloomFilter(uint32(blkID))
 		bfIndex := index.NewEmptyBloomFilterWithType(index.HBF)
@@ -381,6 +383,10 @@ func (node *persistedNode) FillBlockTombstones(
 	if node.object.meta.Load().IsAppendable() {
 		colIdxs = append(colIdxs, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT)
 		snapshotTS = &startTS
+	} else {
+		// Non-appendable tombstones can contain rows committed at different
+		// timestamps, including legacy backup objects.
+		colIdxs = append(colIdxs, objectio.SEQNUM_COMMITTS)
 	}
 	for tombstoneBlkID := 0; tombstoneBlkID < node.object.meta.Load().BlockCnt(); tombstoneBlkID++ {
 		buf := bf.GetBloomFilter(uint32(tombstoneBlkID))
@@ -408,9 +414,27 @@ func (node *persistedNode) FillBlockTombstones(
 			return err
 		}
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](vecs[0].GetDownstreamVector())
+		var commitTSs ioutil.TombstoneCommitTSColumn
+		if !node.object.meta.Load().IsAppendable() && !vecs[1].IsConstNull() {
+			commitTSs, err = ioutil.ValidateTombstoneCommitTSColumn(
+				len(rowIDs), vecs[1].GetDownstreamVector(),
+			)
+			if err != nil {
+				for i := range vecs {
+					vecs[i].Close()
+				}
+				return err
+			}
+		}
 		for i := 0; i < len(rowIDs); i++ {
 			if visibilityDeletes != nil && visibilityDeletes.Contains(uint64(i)) {
 				continue
+			}
+			if commitTSs.IsPresent() {
+				commitTS := commitTSs.At(i)
+				if commitTS.GT(&startTS) {
+					continue
+				}
 			}
 			rowID := rowIDs[i]
 			if types.PrefixCompare(rowID[:], blkID[:]) == 0 {

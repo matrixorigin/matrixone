@@ -114,6 +114,24 @@ func LoadPersistedColumnData(
 	if len(cols) == 0 {
 		return vectors, deletes, nil, nil
 	}
+	if commitTSIdx >= 0 {
+		meta, metaErr := objectio.FastLoadObjectMeta(ctx, &location, false, rt.Fs)
+		if metaErr != nil {
+			return nil, deletes, nil, metaErr
+		}
+		block := meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(uint32(location.ID()))
+		layout := objectio.ResolveSpecialColumnLayout(block)
+		if _, ok := layout.Resolve(objectio.SEQNUM_COMMITTS); !ok &&
+			!block.BlockHeader().Appendable() &&
+			block.GetColumnCount() == 3 &&
+			block.GetMaxSeqnum() == 2 &&
+			block.ColumnMeta(0).DataType() == uint8(types.T_Rowid) &&
+			block.ColumnMeta(2).DataType() == uint8(types.T_TS) {
+			// Backup rewrites from older releases stored commitTS as the
+			// trailing ordinary column instead of declaring it special.
+			cols[commitTSIdx] = 2
+		}
+	}
 	var vecs []containers.Vector
 	var release func()
 	var err error
