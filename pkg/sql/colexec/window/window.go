@@ -1836,12 +1836,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -1861,12 +1867,18 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			if plus {
 				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
 				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
@@ -2281,12 +2293,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doTimeSub(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
 			} else {
 				fol, err := doTimeAdd(col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Time], cmpl)
@@ -2306,12 +2324,18 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			if sub {
 				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, false, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
 				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
 				if err != nil {
+					if moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+						return temporalRangeOverflowBoundary(start, end, true, desc), nil
+					}
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
