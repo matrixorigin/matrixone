@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -779,6 +780,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_json: {
 		types.T_json,
 		types.T_char, types.T_varchar, types.T_text,
+		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -933,6 +935,17 @@ func isStrictSqlMode(proc *process.Process) bool {
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil && v != nil {
 			if s, ok := v.(string); ok {
+				// Remote/background processes can retain a resolver supplied by an
+				// internal executor. An empty value from that resolver must not
+				// overwrite the session snapshot serialized by the coordinator:
+				// recursive CTE assignment casts rely on that snapshot to preserve
+				// STRICT_TRANS_TABLES across CN boundaries. The explicit empty-mode
+				// sentinel still means non-strict and is intentionally not replaced.
+				if s == "" && proc.Base != nil && !proc.Base.IsFrontend {
+					if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" && snapshot != process.EmptySqlModeSentinel {
+						return sqlModeIsStrict(snapshot)
+					}
+				}
 				return sqlModeIsStrict(s)
 			}
 		}
@@ -2616,34 +2629,34 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(source, rs, length, selectList, explicit)
@@ -2823,6 +2836,8 @@ func jsonToOthers(ctx context.Context,
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return jsonToStr(ctx, source, rs, length, selectList,
 			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+	case types.T_bool:
+		return jsonToBool(ctx, source, result, length)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
@@ -2831,7 +2846,7 @@ func jsonToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
 
-// jsonCastErr returns the standard error for invalid JSON to numeric cast.
+// jsonCastErr returns the standard error for an invalid JSON scalar cast.
 func jsonCastErr(ctx context.Context, toOid types.T) error {
 	return moerr.NewInvalidArg(ctx, "operator cast", fmt.Sprintf("[JSON -> %s]", toOid.String()))
 }
@@ -2893,6 +2908,86 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 		}
 	}
 	return nil
+}
+
+// jsonToBool implements JSON -> BOOL using the same scalar rules as the
+// existing numeric/string-to-bool casts.
+func jsonToBool(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
+	result vector.FunctionResultWrapper, length int) error {
+	to := vector.MustFunctionResult[bool](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := to.Append(false, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		bj := types.DecodeJson(v)
+		var value bool
+		switch bj.Type {
+		case bytejson.TpCodeLiteral:
+			if len(bj.Data) == 0 {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+			switch bj.Data[0] {
+			case bytejson.LiteralNull:
+				if err := to.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			case bytejson.LiteralTrue:
+				value = true
+			case bytejson.LiteralFalse:
+				value = false
+			default:
+				return jsonCastErr(ctx, types.T_bool)
+			}
+		case bytejson.TpCodeInt64:
+			value = bj.GetInt64() != 0
+		case bytejson.TpCodeUint64:
+			value = bj.GetUint64() != 0
+		case bytejson.TpCodeFloat64:
+			value = bj.GetFloat64() != 0
+		case bytejson.TpCodeDecimal:
+			var valid bool
+			value, valid = jsonDecimalToBool(bj.GetString())
+			if !valid {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+		case bytejson.TpCodeString:
+			parsed, err := types.ParseBool(string(bj.GetString()))
+			if err != nil {
+				return jsonCastErr(ctx, types.T_bool)
+			}
+			value = parsed
+		default:
+			return jsonCastErr(ctx, types.T_bool)
+		}
+
+		if err := to.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jsonDecimalToBool(text []byte) (value bool, valid bool) {
+	if len(text) == 0 ||
+		(text[0] != '-' && (text[0] < '0' || text[0] > '9')) ||
+		!json.Valid(text) {
+		return false, false
+	}
+	for _, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			break
+		}
+		if ch >= '1' && ch <= '9' {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func jsonAppendNull(result vector.FunctionResultWrapper, toType types.Type) error {
@@ -6154,6 +6249,15 @@ func strToSigned[T constraints.Signed](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+}
+
+func strToSignedWithProc[T constraints.Signed](
+	ctx context.Context,
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -6202,6 +6306,7 @@ func strToSigned[T constraints.Signed](
 					}
 					return moerr.NewInvalidArg(ctx, "cast to int", s)
 				}
+				appendNumericCoercionWarning(proc, s)
 				result = T(r)
 			}
 			if err := to.Append(result, false); err != nil {
@@ -6346,6 +6451,40 @@ func parseBytesToFloat(value []byte, isBinary bool, bitSize int, mode SQLCompati
 		return 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", string(value))
 	}
 	return float64(raw), nil
+}
+
+// warningDiagnosticAppender is implemented by the frontend session without
+// making the execution-layer process.Session contract depend on diagnostics.
+// Remote and unit-test processes simply do not implement it, in which case
+// numeric conversion still succeeds but has nowhere to expose a warning.
+type warningDiagnosticAppender interface {
+	AppendWarningDiagnostic(code uint16, msg string)
+}
+
+// appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
+// whose numeric prefix was consumed and whose remaining text was discarded.
+// Empty strings intentionally coerce to zero without a warning.
+func appendNumericCoercionWarning(proc *process.Process, value string) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
+		return
+	}
+	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
+	if ok && strings.TrimSpace(prefix) == trimmed {
+		return
+	}
+	if proc == nil {
+		return
+	}
+	session := proc.GetSession()
+	appender, ok := session.(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE,
+		fmt.Sprintf("Truncated incorrect DOUBLE value: '%-.128s'", trimmed),
+	)
 }
 
 func parseStrictFloatStringWithBitSize(s string, bitSize int) (float64, error) {
@@ -6594,6 +6733,15 @@ func strToUnsigned[T constraints.Unsigned](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+}
+
+func strToUnsignedWithProc[T constraints.Unsigned](
+	ctx context.Context,
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -6627,6 +6775,9 @@ func strToUnsigned[T constraints.Unsigned](
 				}
 				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
 			}
+			if !isBinary {
+				appendNumericCoercionWarning(proc, *res)
+			}
 			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
@@ -6637,6 +6788,16 @@ func strToUnsigned[T constraints.Unsigned](
 
 func strToFloat[T constraints.Float](
 	ctx context.Context,
+	mode SQLCompatibilityMode,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
+}
+
+func strToFloatWithProc[T constraints.Float](
+	ctx context.Context,
+	proc *process.Process,
 	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
@@ -6672,6 +6833,9 @@ func strToFloat[T constraints.Float](
 			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
 			if tErr != nil {
 				return tErr
+			}
+			if !isBinary && mode == SQLCompatibilityMySQL {
+				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

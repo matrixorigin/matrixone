@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -100,6 +101,9 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
 
 		return nil, err
+	}
+	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
+		sender.warningSink = sink
 	}
 
 	debugMsg := ""
@@ -426,6 +430,11 @@ type messageSenderOnClient struct {
 
 	// anal was used to merge remote-run's cost analysis information.
 	anal *AnalyzeModule
+
+	// warningSink is the session-owned diagnostic destination on the initiating
+	// process. Remote terminal warnings are applied here only after the remote
+	// pipeline has finished, preserving one warning per actual evaluated row.
+	warningSink warningDiagnosticSink
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -909,7 +918,38 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
+	if sender.warningSink != nil {
+		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
+			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+			messages := make([]string, 0, len(envelope.WarningDiagnostics))
+			for _, warning := range envelope.WarningDiagnostics {
+				codes = append(codes, warning.Code)
+				messages = append(messages, warning.Message)
+			}
+			sink.AppendWarningBatch(envelope.WarningCount, codes, messages)
+		} else {
+			for _, warning := range envelope.WarningDiagnostics {
+				sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
+			}
+		}
+	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
+		if envelope.Allocation.GenerationCount != 0 {
+			if envelope.TerminalResourceVersion <
+				remoteAllocationOwnerResourceVersion {
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			} else if envelope.Delta.Quality&
+				resource.QualityMissingAllocationOwner == 0 &&
+				!envelope.Allocation.OwnerAttributionCoversTotals() {
+				// A mixed-version intermediate propagates an explicit missing-
+				// owner fact. Without it, absent or partial v4 attribution
+				// violates the terminal protocol contract.
+				envelope.Delta.Quality |= resource.QualityInvariantFailure
+				envelope.Delta.Quality |= resource.QualityPartial |
+					resource.QualityMissingAllocationOwner
+			}
+		}
 		sender.anal.appendRemoteResource(
 			envelope.Delta,
 			envelope.Memory,

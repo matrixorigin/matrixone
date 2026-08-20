@@ -177,6 +177,11 @@ func (op *operator) Start() error {
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
 	}
+	if op.serviceType == metadata.ServiceType_CN {
+		if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+			return err
+		}
+	}
 
 	if err := op.init(); err != nil {
 		return err
@@ -285,11 +290,14 @@ func (op *operator) startTNServiceLocked(
 func (op *operator) startCNServiceLocked(
 	fs fileservice.FileService,
 ) error {
+	if err := op.verifySiriusBenchmarkNoGC(); err != nil {
+		return err
+	}
+	c := op.cfg.getCNServiceConfig()
 	if err := op.waitClusterConditionLocked(op.waitAnyShardReadyLocked); err != nil {
 		return err
 	}
 	op.cfg.initMetaCache()
-	c := op.cfg.getCNServiceConfig()
 	commonConfigKVMap, _ := dumpCommonConfig(op.cfg)
 	s, err := cnservice.NewService(
 		&c,
@@ -308,6 +316,16 @@ func (op *operator) startCNServiceLocked(
 		return err
 	}
 	return nil
+}
+
+func (op *operator) verifySiriusBenchmarkNoGC() error {
+	// An individual embedded CN operator neither owns nor observes the TN that
+	// serves its snapshots. A sibling TN config is therefore not proof that GC
+	// is disabled on the actual TN, so embedded benchmark mode fails closed.
+	return cnservice.VerifySiriusBenchmarkNoGC(
+		&op.cfg.CN,
+		false,
+	)
 }
 
 func (op *operator) startConstructedServiceLocked(s service) error {

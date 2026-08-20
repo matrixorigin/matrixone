@@ -34,46 +34,46 @@ func TestTerminalBudgetError(t *testing.T) {
 
 	for _, tc := range []struct {
 		name      string
-		component process.HashBuildBudgetComponent
+		component process.ExecutionResourceComponent
 		want      []string
 	}{
-		{"memory", process.HashBuildBudgetComponentMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
-		{"spill disk", process.HashBuildBudgetComponentSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
-		{"spill fd", process.HashBuildBudgetComponentSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
+		{"memory", process.ExecutionResourceComponentMemory, []string{"memory", "requested=3", "used=5", "limit=7", "build width", "processLimitationSize", "join_spill_mem", "recovery headroom"}},
+		{"spill disk", process.ExecutionResourceComponentSpillDisk, []string{"spill disk", "requested=3", "used=5", "limit=7", "processLimitationSpillSize"}},
+		{"spill fd", process.ExecutionResourceComponentSpillFD, []string{"spill file descriptor", "requested=3", "used=5", "limit=7", "open-file limit"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
-				Kind:      process.HashBuildBudgetErrorAdmission,
+			err := TerminalBudgetError(context.Background(), &process.ExecutionResourceError{
+				Kind:      process.ExecutionResourceErrorAdmission,
 				Component: tc.component,
 				Requested: 3,
 				Used:      5,
 				Cap:       7,
-				Message:   process.ErrHashBuildBudgetAdmission.Error() + ": requested=3 used=5 cap=7",
+				Message:   process.ErrExecutionResourceAdmission.Error() + ": requested=3 used=5 cap=7",
 			})
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
-			require.NotErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+			require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
 			for _, want := range tc.want {
 				require.Contains(t, err.Error(), want)
 			}
-			require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 		})
 	}
 
 	t.Run("synthetic admission keeps reason without fake counters", func(t *testing.T) {
-		err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
-			Kind:    process.HashBuildBudgetErrorAdmission,
-			Message: "join spill cannot make progress at depth 8: " + process.ErrHashBuildBudgetAdmission.Error(),
+		err := TerminalBudgetError(context.Background(), &process.ExecutionResourceError{
+			Kind:    process.ExecutionResourceErrorAdmission,
+			Message: "join spill cannot make progress at depth 8: " + process.ErrExecutionResourceAdmission.Error(),
 		})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 		require.Contains(t, err.Error(), "join spill cannot make progress at depth 8")
 		require.NotContains(t, err.Error(), "requested=0")
-		require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
+		require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	})
 
 	t.Run("resource admission keeps spill depth context", func(t *testing.T) {
-		err := TerminalBudgetError(context.Background(), &process.HashBuildBudgetError{
-			Kind:      process.HashBuildBudgetErrorAdmission,
-			Component: process.HashBuildBudgetComponentMemory,
+		err := TerminalBudgetError(context.Background(), &process.ExecutionResourceError{
+			Kind:      process.ExecutionResourceErrorAdmission,
+			Component: process.ExecutionResourceComponentMemory,
 			Requested: 3,
 			Used:      5,
 			Cap:       7,
@@ -82,14 +82,14 @@ func TestTerminalBudgetError(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 		require.Contains(t, err.Error(), "hash build memory budget exceeded")
 		require.Contains(t, err.Error(), "join spill cannot make progress at depth 3")
-		require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
+		require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	})
 
 	t.Run("raw admission is generic resource exhaustion", func(t *testing.T) {
-		err := TerminalBudgetError(context.Background(), process.ErrHashBuildBudgetAdmission)
+		err := TerminalBudgetError(context.Background(), process.ErrExecutionResourceAdmission)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
 		require.Contains(t, err.Error(), "hash build resource budget exceeded")
-		require.NotContains(t, err.Error(), process.ErrHashBuildBudgetAdmission.Error())
+		require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 	})
 
 	t.Run("physical capacity is terminal resource exhaustion", func(t *testing.T) {
@@ -116,12 +116,12 @@ func TestTerminalBudgetError(t *testing.T) {
 	})
 
 	for _, lifecycle := range []error{
-		process.ErrHashBuildBudgetClosed,
-		process.ErrHashBuildBudgetInvalid,
-		process.ErrHashBuildCeilingMissing,
+		process.ErrExecutionResourceClosed,
+		process.ErrExecutionResourceInvalid,
+		process.ErrExecutionMemoryCeilingMissing,
 	} {
 		t.Run(lifecycle.Error(), func(t *testing.T) {
-			joined := errors.Join(process.ErrHashBuildBudgetAdmission, lifecycle)
+			joined := errors.Join(process.ErrExecutionResourceAdmission, lifecycle)
 			require.Same(t, joined, TerminalBudgetError(context.Background(), joined))
 		})
 	}

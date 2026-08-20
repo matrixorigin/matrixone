@@ -6669,6 +6669,61 @@ var supportedArrayOperations = []FuncNew{
 		},
 	},
 
+	// function `l1_distance`
+	{
+		functionId: L1_DISTANCE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_array_float32, types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1DistanceArray[float32]
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float64, types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return L1DistanceArray[float64]
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16, types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16, types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8, types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[int8] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_uint8, types.T_array_uint8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1DistanceArrayViaF32[uint8] },
+			},
+		},
+	},
+
 	// function `l2_distance`
 	{
 		functionId: L2_DISTANCE,
@@ -11801,7 +11856,7 @@ var supportedControlBuiltIns = []FuncNew{
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
-					typ := types.T_datetime.ToTypeWithScale(parameters[0].Scale)
+					typ := types.T_timestamp.ToTypeWithScale(parameters[0].Scale)
 					if typ.Scale > 0 {
 						typ.Width = typ.Scale
 					}

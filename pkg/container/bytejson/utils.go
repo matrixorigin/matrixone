@@ -589,6 +589,13 @@ func appendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
 	return typeCode, nil, moerr.NewInvalidArgNoCtx("invalid json number", x.String())
 }
 
+// AppendBinaryNumber appends a JSON number in MatrixOne's binary JSON wire
+// representation. Callers that construct containers directly use this to
+// preserve the same numeric semantics as CreateByteJSONWithCheck.
+func AppendBinaryNumber(buf []byte, x json.Number) (TpCode, []byte, error) {
+	return appendBinaryNumber(buf, x)
+}
+
 func appendBinaryString(buf []byte, v string) []byte {
 	begin := len(buf)
 	buf = appendZero(buf, binary.MaxVarintLen64)

@@ -55,6 +55,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	if parent != nil {
+		bc.lower = parent.lower
 		bc.defaultDatabase = parent.defaultDatabase
 		bc.cteName = parent.cteName
 		if parent.bindingCte() {
@@ -69,6 +70,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.directView = parent.directView
 		bc.restoreViewMySQLSpecialTypes = parent.restoreViewMySQLSpecialTypes
+		bc.captureViewStarExpansion = parent.captureViewStarExpansion
+		bc.expandedSelectLists = parent.expandedSelectLists
 	}
 
 	return bc
@@ -273,7 +276,7 @@ func (bc *BindContext) replaceBinding(oldBinding, newBinding *Binding) {
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left table", col)
+		return nil, moerr.NewBadFieldErrorf(bc.binder.GetContext(), "invalid input: column '%s' specified in USING clause does not exist in left table", col)
 	}
 	if leftBinding == nil {
 		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "common column '%s' appears more than once in left table", col)
@@ -281,7 +284,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 
 	rightBinding, ok := right.bindingByCol[col]
 	if !ok {
-		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in right table", col)
+		return nil, moerr.NewBadFieldErrorf(bc.binder.GetContext(), "invalid input: column '%s' specified in USING clause does not exist in right table", col)
 	}
 	if rightBinding == nil {
 		return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "common column '%s' appears more than once in right table", col)
@@ -405,7 +408,7 @@ func (bc *BindContext) addUsingColForCrossL2(col string, typ plan.Node_JoinType,
 			},
 		}, nil
 	}
-	return nil, moerr.NewInvalidInputf(bc.binder.GetContext(), "column '%s' specified in USING clause does not exist in left or right table", col)
+	return nil, moerr.NewBadFieldErrorf(bc.binder.GetContext(), "invalid input: column '%s' specified in USING clause does not exist in left or right table", col)
 }
 
 func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccount bool) ([]tree.SelectExpr, []string, error) {

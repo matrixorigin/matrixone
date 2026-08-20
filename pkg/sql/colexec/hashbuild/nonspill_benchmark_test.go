@@ -160,7 +160,7 @@ func benchmarkHashBuildNonSpillE2E(
 	for _, input := range inputs {
 		inputBytes += int64(input.Size())
 	}
-	budget, err := proc.GetHashBuildBudget()
+	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(b, err)
 	require.NotNil(b, budget)
 	registry, err := budget.AllocationAccountRegistry()

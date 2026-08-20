@@ -15,8 +15,11 @@
 package aggexec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,6 +28,289 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAccountedJSONAggregatesLifecycleAndSpill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+
+	jsonValue := func(value any) []byte {
+		t.Helper()
+		bj, err := bytejson.CreateByteJSONWithCheck(value)
+		require.NoError(t, err)
+		data, err := bj.Marshal()
+		require.NoError(t, err)
+		return data
+	}
+	values := vector.NewVec(types.T_json.ToType())
+	for _, value := range [][]byte{
+		jsonValue(int64(1)),
+		jsonValue("two"),
+		jsonValue(int64(1)),
+		jsonValue(nil),
+		jsonValue(nil),
+	} {
+		require.NoError(t, vector.AppendBytes(values, value, false, mp))
+	}
+	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"b", "a", "a", "c", "c"})
+	defer values.Free(mp)
+	defer keys.Free(mp)
+
+	for _, tc := range []struct {
+		name     string
+		id       int64
+		distinct bool
+		params   []types.Type
+		vectors  []*vector.Vector
+		want     string
+	}{
+		{
+			name: "array-distinct", id: AggIdOfJsonArrayAgg, distinct: true,
+			params:  []types.Type{types.T_json.ToType()},
+			vectors: []*vector.Vector{values},
+			want:    `[1,"two",null,null]`,
+		},
+		{
+			name: "object-last-wins", id: AggIdOfJsonObjectAgg,
+			params:  []types.Type{types.T_varchar.ToType(), types.T_json.ToType()},
+			vectors: []*vector.Vector{keys, values},
+			want:    `{"a":1,"b":1,"c":null}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
+			require.NoError(t, err)
+			owner := exec.(AllocationAccountOwner)
+			require.NoError(t, owner.SetAllocationAccount(allocation))
+			require.NoError(t, exec.GroupGrow(1))
+			groups := slices.Repeat([]uint64{1}, values.Length())
+			preflight := exec.(BatchCapacityPreflight)
+			require.NoError(t, preflight.PreflightBatchFill(0, groups, tc.vectors))
+			peak := account.Snapshot().Peak
+			require.NoError(t, exec.BatchFill(0, groups, tc.vectors))
+			require.Equal(t, peak, account.Snapshot().Peak,
+				"mutation must reuse preflighted retained capacity")
+
+			var spill bytes.Buffer
+			require.NoError(t, exec.(SpillStateCodec).SaveSpillIntermediateRows(
+				0, []int32{0}, &spill))
+			restored, err := MakeAgg(mp, tc.id, tc.distinct, tc.params...)
+			require.NoError(t, err)
+			restoredOwner := restored.(AllocationAccountOwner)
+			require.NoError(t, restoredOwner.SetAllocationAccount(allocation))
+			require.NoError(t, restored.(SpillStateCodec).UnmarshalSpillFromReader(
+				bytes.NewReader(spill.Bytes()), mp))
+			results, err := restored.Flush()
+			require.NoError(t, err)
+			visible, err := types.DecodeJson(results[0].GetBytesAt(0)).MarshalJSON()
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(visible))
+			results[0].Free(mp)
+			exec.Free()
+			restored.Free()
+			require.NoError(t, owner.ClearAllocationAccount(allocation))
+			require.NoError(t, restoredOwner.ClearAllocationAccount(allocation))
+		})
+	}
+
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedJSONPreflightOneByteShortDoesNotPublish(t *testing.T) {
+	value, err := bytejson.CreateByteJSONWithCheck(map[string]any{
+		"payload": strings.Repeat("x", 4096),
+	})
+	require.NoError(t, err)
+	raw, err := value.Marshal()
+	require.NoError(t, err)
+
+	run := func(limit uint64) (uint64, uint32, error) {
+		mp := mpool.MustNewZero()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		account, err := registry.Open(limit)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4,
+			ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, types.T_json.ToType())
+		require.NoError(t, err)
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		require.NoError(t, exec.GroupGrow(1))
+		input := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(input, raw, false, mp))
+		err = exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, []uint64{1}, []*vector.Vector{input})
+		published := exec.(*jsonArrayAggExec).state[0].argCnt[0]
+		peak := account.Snapshot().Peak
+		input.Free(mp)
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return peak, published, err
+	}
+
+	peak, published, err := run(128 << 20)
+	require.NoError(t, err)
+	require.Zero(t, published)
+	_, published, err = run(peak - 1)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Zero(t, published)
+}
+
+func TestAccountedJSONAggregatePreservesLegacyValueSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name string
+		vec  *vector.Vector
+	}{
+		{
+			name: "decimal64-integer",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 0), []types.Decimal64{123}),
+		},
+		{
+			name: "decimal64-fraction",
+			vec:  buildFixedVec(t, mp, types.New(types.T_decimal64, 18, 2), []types.Decimal64{123}),
+		},
+		{
+			name: "decimal128",
+			vec: buildFixedVec(t, mp, types.New(types.T_decimal128, 38, 0),
+				[]types.Decimal128{{B0_63: 456}}),
+		},
+		{
+			name: "date",
+			vec:  buildFixedVec(t, mp, types.T_date.ToType(), []types.Date{types.Date(1)}),
+		},
+		{
+			name: "time",
+			vec:  buildFixedVec(t, mp, types.T_time.ToType(), []types.Time{types.Time(1)}),
+		},
+		{
+			name: "datetime",
+			vec: buildFixedVec(t, mp, types.T_datetime.ToType(),
+				[]types.Datetime{types.Datetime(1)}),
+		},
+		{
+			name: "timestamp",
+			vec: buildFixedVec(t, mp, types.T_timestamp.ToType(),
+				[]types.Timestamp{types.Timestamp(1)}),
+		},
+		{
+			name: "array-float32",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float32.ToType(), []float32{1.5, -2.5}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-float64",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float64.ToType(), []float64{1.5, -2.5}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-bf16",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_bf16.ToType(), []types.BF16{
+						types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.5)}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-float16",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_float16.ToType(), []types.Float16{
+						types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.5)}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-int8",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_int8.ToType(), []int8{-128, 127}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+		{
+			name: "array-uint8",
+			vec: func() *vector.Vector {
+				vec, err := vector.NewConstArray(
+					types.T_array_uint8.ToType(), []uint8{0, 255}, 1, mp)
+				require.NoError(t, err)
+				return vec
+			}(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer test.vec.Free(mp)
+			legacy := runJSONArrayAggregate(t, mp, test.vec, nil)
+
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregate(t, mp, test.vec, allocation)
+			finishTestAggregateAllocation(t, registry, account)
+
+			require.Equal(t, legacy.Type, accounted.Type)
+			require.Equal(t, legacy.Data, accounted.Data)
+			legacyElement := legacy.GetArrayElem(0)
+			accountedElement := accounted.GetArrayElem(0)
+			require.Equal(t, legacyElement.TYPE(), accountedElement.TYPE())
+			require.Equal(t, legacyElement.Data, accountedElement.Data)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func runJSONArrayAggregate(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	allocation *AllocationAccount,
+) bytejson.ByteJson {
+	t.Helper()
+	exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, *input.GetType())
+	require.NoError(t, err)
+	var owner AllocationAccountOwner
+	if allocation != nil {
+		owner = exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+	}
+	require.NoError(t, exec.GroupGrow(1))
+	groups := []uint64{1}
+	if allocation != nil {
+		require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+			0, groups, []*vector.Vector{input}))
+	}
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	data := append([]byte(nil), results[0].GetBytesAt(0)...)
+	result := types.DecodeJson(data)
+	results[0].Free(mp)
+	exec.Free()
+	if allocation != nil {
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+	}
+	return result
+}
 
 func buildFixedVec[T types.FixedSizeTExceptStrType](t *testing.T, mp *mpool.MPool, typ types.Type, vals []T) *vector.Vector {
 	t.Helper()
@@ -142,8 +428,8 @@ func TestJsonObjectAggPreAllocate(t *testing.T) {
 	}
 	exec := newJsonObjectAggExec(mg, info)
 	require.NoError(t, exec.PreAllocateGroups(2))
-	require.Len(t, exec.groups, 2)
 	require.NoError(t, exec.GroupGrow(1))
+	require.Equal(t, 1, exec.GetNumGroups())
 
 	keyVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"k"}, nil)
 	valVec := fromValueListToVector(mg, types.T_varchar.ToType(), []string{"v"}, nil)
@@ -265,7 +551,7 @@ func TestJsonAggHelpers(t *testing.T) {
 		emptyNull: true,
 	})
 	require.NoError(t, exec.GroupGrow(1))
-	require.Len(t, exec.groups, 1)
+	require.Equal(t, 1, exec.GetNumGroups())
 	exec.Free()
 }
 

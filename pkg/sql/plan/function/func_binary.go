@@ -1745,34 +1745,499 @@ func TruncateTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	if err != nil {
 		return err
 	}
-	t := int64(num)
+	t := num
 
 	ivec := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0])
-	rs := vector.MustFunctionResult[types.Datetime](result)
+	rs := vector.MustFunctionResult[types.Timestamp](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := ivec.GetValue(i)
 		if null {
-			if err = rs.Append(types.Datetime(0), true); err != nil {
+			if err = rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
 			continue
 		}
-		// ZeroTimestamp is a distinct sentinel, not a chronological instant.
-		// Keep it separate from the 0001-01-01 epoch used by regular modulo math.
 		if v == types.ZeroTimestamp {
-			if err = rs.Append(types.ZeroDatetime, false); err != nil {
+			if err = rs.Append(types.ZeroTimestamp, false); err != nil {
 				return err
 			}
 			continue
 		}
-		truncated := int64(v) - int64(v)%t
-		if err = rs.Append(types.Datetime(truncated), false); err != nil {
+		truncated := NormalizeTimestampWindowStart(v, t, proc.GetSessionInfo().TimeZone)
+		if err = rs.Append(truncated, false); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// NormalizeTimestampWindowStart aligns a timestamp to a session civil-time
+// window grid. Ambiguous fold boundaries retain the source instant's offset;
+// nonexistent gap boundaries advance to the first valid civil boundary. The
+// latter policy makes normalization idempotent across DST spring-forward gaps.
+func NormalizeTimestampWindowStart(value types.Timestamp, interval int64, loc *time.Location) types.Timestamp {
+	if value == types.ZeroTimestamp {
+		return types.ZeroTimestamp
+	}
+	civil := value.ToDatetime(loc)
+	remainder := int64(civil) % interval
+	truncatedCivil := types.Datetime(int64(civil) - remainder)
+
+	// Prefer subtracting on the instant timeline. Besides avoiding a second
+	// timezone lookup in the ordinary case, this preserves which occurrence of
+	// an ambiguous civil boundary the source timestamp belongs to.
+	truncated := types.Timestamp(int64(value) - remainder)
+	if truncated.ToDatetime(loc) == truncatedCivil {
+		return truncated
+	}
+
+	// A changed offset between value and its boundary requires resolving the
+	// boundary with its own offset. Go resolves a nonexistent civil time to one
+	// side of the gap; when it resolves backward, advance by the round-trip
+	// difference so the canonical boundary is the first valid time after it.
+	truncated = truncatedCivil.ToTimestamp(loc)
+	roundTrip := truncated.ToDatetime(loc)
+	if roundTrip < truncatedCivil {
+		truncated += types.Timestamp(truncatedCivil - roundTrip)
+	}
+	// A fold can place the civil floor before the latest boundary reached by
+	// the source instant. Reuse the boundary-sequence helper so non-divisor
+	// grids retain the first occurrence instead of jumping back before the
+	// repeated interval.
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, truncated, interval, loc); ok {
+		return foldBoundary
+	}
+	return truncated
+}
+
+// AdvanceTimestampWindowBoundary advances a TIMESTAMP window boundary on the
+// same civil-time grid used by NormalizeTimestampWindowStart. A civil
+// boundary that falls inside a spring-forward gap is canonicalized to the
+// first valid instant after the gap.
+func AdvanceTimestampWindowBoundary(value types.Timestamp, interval int64, loc *time.Location) types.Timestamp {
+	if value == types.ZeroTimestamp {
+		return types.ZeroTimestamp
+	}
+	civilValue := value.ToDatetime(loc)
+	baseCivil := civilValue
+	gapAdjusted := false
+	if interval > 0 {
+		if gap := timestampWindowGapAt(value, loc); gap > 0 &&
+			int64(civilValue)%interval != 0 {
+			// NormalizeTimestampWindowStart maps a nonexistent civil boundary
+			// to the first valid instant after the gap. Recover that nominal
+			// phase before advancing so a later boundary does not drift.
+			baseCivil -= types.Datetime(gap)
+			gapAdjusted = true
+		}
+	}
+	civil := baseCivil + types.Datetime(interval)
+	resolve := func(candidateCivil types.Datetime) types.Timestamp {
+		boundary := candidateCivil.ToTimestamp(loc)
+		roundTrip := boundary.ToDatetime(loc)
+		if roundTrip < candidateCivil {
+			boundary += types.Timestamp(candidateCivil - roundTrip)
+		}
+		return boundary
+	}
+	boundary := resolve(civil)
+	if gapAdjusted && boundary <= value {
+		// A one-hour interval can map both the nonexistent and the first
+		// valid civil labels to the same instant. Skip the duplicate label.
+		if nextCivil, ok := safeTimestampWindowSum(int64(civil), interval); ok {
+			civil = types.Datetime(nextCivil)
+			boundary = resolve(civil)
+		}
+	}
+	// A repeated civil hour contains two distinct aligned instants.  Resolving
+	// the target wall clock through time.Location chooses one occurrence and can
+	// jump over the other one.  Prefer the instant-step candidate when it is an
+	// aligned civil boundary that falls before the wall-clock target; this keeps
+	// the fold occurrence in the same grid sequence while retaining civil-day
+	// behavior across ordinary DST transitions.
+	if interval != 0 {
+		candidateRaw := int64(value)
+		if (interval > 0 && candidateRaw <= math.MaxInt64-interval) ||
+			(interval < 0 && candidateRaw >= math.MinInt64-interval) {
+			candidate := types.Timestamp(candidateRaw + interval)
+			candidateCivil := candidate.ToDatetime(loc)
+			sourceCivil := value.ToDatetime(loc)
+			grid := interval
+			if grid < 0 {
+				grid = -grid
+			}
+			if candidate != boundary && candidateCivil%types.Datetime(grid) == 0 &&
+				((interval > 0 && (candidateCivil >= sourceCivil || timestampWindowFoldStep(value, candidate, interval, loc)) && candidateCivil <= civil &&
+					(candidate < boundary || candidateCivil == civil)) ||
+					(interval < 0 && (candidateCivil <= sourceCivil || timestampWindowFoldStep(value, candidate, interval, loc)) && candidateCivil >= civil &&
+						(candidate > boundary || candidateCivil == civil))) {
+				return candidate
+			}
+		}
+	}
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		return foldBoundary
+	}
+	return boundary
+}
+
+// AdvanceTimestampWindowBoundaryBy advances count points on the same
+// timezone-aware boundary sequence as AdvanceTimestampWindowBoundary.  A
+// direct instant candidate handles fixed-offset spans in O(1), while the
+// civil-time fallback preserves spring gaps and resolves a target that is not
+// represented by that instant candidate.  In particular, an instant candidate
+// that lands on the second occurrence of a folded civil boundary is retained.
+func AdvanceTimestampWindowBoundaryBy(value types.Timestamp, count, interval int64, loc *time.Location) types.Timestamp {
+	if count <= 0 || interval <= 0 || value == types.ZeroTimestamp {
+		return value
+	}
+	if count == 1 {
+		return AdvanceTimestampWindowBoundary(value, interval, loc)
+	}
+	delta, ok := safeTimestampWindowProduct(count, interval)
+	if !ok {
+		return value
+	}
+	startCivil := int64(value.ToDatetime(loc))
+	gapAdjusted := false
+	if gap := timestampWindowGapAt(value, loc); gap > 0 && startCivil%interval != 0 {
+		startCivil -= gap
+		gapAdjusted = true
+	}
+	targetCivil, ok := safeTimestampWindowSum(startCivil, delta)
+	if !ok {
+		return value
+	}
+	target := types.Datetime(targetCivil)
+	boundary := resolveTimestampWindowBoundary(target, loc)
+	candidateRaw, ok := safeTimestampWindowSum(int64(value), delta)
+	if ok && !gapAdjusted {
+		candidate := types.Timestamp(candidateRaw)
+		candidateCivil := int64(candidate.ToDatetime(loc))
+		civilDelta := candidateCivil - startCivil
+		grid := interval
+		if grid < 0 {
+			grid = -grid
+		}
+		// A DST gap/fold can make the civil distance differ from count*interval
+		// while the raw boundary sequence still advances by exactly interval.
+		// Relative grid alignment is therefore the decisive signal; do not cap
+		// the candidate at targetCivil, which would reject the first valid point
+		// after a spring gap.
+		if (civilDelta >= 0 || timestampWindowFoldStep(value, candidate, interval, loc)) &&
+			grid > 0 && civilDelta%grid == 0 {
+			return candidate
+		}
+		if candidateCivil == targetCivil {
+			return candidate
+		}
+	}
+	if foldBoundary, ok := timestampWindowFoldBoundary(value, boundary, interval, loc); ok {
+		if steps, ok := timestampWindowFoldStepCount(value, foldBoundary, interval, loc); ok && steps <= count {
+			remaining := count - steps
+			if remaining == 0 {
+				return foldBoundary
+			}
+			return AdvanceTimestampWindowBoundaryBy(foldBoundary, remaining, interval, loc)
+		}
+	}
+	return boundary
+}
+
+// timestampWindowGapAt reports a positive UTC-offset jump whose first valid
+// instant is exactly value. Such an instant may be the canonical image of a
+// nonexistent civil grid boundary after NormalizeTimestampWindowStart.
+func timestampWindowGapAt(value types.Timestamp, loc *time.Location) int64 {
+	if loc == nil || value == types.ZeroTimestamp {
+		return 0
+	}
+	instant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	start, _ := instant.ZoneBounds()
+	if start.IsZero() || !instant.Equal(start) {
+		return 0
+	}
+	_, currentOffset := instant.Zone()
+	_, previousOffset := start.Add(-time.Microsecond).Zone()
+	if currentOffset <= previousOffset {
+		return 0
+	}
+	return int64(currentOffset-previousOffset) * types.MicroSecsPerSec
+}
+
+func timestampWindowFoldStep(value, candidate types.Timestamp, interval int64, loc *time.Location) bool {
+	if loc == nil || interval == 0 || candidate == value {
+		return false
+	}
+	sourceCivil := value.ToDatetime(loc)
+	candidateCivil := candidate.ToDatetime(loc)
+	if candidateCivil == sourceCivil {
+		return false
+	}
+	valueInstant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	candidateInstant := time.UnixMicro(int64(candidate) - int64(types.UnixToTimestamp(0))).In(loc)
+	_, valueOffset := valueInstant.Zone()
+	_, candidateOffset := candidateInstant.Zone()
+	return (interval > 0 && candidate > value && candidateCivil < sourceCivil && candidateOffset < valueOffset) ||
+		(interval < 0 && candidate < value && candidateCivil > sourceCivil && candidateOffset > valueOffset)
+}
+
+// timestampWindowFoldBoundary returns an aligned boundary from the repeated
+// civil hour when the wall-clock target would skip it. A fold can contain more
+// than one aligned civil point, so derive the first/last point from the
+// transition rather than assuming the UTC offset change is divisible by the
+// window interval.
+func timestampWindowFoldBoundary(value, boundary types.Timestamp, interval int64, loc *time.Location) (types.Timestamp, bool) {
+	if loc == nil || interval == 0 || value == types.ZeroTimestamp {
+		return 0, false
+	}
+	grid := interval
+	if grid < 0 {
+		grid = -grid
+	}
+	if grid == 0 {
+		return 0, false
+	}
+
+	instant := time.UnixMicro(int64(value) - int64(types.UnixToTimestamp(0))).In(loc)
+	_, currentOffset := instant.Zone()
+	transitionStart, transitionEnd := instant.ZoneBounds()
+	var transition time.Time
+	var previousOffset, nextOffset int
+	var postTransition bool
+	switch {
+	case interval > 0:
+		// A source in the post-transition occurrence can still need the
+		// preceding first occurrence when normalization floors into the
+		// repeated civil hour. Reuse the reverse-direction fold handling
+		// below; its boundary checks keep forward advance callers unchanged.
+		if !transitionStart.IsZero() && !instant.Before(transitionStart) {
+			_, previousOffset = transitionStart.Add(-time.Microsecond).Zone()
+			if previousOffset > currentOffset {
+				transition = transitionStart
+				postTransition = true
+				break
+			}
+		}
+		if transitionEnd.IsZero() || !transitionEnd.After(instant) {
+			return 0, false
+		}
+		_, nextOffset = transitionEnd.Add(time.Microsecond).Zone()
+		if nextOffset >= currentOffset {
+			return 0, false
+		}
+		transition = transitionEnd
+		previousOffset = currentOffset
+		postTransition = false
+	case interval < 0:
+		if transitionStart.IsZero() || instant.Before(transitionStart) {
+			return 0, false
+		}
+		_, previousOffset = transitionStart.Add(-time.Microsecond).Zone()
+		if previousOffset <= currentOffset {
+			return 0, false
+		}
+		transition = transitionStart
+		postTransition = true
+	}
+
+	delta := int64(previousOffset - nextOffset)
+	if postTransition {
+		delta = int64(previousOffset - currentOffset)
+	}
+	if delta <= 0 {
+		return 0, false
+	}
+	delta *= types.MicroSecsPerSec
+
+	foldStart := types.UnixMicroToTimestamp(transition.UnixMicro())
+	foldStartCivil := int64(foldStart.ToDatetime(loc))
+	foldEndCivil := foldStartCivil + delta
+	sourceCivil := int64(value.ToDatetime(loc))
+	boundaryRaw := int64(boundary)
+	foldStartRaw := int64(foldStart)
+
+	alignedAtOrAfter := func(civil int64) int64 {
+		remainder := civil % grid
+		if remainder < 0 {
+			remainder += grid
+		}
+		if remainder != 0 {
+			civil += grid - remainder
+		}
+		return civil
+	}
+	alignedStrictlyBefore := func(civil int64) int64 {
+		remainder := civil % grid
+		if remainder < 0 {
+			remainder += grid
+		}
+		civil -= remainder
+		if remainder == 0 {
+			civil -= grid
+		}
+		return civil
+	}
+
+	if !postTransition {
+		candidateCivil := alignedAtOrAfter(foldStartCivil)
+		if candidateCivil >= foldEndCivil {
+			return 0, false
+		}
+		candidateRaw, ok := safeTimestampWindowSum(
+			foldStartRaw, candidateCivil-foldStartCivil)
+		if !ok || candidateRaw <= int64(value) || candidateRaw >= boundaryRaw {
+			return 0, false
+		}
+		return types.Timestamp(candidateRaw), true
+	}
+
+	limitCivil := sourceCivil
+	if limitCivil > foldEndCivil {
+		limitCivil = foldEndCivil
+	}
+	candidateCivil := alignedStrictlyBefore(limitCivil)
+	if candidateCivil >= foldStartCivil {
+		candidateRaw, ok := safeTimestampWindowSum(
+			foldStartRaw, candidateCivil-foldStartCivil)
+		if ok && candidateRaw > boundaryRaw && candidateRaw < int64(value) {
+			return types.Timestamp(candidateRaw), true
+		}
+	}
+
+	// No post-transition point lies between the current value and target. The
+	// preceding occurrence may still be the next reverse boundary.
+	lastCivil := alignedStrictlyBefore(foldEndCivil)
+	if lastCivil < foldStartCivil {
+		return 0, false
+	}
+	firstOccurrenceStart, ok := safeTimestampWindowSum(foldStartRaw, -delta)
+	if !ok {
+		return 0, false
+	}
+	firstOccurrenceRaw, ok := safeTimestampWindowSum(
+		firstOccurrenceStart, lastCivil-foldStartCivil)
+	if !ok || firstOccurrenceRaw <= boundaryRaw || firstOccurrenceRaw >= int64(value) {
+		return 0, false
+	}
+	return types.Timestamp(firstOccurrenceRaw), true
+}
+
+func timestampWindowFoldStepCount(value, repeated types.Timestamp, interval int64, loc *time.Location) (int64, bool) {
+	if interval <= 0 || loc == nil || repeated <= value {
+		return 0, false
+	}
+	instant := time.UnixMicro(int64(repeated) - int64(types.UnixToTimestamp(0))).In(loc)
+	transitionStart, _ := instant.ZoneBounds()
+	if transitionStart.IsZero() {
+		return 0, false
+	}
+	_, currentOffset := instant.Zone()
+	_, previousOffset := transitionStart.Add(-time.Microsecond).Zone()
+	delta := int64(previousOffset-currentOffset) * types.MicroSecsPerSec
+	if delta <= 0 {
+		return 0, false
+	}
+	firstOccurrence, ok := safeTimestampWindowSum(int64(repeated), -delta)
+	if !ok {
+		return 0, false
+	}
+	if firstOccurrence <= int64(value) {
+		return 1, true
+	}
+	span := firstOccurrence - int64(value)
+	if span <= 0 || span%interval != 0 {
+		return 0, false
+	}
+	return safeTimestampWindowSum(span/interval, 1)
+}
+
+// TimestampWindowBoundarySteps returns the number of boundary advances from
+// start to end.  Raw instant distance is exact for fixed-offset spans and for
+// hourly DST gaps/folds (including both occurrences of a fold).  Civil distance
+// is exact for day-sized transitions where the raw distance is 23/25 hours.
+// The bounded fallback verifies the small number of transition-adjacent cases
+// that are not divisible in either representation; it never scales with a
+// long sparse gap.
+func TimestampWindowBoundarySteps(start, end types.Timestamp, interval int64, loc *time.Location) int64 {
+	if end <= start || interval <= 0 || start == types.ZeroTimestamp {
+		return 0
+	}
+	rawSpan := int64(end) - int64(start)
+	if rawSpan >= 0 && rawSpan%interval == 0 {
+		rawSteps := rawSpan / interval
+		if AdvanceTimestampWindowBoundaryBy(start, rawSteps, interval, loc) == end {
+			return rawSteps
+		}
+	}
+	civilStart := int64(start.ToDatetime(loc))
+	civilEnd := int64(end.ToDatetime(loc))
+	civilSpan := civilEnd - civilStart
+	if civilSpan >= 0 && civilSpan%interval == 0 {
+		// A repeated civil point can make the exact-looking civil quotient one
+		// step short; verify it against the boundary sequence before accepting it.
+		civilSteps := civilSpan / interval
+		if AdvanceTimestampWindowBoundaryBy(start, civilSteps, interval, loc) == end {
+			return civilSteps
+		}
+	}
+
+	// A reachable target normally matches one of the two exact quotients.  If
+	// a non-hour interval straddles a transition, verify nearby estimates rather
+	// than iterating through the potentially enormous sparse range.
+	candidates := []int64{rawSpan / interval, civilSpan / interval}
+	for _, estimate := range candidates {
+		if estimate < 1 {
+			estimate = 1
+		}
+		for offset := int64(-3); offset <= 3; offset++ {
+			steps := estimate + offset
+			if steps < 1 {
+				continue
+			}
+			if AdvanceTimestampWindowBoundaryBy(start, steps, interval, loc) == end {
+				return steps
+			}
+		}
+	}
+
+	// Preserve the legacy floor semantics for a non-boundary target.  The
+	// transition-adjacent exact cases were handled above; for ordinary spans,
+	// returning one here would skip an extra empty window.
+	if rawSpan > 0 {
+		return rawSpan / interval
+	}
+	return 0
+}
+
+func resolveTimestampWindowBoundary(value types.Datetime, loc *time.Location) types.Timestamp {
+	boundary := value.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip < value {
+		boundary += types.Timestamp(value - roundTrip)
+	}
+	return boundary
+}
+
+func safeTimestampWindowProduct(left, right int64) (int64, bool) {
+	if left == 0 || right == 0 {
+		return 0, true
+	}
+	if left < 0 || right < 0 || left > math.MaxInt64/right {
+		return 0, false
+	}
+	return left * right, true
+}
+
+func safeTimestampWindowSum(left, right int64) (int64, bool) {
+	if right > 0 && left > math.MaxInt64-right {
+		return 0, false
+	}
+	if right < 0 && left < math.MinInt64-right {
+		return 0, false
+	}
+	return left + right, true
 }
 
 func getIntervalNum(diff, unit int64, proc *process.Process) (int64, error) {
@@ -8587,7 +9052,30 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	length int,
 	m metric.MetricType,
 	proc *process.Process,
+	selectList *FunctionSelectList,
 ) ([]float32, bool, error) {
+	// Whether a value is constant must not change the value SQL returns, so this path may
+	// only run where it is exactly equivalent to the per-row kernel.
+	//
+	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
+	// float32-out by construction). For float32 elements that is precisely what the scalar
+	// path computes -- ResolveDistanceFn[float32, float32] hands back the SAME kernel
+	// moarray calls, with no cast -- so the two agree bit for bit. For float64 the resolver
+	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
+	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
+	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
+	// Nothing is given up: cuVS pairwise accepts float32/float16 only, so a float64 batch
+	// was never more than a CPU loop.
+	if _, isFloat32 := any(*new(T)).(float32); !isFloat32 {
+		return nil, false, nil
+	}
+	// The batch path evaluates every row, and an error raised by any row escapes. When the
+	// expression framework has masked rows off, only the per-row path can honor that: a
+	// masked row holding a mismatched dimension must be skipped, not reported.
+	if selectList.IgnoreAllRow() || !selectList.ShouldEvalAllRow() {
+		return nil, false, nil
+	}
+
 	c0, c1 := ivecs[0].IsConst(), ivecs[1].IsConst()
 	if c0 == c1 {
 		return nil, false, nil // both const or neither const
@@ -8615,7 +9103,16 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	col := ivecs[colIdx]
 	y := make([][]T, length)
 	for i := range y {
-		y[i] = types.BytesToArray[T](col.GetBytesAt(i))
+		rowBytes := col.GetBytesAt(i)
+		// The metric kernels report a dimension mismatch as an internal error, while the
+		// documented SQL contract for vector ops of differing dimensions is the scalar
+		// path's ErrInvalidInput naming both dimensions. Hand any mismatched row back to
+		// the per-row path so it raises the canonical error, rather than reproducing the
+		// error here and having to keep two constructions in step.
+		if len(rowBytes) != len(queryBytes) {
+			return nil, false, nil
+		}
+		y[i] = types.BytesToArray[T](rowBytes)
 	}
 
 	dist := make([]float32, length)
@@ -8639,7 +9136,7 @@ func batchArrayDistanceSync[T types.RealNumbers](
 }
 
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct, proc); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_InnerProduct, proc, selectList); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -8658,7 +9155,7 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc, selectList); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -8676,7 +9173,7 @@ func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result v
 }
 
 func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance, proc); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2Distance, proc, selectList); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -8690,6 +9187,29 @@ func L2DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
 		return moarray.L2Distance[T](_v1, _v2)
+	}, selectList)
+}
+
+// L1DistanceArray is l1_distance for the native float element types: the Manhattan
+// distance sum|a-b|. It goes through the same metric kernel every other consumer of
+// Metric_L1Distance uses (ivfflat centroid assignment, brute force, cuVS), so the SQL
+// value and the value the index ranks by cannot drift. Unlike L2 there is no squared
+// form, so no transform is applied on either side.
+func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L1Distance, proc, selectList); err != nil {
+		return err
+	} else if ok {
+		rs := vector.MustFunctionResult[float64](result)
+		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+		for i, d := range dist {
+			rss[i] = float64(d)
+		}
+		return nil
+	}
+	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
+		_v1 := types.BytesToArray[T](v1)
+		_v2 := types.BytesToArray[T](v2)
+		return moarray.L1Distance[T](_v1, _v2)
 	}, selectList)
 }
 
@@ -12155,7 +12675,7 @@ func sameGeometryPoint(a, b geometryPoint2D) bool {
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance, proc); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_L2sqDistance, proc, selectList); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -12173,7 +12693,7 @@ func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineDistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc); err != nil {
+	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc, selectList); err != nil {
 		return err
 	} else if ok {
 		rs := vector.MustFunctionResult[float64](result)
@@ -12243,6 +12763,10 @@ func L2DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result 
 
 func L2DistanceSqArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L2sqDistance, false)
+}
+
+func L1DistanceArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return arrayDistanceNarrow[T](ivecs, result, proc, length, selectList, metric.Metric_L1Distance, false)
 }
 
 func InnerProductArrayViaF32[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

@@ -57,6 +57,12 @@ func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	}
 }
 
+func (m *IntHashMap) NewTransactionalIterator() TransactionalIterator {
+	return &transactionalIntIterator{
+		intHashMapIterator: m.NewIterator(),
+	}
+}
+
 // SetRejectNaN makes FLOAT NaN keys non-matching, as required by SQL join
 // equality. It must be selected before inserting the first row.
 func (m *IntHashMap) SetRejectNaN() error {

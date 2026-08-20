@@ -150,6 +150,32 @@ drop table hf_scale_boundaries;
 drop table hf_readings;
 set time_zone = 'SYSTEM';
 
+# Regression for #26985: simple half-open predicates define the full GAPFILL
+# domain, including leading/trailing buckets for every observed partition.
+create table bounded_readings(device varchar(8), event_ts datetime, value int);
+insert into bounded_readings values
+    ('d1', '2026-01-01 00:02:10', 20),
+    ('d1', '2026-01-01 00:04:20', 40),
+    ('d2', '2026-01-01 00:01:30', 7);
+
+select device, _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-01 00:00:00'
+  and event_ts <  '2026-01-01 00:06:00'
+group by device interval(event_ts, 1, minute) gapfill(partition) fill(value, 0)
+order by device, _wstart;
+
+# The same inferred domain must generate a stable grid when the filter returns
+# no rows and no partition key has to be discovered from the input.
+select _wstart, _wend, sum(value) as value_sum
+from bounded_readings
+where event_ts >= '2026-01-02 00:00:00'
+  and event_ts <  '2026-01-02 00:03:00'
+interval(event_ts, 1, minute) gapfill(partition) fill(null)
+order by _wstart;
+
+drop table bounded_readings;
+
 # Regression for #26786: a post-flush GAPFILL generation must not repeat the
 # boundary window. Keep the assertion aggregated so the case does not emit
 # thousands of detail rows.
@@ -238,6 +264,29 @@ select ws, we from boundary_type_rollup_date;
 
 create table boundary_type_ts(k int, event_ts timestamp, value int);
 insert into boundary_type_ts values (1, '2026-01-01 00:00:01', 1);
+
+set time_zone = '+08:00';
+create table gapfill_timezone_ts(k int, event_ts timestamp, value int);
+insert into gapfill_timezone_ts values
+	(1, '2026-01-01 10:00:01', 1),
+	(1, '2026-01-03 10:00:01', 3);
+
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition)
+order by _wstart;
+
+select _wstart, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day) gapfill(partition) fill(value, 99)
+order by _wstart;
+
+select _wstart, _wend, sum(value) as value_sum
+from gapfill_timezone_ts
+group by k interval(event_ts, 1, day)
+order by _wstart;
+
+drop table gapfill_timezone_ts;
 
 create table boundary_type_rollup_ts as
 select _wstart as ws, count(*) as c

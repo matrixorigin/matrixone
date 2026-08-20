@@ -25,7 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTNConfig(t *testing.T) {
@@ -104,6 +108,62 @@ func TestFileServiceFactory(t *testing.T) {
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
+}
+
+func TestFileServiceFactoryScopesMemoryCacheMetrics(t *testing.T) {
+	ctx := context.Background()
+
+	newConfig := func(capacity toml.ByteSize) *ServiceConfig {
+		return &ServiceConfig{FileServices: []fileservice.Config{
+			{
+				Name:    defines.LocalFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.SharedFileServiceName,
+				Backend: "DISK",
+				DataDir: t.TempDir(),
+				Cache: fileservice.CacheConfig{
+					MemoryCapacity: &capacity,
+				},
+			},
+			{
+				Name:    defines.ETLFileServiceName,
+				Backend: "DISK-ETL",
+			},
+			{
+				Name:    defines.TmpFileServiceName,
+				Backend: "DISK-TMP",
+			},
+		}}
+	}
+
+	firstCapacity := toml.ByteSize(1 << 20)
+	first, err := newConfig(firstCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-a")
+	require.NoError(t, err)
+	t.Cleanup(func() { first.Close(ctx) })
+
+	secondCapacity := toml.ByteSize(2 << 20)
+	second, err := newConfig(secondCapacity).createFileService(ctx, metadata.ServiceType_CN, "scope-node-b")
+	require.NoError(t, err)
+	t.Cleanup(func() { second.Close(ctx) })
+
+	_, firstGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-a"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	_, secondGauge := metric.GetFsCacheBytesGaugeWithScope(
+		fileservice.ServiceMetricScope(metadata.ServiceType_CN.String(), "scope-node-b"),
+		defines.SharedFileServiceName,
+		"mem",
+	)
+	require.Equal(t, float64(firstCapacity), testutil.ToFloat64(firstGauge))
+	require.Equal(t, float64(secondCapacity), testutil.ToFloat64(secondGauge))
 }
 
 func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
@@ -207,6 +267,47 @@ func TestDumpCommonConfig(t *testing.T) {
 	cfg1 := newServiceConfig()
 	_, err := dumpCommonConfig(cfg1)
 	assert.NoError(t, err)
+}
+
+func TestMongoDBEnablementConfigDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		wantEnabled bool
+	}{
+		{name: "omitted", input: "", wantEnabled: true},
+		{name: "explicit disable", input: "[cn.frontend.mongodb]\nenable = false\n", wantEnabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newServiceConfig()
+			assert.NoError(t, parseFromString(tc.input, &cfg))
+			assert.NoError(t, cfg.setDefaultValue())
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+			assert.False(t, cfg.CN.Frontend.MongoDB.EnablePerAccount)
+			assert.False(t, cfg.CN.Frontend.MongoDB.AllowLoopback)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedHostSuffixes)
+			assert.Empty(t, cfg.CN.Frontend.MongoDB.AllowedCIDRs)
+
+			cfg.CN.SetDefaultValue()
+			assert.Equal(t, tc.wantEnabled, cfg.CN.Frontend.MongoDB.Enable)
+		})
+	}
+}
+
+func TestMongoDBProgrammaticOptOutSurvivesCNDefaulting(t *testing.T) {
+	op := &operator{cfg: newServiceConfig()}
+	require.True(t, op.cfg.CN.Frontend.MongoDB.Enable)
+
+	// Model the public WithPreStart callback path.
+	op.Adjust(func(cfg *ServiceConfig) {
+		cfg.CN.Frontend.MongoDB.Enable = false
+	})
+
+	serviceCfg := op.GetServiceConfig()
+	cfg := serviceCfg.getCNServiceConfig()
+	cfg.SetDefaultValue()
+	cfg.Frontend.SetDefaultValues()
+	require.False(t, cfg.Frontend.MongoDB.Enable)
 }
 
 func TestStartupRetryIntervalsDefaultAndConfigurable(t *testing.T) {

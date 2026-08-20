@@ -43,6 +43,9 @@ const (
 	// result flush. The boundary window was already published by the previous
 	// aggregate generation, so this transition must not emit it again.
 	resumeAfterFlush = 8
+	// boundedEmpty emits a query-bounded grid when the child has no rows and
+	// therefore there is no observed timestamp to seed firstWindow.
+	boundedEmpty = 9
 )
 
 type container struct {
@@ -65,10 +68,24 @@ type container struct {
 	tsVec []*vector.Vector
 	tsOid types.T
 
-	startExe colexec.ExpressionExecutor
-	startVec *vector.Vector
-	endExe   colexec.ExpressionExecutor
-	endVec   *vector.Vector
+	startExe        colexec.ExpressionExecutor
+	startVec        *vector.Vector
+	startVecInBatch bool
+	endExe          colexec.ExpressionExecutor
+	endVec          *vector.Vector
+	endVecInBatch   bool
+	// Bounds are constant expressions inferred from the query predicates and
+	// evaluated once per Prepare, so prepared parameters remain supported.
+	gapFillStartExe colexec.ExpressionExecutor
+	gapFillEndExe   colexec.ExpressionExecutor
+	gapFillStart    types.Datetime
+	gapFillEnd      types.Datetime
+	gapFillRows     int64
+	// boundedGapFill is the per-execution decision to use the inferred bounds.
+	// Zero temporal sentinels cannot participate in the regular DATETIME grid,
+	// so those executions fall back to the legacy observed-range GAPFILL path.
+	boundedGapFill  bool
+	syntheticBounds bool
 
 	status int32
 	end    bool
@@ -140,6 +157,10 @@ type TimeWin struct {
 	TsType  plan.Type
 	Ts      *plan.Expr
 	EndExpr *plan.Expr
+	// GapFillStart / GapFillEnd define an optional half-open output domain.
+	// The planner sets them only as a pair after proving simple query bounds.
+	GapFillStart *plan.Expr
+	GapFillEnd   *plan.Expr
 
 	Interval types.Datetime
 	Sliding  types.Datetime
@@ -172,6 +193,10 @@ func (timeWin TimeWin) TypeName() string {
 	return opName
 }
 
+func (timeWin *TimeWin) timestampWindow() bool {
+	return types.T(timeWin.TsType.Id) == types.T_timestamp
+}
+
 func NewArgument() *TimeWin {
 	return reuse.Alloc[TimeWin](nil)
 }
@@ -182,21 +207,43 @@ func (timeWin *TimeWin) Release() {
 	}
 }
 
+func (timeWin *TimeWin) hasGapFillBounds() bool {
+	return timeWin.GapFill && timeWin.GapFillStart != nil && timeWin.GapFillEnd != nil
+}
+
+func (ctr *container) hasGapFillBounds(timeWin *TimeWin) bool {
+	return ctr.boundedGapFill && timeWin.hasGapFillBounds()
+}
+
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &timeWin.ctr
 	ctr.resetExes()
+	releaseInheritedAccount := ctr.hasAccountedBufferedVector()
 	// The last flushed batch and the aggregate executors belong to the finished
 	// generation. In the sliding path the batch owns its aggregate prefix (the
 	// boundaries belong to their expression executors and the partition keys to
-	// partOut); in the interval path every vector is a buffer that outlives the
-	// batch, so only the reference is dropped. Aggregates cannot be rewound
-	// once Flush has run (see makeAggExecutors), so they are discarded here and
-	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
-	// the cursors back at zero the next generation reuses them from index 0.
+	// partOut). In the interval path the aggregate/partition vectors are
+	// buffered inputs that outlive the batch, while TIMESTAMP boundaries are
+	// batch-owned decorations and must be released before the batch reference is
+	// dropped. Aggregates cannot be rewound once Flush has run (see
+	// makeAggExecutors), so they are discarded here and rebuilt by Prepare.
+	// Unaccounted tsVec/aggVec/partVec buffers stay
+	// allocated: with the cursors back at zero the next generation reuses them
+	// from index 0. Account-owned buffers are released below because their
+	// lifetime cannot cross a statement-attempt generation.
 	if timeWin.EndExpr == nil {
 		ctr.freeFlushedAggVecs(proc.Mp())
+	} else {
+		ctr.freeIntervalTimestampBoundaryVecs(proc.Mp())
 	}
 	ctr.bat = nil
+	if releaseInheritedAccount {
+		// Dup preserves the source vector's allocation selection. An upstream
+		// accounted Order/MergeOrder can therefore charge these reusable input
+		// caches to the current statement attempt. Such backing must not cross a
+		// prepared-statement generation; unaccounted caches retain legacy reuse.
+		ctr.freeVector(proc.Mp())
+	}
 	ctr.freeAgg()
 	ctr.aggs = nil
 	ctr.resetParam(timeWin)
@@ -291,6 +338,12 @@ func (ctr *container) resetExes() {
 	if ctr.endExe != nil {
 		ctr.endExe.ResetForNextQuery()
 	}
+	if ctr.gapFillStartExe != nil {
+		ctr.gapFillStartExe.ResetForNextQuery()
+	}
+	if ctr.gapFillEndExe != nil {
+		ctr.gapFillEndExe.ResetForNextQuery()
+	}
 }
 
 // resetParam rewinds every piece of per-generation state, so a Reset/Prepare
@@ -308,6 +361,8 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
+	ctr.startVecInBatch = false
+	ctr.endVecInBatch = false
 
 	ctr.curVecIdx = 0
 	ctr.curRowIdx = 0
@@ -334,6 +389,11 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.partitionWindows = 0
 	ctr.partitionCount = 0
 	ctr.gapFillWindows = 0
+	ctr.gapFillStart = 0
+	ctr.gapFillEnd = 0
+	ctr.gapFillRows = 0
+	ctr.boundedGapFill = false
+	ctr.syntheticBounds = false
 }
 
 func (ctr *container) freeExes() {
@@ -354,11 +414,25 @@ func (ctr *container) freeExes() {
 	if ctr.endExe != nil {
 		ctr.endExe.Free()
 	}
+	if ctr.gapFillStartExe != nil {
+		ctr.gapFillStartExe.Free()
+	}
+	if ctr.gapFillEndExe != nil {
+		ctr.gapFillEndExe.Free()
+	}
 }
 
 func (ctr *container) freeBatch(mp *mpool.MPool) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(mp)
+	}
+	if ctr.startVecInBatch {
+		ctr.startVec = nil
+		ctr.startVecInBatch = false
+	}
+	if ctr.endVecInBatch {
+		ctr.endVec = nil
+		ctr.endVecInBatch = false
 	}
 }
 
@@ -400,17 +474,55 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 
 	ctr.freePartOut(mp)
 
-	// calRes only ever hands the *cast results* of these two to the output
-	// batch; the datetime staging vectors themselves are owned here and were
-	// never released before.
+	// DATETIME windows use these as staging vectors and hand only cast results to
+	// the output batch. TIMESTAMP windows can attach them directly to the output
+	// batch; freeBatch/freeFlushedAggVecs clear the ownership flag in that case.
 	if ctr.startVec != nil {
 		ctr.startVec.Free(mp)
 		ctr.startVec = nil
+		ctr.startVecInBatch = false
 	}
 	if ctr.endVec != nil {
 		ctr.endVec.Free(mp)
 		ctr.endVec = nil
+		ctr.endVecInBatch = false
 	}
+}
+
+func (ctr *container) hasAccountedBufferedVector() bool {
+	if ctr == nil {
+		return false
+	}
+	hasAccount := func(vec *vector.Vector) bool {
+		return vec != nil && vec.AllocationAccountSelection() != nil
+	}
+	for _, vec := range ctr.tsVec {
+		if hasAccount(vec) {
+			return true
+		}
+	}
+	for _, aggregateVecs := range ctr.aggVec {
+		for _, vecs := range aggregateVecs {
+			for _, vec := range vecs {
+				if hasAccount(vec) {
+					return true
+				}
+			}
+		}
+	}
+	for _, vecs := range ctr.partVec {
+		for _, vec := range vecs {
+			if hasAccount(vec) {
+				return true
+			}
+		}
+	}
+	for _, vec := range ctr.partOut {
+		if hasAccount(vec) {
+			return true
+		}
+	}
+	return hasAccount(ctr.startVec) || hasAccount(ctr.endVec)
 }
 
 func (ctr *container) freePartOut(mp *mpool.MPool) {

@@ -913,6 +913,9 @@ type ExecCtx struct {
 	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -934,6 +937,7 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	returning         *returningState
+	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
@@ -968,6 +972,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -982,6 +987,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.selectInto = nil
 	execCtx.rewriteEnabled = false
 }
 
@@ -1575,7 +1581,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// later in rewriteSQL, which runs on every statement and would make the
 	// session unable to even clear the bad value.
 	if name == "remap_rewrites" {
-		if err = validateRemapRewrites(ctx, val); err != nil {
+		if err = validateRemapRewrites(ctx, val, parserLowerCaseTableNames(ses)); err != nil {
 			return err
 		}
 	}
@@ -1601,6 +1607,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
 		}
 	}
 
@@ -1617,6 +1624,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
+	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
 	}
 	return
 }

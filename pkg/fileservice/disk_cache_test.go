@@ -1170,8 +1170,8 @@ func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, 
 	return nil, false
 }
 
-func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) error {
-	return nil
+func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
+	return true, nil
 }
 
 func (*countingDataCache) DeletePaths(context.Context, []string) {}

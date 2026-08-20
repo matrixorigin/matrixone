@@ -211,6 +211,37 @@ func TestSessionReleasePlanCache(t *testing.T) {
 	require.Equal(t, 1, second.freed)
 }
 
+func TestSessionUserVariableAssignmentClearsPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	pc.cache("select @v + 0", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{
+		planCache:       pc,
+		userDefinedVars: make(map[string]*UserDefinedVar),
+	}
+	require.True(t, ses.isCached("select @v + 0"))
+	require.NoError(t, ses.SetUserDefinedVar("v", int64(1), "set @v = 1"))
+	require.False(t, ses.isCached("select @v + 0"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "v"}}}
+	pc.cache("select 1 into @v", []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	input := &UserInput{sql: "select 1 into @v"}
+	input.genHash()
+
+	// A cached SELECT-INTO plan is stale by definition: its user-variable
+	// references were bound before the assignment executed.  The lookup must
+	// discard it so the next execution is rebound against the new type.
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}

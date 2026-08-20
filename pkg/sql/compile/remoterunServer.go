@@ -386,6 +386,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					runCompile.MessageBoard = message.NewMessageBoard()
 					runCompile.proc.SetMessageBoard(runCompile.MessageBoard)
 				}
+				if runCompile.proc.GetSession() == receiver.warningSession {
+					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
+				}
 				runCompile.clear()
 				return nil
 			}))
@@ -393,10 +396,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
 			for _, snapshot := range terminal.allocation {
-				localAllocationQuality |= localAllocation.AddGeneration(
-					snapshot.Peak,
-					snapshot.Used,
-					snapshot.State == mpool.AllocationAccountTerminalValid,
+				localAllocationQuality |= addAllocationAccountTerminal(
+					&localAllocation,
+					snapshot,
 				)
 			}
 			var localMemory resource.MemoryDomainSummary
@@ -782,6 +784,9 @@ type messageReceiverOnServer struct {
 	resourceMissingMemoryDomains      uint64
 	resourcePendingAllocationGroups   []remoteAllocationGroupPending
 	resourceCompletedAllocationGroups []string
+	warningSession                    *remoteWarningCollector
+	warningCount                      uint64
+	warningDiagnostics                []remoteWarningDiagnostic
 }
 
 func newMessageReceiverOnServer(
@@ -909,6 +914,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	receiver.warningSession = &remoteWarningCollector{}
+	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)
 	}
@@ -1013,7 +1020,7 @@ func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memor
 		}
 	}
 	if effective == 0 {
-		return 0, process.ErrHashBuildCeilingMissing
+		return 0, process.ErrExecutionMemoryCeilingMissing
 	}
 	reserve := effective / 10
 	if reserve < 256*mpool.MB {
@@ -1167,6 +1174,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
+		WarningCount:              receiver.warningCount,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
 		Allocation:                receiver.resourceAllocation,
@@ -1178,6 +1186,10 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	if receiver.phyPlan != nil {
 		envelope.PhyPlan = *receiver.phyPlan
 	}
+	envelope.WarningDiagnostics = append(
+		envelope.WarningDiagnostics,
+		receiver.warningDiagnostics...,
+	)
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err

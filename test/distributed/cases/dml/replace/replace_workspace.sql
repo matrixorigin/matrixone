@@ -19,7 +19,19 @@ begin;
 replace into t_replace_shuffle_capture select a, a, 24472 from t2;
 rollback;
 
+-- An AP MergeTop nested below HashBuild must publish its final
+-- LIMIT batch once instead of replaying it until the CN runs out of memory.
+create table t_replace_mergetop_once(a int primary key, marker int);
+insert into t_replace_mergetop_once select a, 0 from t2;
+select a, marker from t_replace_mergetop_once order by a desc limit 1;
+replace into t_replace_mergetop_once
+select a, marker + 1 from t_replace_mergetop_once order by a desc limit 1;
+select count(*) as total, min(a) as min_a, max(a) as max_a, sum(marker) as marker_sum
+from t_replace_mergetop_once;
+select a, marker from t_replace_mergetop_once where marker <> 0;
+
 drop table if exists t1;
 drop table if exists t_replace_shuffle_capture;
+drop table if exists t_replace_mergetop_once;
 drop table if exists t2;
 drop database if exists test;

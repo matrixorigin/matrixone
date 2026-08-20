@@ -83,6 +83,60 @@ func isTxnCommitResultUnknown(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrTxnUnknown)
 }
 
+// requestContextErr reports cancellation of the request that owns the
+// statement.  A request can be cancelled when the client disconnects while
+// execution is still finishing.  In that case the statement may have
+// returned successfully, but committing it would make a cancelled DML
+// visible after the client has already received an error.
+func requestContextErr(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.reqCtx == nil {
+		return nil
+	}
+	err := execCtx.reqCtx.Err()
+	if err == nil {
+		return nil
+	}
+	// KILL QUERY (and KILL CONNECTION) deliberately cancel the request
+	// context while keeping the connection available for the former.  Their
+	// existing protocol contract is to finish a read-only query without
+	// turning it into a transaction error.  A client disconnect first marks
+	// the routine as closing in beginClose, so a cancelled DML remains fenced.
+	if errors.Is(err, context.Canceled) && isReadOnlyTransaction(execCtx) {
+		if ses, ok := execCtx.ses.(*Session); ok {
+			if rt := ses.getRoutine(); rt != nil && !rt.closing.Load() {
+				return nil
+			}
+		}
+	}
+	return err
+}
+
+// isReadOnlyTransaction reports the write state that has actually reached the
+// transaction workspace.  The statement kind alone is insufficient: DQL
+// functions such as nextval and setval execute derived updates in the same
+// transaction.  Treat a missing transaction as read-only because there is no
+// transaction state that can be committed; fail closed for an active operator
+// with a missing workspace.
+func isReadOnlyTransaction(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.ses == nil {
+		return false
+	}
+	txnHandler := execCtx.ses.GetTxnHandler()
+	if txnHandler == nil {
+		return false
+	}
+	txnOp := txnHandler.GetTxn()
+	return isReadOnlyTxnOp(txnOp)
+}
+
+func isReadOnlyTxnOp(txnOp TxnOperator) bool {
+	if txnOp == nil {
+		return true
+	}
+	workspace := txnOp.GetWorkspace()
+	return workspace != nil && workspace.Readonly()
+}
+
 // execution succeeds during the transaction. commit the transaction
 func commitTxnFunc(ses FeSession,
 	execCtx *ExecCtx) (retErr error) {
@@ -115,6 +169,12 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	}
 
 	if execCtx.txnOpt.byCommit {
+		if execErr == nil {
+			execErr = requestContextErr(execCtx)
+		}
+		if execErr != nil {
+			return rollbackTxnFunc(ses, execErr, execCtx)
+		}
 		//commit the txn by the COMMIT statement
 		err = ses.GetTxnHandler().Commit(execCtx)
 		if err != nil {
@@ -131,13 +191,17 @@ func finishTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 		v2.TxnUserRollbackCounter.Inc()
 	} else {
 		if execErr == nil {
-			err = commitTxnFunc(ses, execCtx)
-			if err == nil {
-				return err
+			if requestErr := requestContextErr(execCtx); requestErr != nil {
+				execErr = requestErr
+			} else {
+				err = commitTxnFunc(ses, execCtx)
+				if err == nil {
+					return err
+				}
+				// if commitTxnFunc failed, we will roll back the transaction.
+				// if commit panic, rollback below executed at the second time.
+				execErr = err
 			}
-			// if commitTxnFunc failed, we will roll back the transaction.
-			// if commit panic, rollback below executed at the second time.
-			execErr = err
 		}
 		return rollbackTxnFunc(ses, execErr, execCtx)
 	}
@@ -378,6 +442,15 @@ func (th *TxnHandler) setNextTxnIsolation(
 	return nil
 }
 
+func (th *TxnHandler) nextTxnIsolationSnapshot() (pbtxn.TxnIsolation, bool) {
+	if th == nil {
+		return 0, false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.nextTxnIsolation, th.hasNextTxnIsolation
+}
+
 // txnIsolationUnsafe returns the isolation override for the transaction being
 // created and whether a next-transaction override must be consumed after New
 // successfully publishes an owned operator. The caller must hold th.mu.
@@ -612,7 +685,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt),
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
 	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
@@ -637,6 +710,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if consumeNextTxnIsolation {
 		th.hasNextTxnIsolation = false
+		if ses, ok := execCtx.ses.(*Session); ok {
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 	return err
 }
@@ -706,8 +782,17 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	}
 
 	storage := th.storage
+	commitCtx := th.txnCtx
+	// A terminal commit for a DML statement belongs to the statement request,
+	// so a client disconnect can still abort it before it becomes visible.  A
+	// read-only statement must retain the transaction context for its whole
+	// finalization: KILL QUERY cancels reqCtx by design, and that cancellation
+	// may race with Commit after the initial requestContextErr check.
+	if execCtx != nil && execCtx.reqCtx != nil && !isReadOnlyTxnOp(th.txnOp) {
+		commitCtx = execCtx.reqCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		commitCtx,
 		storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseCommitUnsafe,
 	)
@@ -896,6 +981,14 @@ func needToFinishTransactionAtStatementEnd(execCtx *ExecCtx) bool {
 	if statementContainsTransactionCharacteristic(execCtx.stmt) {
 		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
 	}
+	// SET changes session state and must preserve an explicit transaction that
+	// was already active. The frontend still creates a temporary transaction
+	// for a standalone SET, so finish that transaction when there was no active
+	// user transaction at statement start. SET autocommit=1 is handled by
+	// TxnHandler.SetAutocommit, which commits the OFF -> ON transition directly.
+	if IsParameterModificationStatement(execCtx.stmt) {
+		return execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+	}
 	if NeedToBeCommittedInActiveTransaction(execCtx.stmt) {
 		return true
 	}
@@ -940,13 +1033,18 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 }
 
 // statementConsumesNextTxnIsolation marks semantic transaction admission.
-// SET statements can create an implementation-only frontend transaction for
-// expression evaluation or catalog writes; that temporary owner must never
-// consume a NEXT override intended for the next application transaction.
-func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
+// SET statements and autocommit PREPARE statements can create an
+// implementation-only frontend transaction; those temporary owners must never
+// consume a NEXT override intended for the next application transaction. With
+// autocommit disabled, PREPARE owns the user transaction that remains active
+// after the statement, so it must consume the NEXT override consistently with
+// the transaction it creates.
+func statementConsumesNextTxnIsolation(stmt tree.Statement, autoCommit bool) bool {
 	switch stmt.(type) {
 	case *tree.SetVar, *tree.SetTransaction:
 		return false
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
+		return !autoCommit
 	default:
 		return true
 	}

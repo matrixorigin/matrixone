@@ -552,7 +552,7 @@ const UnKnownColId uint64 = math.MaxUint64
 
 type AlterTableContext struct {
 	// key   --> Copy table column name, letter case: lower
-	// value --> Original table column name
+	// value --> Expression used to populate it from the original table
 	alterColMap     map[string]selectExpr
 	schemaName      string
 	originTableName string
@@ -560,6 +560,14 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+}
+
+func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {
+	source, hasSource := ctx.alterColMap[oldName]
+	delete(ctx.alterColMap, oldName)
+	if hasSource {
+		ctx.alterColMap[newName] = source
+	}
 }
 
 type exprType int
@@ -907,9 +915,8 @@ func isInplaceColumnDefinition(
 ) (ok bool, err error) {
 	oCol := FindColumn(tableDef.Cols, column.Name.ColName())
 	if oCol == nil {
-		err = moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			ctx, column.Name.ColNameOrigin(), tableDef.Name)
-		return
 	}
 
 	ok, err = positionMatched(ctx, position, tableDef, oCol)

@@ -119,7 +119,9 @@ var PathExists = func(path string) (bool, bool, error) {
 }
 
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
-	sv := &mo_config.FrontendParameters{}
+	sv := &mo_config.FrontendParameters{
+		MongoDB: *mo_config.NewMongoDBParameters(),
+	}
 	var err error
 	_, err = toml.DecodeFile(configFile, sv)
 	if err != nil {
@@ -197,7 +199,8 @@ func getExprValueWithPrepareMode(
 	preparedExpression bool,
 	isBin ...*bool,
 ) (interface{}, error) {
-	return getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	value, _, err := getExprValueWithPrepareMeta(e, ses, execCtx, preparedExpression, nil, isBin...)
+	return value, err
 }
 
 func getExprValueWithPrepareMeta(
@@ -207,7 +210,7 @@ func getExprValueWithPrepareMeta(
 	preparedExpression bool,
 	prepareParamKind *vector.PrepareParamKind,
 	isBin ...*bool,
-) (interface{}, error) {
+) (interface{}, plan.Type, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -223,7 +226,7 @@ func getExprValueWithPrepareMeta(
 		if prepareParamKind != nil {
 			*prepareParamKind = vector.PrepareParamNone
 		}
-		return v.ColName(), nil
+		return v.ColName(), plan.Type{Id: int32(types.T_text)}, nil
 	}
 
 	var err error
@@ -265,16 +268,16 @@ func getExprValueWithPrepareMeta(
 	err = executeStmtInSameSession(
 		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
-		return nil, err
+		return nil, plan.Type{}, err
 	}
 
 	batches := ses.GetResultBatches()
 	if len(batches) == 0 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	if batches[0].VectorCount() > 1 {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi columns value", e.String())
 	}
 
 	//evaluate the count of rows, the count of columns
@@ -286,7 +289,7 @@ func getExprValueWithPrepareMeta(
 		}
 		count += b.RowCount()
 		if count > 1 {
-			return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
+			return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s generates multi rows value", e.String())
 		}
 		if resultVec == nil && b.GetVector(0).Length() != 0 {
 			resultVec = b.GetVector(0)
@@ -294,7 +297,7 @@ func getExprValueWithPrepareMeta(
 	}
 
 	if resultVec == nil {
-		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
+		return nil, plan.Type{}, moerr.NewInternalErrorf(execCtx.reqCtx, "the expr %s does not generate a value", e.String())
 	}
 
 	// for the decimal type, we need the type of expr
@@ -305,7 +308,7 @@ func getExprValueWithPrepareMeta(
 		planExpr, err = bindSetVariableResultExpr(
 			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
-			return nil, err
+			return nil, plan.Type{}, err
 		}
 	}
 
@@ -317,14 +320,15 @@ func getExprValueWithPrepareMeta(
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind, err = transparentPrepareParamKind(e, ses)
 			if err != nil {
-				return nil, err
+				return nil, plan.Type{}, err
 			}
 		}
 		if *prepareParamKind == vector.PrepareParamNone {
 			*prepareParamKind = prepareParamKindFromType(resultVec.GetType().Oid)
 		}
 	}
-	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	value, err := getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+	return value, plan2.MakePlan2Type(resultVec.GetType()), err
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's
@@ -1694,6 +1698,14 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
 		return err
 	}
+	if typ.Oid == types.T_blob {
+		length := uint32(math.MaxUint32)
+		if typ.Width > 0 {
+			length = uint32(typ.Width)
+		}
+		setMysqlBinaryBlobColumnMetadata(col, length)
+		return nil
+	}
 	setMysqlColumnTypeMetadata(col, typ)
 	setCharacter(col)
 	switch typ.Charset {
@@ -1718,6 +1730,13 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 	return nil
 }
 
+func setMysqlBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
+	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	col.SetCharset(charsetBinary)
+	col.SetLength(length)
+	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
+}
+
 const mysqlDecimalNotSpecified = 0x1f
 
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
@@ -1729,13 +1748,14 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		col.SetLength(uint32(types.MaxVarcharLen))
 	} else if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
 		// Protocol::ColumnDefinition41 expresses column_length in bytes. Character
-		// string widths are declared in characters and use utf8mb3 metadata.
+		// string widths are declared in characters, so the byte multiplier must
+		// match the collation emitted by setMysqlColumnTypeInfo.
 		if typ.Oid == types.T_varchar && typ.Width == 0 {
 			// Synthesized VARCHAR result columns historically use zero as an
 			// unspecified width and must keep their unbounded metadata.
 			col.SetLength(math.MaxUint32)
 		} else {
-			col.SetLength(mysqlStringColumnLength(typ.Width, charsetVarcharMaxBytesPerCharacter))
+			col.SetLength(mysqlStringColumnLength(typ.Width, mysqlTextMaxBytesPerCharacter(typ.Charset)))
 		}
 	} else if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary {
 		// Binary string widths are already declared in bytes.
@@ -1752,6 +1772,18 @@ func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
 		return
 	}
 	col.SetDecimal(typ.Scale)
+}
+
+func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
+	switch charset {
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+		return utf8mb4MaxBytesPerCharacter
+	case types.CharsetBinary:
+		return 1
+	default:
+		// Legacy and unknown text metadata is emitted as utf8_general_ci.
+		return utf8MaxBytesPerCharacter
+	}
 }
 
 func mysqlStringColumnLength(width int32, maxBytesPerCharacter uint32) uint32 {
@@ -2210,6 +2242,12 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	)
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
+	}
+	if typ.Oid == types.T_blob && col.OriginTblName != "" {
+		// A directly selected table BLOB has MySQL's regular BLOB capacity.
+		// Width-less computed BLOB expressions keep the conservative upper bound
+		// installed by setMysqlColumnTypeInfo instead.
+		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
 

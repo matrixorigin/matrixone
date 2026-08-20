@@ -366,7 +366,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, owner, stmt, plan)
+				// Prepared plans are cached across privilege-cache refreshes. Recheck
+				// the resolved statement and plan at execution time so a revoke cannot
+				// leave an existing PREPARE/EXECUTE handle authorized.
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, owner, stmt, plan)
 				if err != nil {
 					return nil, err
 				}
@@ -399,7 +402,10 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.stmtBorrowed = false
 			}
 			if !cwft.ses.IsBackgroundSession() {
-				authStats, err := authenticatePreparedDDLOwnerStatement(
+				// Binary prepared execution follows the same execute-time privilege
+				// check as text EXECUTE. Do not rely on authorization captured while
+				// the statement was prepared.
+				authStats, err := authenticateUserCanExecutePrepareOrExecute(
 					execCtx.reqCtx, owner, stmt, cwft.plan)
 				if err != nil {
 					return nil, err
@@ -457,7 +463,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(cwft.stmt, fill),
+				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
 				cwft.ses.GetSql(),
 			); err != nil {
 				return nil, err
@@ -492,17 +498,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	}
 
 	return cwft.compile, err
-}
-
-func authenticatePreparedDDLOwnerStatement(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
-	var stats statistic.StatsArray
-	stats.Reset()
-	switch stmt.(type) {
-	case *tree.CreateDatabase, *tree.CreateTable:
-		return authenticateUserCanExecutePrepareOrExecute(reqCtx, ses, stmt, p)
-	default:
-		return stats, nil
-	}
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context, phyPlan *models.PhyPlan) error {
@@ -1279,7 +1274,7 @@ func createCompile(
 			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
-	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(stmt, fill))
+	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
 	if err != nil {
 		return
 	}
@@ -1311,6 +1306,8 @@ func siriusStatementSelected(sql string, stmt tree.Statement) bool {
 // callback. Apply the same rule both when compiling a fresh pipeline and when
 // resetting a cached prepared pipeline for another execution.
 func compileOutputCallback(
+	execCtx *ExecCtx,
+	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
@@ -1318,7 +1315,7 @@ func compileOutputCallback(
 	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
 	default:
-		return fill
+		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill)
 	}
 }
 
