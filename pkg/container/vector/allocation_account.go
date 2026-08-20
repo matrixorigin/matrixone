@@ -408,7 +408,9 @@ func (v *Vector) ensureBitmapCapacity(rows int, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
-	if rows < v.Capacity() {
+	// Constant payload and provenance have one physical row even when their
+	// logical broadcast length or a reused payload buffer has larger capacity.
+	if !v.IsConst() && rows < v.Capacity() {
 		rows = v.Capacity()
 	}
 	if v.allocationAccount != nil {

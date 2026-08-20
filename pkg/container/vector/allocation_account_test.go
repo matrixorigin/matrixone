@@ -1522,6 +1522,38 @@ func TestAccountedBinaryStringCreatedAfterPayloadGrowthCoversSetLength(t *testin
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedConstRuntimeStringDomainUsesPhysicalRowCapacity(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	vec, err := NewConstBytesWithAllocation(
+		types.T_varbinary.ToType(), []byte("selected"), 1, mp, state.selection,
+	)
+	require.NoError(t, err)
+	require.NoError(t, vec.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+	used := state.account.Snapshot().Used
+	binaryCapacity := vec.binaryStringRows.ExternalStorageCapacity()
+	textCapacity := vec.textStringRows.ExternalStorageCapacity()
+	require.Equal(t, 1, binaryCapacity)
+	require.Equal(t, 1, textCapacity)
+
+	require.NotPanics(t, func() { vec.SetLength(65) })
+	require.Equal(t, used, state.account.Snapshot().Used)
+	require.Equal(t, binaryCapacity, vec.binaryStringRows.ExternalStorageCapacity())
+	require.Equal(t, textCapacity, vec.textStringRows.ExternalStorageCapacity())
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(0))
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(64))
+
+	vec.SetLength(0)
+	require.Equal(t, types.RuntimeStringInherit, vec.GetRuntimeStringDomainAt(0))
+	require.NotPanics(t, func() { vec.SetLength(129) })
+	require.Equal(t, types.RuntimeStringText, vec.GetRuntimeStringDomainAt(128))
+	require.Equal(t, used, state.account.Snapshot().Used)
+
+	vec.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestAccountedBinaryStringInplaceSortHasPreflightedBitmaps(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		t.Run(fmt.Sprintf("compact=%t", compact), func(t *testing.T) {

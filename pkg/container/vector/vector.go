@@ -303,29 +303,31 @@ func (v *Vector) SetLength(n int) {
 	if v.typ.IsVarlen() && n != v.length {
 		v.areaDisjoint = false
 	}
-	if err := v.preExtendPrepareParamKinds(n, nil); err != nil {
+	metadataLength := n
+	if v.IsConst() && metadataLength > 0 {
+		metadataLength = 1
+	}
+	if err := v.preExtendPrepareParamKinds(metadataLength, nil); err != nil {
 		panic(err)
 	}
 	oldLength := v.length
 	v.setLengthAfterExtend(n)
 	if v.binaryStringRowsActive {
+		if v.IsConst() {
+			// A constant has one physical provenance row regardless of its
+			// broadcast length. In particular, do not grow allocation-accounted
+			// external bitmaps when only the logical row count changes. Row zero
+			// is intentionally retained across length zero for vector reuse.
+			return
+		}
 		if n > oldLength {
 			v.binaryStringRows.TryExpandWithSize(n)
 			v.textStringRows.TryExpandWithSize(n)
 		} else if n < oldLength {
-			start := n
-			if v.IsConst() && start == 0 {
-				// Const row-level provenance belongs to physical row zero. Keep it
-				// while the broadcast has no logical rows so a later expansion can
-				// reuse the same folded/scalar value without changing its domain.
-				start = 1
-			}
-			v.binaryStringRows.RemoveRange(uint64(start), uint64(oldLength))
-			v.textStringRows.RemoveRange(uint64(start), uint64(oldLength))
+			v.binaryStringRows.RemoveRange(uint64(n), uint64(oldLength))
+			v.textStringRows.RemoveRange(uint64(n), uint64(oldLength))
 		}
-		if !v.IsConst() || n != 0 {
-			v.normalizeBinaryStringRows()
-		}
+		v.normalizeBinaryStringRows()
 	}
 }
 
@@ -865,7 +867,7 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 	}
 	rowDomains := textCount > 0 || binaryCount > 0 && binaryCount < nonNull
 	if rowDomains {
-		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+		if err := v.ensureBinaryStringCapacity(physicalRows, mp); err != nil {
 			releaseKinds()
 			return err
 		}
@@ -877,8 +879,8 @@ func (v *Vector) SetPrepareParamKindsAndBinaryStringFromReader(
 	case binaryCount == nonNull && textCount == 0:
 		v.setBinaryStringScalar(true)
 	default:
-		v.binaryStringRows.InitWithSize(int64(v.length))
-		v.textStringRows.InitWithSize(int64(v.length))
+		v.binaryStringRows.InitWithSize(int64(physicalRows))
+		v.textStringRows.InitWithSize(int64(physicalRows))
 		for row := 0; row < physicalRows; row++ {
 			if byte(kinds[row])&binaryMask != 0 && !v.IsNull(uint64(row)) {
 				v.binaryStringRows.Add(uint64(row))
@@ -1236,13 +1238,17 @@ func (v *Vector) prepareOrdinaryAppendMetadata(rows int, mp *mpool.MPool) error 
 // already reserved. It cannot allocate and initializes newly visible ordinary
 // rows with PrepareParamNone.
 func (v *Vector) setLengthAfterExtend(n int) {
+	metadataLength := n
+	if v.IsConst() && metadataLength > 0 {
+		metadataLength = 1
+	}
 	if v.prepareParamKinds != nil {
-		if n > cap(v.prepareParamKinds) {
+		if metadataLength > cap(v.prepareParamKinds) {
 			panic("prepared parameter sidecar capacity was not extended")
 		}
 		oldLength := len(v.prepareParamKinds)
-		v.prepareParamKinds = v.prepareParamKinds[:n]
-		if n > oldLength {
+		v.prepareParamKinds = v.prepareParamKinds[:metadataLength]
+		if metadataLength > oldLength {
 			clear(v.prepareParamKinds[oldLength:])
 		}
 	}
@@ -2251,13 +2257,17 @@ func (v *Vector) setRuntimeStringDomainAt(
 		row = 0
 	}
 	if !v.binaryStringRowsActive {
-		if err := v.ensureBinaryStringCapacity(v.length, pool); err != nil {
+		physicalRows := v.length
+		if v.IsConst() {
+			physicalRows = 1
+		}
+		if err := v.ensureBinaryStringCapacity(physicalRows, pool); err != nil {
 			return err
 		}
-		v.binaryStringRows.InitWithSize(int64(v.length))
-		v.textStringRows.InitWithSize(int64(v.length))
+		v.binaryStringRows.InitWithSize(int64(physicalRows))
+		v.textStringRows.InitWithSize(int64(physicalRows))
 		if v.binaryString {
-			v.binaryStringRows.AddRange(0, uint64(v.length))
+			v.binaryStringRows.AddRange(0, uint64(physicalRows))
 		}
 		v.binaryStringRowsActive = true
 	}
@@ -2351,12 +2361,16 @@ func (v *Vector) SetRuntimeStringDomainWithMP(domain types.RuntimeStringDomain, 
 			v.resetBinaryString()
 			return nil
 		}
-		if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+		physicalRows := v.length
+		if v.IsConst() {
+			physicalRows = 1
+		}
+		if err := v.ensureBinaryStringCapacity(physicalRows, mp); err != nil {
 			return err
 		}
-		v.binaryStringRows.InitWithSize(int64(v.length))
-		v.textStringRows.InitWithSize(int64(v.length))
-		for row := 0; row < v.length; row++ {
+		v.binaryStringRows.InitWithSize(int64(physicalRows))
+		v.textStringRows.InitWithSize(int64(physicalRows))
+		for row := 0; row < physicalRows; row++ {
 			if !v.IsNull(uint64(row)) {
 				v.textStringRows.Add(uint64(row))
 			}
@@ -2397,9 +2411,19 @@ func (v *Vector) setBinaryStringRowsWithMP(rows []bool, mp *mpool.MPool, selecte
 		return nil
 	}
 	overrideStatic := selectedValue && v.staticBinaryStringType()
-	if v.IsConst() && !overrideStatic {
+	if v.IsConst() {
+		for row := 1; row < len(rows); row++ {
+			if rows[row] != rows[0] {
+				return moerr.NewInvalidInputNoCtx(
+					"constant vector requires one uniform binary-string domain")
+			}
+		}
 		if v.IsNull(0) {
 			v.setBinaryStringScalar(false)
+		} else if overrideStatic && !rows[0] {
+			return v.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp)
+		} else if overrideStatic {
+			v.resetBinaryString()
 		} else {
 			v.setBinaryStringScalar(rows[0])
 		}
@@ -6597,8 +6621,8 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		}
 		// Admit the only fallible provenance allocation before SetConst*
 		// publishes the new payload, const state, and logical length.
-		if domain == types.RuntimeStringText {
-			if err := v.ensureBinaryStringCapacity(length, mp); err != nil {
+		if domain == types.RuntimeStringText && length > 0 {
+			if err := v.ensureBinaryStringCapacity(1, mp); err != nil {
 				return err
 			}
 		}
