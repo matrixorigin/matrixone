@@ -1732,6 +1732,47 @@ func TestBoundedSlidingSumSupportsInt64Arguments(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.New(types.T_decimal64, 18, 2)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.NewDecimal64Vector(
+		5, typ, proc.Mp(), false,
+		[]bool{false, true, true, false, false},
+		[]types.Decimal64{100, 0, 0, types.Decimal64(300).Minus(), 400})
+	bat.SetRowCount(5)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeFiniteCumulativeFrame(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedSumAggExpr(t, 0, typ)},
+	}
+	ctr := &container{
+		bat:     bat,
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []types.Decimal128{
+		types.Decimal128FromInt64(100),
+		types.Decimal128FromInt64(100),
+		{},
+		types.Decimal128FromInt64(-300),
+		types.Decimal128FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+	require.False(t, result.IsNull(0))
+	require.False(t, result.IsNull(1))
+	require.True(t, result.IsNull(2))
+	require.False(t, result.IsNull(3))
+	require.False(t, result.IsNull(4))
+
+	result.Free(proc.Mp())
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	bat := batch.NewWithSize(1)
