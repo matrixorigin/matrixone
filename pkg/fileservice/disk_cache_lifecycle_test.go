@@ -16,6 +16,8 @@ package fileservice
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -103,6 +105,54 @@ func TestDiskCacheIOEntryWaitHonorsCancellation(t *testing.T) {
 		t.Fatal("canceled disk-cache read remained blocked by an IOEntry update")
 	}
 	release()
+}
+
+func TestDiskCacheIOEntryWaitIsBoundedDuringAsyncFinalize(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	t.Cleanup(unblock)
+	cache.fileSync = func(file *os.File) error {
+		close(syncStarted)
+		<-releaseSync
+		return file.Sync()
+	}
+	require.NoError(t, cache.Update(context.Background(), &IOVector{
+		FilePath: "foo",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}, true))
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async IOEntry finalizer did not start")
+	}
+
+	vector := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 1}}}
+	readDone := make(chan error, 1)
+	go func() { readDone <- cache.Read(context.Background(), vector) }()
+	select {
+	case err := <-readDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblock()
+		<-readDone
+		t.Fatal("IOEntry cache read waited for async disk finalization")
+	}
+	require.False(t, vector.Entries[0].done)
+
+	unblock()
+	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache.Flush(flushCtx)
+	require.NoError(t, flushCtx.Err())
+	require.NoError(t, cache.Read(context.Background(), vector))
+	require.True(t, vector.Entries[0].done)
+	require.Equal(t, []byte("x"), vector.Entries[0].Data)
 }
 
 func TestDiskCacheSynchronousUpdateWaitHonorsCancellation(t *testing.T) {
@@ -278,6 +328,115 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	require.NoError(t, cache.Read(context.Background(), vector))
 	require.True(t, vector.Entries[0].done)
 	require.Equal(t, []byte("x"), vector.Entries[0].Data)
+}
+
+func TestDiskCacheAsyncCallbackCanReenterCompletionMethods(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		call func(context.Context, *DiskCache)
+	}{
+		{
+			name: "flush",
+			call: func(ctx context.Context, cache *DiskCache) { cache.Flush(ctx) },
+		},
+		{
+			name: "close",
+			call: func(ctx context.Context, cache *DiskCache) { cache.Close(ctx) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cache := newLifecycleTestDiskCache(t)
+			callbackCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			callbackStarted := make(chan struct{})
+			callbackDone := make(chan struct{})
+			ctx := OnDiskCacheWritten(context.Background(), func(string, IOEntry) {
+				close(callbackStarted)
+				test.call(callbackCtx, cache)
+				close(callbackDone)
+			})
+
+			require.NoError(t, cache.Update(ctx, &IOVector{
+				FilePath: "foo",
+				Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+			}, true))
+			select {
+			case <-callbackStarted:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				t.Fatal("async callback did not start")
+			}
+			select {
+			case <-callbackDone:
+			case <-time.After(diskCacheLifecycleTestTimeout):
+				cancel()
+				<-callbackDone
+				t.Fatalf("async callback deadlocked while reentering %s", test.name)
+			}
+			require.Eventually(t, func() bool {
+				cache.async.mu.Lock()
+				defer cache.async.mu.Unlock()
+				return len(cache.async.slots) == 0 && cache.async.mu.pendingBytes == 0
+			}, diskCacheLifecycleTestTimeout, time.Millisecond)
+		})
+	}
+}
+
+func TestDiskCacheAsyncCallbacksRemainOrderedAndBounded(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	cache.fileSync = func(*os.File) error { return nil }
+	releaseCallbacks := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseCallbacks) })
+	t.Cleanup(unblock)
+	callbackStarted := make(chan struct{})
+	var startedOnce sync.Once
+	var callbackMu sync.Mutex
+	var callbackPaths []string
+	ctx := OnDiskCacheWritten(context.Background(), func(filePath string, _ IOEntry) {
+		startedOnce.Do(func() { close(callbackStarted) })
+		<-releaseCallbacks
+		callbackMu.Lock()
+		callbackPaths = append(callbackPaths, filePath)
+		callbackMu.Unlock()
+	})
+
+	expectedPaths := make([]string, 0, cap(cache.async.slots))
+	for i := 0; i < cap(cache.async.slots); i++ {
+		filePath := fmt.Sprintf("file-%02d", i)
+		expectedPaths = append(expectedPaths, filePath)
+		require.NoError(t, cache.Update(ctx, &IOVector{
+			FilePath: filePath,
+			Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+		}, true))
+	}
+	select {
+	case <-callbackStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async callback did not start")
+	}
+	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer cancel()
+	cache.Flush(flushCtx)
+	require.NoError(t, flushCtx.Err())
+
+	require.NoError(t, cache.Update(ctx, &IOVector{
+		FilePath: "overflow",
+		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+	}, true))
+	cache.async.mu.Lock()
+	require.Len(t, cache.async.slots, cap(cache.async.slots))
+	require.Equal(t, int64(cap(cache.async.slots)), cache.async.mu.pendingBytes)
+	require.Equal(t, int64(1), cache.async.mu.dropped)
+	cache.async.mu.Unlock()
+
+	unblock()
+	require.Eventually(t, func() bool {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		return len(cache.async.slots) == 0 && cache.async.mu.pendingBytes == 0
+	}, diskCacheLifecycleTestTimeout, time.Millisecond)
+	callbackMu.Lock()
+	require.Equal(t, expectedPaths, callbackPaths)
+	callbackMu.Unlock()
 }
 
 func TestDiskCacheAsyncSetFileReturnsBeforeFinalize(t *testing.T) {
@@ -500,6 +659,174 @@ func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {
 	diskPath := cache.pathForFile("active")
 	require.False(t, cache.isUpdating(diskPath))
 	_, err := os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCacheCloseWinsAtFilePublicationBoundary(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	publicationReached := make(chan struct{})
+	releasePublication := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releasePublication) })
+	t.Cleanup(unblock)
+	cache.beforeFilePublication = func() {
+		close(publicationReached)
+		<-releasePublication
+	}
+
+	require.NoError(t, cache.setFile(
+		context.Background(),
+		"boundary",
+		func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("payload")), nil
+		},
+		true,
+	))
+	select {
+	case <-publicationReached:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async finalizer did not reach the publication boundary")
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	cache.Close(closeCtx)
+	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	unblock()
+
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	cache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	diskPath := cache.pathForFile("boundary")
+	require.False(t, cache.isUpdating(diskPath))
+	_, err := os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	diskPath := cache.pathForFile("claimed")
+	require.True(t, cache.tryReserveAsyncFileFinalize(diskPath))
+	doneUpdate, ok := cache.tryStartUpdateWithCleanup(
+		diskPath,
+		func() error { return cache.removeUnindexedFile(diskPath) },
+	)
+	require.True(t, ok)
+	tempFile, err := os.CreateTemp(cache.path, "claimed-*"+cacheFileTempSuffix)
+	require.NoError(t, err)
+	_, err = tempFile.WriteString("payload")
+	require.NoError(t, err)
+
+	claimReached := make(chan struct{})
+	releaseClaim := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseClaim) })
+	t.Cleanup(unblock)
+	finalizeDone := make(chan error, 1)
+	go func() {
+		finalizeErr := cache.finalizeFile(
+			cache.async.ctx,
+			diskPath,
+			tempFile,
+			func() bool {
+				claimed := cache.claimAsyncPublication()
+				close(claimReached)
+				<-releaseClaim
+				return claimed
+			},
+		)
+		cleanupErr := errors.Join(
+			cleanupDiskCacheTempFile(tempFile),
+			doneUpdate(),
+		)
+		cache.releaseAsyncFileFinalizeReservation(diskPath)
+		finalizeDone <- errors.Join(finalizeErr, cleanupErr)
+	}()
+	select {
+	case <-claimReached:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async finalizer did not claim the publication generation")
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	cache.Close(closeCtx)
+	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	unblock()
+	select {
+	case err := <-finalizeDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("claimed publication did not complete")
+	}
+
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	cache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	data, err := os.ReadFile(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), data)
+}
+
+func TestDiskCacheCloseTracksReservedFileFinalize(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	reader, writer := io.Pipe()
+	readerOpened := make(chan struct{})
+	closeWriter := sync.OnceFunc(func() { _ = writer.Close() })
+	t.Cleanup(closeWriter)
+	setFileDone := make(chan error, 1)
+	go func() {
+		setFileDone <- cache.setFile(
+			context.Background(),
+			"reserved",
+			func(context.Context) (io.ReadCloser, error) {
+				close(readerOpened)
+				return reader, nil
+			},
+			true,
+		)
+	}()
+	select {
+	case <-readerOpened:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		closeWriter()
+		<-setFileDone
+		t.Fatal("async full-file source reader did not open")
+	}
+
+	const numClosers = 4
+	closeResults := make(chan error, numClosers)
+	for i := 0; i < numClosers; i++ {
+		go func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			cache.Close(closeCtx)
+			closeResults <- closeCtx.Err()
+		}()
+	}
+	for i := 0; i < numClosers; i++ {
+		select {
+		case err := <-closeResults:
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("concurrent Close did not honor its deadline")
+		}
+	}
+
+	_, err := writer.Write([]byte("payload"))
+	require.NoError(t, err)
+	closeWriter()
+	select {
+	case err := <-setFileDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async SetFile did not transfer canceled finalizer cleanup")
+	}
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	cache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	_, err = os.Stat(cache.pathForFile("reserved"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 

@@ -2350,6 +2350,90 @@ func TestS3FSReadIOMergerReleaseMatchesDiskFinalizeMode(t *testing.T) {
 	}
 }
 
+func TestS3FSRangeFollowerDoesNotWaitForAsyncDiskFinalize(t *testing.T) {
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 5 * time.Millisecond
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+
+	var pcSet perfcounter.CounterSet
+	ctx := perfcounter.WithCounterSet(context.Background(), &pcSet)
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 20),
+		},
+		nil,
+		false,
+		false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries:  []IOEntry{{Size: 11, Data: []byte("hello world")}},
+		Policy:   SkipDiskCache | SkipMemoryCache,
+	}))
+
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	t.Cleanup(func() {
+		unblock()
+		fs.Close(ctx)
+	})
+	fs.diskCache.fileSync = func(file *os.File) error {
+		close(syncStarted)
+		<-releaseSync
+		return file.Sync()
+	}
+
+	newVector := func() *IOVector {
+		return &IOVector{
+			FilePath: "foo/bar",
+			Entries:  []IOEntry{{Offset: 1, Size: 4}},
+			Policy:   SkipFullFilePreloads,
+		}
+	}
+	leader := newVector()
+	defer leader.Release()
+	require.NoError(t, fs.Read(ctx, leader))
+	require.Equal(t, []byte("ello"), leader.Entries[0].Data)
+	select {
+	case <-syncStarted:
+	case <-time.After(time.Second):
+		t.Fatal("async range finalizer did not start")
+	}
+
+	follower := newVector()
+	defer follower.Release()
+	followerDone := make(chan error, 1)
+	go func() { followerDone <- fs.Read(ctx, follower) }()
+	select {
+	case err := <-followerDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		unblock()
+		<-followerDone
+		t.Fatal("range follower waited for async disk finalization")
+	}
+	require.Equal(t, []byte("ello"), follower.Entries[0].Data)
+	require.Equal(t, int64(2), pcSet.FileService.S3.Get.Load())
+	diskPath := fs.diskCache.pathForIOEntry("foo/bar", follower.Entries[0])
+	require.True(t, fs.diskCache.isUpdating(diskPath))
+
+	unblock()
+	flushCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	fs.FlushCache(flushCtx)
+	require.NoError(t, flushCtx.Err())
+}
+
 func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")

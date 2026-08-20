@@ -25,6 +25,10 @@ type DiskCacheCallbacks struct {
 	upstreamCtx context.Context
 }
 
+// OnDiskCacheWrittenFunc runs after a cache entry is published. Async disk-cache
+// callbacks preserve submission order but are outside the Flush and Close
+// completion barriers; their retained entry data remains charged to async
+// admission until the callback returns.
 type OnDiskCacheWrittenFunc = func(
 	filePath string,
 	entry IOEntry,
