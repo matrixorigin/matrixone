@@ -959,7 +959,11 @@ func (e *exporter) castExpr(result *planpb.Expr, call *planpb.Function, inputs [
 		return nil, err
 	}
 	if !supported {
-		return nil, notEligiblef(EligibilityExpression, "cast overload %q has no declared Sirius semantic equivalence", call.Func.ObjName)
+		return nil, notEligiblef(EligibilityExpression,
+			"cast overload %q from %s(width=%d,scale=%d) to %s(width=%d,scale=%d) has no declared Sirius semantic equivalence",
+			call.Func.ObjName,
+			types.T(call.Args[0].Typ.Id).String(), call.Args[0].Typ.Width, call.Args[0].Typ.Scale,
+			types.T(result.Typ.Id).String(), result.Typ.Width, result.Typ.Scale)
 	}
 	input, err := e.expr(call.Args[0], inputs)
 	if err != nil {
@@ -1669,7 +1673,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "substring":
 			declared = functionID == function.SUBSTRING && len(args) == 3 && isTPCHStringType(types.T(args[0].Typ.Id)) && types.T(args[1].Typ.Id) == types.T_int64 && types.T(args[2].Typ.Id) == types.T_int64
 		case "cast":
-			declared = functionID == function.CAST && len(args) == 2 && tpchCastType(types.T(args[0].Typ.Id)) && tpchCastType(types.T(out.Id))
+			declared = functionID == function.CAST && len(args) == 2 && tpchCastTypes(&args[0].Typ, out)
 		case "if_then":
 			declared = functionID == function.CASE && len(args) >= 3 && len(args)%2 == 1 && tpchCaseArgs(args, out)
 		case "singular_or_list":
@@ -1783,10 +1787,25 @@ func varcharArgs(args []*planpb.Expr, count int) bool {
 	return true
 }
 
-func tpchCastType(value types.T) bool {
-	switch value {
-	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_char, types.T_varchar:
-		return true
+func tpchCastTypes(input, output *planpb.Type) bool {
+	if input == nil || output == nil {
+		return false
+	}
+	source, target := types.T(input.Id), types.T(output.Id)
+	switch target {
+	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128:
+		return source == types.T_int32 || source == types.T_int64 ||
+			isDecimalType(source) || source == types.T_varchar
+	case types.T_varchar:
+		// MatrixOne enforces finite CHAR/VARCHAR target widths while Sirius
+		// lowers both to Substrait VARCHAR, whose DuckDB execution does not
+		// enforce length. An unbounded or non-narrowing VARCHAR coercion is
+		// byte-preserving: every source value is already bounded by the target
+		// width when it is finite. Reject every other string target, including
+		// all CHAR casts, until
+		// Sirius implements MatrixOne's truncation/error behavior.
+		return source == types.T_varchar &&
+			(output.Width == 0 || (input.Width >= 0 && output.Width >= input.Width))
 	default:
 		return false
 	}

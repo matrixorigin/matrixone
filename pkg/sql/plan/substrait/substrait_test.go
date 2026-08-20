@@ -2354,6 +2354,41 @@ func TestCharUsesTheVarcharSemanticFamily(t *testing.T) {
 	require.True(t, supported)
 }
 
+func TestExportRejectsWidthSensitiveStringCasts(t *testing.T) {
+	for _, target := range []string{"char(3)", "varchar(3)"} {
+		t.Run(target, func(t *testing.T) {
+			// MatrixOne truncates this public SQL cast to three runes. Sirius
+			// executes its Substrait VARCHAR target without enforcing the bound,
+			// so Export must decline rather than expose divergent result bytes.
+			query := boundSQLQuery(t, "select cast('abcd' as "+target+") from tpch.nation")
+			_, err := Export(query)
+			require.True(t, IsNotEligible(err))
+			require.ErrorContains(t, err, "cast overload")
+		})
+	}
+}
+
+func TestTPCHCastStringWidthAdmission(t *testing.T) {
+	varchar6 := &planpb.Type{Id: int32(types.T_varchar), Width: 6}
+	char6 := &planpb.Type{Id: int32(types.T_char), Width: 6}
+	for _, tc := range []struct {
+		name   string
+		input  *planpb.Type
+		output *planpb.Type
+		want   bool
+	}{
+		{name: "varchar widening", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 25}, want: true},
+		{name: "varchar unbounded", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar)}, want: true},
+		{name: "varchar narrowing", input: varchar6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 3}, want: false},
+		{name: "char target", input: varchar6, output: &planpb.Type{Id: int32(types.T_char), Width: 25}, want: false},
+		{name: "char source", input: char6, output: &planpb.Type{Id: int32(types.T_varchar), Width: 25}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tpchCastTypes(tc.input, tc.output))
+		})
+	}
+}
+
 func TestExportAcceptsDateAndRejectsTimestamp(t *testing.T) {
 	dateType := planpb.Type{Id: int32(types.T_date)}
 	q := scanQuery()
