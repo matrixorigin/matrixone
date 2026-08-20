@@ -856,7 +856,7 @@ func (c *clientConn) handleQuitEventInternal(ctx context.Context, waitClientPipe
 		// publishing that backend would leave the old response in the socket for
 		// the next generation's SET CONNECTION ID to consume. With c2s sealed and
 		// s2c stopped this state can no longer change, so discard conservatively.
-		if c.tun.hasInFlightClientRequest() {
+		if c.tun.hasUnsafeClientState() {
 			discardBackend()
 			return
 		}

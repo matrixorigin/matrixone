@@ -431,6 +431,14 @@ func (db *txnDB) SoftDeleteObject(id *common.ID, isTombstone bool) (err error) {
 	}
 	return table.SoftDeleteObject(id.ObjectID(), isTombstone)
 }
+
+func (db *txnDB) SoftDeleteObjectByCN(id *common.ID, isTombstone bool) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.SoftDeleteObjectByCN(id.ObjectID(), isTombstone)
+}
 func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil
 }

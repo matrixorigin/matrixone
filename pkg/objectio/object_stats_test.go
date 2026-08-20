@@ -103,10 +103,16 @@ func TestObjectStatsOptions(t *testing.T) {
 	require.True(t, stats.IsZero())
 	require.False(t, stats.GetAppendable())
 	require.False(t, stats.GetCNCreated())
+	require.False(t, stats.GetCNDeleted())
 	require.False(t, stats.GetSorted())
 
 	WithCNCreated()(stats)
 	require.True(t, stats.GetCNCreated())
+
+	SetObjectStatsCNDeleted(stats, true)
+	require.True(t, stats.GetCNDeleted())
+	SetObjectStatsCNDeleted(stats, false)
+	require.False(t, stats.GetCNDeleted())
 
 	WithSorted()(stats)
 	require.True(t, stats.GetSorted())
@@ -153,7 +159,7 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			stats := NewObjectStats()
 
 			// Set some flags to ensure they're preserved
-			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted
+			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted | ObjectFlag_CNDeleted
 
 			stats.SetLevel(tt.level)
 
@@ -169,6 +175,9 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			}
 			if !stats.GetSorted() {
 				t.Error("Sorted flag was not preserved")
+			}
+			if !stats.GetCNDeleted() {
+				t.Error("CNDeleted flag was not preserved")
 			}
 		})
 	}

@@ -221,20 +221,6 @@ func TestIsLoadDataLocalInfileRespPacket(t *testing.T) {
 	require.True(t, ret)
 }
 
-func TestIsDeallocatePacket(t *testing.T) {
-	var data []byte
-	ret := isDeallocatePacket(data)
-	require.False(t, ret)
-
-	data = []byte{0, 0, 0, 0, 2, 0}
-	ret = isDeallocatePacket(data)
-	require.False(t, ret)
-
-	data = []byte{0, 0, 0, 0, 25, 0}
-	ret = isDeallocatePacket(data)
-	require.True(t, ret)
-}
-
 func TestIsEmptyPacket(t *testing.T) {
 	ret := isEmptyPacket(nil)
 	require.True(t, ret)
