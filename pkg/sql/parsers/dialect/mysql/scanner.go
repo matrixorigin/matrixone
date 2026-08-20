@@ -993,7 +993,8 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 	// which is the semantic distinction from the legacy implicit-alias spelling.
 	// Scan SQL tokens so relation/alias names, quoted strings, comments, and
 	// later joins cannot influence this decision.
-	inOn, escaped, leftRef := false, false, false
+	inOn, escaped, leftRef, asofRef, pendingIneq := false, false, false, false, false
+	rightName := s.asofRightRelationName(pos)
 	var quote byte
 	for i := pos; i < len(s.buf); {
 		ch := s.buf[i]
@@ -1034,11 +1035,14 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 			}
 			continue
 		}
-		if inOn && (ch == '<' || ch == '>') && (leftName == "" || leftRef) {
-			return true
+		if inOn && (ch == '<' || ch == '>') {
+			pendingIneq = true
+			if leftName != "" && leftRef && (!asofRef || rightName == "asof") {
+				return true
+			}
 		}
-		if inOn && (ch == '=' || ch == '<' || ch == '>') {
-			leftRef = false
+		if inOn && ch == '=' && (i == 0 || (s.buf[i-1] != '<' && s.buf[i-1] != '>')) {
+			leftRef, asofRef, pendingIneq = false, false, false
 		}
 		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(uint16(s.buf[i])) {
 			i++
@@ -1052,6 +1056,18 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 		if inOn && leftName != "" && word == leftName {
 			next := s.skipBlankAndCommentsFrom(i)
 			leftRef = next < len(s.buf) && s.buf[next] == '.'
+			if pendingIneq && leftRef && (!asofRef || rightName == "asof") {
+				return true
+			}
+		}
+		if inOn {
+			next := s.skipBlankAndCommentsFrom(i)
+			qualified := next < len(s.buf) && s.buf[next] == '.'
+			if qualified {
+				if word == "asof" {
+					asofRef = true
+				}
+			}
 		}
 		if !inOn {
 			if word == "on" {
@@ -1074,6 +1090,18 @@ func (s *Scanner) asofTemporalPredicateInJoin(pos int, leftName string) bool {
 		}
 	}
 	return false
+}
+
+func (s *Scanner) asofRightRelationName(pos int) string {
+	pos = s.skipBlankAndCommentsFrom(pos)
+	if pos >= len(s.buf) || !isUnquotedIdentifierLetterAt(s.buf, pos) {
+		return ""
+	}
+	end := pos + 1
+	for end < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, end) || isDigit(uint16(s.buf[end])) || s.buf[end] == '_') {
+		end++
+	}
+	return strings.ToLower(s.buf[pos:end])
 }
 
 func (s *Scanner) previousSignificantPos(pos int) int {
