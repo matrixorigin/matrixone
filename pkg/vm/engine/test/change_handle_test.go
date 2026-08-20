@@ -5692,7 +5692,7 @@ func TestPartitionChangesHandleStaleRead(t *testing.T) {
 						End:       &t3Timestamp,
 						Location1: []byte("fake_location1"),
 						Location2: []byte("fake_location2"),
-						EntryType: 0,
+						EntryType: int32(checkpoint.ET_Incremental),
 						Version:   1,
 					},
 				}
@@ -6261,7 +6261,7 @@ func TestRealStaleReadStillReturnsError(t *testing.T) {
 						End:       &t2NextTs,
 						Location1: []byte("fake"),
 						Location2: []byte("fake"),
-						EntryType: 0,
+						EntryType: int32(checkpoint.ET_Incremental),
 						Version:   1,
 					},
 				}
