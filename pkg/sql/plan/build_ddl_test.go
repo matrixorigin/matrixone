@@ -3809,6 +3809,24 @@ func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
 	}
 }
 
+func TestBuildMongoDBExternalTableRejectsGeneratedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	_, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_generated (
+			id VARCHAR(8) MONGODB_PATH '_id',
+			x INT GENERATED ALWAYS AS (1) STORED
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples',
+			"schema_mode"='explicit'
+		)`)
+	require.ErrorContains(t, err, "MongoDB external table does not support generated column 'x'")
+}
+
 func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
