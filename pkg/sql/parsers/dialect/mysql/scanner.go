@@ -943,28 +943,40 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
-		return !s.asofQualifierInJoin(pos + len("join"))
+		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"))
 	}
 	if !hasKeywordAt(s.buf, pos, "left") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("left"))
 	if hasKeywordAt(s.buf, pos, "join") {
-		return !s.asofQualifierInJoin(pos + len("join"))
+		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"))
 	}
 	if !hasKeywordAt(s.buf, pos, "outer") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
-	return hasKeywordAt(s.buf, pos, "join") && !s.asofQualifierInJoin(pos+len("join"))
+	return hasKeywordAt(s.buf, pos, "join") && (s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join")))
 }
 
-func (s *Scanner) asofQualifierInJoin(pos int) bool {
+func (s *Scanner) asofDerivedLeftRelation(start int) bool {
+	prev := s.previousSignificantPos(start - 1)
+	if prev < 0 {
+		return false
+	}
+	for prev >= 0 && (isLetter(uint16(s.buf[prev])) || isDigit(uint16(s.buf[prev])) || s.buf[prev] == '_') {
+		prev--
+	}
+	prev = s.previousSignificantPos(prev)
+	return prev >= 0 && s.buf[prev] == ')'
+}
+
+func (s *Scanner) asofTemporalPredicateInJoin(pos int) bool {
 	// The ASOF/implicit-alias spelling is ambiguous at the lexer level.  Treat
-	// `asof` as the join modifier only when the ON expression actually
-	// qualifies a column with `asof.`.  Scan SQL tokens here (rather than using
-	// a raw suffix search), so quoted strings, comments, and line breaks cannot
-	// manufacture a qualifier or hide one.
+	// it as the modifier when the ON clause contains a temporal inequality,
+	// which is the semantic distinction from the legacy implicit-alias spelling.
+	// Scan SQL tokens so relation/alias names, quoted strings, comments, and
+	// later joins cannot influence this decision.
 	inOn, escaped := false, false
 	var quote byte
 	for i := pos; i < len(s.buf); {
@@ -1006,6 +1018,9 @@ func (s *Scanner) asofQualifierInJoin(pos int) bool {
 			}
 			continue
 		}
+		if inOn && (ch == '<' || ch == '>') {
+			return true
+		}
 		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(uint16(s.buf[i])) {
 			i++
 			continue
@@ -1028,11 +1043,11 @@ func (s *Scanner) asofQualifierInJoin(pos int) bool {
 		if word == "where" || word == "group" || word == "order" || word == "limit" || word == "having" || word == "union" {
 			break
 		}
-		if word == "asof" {
-			j := s.skipBlankAndCommentsFrom(i)
-			if j < len(s.buf) && s.buf[j] == '.' {
-				return true
-			}
+		if word == "join" {
+			break
+		}
+		if word == "tolerance" {
+			return true
 		}
 	}
 	return false

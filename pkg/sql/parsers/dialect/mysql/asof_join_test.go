@@ -68,13 +68,18 @@ func TestAsofRemainsAnIdentifierOutsideJoin(t *testing.T) {
 }
 
 func TestAsofImplicitAliasKeepsInnerJoinSemantics(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "select * from t asof join u on asof.k = u.k", 1)
-	require.NoError(t, err)
-	defer stmt.Free()
-	join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
-	require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType)
-	left := join.Left.(*tree.AliasedTableExpr)
-	require.Equal(t, tree.Identifier("asof"), left.As.Alias)
+	for _, sql := range []string{
+		"select * from t asof join u on t.k = u.k",
+		"select * from t asof join u on t.k = u.k and u.v = 1",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+		require.Equal(t, tree.JOIN_TYPE_INNER, join.JoinType, sql)
+		left := join.Left.(*tree.AliasedTableExpr)
+		require.Equal(t, tree.Identifier("asof"), left.As.Alias, sql)
+		stmt.Free()
+	}
 }
 
 func TestAsofJoinProducesAsofAst(t *testing.T) {
@@ -83,4 +88,17 @@ func TestAsofJoinProducesAsofAst(t *testing.T) {
 	defer stmt.Free()
 	join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
 	require.Equal(t, tree.JOIN_TYPE_ASOF, join.JoinType)
+}
+
+func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
+	for _, sql := range []string{
+		"select * from l asof join asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from l asof join r asof on l.k = r.k and l.ts >= r.ts",
+	} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		join := stmt.(*tree.Select).Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
+		require.Equal(t, tree.JOIN_TYPE_ASOF, join.JoinType, sql)
+		stmt.Free()
+	}
 }

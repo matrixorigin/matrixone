@@ -955,8 +955,15 @@ func (ctr *container) findAsofPredecessor(
 		qualified, evalErr := ctr.evalNonEqCondition(ctr.leftBat, leftRow, proc, batchIdx, rowIdx)
 		return candidate, qualified, evalErr
 	}
-	indexPos := sort.Search(ctr.asofIndexCount, func(i int) bool { return ctr.asofIndexes[i].key >= groupKey })
-	ok := indexPos < ctr.asofIndexCount && ctr.asofIndexes[indexPos].key == groupKey
+	if len(ctr.asofIndexes) == 0 {
+		indexes, allocErr := mpool.MakeSliceAccounted[asofIndex](8, proc.Mp(), hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild, hashJoinAllocationSiteAsofIndex)
+		if allocErr != nil {
+			return -1, false, allocErr
+		}
+		ctr.asofIndexes = indexes
+	}
+	indexPos := ctr.findAsofIndexSlot(groupKey)
+	ok := ctr.asofIndexes[indexPos].occupied
 	var ordered []int32
 	if ok {
 		ordered = ctr.asofIndexes[indexPos].values
@@ -965,9 +972,9 @@ func (ctr *container) findAsofPredecessor(
 		// A build bucket with a changed row set cannot reuse the previous
 		// ordering. This also protects prepared/test reuse from stale ordinals.
 		mpool.FreeSlice(proc.Mp(), ordered)
-		copy(ctr.asofIndexes[indexPos:], ctr.asofIndexes[indexPos+1:ctr.asofIndexCount])
+		ctr.asofIndexes[indexPos].values = nil
+		ctr.asofIndexes[indexPos].occupied = false
 		ctr.asofIndexCount--
-		ctr.asofIndexes[ctr.asofIndexCount] = asofIndex{}
 		ok = false
 	}
 	if !ok {
@@ -999,7 +1006,7 @@ func (ctr *container) findAsofPredecessor(
 			return left > right
 		})
 		if !ok {
-			if ctr.asofIndexCount == len(ctr.asofIndexes) {
+			if ctr.asofIndexCount+1 > len(ctr.asofIndexes)*3/4 {
 				capacity := len(ctr.asofIndexes) * 2
 				if capacity == 0 {
 					capacity = 8
@@ -1009,12 +1016,21 @@ func (ctr *container) findAsofPredecessor(
 					mpool.FreeSlice(proc.Mp(), ordered)
 					return -1, false, allocErr
 				}
-				copy(newIndexes, ctr.asofIndexes[:ctr.asofIndexCount])
+				for _, old := range ctr.asofIndexes {
+					if !old.occupied {
+						continue
+					}
+					i := hashAsofIndex(old.key, len(newIndexes))
+					for newIndexes[i].occupied {
+						i = (i + 1) % len(newIndexes)
+					}
+					newIndexes[i] = old
+				}
 				mpool.FreeSlice(proc.Mp(), ctr.asofIndexes)
 				ctr.asofIndexes = newIndexes
+				indexPos = ctr.findAsofIndexSlot(groupKey)
 			}
-			copy(ctr.asofIndexes[indexPos+1:ctr.asofIndexCount+1], ctr.asofIndexes[indexPos:ctr.asofIndexCount])
-			ctr.asofIndexes[indexPos] = asofIndex{key: groupKey, values: ordered}
+			ctr.asofIndexes[indexPos] = asofIndex{key: groupKey, values: ordered, occupied: true}
 			ctr.asofIndexCount++
 		}
 	}
@@ -1047,6 +1063,28 @@ func (ctr *container) findAsofPredecessor(
 		return -1, false, evalErr
 	}
 	return candidate, qualified, nil
+}
+
+func hashAsofIndex(key uint64, size int) int {
+	// Mix the equality hash before reducing it to keep sequential keys from
+	// clustering in the open-addressed table.
+	key ^= key >> 33
+	key *= 0xff51afd7ed558ccd
+	key ^= key >> 33
+	return int(key % uint64(size))
+}
+
+func (ctr *container) findAsofIndexSlot(key uint64) int {
+	if len(ctr.asofIndexes) == 0 {
+		return 0
+	}
+	i := hashAsofIndex(key, len(ctr.asofIndexes))
+	for {
+		if !ctr.asofIndexes[i].occupied || ctr.asofIndexes[i].key == key {
+			return i
+		}
+		i = (i + 1) % len(ctr.asofIndexes)
+	}
 }
 
 func asofTemporalMetadata(expr *plan.Expr) (leftCol int, strict bool) {

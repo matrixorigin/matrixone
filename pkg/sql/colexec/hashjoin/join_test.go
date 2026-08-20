@@ -1388,7 +1388,10 @@ func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
 	arg.ctr.rightBats = []*batch.Batch{right}
 	arg.ctr.joinBats[0], arg.ctr.cfs1 = colexec.NewJoinBatch(left, proc.Mp())
 	arg.ctr.joinBats[1], arg.ctr.cfs2 = colexec.NewJoinBatch(right, proc.Mp())
-	for group := uint64(0); group < 64; group++ {
+	// Probe in reverse order so insertion is not an append-shaped workload.
+	// The index must use bounded-amortized placement rather than shifting all
+	// previously seen groups for each first touch.
+	for group := uint64(64); group > 0; group-- {
 		_, found, err := arg.ctr.findAsofPredecessor(arg, proc, 0, group, []int32{0, 1})
 		require.NoError(t, err)
 		require.True(t, found)

@@ -128,8 +128,9 @@ type container struct {
 // backing storage prevents the per-group map/slice headers from escaping the
 // query allocation account.
 type asofIndex struct {
-	key    uint64
-	values []int32
+	key      uint64
+	values   []int32
+	occupied bool
 }
 
 type HashJoin struct {
