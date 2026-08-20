@@ -20,11 +20,16 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/require"
@@ -73,6 +78,62 @@ func TestIsRetryableErrorTypedStartupFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, IsRetryableError(test.err))
+		})
+	}
+}
+
+func TestIsRetryableErrorRejectsMinioProtocolMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		server   func() *httptest.Server
+		endpoint func(string) string
+	}{
+		{
+			name: "https client to http server",
+			server: func() *httptest.Server {
+				server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+				server.Config.ErrorLog = log.New(io.Discard, "", 0)
+				server.Start()
+				return server
+			},
+			endpoint: func(serverURL string) string {
+				return "https://" + strings.TrimPrefix(serverURL, "http://")
+			},
+		},
+		{
+			name: "http client to https server",
+			server: func() *httptest.Server {
+				server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+				server.Config.ErrorLog = log.New(io.Discard, "", 0)
+				server.StartTLS()
+				return server
+			},
+			endpoint: func(serverURL string) string {
+				return "http://" + strings.TrimPrefix(serverURL, "https://")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := test.server()
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			_, err := NewFileService(ctx, Config{
+				Name:    "SHARED",
+				Backend: "MINIO",
+				S3: ObjectStorageArguments{
+					Endpoint:             test.endpoint(server.URL),
+					Bucket:               "test",
+					KeyID:                "id",
+					KeySecret:            "secret",
+					NoDefaultCredentials: true,
+				},
+			}, nil)
+			require.Error(t, err)
+			require.False(t, IsRetryableError(err), "protocol mismatch must fail fast: %v", err)
 		})
 	}
 }

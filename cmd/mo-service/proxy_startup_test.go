@@ -17,14 +17,20 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +64,66 @@ func TestRunProxyAfterFileServiceInitialization(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, started)
+}
+
+func TestRunObservabilityTaskTreatsProxyStopAsCancellation(t *testing.T) {
+	for _, stage := range []string{"trace", "metric"} {
+		t.Run(stage, func(t *testing.T) {
+			serviceStopper := stopper.NewStopper("proxy-observability-" + stage)
+			outerStarted := make(chan struct{})
+			taskErrC := make(chan error, 1)
+			require.NoError(t, serviceStopper.RunNamedTask("proxy-service", func(ctx context.Context) {
+				close(outerStarted)
+				<-ctx.Done()
+				taskErrC <- runObservabilityTask(
+					metadata.ServiceType_PROXY,
+					serviceStopper,
+					stage,
+					func(context.Context) {},
+				)
+			}))
+			<-outerStarted
+
+			stopped := make(chan struct{})
+			go func() {
+				serviceStopper.Stop()
+				close(stopped)
+			}()
+
+			require.ErrorIs(t, <-taskErrC, context.Canceled)
+			<-stopped
+		})
+	}
+}
+
+func TestRunObservabilityTaskPreservesUnavailableForNonProxy(t *testing.T) {
+	serviceStopper := stopper.NewStopper("non-proxy-observability")
+	serviceStopper.Stop()
+	err := runObservabilityTask(
+		metadata.ServiceType_CN,
+		serviceStopper,
+		"trace",
+		func(context.Context) {},
+	)
+	require.ErrorIs(t, err, stopper.ErrUnavailable)
+}
+
+func TestClearSpillFilesReturnsCanceledListError(t *testing.T) {
+	localFS, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.CacheConfig{},
+		nil,
+	)
+	require.NoError(t, err)
+	fs, err := fileservice.NewFileServices(defines.LocalFileServiceName, localFS)
+	require.NoError(t, err)
+	defer fs.Close(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, clearSpillFiles(ctx, fs), context.Canceled)
 }
 
 func TestCreateProxyFileServiceWithRetryRecovers(t *testing.T) {
@@ -131,6 +197,39 @@ func TestCreateProxyFileServiceWithRetryUsesMinioBucketValidationError(t *testin
 	defer fs.Close(context.Background())
 	require.Equal(t, 3, attempts)
 	require.Equal(t, []time.Duration{time.Second, 2 * time.Second}, waits)
+}
+
+func TestCreateProxyFileServiceWithRetryRejectsMinioProtocolMismatch(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.Start()
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	waits := 0
+	_, err := createProxyFileServiceWithRetry(
+		ctx,
+		fileservice.Config{
+			Name:    "SHARED",
+			Backend: "MINIO",
+			S3: fileservice.ObjectStorageArguments{
+				Endpoint:             "https://" + strings.TrimPrefix(server.URL, "http://"),
+				Bucket:               "test",
+				KeyID:                "id",
+				KeySecret:            "secret",
+				NoDefaultCredentials: true,
+			},
+		},
+		nil,
+		fileservice.NewFileService,
+		func(context.Context, time.Duration) error {
+			waits++
+			return errors.New("protocol mismatch must not retry")
+		},
+	)
+	require.Error(t, err)
+	require.Zero(t, waits)
 }
 
 func TestCreateProxyFileServiceWithRetryCapsBackoff(t *testing.T) {

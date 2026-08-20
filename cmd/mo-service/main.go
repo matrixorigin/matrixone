@@ -636,6 +636,19 @@ func startPythonUdfService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
+func runObservabilityTask(
+	serviceType metadata.ServiceType,
+	serviceStopper *stopper.Stopper,
+	name string,
+	task func(context.Context),
+) error {
+	err := serviceStopper.RunNamedTask(name, task)
+	if serviceType == metadata.ServiceType_PROXY && errors.Is(err, stopper.ErrUnavailable) {
+		return context.Canceled
+	}
+	return err
+}
+
 func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService, UUID string) error {
 	var writerFactory table.WriterFactory
 	var err error
@@ -657,7 +670,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
-		if taskErr := stopper.RunNamedTask("trace", func(ctx context.Context) {
+		if taskErr := runObservabilityTask(st, stopper, "trace", func(ctx context.Context) {
 			traceErr, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithService(cfg.mustGetServiceUUID()),
@@ -688,7 +701,7 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		initWG.Wait()
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
-		if taskErr := stopper.RunNamedTask("metric", func(ctx context.Context) {
+		if taskErr := runObservabilityTask(st, stopper, "metric", func(ctx context.Context) {
 			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole,
 				mometric.WithWriterFactory(writerFactory),
 				mometric.WithFrontendServerStarted(frontend.MoServerIsStarted),
@@ -737,7 +750,10 @@ func clearSpillFiles(ctx context.Context, fs fileservice.FileService) error {
 		return err
 	}
 	spillFS := fileservice.SubPath(localFS, defines.SpillFileServiceName)
-	for entry := range spillFS.List(ctx, "/") {
+	for entry, listErr := range spillFS.List(ctx, "/") {
+		if listErr != nil {
+			return listErr
+		}
 		_ = spillFS.Delete(ctx, entry.Name)
 	}
 	return nil

@@ -63,6 +63,14 @@ func IsRetryableError(err error) bool {
 		}
 	}
 
+	str := err.Error()
+	// MinIO's broad network classifier treats endpoint protocol mismatches as
+	// host-down, although its request retryer correctly rejects both cases.
+	if strings.Contains(str, "server gave HTTP response to HTTPS client") ||
+		strings.Contains(str, "Client sent an HTTP request to an HTTPS server") {
+		return false
+	}
+
 	// MinIO wraps an EOF returned by its HTTP transport in a url.Error whose
 	// inner error has no typed sentinel. Use the SDK's canonical classifier for
 	// that case, but keep certificate verification failures fail-fast.
@@ -94,7 +102,6 @@ func IsRetryableError(err error) bool {
 		return true
 	}
 
-	str := err.Error()
 	// match exact string
 	switch str {
 	case "connection reset by peer",
