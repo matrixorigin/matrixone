@@ -325,6 +325,26 @@ func TestPersistedObjectPrefetchHonorsRowLimitWithByteBudget(t *testing.T) {
 	})
 }
 
+func TestOrderPersistedColumnSeqnumsUsesLogicalColumnOrder(t *testing.T) {
+	// ADD COLUMN FIRST/AFTER allocates a new physical seqnum while inserting
+	// the column at a different logical position. Persisted readers must use
+	// the metadata's logical index, not the physical seqnum.
+	columns := []persistedColumnSeqnum{
+		{seqnum: 0, idx: 1},
+		{seqnum: 1, idx: 2},
+		{seqnum: 2, idx: 0},
+	}
+	require.Equal(t, []uint16{2, 0, 1}, orderPersistedColumnSeqnums(columns))
+
+	// Sparse metadata from a dropped column must not create a hole.
+	columns = []persistedColumnSeqnum{
+		{seqnum: 0, idx: 1},
+		{seqnum: 2, idx: 2},
+		{seqnum: 4, idx: 0},
+	}
+	require.Equal(t, []uint16{4, 0, 2}, orderPersistedColumnSeqnums(columns))
+}
+
 func TestPartitionStateRangeRejectsRowOnlyLimitBeforeReadingLegacyWideObject(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -3368,7 +3388,7 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 		bat.SetRowCount(1)
 
 		require.NoError(t, updateTombstoneBatch(
-			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, nil, false, mp))
+			bat, types.BuildTS(50, 0), types.BuildTS(150, 0), nil, false, nil, nil, nil, false, mp))
 
 		require.Equal(t, []string{
 			objectio.TombstoneAttr_PK_Attr,
