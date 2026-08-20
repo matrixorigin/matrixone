@@ -1473,6 +1473,11 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
+	if stmt.Replace && !stmt.IfNotExists {
+		ctx.SetBuildingAlterView(true, createView.Database, string(viewName))
+		defer ctx.SetBuildingAlterView(false, "", "")
+	}
+
 	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
@@ -2788,6 +2793,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.ForeignKey:
+			if stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"FOREIGN KEY constraints on MongoDB external tables",
+				)
+			}
 			if createTable.Temporary {
 				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}

@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +36,37 @@ type sumDecimal64FastExec struct {
 }
 
 func (*sumDecimal64FastExec) sourcePreservingMerge() {}
+
+func (exec *sumDecimal64FastExec) windowSlidingSupported() bool {
+	return exec.isSum && !exec.IsDistinct()
+}
+
+func (exec *sumDecimal64FastExec) addWindowRow(row int, vectors []*vector.Vector) error {
+	return exec.Fill(0, row, vectors)
+}
+
+func (exec *sumDecimal64FastExec) removeWindowRow(row int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	if windowRowIsNull(vec, row) {
+		return nil
+	}
+	if vec.IsConst() {
+		row = 0
+	}
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])
+	if cnts[0] <= 0 {
+		return moerr.NewInternalErrorNoCtx("sliding SUM state is empty")
+	}
+	raw := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row]
+	value := types.Decimal128{B0_63: uint64(raw), B64_127: uint64(int64(raw) >> 63)}
+	sums := chunkArr[types.Decimal128](exec.state[0].vecs[0])
+	sums[0] = sums[0].Add128Unchecked(value.Minus())
+	cnts[0]--
+	if cnts[0] == 0 {
+		sums[0] = types.Decimal128{}
+	}
+	return nil
+}
 
 func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
 	var exec sumDecimal64FastExec
