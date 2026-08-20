@@ -1081,6 +1081,11 @@ message Node {
   // planner, so the right-side operator only needs to look up target keys and
   // must not retain incoming keys in its hashmap.
   bool dedup_input_keys_unique = 83;
+
+  // JOIN only: the planner proved that the join is consumed by a scalar,
+  // single COUNT(*) aggregate which understands a zero-column batch whose
+  // row count carries the complete join multiplicity.
+  bool emit_compressed_row_count = 84;
 }
 
 message SnapshotExtraInfo {

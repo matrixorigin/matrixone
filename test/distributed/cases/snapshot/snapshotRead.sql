@@ -292,7 +292,8 @@ insert into cluster01 values(2,3,0);
 select * from cluster01;
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
-select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
+-- Verify the cluster table itself without coupling the assertion to the catalog table count.
+select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog' and relname = 'cluster01' and relkind = 'cluster';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 drop table cluster01;
