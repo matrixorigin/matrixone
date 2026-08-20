@@ -11211,13 +11211,18 @@ type userDefinedFunctionDefinition struct {
 // overload. Argument names do not participate in function resolution, while
 // their ordered types do. Keep the zero-argument identity empty to match the
 // legacy json_extract(args, '$[*].type') IS NULL representation.
-func userDefinedFunctionArgumentTypes(types []string) (string, error) {
-	if len(types) == 0 {
+func userDefinedFunctionArgumentTypes(argumentTypes []string) (string, error) {
+	if len(argumentTypes) == 0 {
 		return "", nil
 	}
-	encoded, err := json.Marshal(types)
+	encoded, err := json.Marshal(argumentTypes)
 	if err != nil {
 		return "", err
+	}
+	if len(encoded) > types.MaxStringSize {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
+		)
 	}
 	return string(encoded), nil
 }

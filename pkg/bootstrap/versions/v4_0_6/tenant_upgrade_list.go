@@ -18,6 +18,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -117,8 +119,8 @@ func addUserDefinedFunctionArgumentTypesColumn() versions.UpgradeEntry {
 		Schema:    catalog.MO_CATALOG,
 		TableName: "mo_user_defined_function",
 		UpgType:   versions.ADD_COLUMN,
-		UpgSql: "alter table mo_catalog.mo_user_defined_function " +
-			"add column arg_types varchar(1024) not null default '' after args",
+		UpgSql: fmt.Sprintf("alter table mo_catalog.mo_user_defined_function "+
+			"add column arg_types varchar(%d) not null default '' after args", types.MaxStringSize),
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			column, err := versions.CheckTableColumn(
 				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "arg_types",
@@ -129,19 +131,41 @@ func addUserDefinedFunctionArgumentTypesColumn() versions.UpgradeEntry {
 }
 
 func backfillUserDefinedFunctionArgumentTypes() versions.UpgradeEntry {
-	const canonicalArgumentTypes = "coalesce(cast(json_extract(args, '$[*].type') as char), '')"
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
 		TableName: "mo_user_defined_function",
 		UpgType:   versions.MODIFY_METADATA,
-		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + canonicalArgumentTypes,
+		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + canonicalUserDefinedFunctionArgumentTypes,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			if err := validateUserDefinedFunctionArgumentTypesFit(txn, accountID); err != nil {
+				return false, err
+			}
 			mismatch, err := versions.CheckTableDataExist(txn, accountID,
-				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+canonicalArgumentTypes+" limit 1",
+				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+canonicalUserDefinedFunctionArgumentTypes+" limit 1",
 			)
 			return !mismatch, err
 		},
 	}
+}
+
+const canonicalUserDefinedFunctionArgumentTypes = "coalesce(cast(json_extract(args, '$[*].type') as char), '')"
+
+// validateUserDefinedFunctionArgumentTypesFit prevents the upgrade backfill
+// from truncating a legacy signature before the unique overload index is built.
+func validateUserDefinedFunctionArgumentTypesFit(txn executor.TxnExecutor, accountID uint32) error {
+	overLimit, err := versions.CheckTableDataExist(txn, accountID, fmt.Sprintf(
+		"select 1 from mo_catalog.mo_user_defined_function where length(%s) > %d limit 1",
+		canonicalUserDefinedFunctionArgumentTypes, types.MaxStringSize,
+	))
+	if err != nil {
+		return err
+	}
+	if overLimit {
+		return moerr.NewInvalidInputNoCtxf(
+			"function argument type signature exceeds the %d-byte catalog limit", types.MaxStringSize,
+		)
+	}
+	return nil
 }
 
 func addUserDefinedFunctionSignatureIndex() versions.UpgradeEntry {

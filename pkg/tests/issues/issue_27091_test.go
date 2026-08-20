@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,74 @@ func TestIssue27091ConcurrentFunctionCreationUnderOptimisticSI(t *testing.T) {
 		).Scan(&argTypes))
 		require.Equal(t, `["int"]`, argTypes)
 	})
+}
+
+func TestIssue27091KeepsWideOverloadIdentities(t *testing.T) {
+	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		const (
+			database = "issue_27091_wide_signature"
+			function = "f_wide"
+		)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop database if exists "+database)
+		}()
+		execSQLRequire(t, ctx, db, "drop database if exists "+database)
+		execSQLRequire(t, ctx, db, "create database "+database)
+		testutils.WaitDatabaseCreated(t, database, cn)
+
+		firstArgs := issue27091WideFunctionArguments("decimal")
+		secondArgs := issue27091WideFunctionArguments("bigint")
+		execSQLRequire(t, ctx, db, fmt.Sprintf(
+			"create function %s.%s(%s) returns int language sql as '1'", database, function, firstArgs,
+		))
+		execSQLRequire(t, ctx, db, fmt.Sprintf(
+			"create function %s.%s(%s) returns int language sql as '1'", database, function, secondArgs,
+		))
+
+		rows, err := db.QueryContext(ctx,
+			"select arg_types from mo_catalog.mo_user_defined_function where db = ? and name = ? order by function_id",
+			database, function,
+		)
+		require.NoError(t, err)
+		defer rows.Close()
+		var signatures []string
+		for rows.Next() {
+			var signature string
+			require.NoError(t, rows.Scan(&signature))
+			signatures = append(signatures, signature)
+		}
+		require.NoError(t, rows.Err())
+		require.Len(t, signatures, 2)
+		require.Greater(t, len(signatures[0]), 1024)
+		require.Greater(t, len(signatures[1]), 1024)
+		require.NotEqual(t, signatures[0], signatures[1])
+		require.Equal(t, signatures[0][:1024], signatures[1][:1024])
+	})
+}
+
+func issue27091WideFunctionArguments(lastType string) string {
+	const argumentCount = 105
+	arguments := make([]string, argumentCount)
+	for i := range arguments {
+		argumentType := "decimal"
+		if i == argumentCount-1 {
+			argumentType = lastType
+		}
+		arguments[i] = fmt.Sprintf("arg%d %s", i, argumentType)
+	}
+	return strings.Join(arguments, ", ")
 }
 
 func execOnConn(ctx context.Context, conn *sql.Conn, statement string) error {

@@ -99,6 +99,7 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionArgumentTypes.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionArgumentTypes.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctionArgumentTypes.UpgSql), "arg_types")
+	require.Contains(t, userDefinedFunctionArgumentTypes.UpgSql, "varchar(65535)")
 	userDefinedFunctionBackfill := tenantUpgEntries[15]
 	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
@@ -109,6 +110,20 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
+}
+
+func TestUserDefinedFunctionArgumentTypesBackfillRejectsOversizedSignature(t *testing.T) {
+	entry := backfillUserDefinedFunctionArgumentTypes()
+	txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		require.Contains(t, sql, "length(")
+		require.Contains(t, sql, "> 65535")
+		return newShowCreateTableResult(t, "function", "create table function (id int)"), nil
+	})
+
+	finished, err := entry.CheckFunc(txn, 1)
+	require.False(t, finished)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {

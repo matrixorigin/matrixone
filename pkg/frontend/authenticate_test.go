@@ -97,6 +97,28 @@ func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
 	require.Empty(t, got)
 	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
 	require.Error(t, err)
+
+	wideTypes := make([]string, 105)
+	for i := range wideTypes {
+		wideTypes[i] = "decimal(10,0)"
+	}
+	wideSignature, err := userDefinedFunctionArgumentTypes(wideTypes)
+	require.NoError(t, err)
+	require.Greater(t, len(wideSignature), 1024)
+	require.LessOrEqual(t, len(wideSignature), types.MaxStringSize)
+
+	maxSignature, err := userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize-4)})
+	require.NoError(t, err)
+	require.Len(t, maxSignature, types.MaxStringSize)
+
+	_, err = userDefinedFunctionArgumentTypes([]string{strings.Repeat("x", types.MaxStringSize)})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "catalog limit")
+}
+
+func TestUserDefinedFunctionCatalogSignatureWidth(t *testing.T) {
+	require.Contains(t, MoCatalogMoUserDefinedFunctionDDL,
+		fmt.Sprintf("arg_types varchar(%d)", types.MaxStringSize))
 }
 
 func TestGetTenantInfo(t *testing.T) {
