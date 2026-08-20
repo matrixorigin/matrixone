@@ -4025,6 +4025,24 @@ func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
 	}
 }
 
+func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_on_update (
+			id VARCHAR(8) MONGODB_PATH '_id',
+			ts DATETIME(3) DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP MONGODB_PATH 'ts'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.Nil(t, logicPlan)
+	require.ErrorContains(t, err, "MongoDB external table column 'ts' does not support ON UPDATE")
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
