@@ -325,6 +325,9 @@ type Compile struct {
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
+	// foundRowsOwnerNode is the final result node allowed to publish the
+	// SQL_CALC_FOUND_ROWS count. Nested LIMIT/OFFSET nodes are not owners.
+	foundRowsOwnerNode *plan.Node
 
 	counterSet *perfcounter.CounterSet
 

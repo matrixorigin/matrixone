@@ -205,6 +205,10 @@ type Session struct {
 	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
 	lastAffectedRows int64
 
+	// lastFoundRows records the result count exposed by FOUND_ROWS() for the
+	// previous result-set statement.
+	lastFoundRows uint64
+
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
@@ -1718,6 +1722,18 @@ func (ses *Session) GetLastAffectedRows() int64 {
 	return ses.lastAffectedRows
 }
 
+func (ses *Session) SetLastFoundRows(num uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastFoundRows = num
+}
+
+func (ses *Session) GetLastFoundRows() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastFoundRows
+}
+
 func (ses *Session) SetCmd(cmd CommandType) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -2752,8 +2768,14 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		return err
 	}
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
-	// Restore the source session value after all replay work has finished.
+	// Restore the source session values after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
+	defer func() {
+		ses.SetLastFoundRows(req.FoundRows)
+		if proc := ses.GetProc(); proc != nil {
+			proc.SetFoundRows(req.FoundRows)
+		}
+	}()
 	// Migration work is bounded by both its caller/lifecycle context and the
 	// configured session timeout.
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ctx, parameters.SessionTimeout.Duration, moerr.CauseMigrate)

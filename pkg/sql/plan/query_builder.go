@@ -3382,6 +3382,15 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	builder.parseOptimizeHints()
+	if builder.sqlCalcFoundRows {
+		if builder.optimizerHints == nil {
+			builder.optimizerHints = &OptimizerHints{}
+		}
+		// Preserve the complete input stream for FOUND_ROWS(); this hint is
+		// internal and overrides global limit-pushdown settings for this query.
+		builder.optimizerHints.pushDownLimitToScan = 1
+		builder.optimizerHints.pushDownTopThroughLeftJoin = 1
+	}
 	for i, rootID := range builder.qry.Steps {
 		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)

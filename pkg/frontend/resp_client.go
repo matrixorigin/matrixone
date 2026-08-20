@@ -32,6 +32,21 @@ func setResponse(ses *Session, isLastStmt bool, rspLen uint64) *Response {
 	return ses.SetNewResponse(OkResponse, rspLen, int(COM_QUERY), "", isLastStmt)
 }
 
+// recordLastFoundRows publishes the count for a successfully returned result
+// set. Status statements and failed statements leave the preceding value
+// untouched. The process copy serves a following statement in the same
+// multi-statement request; the session copy seeds the next request.
+func recordLastFoundRows(ses *Session, execCtx *ExecCtx) {
+	if ses == nil || execCtx == nil || execCtx.stmt == nil || execCtx.proc == nil ||
+		execCtx.stmt.StmtKind().OutputType() != tree.OUTPUT_RESULT_ROW {
+		return
+	}
+	if !execCtx.proc.FoundRowsRecorded() {
+		execCtx.proc.SetFoundRows(execCtx.proc.GetResultRows())
+	}
+	ses.SetLastFoundRows(execCtx.proc.GetFoundRows())
+}
+
 // recordLastAffectedRows records the value the ROW_COUNT() builtin should return
 // for the statement that just finished. It is called once per statement, right
 // after execution, so it covers both single- and multi-statement COM_QUERY and
@@ -219,6 +234,9 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 	// the error can still prevent the OK response.
 	if isPerformStatement(execCtx.stmt) && bat == nil {
 		return nil
+	}
+	if bat != nil {
+		execCtx.proc.AddResultRows(uint64(bat.RowCount()))
 	}
 
 	if resper.binWr != nil {

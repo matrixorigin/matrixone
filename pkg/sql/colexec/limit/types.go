@@ -30,10 +30,12 @@ type container struct {
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 	buf           *batch.Batch
+	draining      bool
 }
 type Limit struct {
-	ctr       container
-	LimitExpr *plan.Expr
+	ctr           container
+	LimitExpr     *plan.Expr
+	calcFoundRows bool
 
 	vm.OperatorBase
 }
@@ -68,6 +70,15 @@ func (limit *Limit) WithLimit(limitExpr *plan.Expr) *Limit {
 	return limit
 }
 
+func (limit *Limit) WithFoundRows(enabled bool) *Limit {
+	limit.calcFoundRows = enabled
+	return limit
+}
+
+func (limit *Limit) IsFoundRowsOwner() bool {
+	return limit.calcFoundRows
+}
+
 func (limit *Limit) Release() {
 	if limit != nil {
 		reuse.Free[Limit](limit, nil)
@@ -85,6 +96,7 @@ func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error)
 		limit.ctr.buf = nil
 	}
 	limit.ctr.seen = 0
+	limit.ctr.draining = false
 }
 
 func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) {

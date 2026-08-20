@@ -7483,6 +7483,19 @@ func TestRowCount(t *testing.T) {
 	}
 }
 
+func TestFoundRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, want := range []uint64{0, 1, 3, 100} {
+		proc.SetFoundRows(want)
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{want}, []bool{false}),
+			FoundRows)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("found_rows want %d, err info is '%s'", want, info))
+	}
+}
+
 func TestUTCTimestamp(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fn, err := GetFunctionByName(proc.Ctx, "utc_timestamp", nil)

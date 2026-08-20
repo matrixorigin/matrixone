@@ -713,12 +713,14 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetLastAffectedRows(7)
+	ses.SetLastFoundRows(11)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Equal(t, int64(7), resp.LastAffectedRows)
+	require.Equal(t, uint64(11), resp.FoundRows)
 }
 
 func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {

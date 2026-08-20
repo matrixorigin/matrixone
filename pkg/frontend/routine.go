@@ -608,6 +608,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 		}
 	}
 	resp.PreparedStmtLongDataChecked = true
+	resp.FoundRows = ses.GetLastFoundRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {
 		// Typed snapshots can only be replayed by a v22 target when the proxy's
 		// raw COM_QUERY history did not observe every assignment (for example,

@@ -62,6 +62,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {
@@ -784,6 +785,33 @@ func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
 	if query != nil {
 		query.ApplySqlSelectLimit = stmt != nil && !stmt.IsPerform &&
 			!selectHasExplicitTopLevelLimit(stmt)
+	}
+}
+
+func selectHasSQLCalcFoundRows(stmt *tree.Select) bool {
+	for stmt != nil {
+		switch body := stmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			stmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return selectHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return selectHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
 	}
 }
 

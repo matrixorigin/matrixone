@@ -228,6 +228,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
+	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.reusePlanSnapshot = false
 	c.capturePlanSnapshot()
 
@@ -1241,6 +1242,10 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	var err error
+	c.foundRowsOwnerNode = nil
+	if statementHasSQLCalcFoundRowsPagination(c.stmt) && len(qry.Steps) > 0 {
+		c.foundRowsOwnerNode = findFoundRowsOwnerNode(qry, qry.Steps[len(qry.Steps)-1])
+	}
 	c.compiledRightSingleNodes = nil
 	defer func() {
 		c.compiledRightSingleNodes = nil
@@ -1599,17 +1604,11 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	}()
 	node := nodes[curNodeIdx]
 
-	if node.Limit != nil {
-		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
-			if cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				if cval.U64Val == 0 {
-					// optimize for limit 0
-					rs := c.newEmptyMergeScope()
-					rs.Proc = c.proc.NewNoContextChildProc(0)
-					return c.compileLimit(node, []*Scope{rs}), nil
-				}
-			}
-		}
+	if c.canUseLiteralLimitZeroFastPath(node) {
+		// optimize for limit 0
+		rs := c.newEmptyMergeScope()
+		rs.Proc = c.proc.NewNoContextChildProc(0)
+		return c.compileLimit(node, []*Scope{rs}), nil
 	}
 
 	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE && node.IsRightJoin {
@@ -2034,6 +2033,49 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", node))
 	}
+}
+
+func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
+	if node == nil || node.Limit == nil || c.ownsFoundRows(node) {
+		return false
+	}
+	cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit)
+	if !ok || cExpr.Lit == nil {
+		return false
+	}
+	cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val)
+	return ok && cval.U64Val == 0
+}
+
+func (c *Compile) ownsFoundRows(node *plan.Node) bool {
+	return statementHasSQLCalcFoundRows(c.stmt) && node != nil && node == c.foundRowsOwnerNode
+}
+
+func findFoundRowsOwnerNode(qry *plan.Query, rootID int32) *plan.Node {
+	if qry == nil || rootID < 0 || int(rootID) >= len(qry.Nodes) {
+		return nil
+	}
+
+	queue := []int32{rootID}
+	visited := make(map[int32]struct{})
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[nodeID]; ok || nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			continue
+		}
+		visited[nodeID] = struct{}{}
+
+		node := qry.Nodes[nodeID]
+		if node == nil {
+			continue
+		}
+		if node.Limit != nil || node.Offset != nil {
+			return node
+		}
+		queue = append(queue, node.Children...)
+	}
+	return nil
 }
 
 func isIdentityProjectionOfChild(projectList, childProjectList []*plan.Expr) bool {
@@ -5277,6 +5319,21 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// SQL_CALC_FOUND_ROWS must not use the Top-N shortcut: Top-N is
+		// intentionally allowed to stop upstream work. Build the complete
+		// ordered stream first, then apply OFFSET and LIMIT on the final scope.
+		if len(node.OrderBy) > 0 {
+			ss = c.compileOrder(node, ss)
+		}
+		if node.Offset != nil {
+			ss = c.compileOffset(node, ss)
+		}
+		if node.Limit != nil {
+			ss = c.compileLimit(node, ss)
+		}
+		return ss
+	}
 	switch {
 	case node.Limit != nil && node.Offset == nil && len(node.OrderBy) > 0: // top
 		return c.compileTop(node, node.Limit, ss)
@@ -5447,6 +5504,19 @@ func (c *Compile) compileFill(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// OFFSET owns the pre-offset count for SQL_CALC_FOUND_ROWS, so it must
+		// run on the coordinator as well. This keeps remote workers stateless and
+		// lets the following coordinator Limit preserve this complete count.
+		rs := c.newMergeScope(ss)
+		arg := constructOffset(node)
+		arg.WithFoundRows(true)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructOffset(node)
@@ -5468,6 +5538,22 @@ func (c *Compile) compileOffset(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileLimit(node *plan.Node, ss []*Scope) []*Scope {
+	if c.ownsFoundRows(node) {
+		// Keep the only counting Limit on the coordinator. Installing Limits on
+		// producer scopes would publish partial counts from local workers and
+		// would also require SQL_CALC_FOUND_ROWS state on remote CN processes.
+		// Merging the complete producer streams first gives the final Limit one
+		// deterministic owner for both draining and publishing the total count.
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		rs := c.newMergeScope(ss)
+		arg := constructLimit(node)
+		arg.WithFoundRows(true)
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+		rs.setRootOperator(arg)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	if c.IsSingleScope(ss) {
 		currentFirstFlag := c.anal.isFirst
 		op := constructLimit(node)

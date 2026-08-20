@@ -134,17 +134,25 @@ type SessionInfo struct {
 	// background SQL, which may inherit a session-variable resolver but must not
 	// be affected by a client's row cap.
 	ApplySQLSelectLimit bool
-	StorageEngine       engine.Engine
-	QueryId             []string
-	ResultColTypes      []types.Type
-	SeqCurValues        map[uint64]string
-	SeqDeleteKeys       []uint64
-	SeqAddValues        map[uint64]string
-	SeqLastValue        []string
-	SqlHelper           sqlHelper
-	Buf                 *buffer.Buffer
-	LogLevel            zapcore.Level
-	SessionId           uuid.UUID
+	// FoundRows is the row count exposed by FOUND_ROWS() for the preceding
+	// result-set statement.
+	FoundRows  uint64
+	ResultRows uint64
+	// FoundRowsRecorded prevents a SQL_CALC_FOUND_ROWS count from being
+	// overwritten by the limited output count.
+	FoundRowsRecorded bool
+	SqlCalcFoundRows  bool
+	StorageEngine     engine.Engine
+	QueryId           []string
+	ResultColTypes    []types.Type
+	SeqCurValues      map[uint64]string
+	SeqDeleteKeys     []uint64
+	SeqAddValues      map[uint64]string
+	SeqLastValue      []string
+	SqlHelper         sqlHelper
+	Buf               *buffer.Buffer
+	LogLevel          zapcore.Level
+	SessionId         uuid.UUID
 }
 
 type Session interface {
@@ -640,6 +648,52 @@ func (proc *Process) SetLastInsertID(num uint64) {
 
 func (proc *Process) GetSessionInfo() *SessionInfo {
 	return &proc.Base.SessionInfo
+}
+
+func (proc *Process) BeginFoundRowsStatement(sqlCalc bool) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.ResultRows = 0
+	proc.Base.SessionInfo.FoundRowsRecorded = false
+	proc.Base.SessionInfo.SqlCalcFoundRows = sqlCalc
+}
+
+func (proc *Process) GetFoundRows() uint64 {
+	if proc == nil || proc.Base == nil {
+		return 0
+	}
+	return proc.Base.SessionInfo.FoundRows
+}
+
+func (proc *Process) AddResultRows(rows uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.ResultRows += rows
+}
+
+func (proc *Process) GetResultRows() uint64 {
+	if proc == nil || proc.Base == nil {
+		return 0
+	}
+	return proc.Base.SessionInfo.ResultRows
+}
+
+func (proc *Process) SetFoundRows(rows uint64) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.FoundRows = rows
+	proc.Base.SessionInfo.FoundRowsRecorded = true
+}
+
+func (proc *Process) FoundRowsRecorded() bool {
+	return proc != nil && proc.Base != nil && proc.Base.SessionInfo.FoundRowsRecorded
+}
+
+func (proc *Process) IsSqlCalcFoundRows() bool {
+	return proc != nil && proc.Base != nil && proc.Base.SessionInfo.SqlCalcFoundRows
 }
 
 func (proc *Process) GetLastInsertID() uint64 {

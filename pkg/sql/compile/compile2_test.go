@@ -16,12 +16,191 @@ package compile
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func sqlCalcFoundRowsTestStatement() *tree.Select {
+	return &tree.Select{Select: &tree.SelectClause{
+		Option: tree.QuerySpecOptionSqlCalcFoundRows,
+	}}
+}
+
+func TestStatementHasSQLCalcFoundRows(t *testing.T) {
+	withFoundRows := func() *tree.Select {
+		return sqlCalcFoundRowsTestStatement()
+	}
+
+	tests := []struct {
+		name string
+		stmt tree.Statement
+		want bool
+	}{
+		{name: "nil interface", stmt: nil, want: false},
+		{name: "nil select", stmt: (*tree.Select)(nil), want: false},
+		{name: "select clause", stmt: withFoundRows(), want: true},
+		{name: "plain select clause", stmt: &tree.Select{Select: &tree.SelectClause{}}, want: false},
+		{name: "parenthesized select", stmt: &tree.Select{Select: &tree.ParenSelect{Select: withFoundRows()}}, want: true},
+		{name: "union left select", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.ValuesClause{}}}, want: true},
+		{name: "union left parenthesized select", stmt: &tree.Select{Select: &tree.UnionClause{Left: &tree.ParenSelect{Select: withFoundRows()}, Right: &tree.ValuesClause{}}}, want: true},
+		{name: "union without select clause", stmt: &tree.Select{Select: &tree.UnionClause{Left: &tree.ValuesClause{}, Right: withFoundRows()}}, want: false},
+		{name: "non select statement", stmt: &tree.ValuesStatement{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, statementHasSQLCalcFoundRows(tt.stmt))
+		})
+	}
+
+	require.True(t, selectStatementHasSQLCalcFoundRows(withFoundRows()))
+	require.True(t, selectStatementHasSQLCalcFoundRows(&tree.ParenSelect{Select: withFoundRows()}))
+	require.False(t, selectStatementHasSQLCalcFoundRows(&tree.SelectClause{}))
+}
+
+func TestSQLCalcFoundRowsDisablesLiteralLimitZeroFastPath(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
+	require.True(t, c.canUseLiteralLimitZeroFastPath(node))
+
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = node
+	require.False(t, c.canUseLiteralLimitZeroFastPath(node))
+
+	nested := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
+	require.True(t, c.canUseLiteralLimitZeroFastPath(nested))
+
+	node.Limit = plan2.MakePlan2Uint64ConstExprWithType(1)
+	require.False(t, c.canUseLiteralLimitZeroFastPath(node))
+}
+
+func TestFindFoundRowsOwnerBelowResultProjection(t *testing.T) {
+	outerLimit := &plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(2),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			outerLimit,
+			root,
+		},
+		Steps: []int32{2},
+	}
+
+	stmt := sqlCalcFoundRowsTestStatement()
+	stmt.Limit = &tree.Limit{Count: tree.NewNumVal(int64(2), "2", false, tree.P_int64)}
+	require.True(t, statementHasSQLCalcFoundRowsPagination(stmt))
+	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+
+	stmt.Limit = nil
+	require.False(t, statementHasSQLCalcFoundRowsPagination(stmt))
+}
+
+func TestFindFoundRowsOwnerPrefersOuterPagination(t *testing.T) {
+	nestedLimit := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
+	outerLimit := &plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{1},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{2}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			nestedLimit,
+			outerLimit,
+			root,
+		},
+		Steps: []int32{3},
+	}
+
+	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+}
+
+func TestSQLCalcFoundRowsLimitHasSingleCoordinatorOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	c.foundRowsOwnerNode = node
+	left := newLazyUnionAllLeaf(c, nil)
+	right := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileLimit(node, []*Scope{left, right})
+	require.Len(t, result, 1)
+	_, leftHasLimit := left.RootOp.(*limitop.Limit)
+	_, rightHasLimit := right.RootOp.(*limitop.Limit)
+	coordinatorLimit, coordinatorHasLimit := result[0].RootOp.(*limitop.Limit)
+	require.False(t, leftHasLimit)
+	require.False(t, rightHasLimit)
+	require.True(t, coordinatorHasLimit)
+	require.True(t, coordinatorLimit.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestSQLCalcFoundRowsOffsetHasSingleCoordinatorOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	node := &plan.Node{Offset: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	c.foundRowsOwnerNode = node
+	input := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileOffset(node, []*Scope{input})
+	require.Len(t, result, 1)
+	_, inputHasOffset := input.RootOp.(*offsetop.Offset)
+	coordinatorOffset, coordinatorHasOffset := result[0].RootOp.(*offsetop.Offset)
+	require.False(t, inputHasOffset)
+	require.True(t, coordinatorHasOffset)
+	require.True(t, coordinatorOffset.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestNestedLimitDoesNotBecomeFoundRowsOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = &plan.Node{}
+	nested := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	input := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileLimit(nested, []*Scope{input})
+	require.Len(t, result, 1)
+	nestedLimit, ok := result[0].RootOp.(*limitop.Limit)
+	require.True(t, ok)
+	require.False(t, nestedLimit.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewCompile("test", "test", "", "", "", newStubEngine(), proc,
+		sqlCalcFoundRowsTestStatement(), false, nil, time.Now())
+	t.Cleanup(c.Release)
+	proc.BeginFoundRowsStatement(false)
+	proc.SetFoundRows(9)
+
+	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_found_rows"))
+	require.True(t, proc.IsSqlCalcFoundRows())
+	require.False(t, proc.FoundRowsRecorded())
+	require.Zero(t, proc.GetResultRows())
+	require.Equal(t, uint64(9), proc.GetFoundRows())
+}
 
 // ============================================================================
 // Tests for rewriteAutoModeToPre

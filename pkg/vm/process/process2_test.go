@@ -135,6 +135,39 @@ func TestAffectedRows(t *testing.T) {
 	assert.Equal(t, int64(0), proc.GetAffectedRows())
 }
 
+func TestFoundRows(t *testing.T) {
+	var nilProc *Process
+	nilProc.BeginFoundRowsStatement(true)
+	nilProc.AddResultRows(1)
+	nilProc.SetFoundRows(1)
+	assert.Zero(t, nilProc.GetFoundRows())
+	assert.Zero(t, nilProc.GetResultRows())
+	assert.False(t, nilProc.FoundRowsRecorded())
+	assert.False(t, nilProc.IsSqlCalcFoundRows())
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.SetFoundRows(7)
+	proc.BeginFoundRowsStatement(true)
+	assert.Equal(t, uint64(7), proc.GetFoundRows())
+	assert.True(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+	proc.AddResultRows(1)
+	proc.AddResultRows(2)
+	assert.Equal(t, uint64(3), proc.GetResultRows())
+
+	proc.SetFoundRows(3)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.True(t, proc.FoundRowsRecorded())
+
+	// Statement setup preserves the previous value while clearing only the
+	// statement-local publication flags.
+	proc.BeginFoundRowsStatement(false)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.Zero(t, proc.GetResultRows())
+	assert.False(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
