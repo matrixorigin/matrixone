@@ -1006,12 +1006,12 @@ func (s *Scanner) asofQualifierInJoin(pos int) bool {
 			}
 			continue
 		}
-		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(s.buf[i]) {
+		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(uint16(s.buf[i])) {
 			i++
 			continue
 		}
 		start := i
-		for i < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, i) || isDigit(s.buf[i]) || s.buf[i] == '_') {
+		for i < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, i) || isDigit(uint16(s.buf[i])) || s.buf[i] == '_') {
 			i++
 		}
 		word := strings.ToLower(s.buf[start:i])
