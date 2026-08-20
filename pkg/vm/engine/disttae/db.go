@@ -504,6 +504,58 @@ const (
 	snapshotReadRetryTimeout  = 30 * time.Second
 )
 
+func snapshotCheckpointsCanServe(
+	checkpointEntries []*checkpoint.CheckpointEntry,
+	ts types.TS,
+) bool {
+	if len(checkpointEntries) == 0 {
+		return false
+	}
+
+	base := 0
+	for i, entry := range checkpointEntries {
+		if i > 0 {
+			previousEnd := checkpointEntries[i-1].GetEnd()
+			currentEnd := entry.GetEnd()
+			if currentEnd.LT(&previousEnd) {
+				return false
+			}
+		}
+		if entry.GetType() == checkpoint.ET_Global ||
+			entry.GetType() == checkpoint.ET_Compacted {
+			// A base checkpoint supersedes any predecessor entry retained by
+			// snapshot filtering. Only entries after the latest base must form
+			// an incremental chain.
+			base = i
+		}
+	}
+
+	for i := base + 1; i < len(checkpointEntries); i++ {
+		previous := checkpointEntries[i-1]
+		previousEnd := previous.GetEnd()
+		currentStart := checkpointEntries[i].GetStart()
+
+		// An incremental checkpoint normally starts at previousEnd.Next().
+		// The first incremental after a global or compacted base can start at
+		// that base's synthetic end instead. Accept exactly those two producer
+		// contracts and reject gaps, overlaps, and out-of-order sets.
+		if !currentStart.Equal(&previousEnd) {
+			next := previousEnd.Next()
+			if !currentStart.Equal(&next) {
+				return false
+			}
+		} else if previous.GetType() != checkpoint.ET_Global &&
+			previous.GetType() != checkpoint.ET_Compacted {
+			return false
+		}
+	}
+
+	// The requested snapshot can contain data that is flushed only by the
+	// checkpoint following it, so the returned coverage must reach ts.
+	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
+	return !end.LT(&ts)
+}
+
 // requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
 // from a checkpoint set that cannot cover the requested snapshot. TN reports
 // the former as Succeed=false, so retry it with a bounded, context-aware wait.
@@ -586,21 +638,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 		}
 	}
 
-	ckpsCanServe := func() bool {
-		// Succeed=false was handled as temporary checkpoint lag above. A successful
-		// response must contain physical checkpoint coverage for the snapshot; do
-		// not turn an empty or gapped response into an incomplete partition.
-		if len(checkpointEntries) < 1 {
-			return false
-		}
-
-		// The end time of the last checkpoint must not be less than the ts of the snapshot,
-		// because the data of the snapshot may exist in the wal and be collected to the next checkpoint
-		end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
-		return !end.LT(&ts)
-	}
-
-	if !ckpsCanServe() {
+	if !snapshotCheckpointsCanServe(checkpointEntries, ts) {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"No available checkpoints for snapshot read at:%s, table:%s, tid:%v, txn:%s",
 			ts.ToString(),
