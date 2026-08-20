@@ -23,6 +23,7 @@
 #pragma once
 
 #include "index_base.hpp"
+#include "device_memory.hpp"
 #include "cuvs_worker.hpp"
 #include "cuvs_types.h"
 #include "quantize.hpp"
@@ -323,6 +324,20 @@ public:
     void build_internal(raft_handle_wrapper_t& handle) {
         std::unique_lock<std::shared_mutex> lock(this->mutex_);
         auto res = handle.get_raft_resources();
+
+        // Claim the dataset bytes this build is about to materialise, in the same
+        // per-device ledger index loads use, so a concurrent load cannot spend
+        // the free bytes this build is relying on. brute_force keeps the raw
+        // vectors resident (it searches them directly), so count*dim*sizeof(T) is
+        // the real demand — unlike IVF-PQ, which streams the dataset and keeps
+        // only the PQ codes. Skipped for an empty index: there is nothing to
+        // allocate, and reserve() refuses a zero claim by design.
+        matrixone::device_memory_governor::reservation build_claim;
+        if (this->count > 0 && this->dimension > 0) {
+            build_claim = matrixone::device_memory_governor::reserve(
+                static_cast<size_t>(this->count) * static_cast<size_t>(this->dimension) * sizeof(T),
+                "brute_force::build");
+        }
 
         // Create and own the device memory
         using dataset_t = raft::device_matrix<T, int64_t>;

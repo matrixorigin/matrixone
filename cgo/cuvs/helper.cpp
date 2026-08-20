@@ -15,6 +15,7 @@
  */
 
 #include "helper.h"
+#include "device_memory.hpp"
 #include <unordered_map>
 #include <stdexcept>
 #include <cuda_runtime.h>
@@ -336,6 +337,32 @@ int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
         matrixone::set_errmsg(errmsg, "Error in gpu_rows_fitting_free_mem", "unknown C++ exception");
         return -1;
     }
+}
+
+void* gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg) {
+    if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
+    try {
+        auto claim = matrixone::device_memory_governor::reserve_on(
+            device_id, static_cast<size_t>(bytes), "build");
+        // Heap the RAII claim so its lifetime can be owned by the Go caller.
+        return new matrixone::device_memory_governor::reservation(std::move(claim));
+    } catch (const std::exception& e) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_device_memory_reserve", e.what());
+        return nullptr;
+    } catch (...) {
+        matrixone::set_errmsg(errmsg, "Error in gpu_device_memory_reserve", "unknown C++ exception");
+        return nullptr;
+    }
+}
+
+void gpu_device_memory_release(void* token) {
+    // NULL-safe so a Go defer can fire unconditionally after a failed reserve.
+    if (!token) return;
+    delete static_cast<matrixone::device_memory_governor::reservation*>(token);
+}
+
+uint64_t gpu_device_memory_reserved(int device_id) {
+    return static_cast<uint64_t>(matrixone::device_memory_governor::reserved_bytes(device_id));
 }
 
 void* gpu_alloc_pinned(uint64_t size, void* errmsg) {

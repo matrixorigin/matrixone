@@ -211,6 +211,22 @@ extern "C" {
 int gpu_rows_fitting_free_mem(int device_id, uint64_t per_row_bytes,
                               int64_t* out_rows, uint64_t* out_free_bytes, void* errmsg);
 
+// ---- device memory governor, exposed to Go ------------------------------
+// One ledger for every large device allocation. C++ index LOADS claim through
+// it directly; BUILDS claim from Go, because Go owns the per-algo cost model
+// (CAGRA charges dataset+graph, IVF-PQ charges PQ codes and budgets the k-means
+// trainset as max(train,index) — restating that in C++ would fork it) and
+// because a Go-side claim can span the whole decided-but-not-yet-allocated
+// window, which a claim taken inside the C++ build cannot.
+//
+// gpu_device_memory_reserve returns an opaque token, or NULL with errmsg set
+// when the device cannot accommodate the request. The caller MUST pass the
+// token to gpu_device_memory_release exactly once; releasing NULL is a no-op.
+void*    gpu_device_memory_reserve(int device_id, uint64_t bytes, void* errmsg);
+void     gpu_device_memory_release(void* token);
+// Bytes currently claimed on a device. For tests and diagnostics.
+uint64_t gpu_device_memory_reserved(int device_id);
+
 void* gpu_alloc_pinned(uint64_t size, void* errmsg);
 void gpu_free_pinned(void* ptr, void* errmsg);
 

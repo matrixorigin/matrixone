@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // DeviceDistinct returns the distinct PHYSICAL device ids in first-seen order.
@@ -83,4 +84,36 @@ func DeviceMinRowsFitting(devices []int, perRowBytes uint64, rowsFitting DeviceR
 		}
 	}
 	return rows, minDev, minFree, nil
+}
+
+// DeviceBuildBytes attributes a build's total device demand to the physical
+// devices that will hold it.
+//
+// SHARDED splits the work, so each device holds total/N. REPLICATED puts a full
+// copy on every device. SINGLE_GPU puts it all on the first. The map keys by
+// device id, so under gpu_multi_simulation -- where the list aliases one card
+// several times -- the shards correctly accumulate back onto that one card
+// instead of pretending there are N.
+func DeviceBuildBytes(mode vectorindex.DistributionMode, devices []int, totalBytes uint64) map[int]uint64 {
+	perDev := make(map[int]uint64, len(devices))
+	if totalBytes == 0 || len(devices) == 0 {
+		return perDev
+	}
+	switch mode {
+	case vectorindex.DistributionMode_SHARDED:
+		per := totalBytes / uint64(len(devices))
+		if per == 0 {
+			per = totalBytes
+		}
+		for _, d := range devices {
+			perDev[d] += per
+		}
+	case vectorindex.DistributionMode_REPLICATED:
+		for _, d := range devices {
+			perDev[d] += totalBytes
+		}
+	default:
+		perDev[devices[0]] += totalBytes
+	}
+	return perDev
 }

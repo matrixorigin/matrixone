@@ -62,6 +62,12 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
+	// SetDeviceBytesPerRow hands the builder the per-row DEVICE cost this file
+	// already computed for capacity planning, so each sub-index build can claim
+	// rows*perRow in the C++ governor and a concurrent index load cannot spend
+	// the same free VRAM. Passing the number rather than recomputing it keeps a
+	// single definition of a per-algo model that is easy to get wrong.
+	SetDeviceBytesPerRow(perRow uint64)
 	ToInsertSql(ts int64) ([]string, error)
 	Destroy() error
 }
@@ -507,6 +513,14 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if err != nil {
 			return err
 		}
+
+		// Hand the builder the per-row DEVICE cost computed above, so each
+		// sub-index build claims rows*perRow in the C++ governor -- the same
+		// ledger index loads claim through. Passing the number rather than
+		// recomputing it in the builder keeps one definition of a per-algo
+		// model that is easy to get wrong (IVF-PQ charges PQ codes, not the
+		// dataset, and budgets the trainset as max(train, index)).
+		u.builder.SetDeviceBytesPerRow(perRow)
 
 		// ---- pre-filter (INCLUDE columns) setup ----
 		// u.filterCols was already resolved above (before memory.HostRowsFitting)

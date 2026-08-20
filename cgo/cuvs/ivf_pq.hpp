@@ -1684,8 +1684,8 @@ public:
             // build or load on this device cannot spend the same free bytes. The
             // claim holds no lock; it is dropped at scope exit, by which point the
             // memory is resident and cudaMemGetInfo accounts for it.
-            auto load_claim = matrixone::device_memory_governor::reserve(
-                matrixone::path_bytes(filename), "ivf_pq::load");
+            const size_t load_bytes = matrixone::required_path_bytes(filename, "ivf_pq::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
             cuvs::neighbors::ivf_pq::deserialize(*res, filename, local_idx.get());
             // Drain `res`'s stream so any H2D copy committed by deserialize is
             // visible before any search thread reads the loaded index. Without
@@ -1856,8 +1856,8 @@ public:
                 // build or load on this device cannot spend the same free bytes. The
                 // claim holds no lock; it is dropped at scope exit, by which point the
                 // memory is resident and cudaMemGetInfo accounts for it.
-                auto load_claim = matrixone::device_memory_governor::reserve(
-                    matrixone::path_bytes(full_path), "ivf_pq::load");
+                const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                 cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                 // Drain `res`'s stream so deserialize's H2D copy is committed
                 // before any search thread reads the loaded index. See the
@@ -1886,8 +1886,8 @@ public:
                     // build or load on this device cannot spend the same free bytes. The
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
-                    auto load_claim = matrixone::device_memory_governor::reserve(
-                        matrixone::path_bytes(full_path), "ivf_pq::load");
+                    const size_t load_bytes = matrixone::required_path_bytes(full_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, full_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1917,8 +1917,8 @@ public:
                     // build or load on this device cannot spend the same free bytes. The
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
-                    auto load_claim = matrixone::device_memory_governor::reserve(
-                        matrixone::path_bytes(shard_path), "ivf_pq::load");
+                    const size_t load_bytes = matrixone::required_path_bytes(shard_path, "ivf_pq::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "ivf_pq::load");
                     cuvs::neighbors::ivf_pq::deserialize(*res, shard_path, local_idx.get());
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

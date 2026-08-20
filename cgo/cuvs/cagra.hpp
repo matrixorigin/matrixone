@@ -1577,8 +1577,8 @@ public:
             // build or load on this device cannot spend the same free bytes. The
             // claim holds no lock; it is dropped at scope exit, by which point the
             // memory is resident and cudaMemGetInfo accounts for it.
-            auto load_claim = matrixone::device_memory_governor::reserve(
-                matrixone::path_bytes(filename), "cagra::load");
+            const size_t load_bytes = matrixone::required_path_bytes(filename, "cagra::load");
+            auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
             cuvs::neighbors::cagra::deserialize(*res, filename, local_idx.get(), &out_dataset);
             // Drain `res`'s stream so the dataset H2D copy committed by
             // deserialize is visible before any search thread reads it.
@@ -1743,8 +1743,8 @@ public:
                 // build or load on this device cannot spend the same free bytes. The
                 // claim holds no lock; it is dropped at scope exit, by which point the
                 // memory is resident and cudaMemGetInfo accounts for it.
-                auto load_claim = matrixone::device_memory_governor::reserve(
-                    matrixone::path_bytes(full_path), "cagra::load");
+                const size_t load_bytes = matrixone::required_path_bytes(full_path, "cagra::load");
+                auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
                 cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                 // cuVS' cagra::deserialize stages the dataset host→device on
                 // `res`'s stream and returns BEFORE the H2D copy is committed.
@@ -1779,8 +1779,8 @@ public:
                     // build or load on this device cannot spend the same free bytes. The
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
-                    auto load_claim = matrixone::device_memory_governor::reserve(
-                        matrixone::path_bytes(full_path), "cagra::load");
+                    const size_t load_bytes = matrixone::required_path_bytes(full_path, "cagra::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
                     cuvs::neighbors::cagra::deserialize(*res, full_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);
@@ -1807,8 +1807,8 @@ public:
                     // build or load on this device cannot spend the same free bytes. The
                     // claim holds no lock; it is dropped at scope exit, by which point the
                     // memory is resident and cudaMemGetInfo accounts for it.
-                    auto load_claim = matrixone::device_memory_governor::reserve(
-                        matrixone::path_bytes(shard_path), "cagra::load");
+                    const size_t load_bytes = matrixone::required_path_bytes(shard_path, "cagra::load");
+                    auto load_claim = matrixone::device_memory_governor::reserve(load_bytes, "cagra::load");
                     cuvs::neighbors::cagra::deserialize(*res, shard_path, local_idx.get(), &out_dataset);
                     // See SINGLE_GPU branch above for the rationale.
                     raft::resource::sync_stream(*res);

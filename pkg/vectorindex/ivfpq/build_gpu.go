@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 )
 
 // IvfpqBuild manages bulk index construction across one or more IvfpqModel sub-indexes.
@@ -57,8 +58,13 @@ type IvfpqBuild[B, Q cuvs.VectorType] struct {
 	current *IvfpqModel[B, Q]
 	nthread uint32
 	devices []int
-	count   int64
-	idBuf   [1]int64
+
+	// deviceBytesPerRow is the per-row DEVICE cost supplied by the create TVF,
+	// which owns the per-algo model. 0 means the caller did not supply it and
+	// no claim is taken -- direct API users and tests keep today's behaviour.
+	deviceBytesPerRow uint64
+	count             int64
+	idBuf             [1]int64
 
 	// (B, Q) routing tags computed once at construction. bIsHalf: the base
 	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
@@ -121,7 +127,16 @@ func (b *IvfpqBuild[B, Q]) getOrCreateCurrent() (*IvfpqModel[B, Q], error) {
 	// per row. Today the create TVF always resolves a positive capacity, so the guard is
 	// belt-and-braces against a second provenance for the value.
 	if b.current != nil && capacity > 0 && b.count >= capacity {
-		if err := b.current.Build(); err != nil {
+		// Claim the VRAM this sub-index is about to allocate before building it.
+		claim, cerr := b.reserveBuildVRAM(b.count)
+		if cerr != nil {
+			return nil, cerr
+		}
+		err := b.current.Build()
+		// Released once the memory is resident, so the next admission sees it
+		// through cudaMemGetInfo rather than through the ledger.
+		claim.Release()
+		if err != nil {
 			return nil, err
 		}
 		full := b.current
@@ -203,7 +218,16 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 
 func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	if b.current != nil && b.count > 0 {
-		if err := b.current.Build(); err != nil {
+		// Claim the VRAM this sub-index is about to allocate before building it.
+		claim, cerr := b.reserveBuildVRAM(b.count)
+		if cerr != nil {
+			return nil, cerr
+		}
+		err := b.current.Build()
+		// Released once the memory is resident, so the next admission sees it
+		// through cudaMemGetInfo rather than through the ledger.
+		claim.Release()
+		if err != nil {
 			return nil, err
 		}
 		b.indexes = append(b.indexes, b.current)
@@ -259,4 +283,30 @@ func (b *IvfpqBuild[B, Q]) Destroy() error {
 
 func (b *IvfpqBuild[B, Q]) GetIndexes() []*IvfpqModel[B, Q] {
 	return b.indexes
+}
+
+// SetDeviceBytesPerRow records the per-row device cost used to claim VRAM
+// around each sub-index build. See the ivfpqBuilder interface for why the
+// number is passed in rather than recomputed here.
+func (b *IvfpqBuild[B, Q]) SetDeviceBytesPerRow(perRow uint64) {
+	b.deviceBytesPerRow = perRow
+}
+
+// reserveBuildVRAM claims what this sub-index build is about to allocate, in the
+// same C++ ledger index loads claim through (cgo/cuvs/device_memory.hpp). The
+// claim is taken HERE, not inside the C++ build, so it spans the whole window
+// where the build has decided its size but has not allocated yet -- a claim
+// taken at the allocation would leave that window exactly as exposed as before.
+//
+// Returns a no-op release when the per-row cost was never supplied or the
+// sub-index is empty: reserve() refuses a zero claim by design, and there is
+// nothing to protect.
+func (b *IvfpqBuild[B, Q]) reserveBuildVRAM(rows int64) (cuvs.DeviceReservations, error) {
+	if b.deviceBytesPerRow == 0 || rows <= 0 || len(b.devices) == 0 {
+		return nil, nil
+	}
+	total := uint64(rows) * b.deviceBytesPerRow
+	perDev := memory.DeviceBuildBytes(
+		vectorindex.DistributionMode(b.idxcfg.CuvsIvfpq.DistributionMode), b.devices, total)
+	return cuvs.ReserveBuildMemory(perDev)
 }

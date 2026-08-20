@@ -25,6 +25,7 @@
 
 using matrixone::device_memory_governor;
 using matrixone::path_bytes;
+using matrixone::required_path_bytes;
 
 namespace {
 
@@ -51,10 +52,12 @@ size_t free_now() {
 
 }  // namespace
 
-TEST(DeviceMemoryGovernor, ZeroDemandIsAdmittedWithoutAClaim) {
-    // "Unknown demand" must never be guessed at, and must not claim anything.
-    auto claim = device_memory_governor::reserve(0, "test");
-    require_ledger_empty("zero-demand reserve");
+TEST(DeviceMemoryGovernor, ZeroDemandIsRefused) {
+    // 0 must not be overloaded to mean "unknown demand, admit anyway": that
+    // silently skips admission for a caller that failed to size its allocation.
+    // A caller with nothing to allocate must not reserve at all.
+    ASSERT_THROW(device_memory_governor::reserve(0, "test"), std::runtime_error);
+    require_ledger_empty("refused zero-demand reserve");
 }
 
 TEST(DeviceMemoryGovernor, ClaimIsVisibleThenReleasedOnScopeExit) {
@@ -175,6 +178,36 @@ TEST(PathBytes, ReportsFileAndDirectorySizes) {
     // Unknown paths report 0, which reserve() reads as "do not guess".
     ASSERT_EQ(size_t(0), path_bytes((dir / "missing.bin").string()));
     ASSERT_EQ(size_t(0), path_bytes(""));
+
+    fs::remove_all(dir);
+}
+
+TEST(RequiredPathBytes, ThrowsOnMissingEmptyOrUnreadable) {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "mo_required_path_bytes_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    // A real artifact reports its size, same as path_bytes.
+    {
+        std::ofstream f(dir / "ok.bin", std::ios::binary);
+        std::string blob(1234, 'x');
+        f.write(blob.data(), static_cast<std::streamsize>(blob.size()));
+    }
+    ASSERT_EQ(size_t(1234), required_path_bytes((dir / "ok.bin").string(), "test"));
+
+    // Missing, empty, and invalid must all be REFUSED rather than silently
+    // admitted with no claim -- at a load site the artifact was just unpacked,
+    // so a zero size is a defect, not "unknown demand".
+    ASSERT_THROW(required_path_bytes((dir / "missing.bin").string(), "test"), std::runtime_error);
+
+    { std::ofstream f(dir / "empty.bin", std::ios::binary); }  // zero-length
+    ASSERT_THROW(required_path_bytes((dir / "empty.bin").string(), "test"), std::runtime_error);
+
+    ASSERT_THROW(required_path_bytes("", "test"), std::runtime_error);
+
+    // The non-strict query keeps reporting 0 for the same inputs.
+    ASSERT_EQ(size_t(0), path_bytes((dir / "missing.bin").string()));
 
     fs::remove_all(dir);
 }

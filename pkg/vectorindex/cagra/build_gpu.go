@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 )
 
 // CagraBuild manages bulk index construction across one or more CagraModel sub-indexes.
@@ -57,8 +58,13 @@ type CagraBuild[B, Q cuvs.VectorType] struct {
 	current *CagraModel[B, Q]   // sub-index currently being filled
 	nthread uint32
 	devices []int
-	count   int64    // vectors in current sub-index
-	idBuf   [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
+
+	// deviceBytesPerRow is the per-row DEVICE cost supplied by the create TVF,
+	// which owns the per-algo model. 0 means the caller did not supply it and
+	// no claim is taken -- direct API users and tests keep today's behaviour.
+	deviceBytesPerRow uint64
+	count             int64    // vectors in current sub-index
+	idBuf             [1]int64 // reusable buffer for AddRow to avoid per-call heap allocation
 
 	// (B, Q) routing tags computed once at construction. bIsHalf: the base
 	// type is f16. qIsHalf: the storage type is f16 (so a half base goes
@@ -127,7 +133,16 @@ func (b *CagraBuild[B, Q]) getOrCreateCurrent() (*CagraModel[B, Q], error) {
 	// belt-and-braces against a second provenance for the value.
 	if b.current != nil && capacity > 0 && b.count >= capacity {
 		// Current index is full: build it, retire it, and release its GPU residency.
-		if err := b.current.Build(); err != nil {
+		// Claim the VRAM this sub-index is about to allocate before building it.
+		claim, cerr := b.reserveBuildVRAM(b.count)
+		if cerr != nil {
+			return nil, cerr
+		}
+		err := b.current.Build()
+		// Released once the memory is resident, so the next admission sees it
+		// through cudaMemGetInfo rather than through the ledger.
+		claim.Release()
+		if err != nil {
 			return nil, err
 		}
 		full := b.current
@@ -220,7 +235,16 @@ func (b *CagraBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 func (b *CagraBuild[B, Q]) ToInsertSql(ts int64) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
-		if err := b.current.Build(); err != nil {
+		// Claim the VRAM this sub-index is about to allocate before building it.
+		claim, cerr := b.reserveBuildVRAM(b.count)
+		if cerr != nil {
+			return nil, cerr
+		}
+		err := b.current.Build()
+		// Released once the memory is resident, so the next admission sees it
+		// through cudaMemGetInfo rather than through the ledger.
+		claim.Release()
+		if err != nil {
 			return nil, err
 		}
 		b.indexes = append(b.indexes, b.current)
@@ -280,4 +304,30 @@ func (b *CagraBuild[B, Q]) Destroy() error {
 // GetIndexes returns the completed sub-indexes (for testing).
 func (b *CagraBuild[B, Q]) GetIndexes() []*CagraModel[B, Q] {
 	return b.indexes
+}
+
+// SetDeviceBytesPerRow records the per-row device cost used to claim VRAM
+// around each sub-index build. See the cagraBuilder interface for why the
+// number is passed in rather than recomputed here.
+func (b *CagraBuild[B, Q]) SetDeviceBytesPerRow(perRow uint64) {
+	b.deviceBytesPerRow = perRow
+}
+
+// reserveBuildVRAM claims what this sub-index build is about to allocate, in the
+// same C++ ledger index loads claim through (cgo/cuvs/device_memory.hpp). The
+// claim is taken HERE, not inside the C++ build, so it spans the whole window
+// where the build has decided its size but has not allocated yet -- a claim
+// taken at the allocation would leave that window exactly as exposed as before.
+//
+// Returns a no-op release when the per-row cost was never supplied or the
+// sub-index is empty: reserve() refuses a zero claim by design, and there is
+// nothing to protect.
+func (b *CagraBuild[B, Q]) reserveBuildVRAM(rows int64) (cuvs.DeviceReservations, error) {
+	if b.deviceBytesPerRow == 0 || rows <= 0 || len(b.devices) == 0 {
+		return nil, nil
+	}
+	total := uint64(rows) * b.deviceBytesPerRow
+	perDev := memory.DeviceBuildBytes(
+		vectorindex.DistributionMode(b.idxcfg.CuvsCagra.DistributionMode), b.devices, total)
+	return cuvs.ReserveBuildMemory(perDev)
 }

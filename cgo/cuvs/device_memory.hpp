@@ -133,19 +133,49 @@ public:
     // ambient device avoids a cudaSetDevice here that would leave the calling
     // thread bound somewhere the caller did not ask for.
     //
-    // need_bytes == 0 means "demand unknown" and is admitted without a claim —
-    // this never guesses a number.
+    // need_bytes == 0 is REFUSED, not treated as "unknown demand". Admitting a
+    // zero claim would overload one value with two meanings — "nothing to
+    // allocate" and "I could not work out the size" — and the second is a defect
+    // every caller here can detect locally (see required_path_bytes). A caller
+    // with genuinely nothing to allocate must not call this at all.
     //
     // THROWS std::runtime_error naming the demand, the budget and the free
-    // figure when it does not fit.
+    // figure when it does not fit, or when need_bytes is 0.
     static reservation reserve(size_t need_bytes, const char* who) {
-        if (need_bytes == 0) return reservation();
-
         int device_id = 0;
         if (cudaGetDevice(&device_id) != cudaSuccess) device_id = 0;
+        return reserve_on(device_id, need_bytes, who);
+    }
+
+    // reserve_on names the device explicitly, for callers that are not running
+    // on it — in particular the Go build path, which decides how much a build
+    // will need long before any worker thread has bound a device. Reserving
+    // from there is what covers the decided-but-not-yet-allocated window: a
+    // claim taken inside the C++ build would only start at the allocation,
+    // leaving the minutes between planning and allocating uncovered.
+    static reservation reserve_on(int device_id, size_t need_bytes, const char* who) {
+        if (need_bytes == 0) {
+            throw std::runtime_error(
+                std::string(who) + ": refusing a zero-byte VRAM claim; a zero demand means the "
+                "caller could not determine the size, which is a defect, not permission to skip "
+                "admission. Callers with nothing to allocate must not reserve at all.");
+        }
+
+        // cudaMemGetInfo reports the CURRENT device, so bind the requested one
+        // and put it back: this runs on a caller's thread (a Go goroutine's OS
+        // thread, for the build path) that did not ask to be moved.
+        int prev_device = device_id;
+        cudaGetDevice(&prev_device);
+        const bool rebind = (prev_device != device_id);
+        if (rebind && cudaSetDevice(device_id) != cudaSuccess) {
+            throw std::runtime_error(std::string(who) + ": cannot select device " +
+                                     std::to_string(device_id) + " to admit " +
+                                     std::to_string(need_bytes) + " bytes");
+        }
 
         size_t free_bytes = 0, total_bytes = 0;
         cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+        if (rebind) cudaSetDevice(prev_device);
         if (err != cudaSuccess) {
             // Same fail-loud policy as rows_fitting_gpu_mem: an allocation that
             // OOMs at first search is worse than one that never happens.
@@ -222,6 +252,26 @@ inline size_t path_bytes(const std::string& path) {
         if (!fec) total += static_cast<size_t>(n);
     }
     return total;
+}
+
+
+// required_path_bytes is path_bytes for callers that KNOW the artifact must be
+// there — an index file that was just unpacked, for instance.
+//
+// path_bytes reports 0 for "no size I can determine", which reserve() reads as
+// "unknown demand, do not guess" and admits without a claim. At a load site that
+// reading is wrong in both directions: the file is supposed to exist, so 0 means
+// missing, unreadable, or truncated, and admitting the load anyway skips the
+// admission AND defers the real complaint to a later, more cryptic deserialize
+// failure. THROWS std::runtime_error naming the path instead.
+inline size_t required_path_bytes(const std::string& path, const char* who) {
+    const size_t n = path_bytes(path);
+    if (n == 0) {
+        throw std::runtime_error(
+            std::string(who) + ": index artifact \"" + path +
+            "\" is missing, unreadable, or empty; cannot size its VRAM before loading");
+    }
+    return n;
 }
 
 }  // namespace matrixone
