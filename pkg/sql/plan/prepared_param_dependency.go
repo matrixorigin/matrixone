@@ -299,6 +299,15 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 						traceExpr(currentNodeID, fn.Args[i], true)
 					}
 					return
+				case "coalesce", "greatest", "least":
+					for _, arg := range fn.Args {
+						if containsPreparedParamMarker(arg, "mo_all_param_result_dependency") {
+							for _, valueArg := range fn.Args {
+								traceExpr(currentNodeID, valueArg, true)
+							}
+							return
+						}
+					}
 				case "case":
 					for i := 1; i < len(fn.Args); i += 2 {
 						traceExpr(currentNodeID, fn.Args[i], true)
@@ -308,20 +317,26 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					}
 					return
 				}
-			}
-			if allowSetCast {
-				fn := expr.GetF()
-				if fn != nil {
-					if fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
-						return
-					}
+				// Binder-generated casts are transparent to result provenance.
+				// A user-written CAST is the only boundary and carries an explicit
+				// marker, so do not infer provenance from an overload identifier.
+				if fn.Func.GetObjName() == "cast" && len(fn.Args) == 2 {
 					if containsPreparedParamMarker(
 						fn.Args[0], "mo_explicit_cast_param_dependency") {
 						return
 					}
-					_, overload := function.DecodeOverloadID(fn.Func.GetObj())
-					if overload == 0 {
-						traceExpr(currentNodeID, fn.Args[0], false)
+					traceExpr(currentNodeID, fn.Args[0], allowSetCast)
+					return
+				}
+			}
+			if allowSetCast {
+				fn := expr.GetF()
+				if fn != nil {
+					if fn.Func == nil {
+						return
+					}
+					for _, arg := range fn.Args {
+						traceExpr(currentNodeID, arg, true)
 					}
 					return
 				}

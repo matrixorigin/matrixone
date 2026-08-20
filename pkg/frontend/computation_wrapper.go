@@ -1809,8 +1809,15 @@ func preservePreparedResultColumnBindings(
 	result := bindingTypes
 	cloned := false
 	for columnPos, positions := range dependencies {
-		if columnPos >= len(resultTypes) || resultTypes[columnPos].Oid != types.T_float64 {
+		if columnPos >= len(resultTypes) || !preparedResultTypeIsStableNumeric(resultTypes[columnPos]) {
 			continue
+		}
+		columnType := resultTypes[columnPos]
+		for paramPos, dependent := range positions {
+			if dependent && paramPos < len(bindingTypes) &&
+				preparedResultTypeIsStableNumeric(bindingTypes[paramPos]) {
+				columnType = mergePreparedResultColumnType(columnType, bindingTypes[paramPos])
+			}
 		}
 		if !cloned {
 			if result == nil {
@@ -1822,7 +1829,7 @@ func preservePreparedResultColumnBindings(
 		}
 		for paramPos, dependent := range positions {
 			if dependent && paramPos < len(result) {
-				result[paramPos] = types.T_float64.ToType()
+				result[paramPos] = columnType
 			}
 		}
 	}
@@ -1838,11 +1845,39 @@ func preservePreparedResultColumnTypes(previous []types.Type, columns []*plan2.C
 		result[i] = types.Type{
 			Oid: types.T(column.Typ.Id), Width: column.Typ.Width, Scale: column.Typ.Scale,
 		}
-		if i < len(previous) && previous[i].Oid == types.T_float64 {
-			result[i] = previous[i]
+		if i < len(previous) {
+			result[i] = mergePreparedResultColumnType(previous[i], result[i])
 		}
 	}
 	return result
+}
+
+func preparedResultTypeIsStableNumeric(typ types.Type) bool {
+	return typ.IsNumeric()
+}
+
+func mergePreparedResultColumnType(previous, current types.Type) types.Type {
+	if !preparedResultTypeIsStableNumeric(previous) {
+		return current
+	}
+	if !preparedResultTypeIsStableNumeric(current) {
+		return previous
+	}
+	if previous.Oid == types.T_float64 || current.Oid == types.T_float64 {
+		return types.T_float64.ToType()
+	}
+	if previous.Oid.IsDecimal() && !current.Oid.IsDecimal() {
+		return previous
+	}
+	if current.Oid.IsDecimal() {
+		if !previous.Oid.IsDecimal() {
+			return current
+		}
+		scale := max(previous.Scale, current.Scale)
+		width := max(previous.Width-previous.Scale, current.Width-current.Scale) + scale
+		return preparedResultDecimalType(width, scale)
+	}
+	return previous
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {

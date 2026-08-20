@@ -230,14 +230,17 @@ func TestPreparedParamResultMetadataDependenciesFollowUnionOutputs(t *testing.T)
 
 func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testing.T) {
 	for _, test := range []struct {
-		name string
-		sql  string
-		want []bool
+		name   string
+		sql    string
+		params int
+		want   []bool
 	}{
-		{"if value", "prepare p from 'select if(true, ?, cast(0 as decimal(1,0)))'", []bool{true}},
-		{"case value", "prepare p from 'select case when true then ? else cast(0 as decimal(1,0)) end'", []bool{true}},
-		{"if condition excluded", "prepare p from 'select if(?, 1, 0)'", nil},
-		{"explicit cast terminates", "prepare p from 'select if(true, cast(? as text), cast(0 as decimal(1,0)))'", nil},
+		{"if value", "prepare p from 'select if(true, ?, cast(0 as decimal(1,0)))'", 1, []bool{true}},
+		{"nested function value", "prepare p from 'select if(false, abs(?), ?)'", 2, []bool{true, true}},
+		{"nested arithmetic value", "prepare p from 'select if(false, ? + 0, ?)'", 2, []bool{true, true}},
+		{"case value", "prepare p from 'select case when true then ? else cast(0 as decimal(1,0)) end'", 1, []bool{true}},
+		{"if condition excluded", "prepare p from 'select if(?, 1, 0)'", 1, nil},
+		{"explicit cast terminates", "prepare p from 'select if(true, cast(? as text), cast(0 as decimal(1,0)))'", 1, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
@@ -246,7 +249,7 @@ func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testi
 			prepare := logicPlan.GetDcl().GetPrepare()
 			require.NotNil(t, prepare)
 			require.Equal(t, test.want,
-				PreparedParamResultMetadataDependencies(prepare.Plan, 1))
+				PreparedParamResultMetadataDependencies(prepare.Plan, test.params))
 			if test.name == "explicit cast terminates" {
 				require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 1))
 				require.Equal(t, []bool{true},
@@ -256,7 +259,7 @@ func TestPreparedParamResultMetadataDependenciesFollowControlFlowValues(t *testi
 	}
 }
 
-func TestPreparedAllParameterCommonTypeDependencies(t *testing.T) {
+func TestPreparedAllParameterResultTypeDependencies(t *testing.T) {
 	for _, name := range []string{"coalesce", "greatest", "least"} {
 		t.Run(name, func(t *testing.T) {
 			mock := NewMockOptimizer(false)
@@ -264,8 +267,9 @@ func TestPreparedAllParameterCommonTypeDependencies(t *testing.T) {
 				"prepare p from 'select "+name+"(?, ?)'")
 			require.NoError(t, err)
 			prepare := logicPlan.GetDcl().GetPrepare()
+			require.Empty(t, PreparedParamCommonTypeDependencies(prepare.Plan, 2))
 			require.Equal(t, []bool{true, true},
-				PreparedParamCommonTypeDependencies(prepare.Plan, 2))
+				PreparedParamResultMetadataDependencies(prepare.Plan, 2))
 		})
 	}
 }

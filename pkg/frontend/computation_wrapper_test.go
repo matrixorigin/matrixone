@@ -1361,26 +1361,89 @@ func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
 }
 
 func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
-	for _, name := range []string{"coalesce", "greatest", "least"} {
-		t.Run(name, func(t *testing.T) {
-			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 215,
-				"select "+name+"(?, ?)")
+	for _, test := range []struct {
+		name      string
+		mysqlType defines.MysqlType
+		want      types.T
+	}{
+		{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, types.T_decimal64},
+		{"string", defines.MYSQL_TYPE_VAR_STRING, types.T_text},
+		{"integer", defines.MYSQL_TYPE_LONGLONG, types.T_int64},
+	} {
+		for _, name := range []string{"coalesce", "greatest", "least"} {
+			t.Run(test.name+"/"+name, func(t *testing.T) {
+				ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 215,
+					"select "+name+"(?, ?)")
+				defer prepareStmt.Close()
+				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				for _, value := range []string{"10", "2"} {
+					require.NoError(t, vector.AppendBytes(
+						prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				}
+				prepareStmt.ParamTypes = []byte{
+					byte(test.mysqlType), 0,
+					byte(test.mysqlType), 0,
+				}
+				_, queryPlan, _, _, _, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				require.Empty(t, prepareStmt.paramBindingDependencies)
+				require.Equal(t, []bool{true, true}, prepareStmt.paramResultMetadataDependencies)
+				columns := plan2.GetResultColumnsFromPlan(queryPlan)
+				actual := types.T(columns[0].Typ.Id)
+				if test.want.IsDecimal() {
+					require.True(t, actual.IsDecimal())
+				} else {
+					require.Equal(t, test.want, actual)
+				}
+			})
+		}
+	}
+}
+
+func TestPreparedResultColumnKeepsNumericDomain(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		first defines.MysqlType
+		want  types.T
+	}{
+		{"integer", defines.MYSQL_TYPE_LONGLONG, types.T_int64},
+		{"decimal", defines.MYSQL_TYPE_NEWDECIMAL, types.T_decimal64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 216,
+				"select if(false, ?, ?)")
 			defer prepareStmt.Close()
-			prepareStmt.params = vector.NewVec(types.T_text.ToType())
-			for _, value := range []string{"10", "2"} {
-				require.NoError(t, vector.AppendBytes(
-					prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+			for step, paramTypes := range [][]defines.MysqlType{
+				{test.first, test.first},
+				{defines.MYSQL_TYPE_VAR_STRING, test.first},
+			} {
+				if prepareStmt.params != nil {
+					cw.proc.SetPrepareParams(nil)
+					prepareStmt.params.Free(cw.proc.Mp())
+				}
+				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				prepareStmt.ParamTypes = make([]byte, 4)
+				for i, mysqlType := range paramTypes {
+					value := "2"
+					if step == 1 && i == 0 {
+						value = "text"
+					}
+					require.NoError(t, vector.AppendBytes(
+						prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+					prepareStmt.ParamTypes[i*2] = byte(mysqlType)
+				}
+				_, queryPlan, _, _, _, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				columns := plan2.GetResultColumnsFromPlan(queryPlan)
+				actual := types.T(columns[0].Typ.Id)
+				if test.want.IsDecimal() {
+					require.True(t, actual.IsDecimal())
+				} else {
+					require.Equal(t, test.want, actual)
+				}
 			}
-			prepareStmt.ParamTypes = []byte{
-				byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-				byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
-			}
-			_, queryPlan, _, _, _, err := initExecuteStmtParam(
-				execCtx, ses, cw, nil, prepareStmt.Name)
-			require.NoError(t, err)
-			require.Equal(t, []bool{true, true}, prepareStmt.paramBindingDependencies)
-			columns := plan2.GetResultColumnsFromPlan(queryPlan)
-			require.True(t, types.T(columns[0].Typ.Id).IsDecimal())
 		})
 	}
 }

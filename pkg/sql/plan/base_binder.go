@@ -465,6 +465,13 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		},
 	}
 	bindingType, bindingFound := b.preparedParamBindingType(int32(astExpr.Offset))
+	if b.allParamCommonTypeTarget {
+		if bindingFound {
+			param.Typ = makePlan2Type(&bindingType)
+		}
+		param.Typ.Enumvalues = "mo_all_param_result_dependency"
+		return param, nil
+	}
 	if bindingFound && b.decimalParamCommonTypeTarget {
 		if bindingType.Oid == types.T_text && bindingType.Charset == 255 {
 			param.Typ.Enumvalues = fmt.Sprintf("mo_runtime_numeric:%d:%d:%d", bindingType.Size, bindingType.Width, bindingType.Scale)
@@ -3450,13 +3457,25 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		args = make([]*Expr, len(astArgs))
 		decimalParamCommonTypeTarget := b.decimalParamCommonTypeTarget
+		allParamCommonTypeTarget := b.allParamCommonTypeTarget
 		switch name {
 		case "coalesce", "greatest", "least":
 			b.decimalParamCommonTypeTarget = true
+			b.allParamCommonTypeTarget = len(astArgs) > 0
+			for _, arg := range astArgs {
+				if _, ok := unwrapParenExpr(arg).(*tree.ParamExpr); !ok {
+					b.allParamCommonTypeTarget = false
+					break
+				}
+			}
 		default:
 			b.decimalParamCommonTypeTarget = false
+			b.allParamCommonTypeTarget = false
 		}
-		defer func() { b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget }()
+		defer func() {
+			b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget
+			b.allParamCommonTypeTarget = allParamCommonTypeTarget
+		}()
 		var functionContext numericFunctionContext
 		hasFunctionContext := false
 		if b.numericFunctionTarget {
@@ -6095,13 +6114,11 @@ func decimalParamCommonTypeResolutionTypes(
 
 	hasParam := false
 	hasDecimal := false
-	allParams := len(args) > 0
 	for i, typ := range argsType {
 		if isUnresolvedPreparedNumericParam(args[i], typ) {
 			hasParam = true
 			continue
 		}
-		allParams = false
 		switch {
 		case typ.Oid == types.T_any:
 			continue
@@ -6117,7 +6134,7 @@ func decimalParamCommonTypeResolutionTypes(
 			return argsType
 		}
 	}
-	if !hasDecimal && !allParams {
+	if !hasDecimal {
 		return argsType
 	}
 	for i, typ := range argsType {

@@ -170,6 +170,57 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.Equal(t, []int{1, 2, 3},
 			queryIssue27088IDs(t, ctx, inStmt, float64(9007199254740992), "0"))
 
+		stringCommonStmt, err := conn.PrepareContext(ctx,
+			"select greatest(?, ?), least(?, ?), coalesce(?, ?)")
+		require.NoError(t, err)
+		defer stringCommonStmt.Close()
+		stringCommonRows, err := stringCommonStmt.QueryContext(ctx,
+			"10", "2", "10", "2", "abc", "def")
+		require.NoError(t, err)
+		stringCommonColumns, err := stringCommonRows.ColumnTypes()
+		require.NoError(t, err)
+		require.Len(t, stringCommonColumns, 3)
+		for _, column := range stringCommonColumns {
+			require.Equal(t, "TEXT", column.DatabaseTypeName())
+		}
+		require.True(t, stringCommonRows.Next())
+		var greatestString, leastString, coalesceString string
+		require.NoError(t, stringCommonRows.Scan(
+			&greatestString, &leastString, &coalesceString))
+		require.Equal(t, "2", greatestString)
+		require.Equal(t, "10", leastString)
+		require.Equal(t, "abc", coalesceString)
+		require.False(t, stringCommonRows.Next())
+		require.NoError(t, stringCommonRows.Err())
+		require.NoError(t, stringCommonRows.Close())
+
+		nestedResultStmt, err := conn.PrepareContext(ctx, "select if(false, abs(?), ?)")
+		require.NoError(t, err)
+		defer nestedResultStmt.Close()
+		for _, test := range []struct {
+			left, right any
+			wantType    string
+			wantValue   string
+		}{
+			{int64(1), int64(2), "BIGINT", "2"},
+			{float64(1.5), int64(2), "DOUBLE", "2"},
+			{"text", int64(2), "DOUBLE", "2"},
+		} {
+			rows, err := nestedResultStmt.QueryContext(ctx, test.left, test.right)
+			require.NoError(t, err)
+			columns, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, columns, 1)
+			require.Equal(t, test.wantType, columns[0].DatabaseTypeName())
+			require.True(t, rows.Next())
+			var value string
+			require.NoError(t, rows.Scan(&value))
+			require.Equal(t, test.wantValue, value)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+		}
+
 		for _, query := range []string{
 			"select id from t where d = ?+0 order by id",
 			"select id from t where d = ?-0 order by id",

@@ -801,6 +801,7 @@ type baseBinder struct {
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
 	decimalParamCommonTypeTarget     bool
+	allParamCommonTypeTarget         bool
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
