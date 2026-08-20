@@ -131,7 +131,9 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		if !ok {
 			return 0, nil, 0, moerr.NewInternalErrorf(builder.GetContext(), "update column %s not found", colName)
 		}
-		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(bindCtx, currentNodeID, currentTag, tableDef, alias)
+		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
+		)
 		if isNumericAssignmentTarget(tableDef.Cols[columnIndex].Typ) {
 			target := tableDef.Cols[columnIndex].Typ
 			rhsBinder.numericTargetType = &target
@@ -210,6 +212,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	tag int32,
 	tableDef *plan.TableDef,
 	alias string,
+	currentProjectList []*plan.Expr,
 ) (*BindContext, *ProjectionBinder) {
 	ctx := NewBindContext(builder, parent)
 	cols := make([]string, len(tableDef.Cols))
@@ -219,7 +222,11 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	for i, col := range tableDef.Cols {
 		cols[i] = col.Name
 		hidden[i] = col.Hidden
-		types[i] = &col.Typ
+		// Bind against the physical representation exposed by the preceding
+		// projection, not the table's storage type. In particular, an untouched
+		// ENUM/SET column is already a VARCHAR display vector at this boundary;
+		// declaring it as ENUM/SET would add a second index-to-value conversion.
+		types[i] = DeepCopyType(&currentProjectList[i].Typ)
 		if col.Default != nil {
 			defaults[i] = col.Default.OriginString
 		}

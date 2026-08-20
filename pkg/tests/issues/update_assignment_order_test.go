@@ -118,6 +118,19 @@ func TestUpdateAssignmentEvaluationIsLeftToRight(t *testing.T) {
 		query("select sal, comm from "+database+".numeric_values where id = 1", &sal, &comm)
 		require.Equal(t, []string{"12.34", "12.34"}, []string{sal, comm})
 
+		exec("create table " + database + ".special_values (id int primary key, n int, e enum('red','blue'), s set('x','y'), e_copy varchar(20), s_copy varchar(20))")
+		exec("insert into " + database + ".special_values values (1, 0, 'red', 'x,y', '', '')")
+		exec("update " + database + ".special_values set n = n + 1, e_copy = e, s_copy = s where id = 1")
+		var specialN int
+		var enumValue, setValue, enumCopy, setCopy string
+		query("select n, e, s, e_copy, s_copy from "+database+".special_values where id = 1", &specialN, &enumValue, &setValue, &enumCopy, &setCopy)
+		require.Equal(t, 1, specialN)
+		require.Equal(t, []string{"red", "x,y", "red", "x,y"}, []string{enumValue, setValue, enumCopy, setCopy})
+
+		exec("update " + database + ".special_values set e = 'blue', e_copy = e, s = 'y', s_copy = s where id = 1")
+		query("select e, s, e_copy, s_copy from "+database+".special_values where id = 1", &enumValue, &setValue, &enumCopy, &setCopy)
+		require.Equal(t, []string{"blue", "y", "blue", "y"}, []string{enumValue, setValue, enumCopy, setCopy})
+
 		exec("update " + database + ".t set a = 1, b = 10, c = 100 where id = 1")
 		exec("prepare chained_update from 'update " + database + ".t set a = a + 1, b = a, c = b where id = 1'")
 		exec("execute chained_update")
