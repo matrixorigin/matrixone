@@ -177,11 +177,15 @@ func (entry *ObjectEntry) GetCommandMVCCNode() *MVCCNode[*ObjectMVCCNode] {
 }
 func (entry *ObjectEntry) GetDropEntry(
 	txn txnif.TxnReader,
+	deleteByCN bool,
 ) (dropped *ObjectEntry, updatedCEntry *ObjectEntry, isNewNode bool) {
 	dropped = entry.Clone()
 	dropped.ObjectState = ObjectState_Delete_Active
 	dropped.DeletedAt = txnif.UncommitTS
 	dropped.DeleteNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+	// ObjectStats must be finalized before UpdateMeta publishes this entry to
+	// readers.
+	objectio.SetObjectStatsCNDeleted(&dropped.ObjectStats, deleteByCN)
 	dropped.GetObjectData().UpdateMeta(dropped)
 	updatedCEntry = entry.Clone()
 	updatedCEntry.nextVersion = dropped
