@@ -51,6 +51,7 @@ import (
 )
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
+var _ plan2.ViewDependencyIdentityResolver = &TxnCompilerContext{}
 
 type TxnCompilerContext struct {
 	dbName               string
@@ -252,6 +253,36 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 	return tcc.execCtx.ses.GetAccountId(), nil
+}
+
+// ResolveViewDependencyAccount returns the account whose catalog namespace was
+// used to resolve a View dependency. Keep the override order aligned with
+// getRelation: snapshot tenant, subscription publisher, then relations that
+// are always read from the system account.
+func (tcc *TxnCompilerContext) ResolveViewDependencyAccount(
+	obj *plan2.ObjectRef,
+	tableDef *plan2.TableDef,
+	snapshot *plan2.Snapshot,
+) (uint32, error) {
+	accountID := tcc.execCtx.ses.GetAccountId()
+	if snapshot != nil && snapshot.Tenant != nil {
+		accountID = snapshot.Tenant.TenantID
+	}
+	if obj.PubInfo != nil {
+		accountID = uint32(obj.PubInfo.TenantId)
+	}
+
+	dbName, tableName := obj.SchemaName, obj.ObjName
+	if dbName == "" {
+		dbName = tableDef.DbName
+	}
+	if tableName == "" {
+		tableName = tableDef.Name
+	}
+	if isClusterTable(dbName, tableName) || ShouldSwitchToSysAccount(dbName, tableName) {
+		accountID = sysAccountID
+	}
+	return accountID, nil
 }
 
 func (tcc *TxnCompilerContext) GetAccountName() string {

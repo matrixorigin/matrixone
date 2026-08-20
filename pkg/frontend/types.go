@@ -929,6 +929,9 @@ type ExecCtx struct {
 	persistentDropTableTargets tree.TableNames
 	//isLastStmt : true denotes the last statement in the query
 	isLastStmt bool
+	// singleStatementQuery is true only for a raw COM_QUERY containing one
+	// statement, which is the only input the proxy records for raw replay.
+	singleStatementQuery bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -985,6 +988,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.persistentDropTableTargets = nil
+	execCtx.singleStatementQuery = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1619,6 +1623,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
 			txnHandler.setSessionTxnIsolation(txnIsolation)
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
 		}
 	}
 
@@ -1635,6 +1640,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
 	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
 		ses.RemoveAllPrepareStmts()
+	}
+	if err == nil {
+		ses.markMigrationSystemVarReplayable(canonicalName, false)
 	}
 	return
 }

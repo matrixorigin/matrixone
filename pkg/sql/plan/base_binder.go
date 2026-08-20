@@ -6240,7 +6240,7 @@ func preparedDecimalPrefixCastEnabled(proc *process.Process) bool {
 	}
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion22
+	return ok && valid && version >= defines.MORPCVersion23
 }
 
 func decimalParamCommonTypeHasFloatingPeer(args []*Expr, argsType []types.Type) bool {
