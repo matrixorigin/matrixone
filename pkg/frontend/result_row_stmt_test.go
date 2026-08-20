@@ -119,13 +119,13 @@ func TestPreparedCursorMetadataAndEmptyResultTerminators(t *testing.T) {
 	column := &MysqlColumn{}
 	column.SetName("v")
 	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	require.NoError(t, NewMysqlResp(writer).respColumnDefsWithoutFlush(ses, execCtx, []any{column}))
+	require.NoError(t, NewMysqlResp(writer).respCursorColumnDefs(ses, execCtx, []any{column}))
 	require.NotNil(t, stmt.cursor.result)
-	// The metadata EOF only terminates column definitions.  It must not
-	// advertise a cursor before the pipeline has successfully materialized the
-	// result.
-	require.Zero(t, writer.metadataStatus&SERVER_STATUS_CURSOR_EXISTS)
-	require.Zero(t, writer.metadataStatus&SERVER_STATUS_LAST_ROW_SENT)
+	// The single execute terminator follows the column definitions and
+	// advertises the cursor only after successful materialization.
+	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.resultStatus&SERVER_STATUS_CURSOR_EXISTS)
+	require.Zero(t, writer.resultStatus&SERVER_STATUS_LAST_ROW_SENT)
+	require.Zero(t, writer.metadataStatus)
 
 	// The final EXECUTE response keeps the empty cursor open. The first FETCH
 	// then observes the zero-row result and emits LAST_ROW_SENT itself.
@@ -140,7 +140,7 @@ func TestPreparedCursorPacketSequence(t *testing.T) {
 		deprecateEOF    bool
 		expectedPackets int
 	}{
-		{name: "legacy EOF", expectedPackets: 4},
+		{name: "legacy EOF", expectedPackets: 3},
 		{name: "deprecate EOF", deprecateEOF: true, expectedPackets: 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -180,21 +180,51 @@ func TestPreparedCursorPacketSequence(t *testing.T) {
 			column := &MysqlColumn{}
 			column.SetName("v")
 			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-			require.NoError(t, NewMysqlResp(proto).respColumnDefsWithoutFlush(ses, execCtx, []any{column}))
+			require.NoError(t, NewMysqlResp(proto).respCursorColumnDefs(ses, execCtx, []any{column}))
 			require.NoError(t, NewMysqlResp(proto).respStreamResultRow(ses, execCtx))
 
 			packets := splitProtocolPackets(t, conn.writes)
 			require.Len(t, packets, tc.expectedPackets)
 			if !tc.deprecateEOF {
-				// Metadata EOF is not the cursor execute terminator. The sole
-				// cursor status is on the final execute EOF after materialization.
+				// The sole cursor status is on the EOF following column
+				// definitions; there is no second execute terminator.
 				require.Equal(t, byte(defines.EOFHeader), packets[2][0])
-				require.Zero(t, binary.LittleEndian.Uint16(packets[2][3:5])&SERVER_STATUS_CURSOR_EXISTS)
 			}
 			finalPacket := packets[len(packets)-1]
 			require.NotZero(t, binary.LittleEndian.Uint16(finalPacket[3:5])&SERVER_STATUS_CURSOR_EXISTS)
 		})
 	}
+}
+
+func TestPreparedCursorExecutionErrorDoesNotAdvertiseCursor(t *testing.T) {
+	wantErr := fmt.Errorf("cursor materialization failed")
+	writer := &cursorMetadataProtocolWriter{}
+	resper := NewMysqlResp(writer)
+	ses := &Session{feSessionImpl: feSessionImpl{
+		respr:      resper,
+		txnHandler: &TxnHandler{},
+		mrs:        &MysqlResultSet{},
+	}}
+	stmt := &tree.Select{}
+	prepareStmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:      context.Background(),
+		ses:         ses,
+		stmt:        stmt,
+		cw:          &TxnComputationWrapper{stmt: stmt, plan: newResultColumnTestPlan(1)},
+		runner:      &performTestRunner{err: wantErr},
+		resper:      resper,
+		prepareStmt: prepareStmt,
+		input:       &UserInput{isCursorExecute: true},
+	}
+
+	err := executeResultRowStmt(ses, execCtx)
+	require.ErrorIs(t, err, wantErr)
+	// Column metadata may be retained for decoding, but no protocol packet is
+	// written until Run succeeds, so a failed execute cannot advertise a live
+	// cursor.
+	require.Zero(t, writer.metadataStatus)
+	require.Zero(t, writer.resultStatus)
 }
 
 func TestCursorExecuteStatusClearsTerminalFlags(t *testing.T) {

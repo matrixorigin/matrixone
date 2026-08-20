@@ -168,9 +168,21 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		err = execCtx.resper.RespPreMeta(execCtx, columns)
-		if err != nil {
-			return
+		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		if cursorExecute {
+			// A cursor must retain its metadata before the pipeline starts so
+			// captured batches can be decoded, but its execute terminator must
+			// not be sent until all batches have materialized successfully.
+			if resper, ok := execCtx.resper.(*MysqlResp); ok {
+				resper.setPreparedCursorColumns(execCtx, columns)
+			} else {
+				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
+			}
+		} else {
+			err = execCtx.resper.RespPreMeta(execCtx, columns)
+			if err != nil {
+				return
+			}
 		}
 
 		ses.EnterFPrint(FPResultRowStmtSelect2)
@@ -183,6 +195,19 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// todo: add trace
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
+		}
+		if cursorExecute {
+			// Send column definitions and the single cursor-marked EOF/OK only
+			// after Run has completed. This keeps failed materialization from
+			// advertising a fetchable cursor.
+			if resper, ok := execCtx.resper.(*MysqlResp); ok {
+				err = resper.respCursorColumnDefs(ses, execCtx, columns)
+			} else {
+				err = moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
+			}
+			if err != nil {
+				return
+			}
 		}
 
 		// only log if run time is longer than 1s
@@ -292,18 +317,53 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 	//!!!carefully to use
 	//execCtx.proto.DisableAutoFlush()
 	//defer execCtx.proto.EnableAutoFlush()
-
-	mrs := ses.GetMysqlResultSet()
-	if execCtx.input != nil && execCtx.input.isCursorExecute && execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
-		if execCtx.prepareStmt.cursor.result == nil {
-			execCtx.prepareStmt.cursor.result = &MysqlResultSet{}
-		}
-		cursorColumns := make([]Column, 0, len(columns))
-		for _, column := range columns {
-			cursorColumns = append(cursorColumns, column.(Column))
-		}
-		execCtx.prepareStmt.cursor.result.Columns = cursorColumns
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err = resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
 	}
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	return resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
+}
+
+// respCursorColumnDefs writes the complete COM_STMT_EXECUTE cursor response
+// after the pipeline has successfully materialized the result. A server cursor
+// response has one and only one execute terminator: the EOF/OK packet following
+// the column definitions, carrying SERVER_STATUS_CURSOR_EXISTS. Keeping this
+// packet after runner.Run prevents a failed decode, limit check, or pipeline
+// error from advertising a cursor that cannot be fetched.
+func (resper *MysqlResp) respCursorColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) error {
+	if execCtx.inMigration {
+		return nil
+	}
+	resper.setPreparedCursorColumns(execCtx, columns)
+	if err := resper.writeColumnDefs(ses, execCtx, columns); err != nil {
+		return err
+	}
+	status := cursorExecuteStatus(checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+	return resper.mysqlRrWr.WriteEOFOrOK(0, status)
+}
+
+func (resper *MysqlResp) setPreparedCursorColumns(execCtx *ExecCtx, columns []any) {
+	if execCtx == nil || execCtx.input == nil || !execCtx.input.isCursorExecute ||
+		execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil {
+		return
+	}
+	if execCtx.prepareStmt.cursor.result == nil {
+		execCtx.prepareStmt.cursor.result = &MysqlResultSet{}
+	}
+	cursorColumns := make([]Column, 0, len(columns))
+	for _, column := range columns {
+		cursorColumns = append(cursorColumns, column.(Column))
+	}
+	execCtx.prepareStmt.cursor.result.Columns = cursorColumns
+}
+
+func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) (err error) {
+	mrs := ses.GetMysqlResultSet()
+
 	/*
 		Step 1 : send column count and column definition.
 	*/
@@ -339,20 +399,6 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 			}
 		}
 	}
-	/*
-		mysql COM_QUERY response: End after the column has been sent.
-		send EOF packet
-	*/
-	// The metadata terminator is part of the column-definition phase, not the
-	// execute result terminator.  In the legacy-EOF protocol a cursor execute
-	// therefore sends a plain metadata EOF here and advertises CURSOR_EXISTS
-	// only on the final packet after the result has been materialized.  Setting
-	// the cursor bit before the pipeline runs both emits two cursor terminators
-	// and advertises success before a limit/decode/pipeline error can occur.
-	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
-	if err != nil {
-		return
-	}
 	return
 }
 
@@ -370,13 +416,13 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			ses.AddSeqValues(execCtx.proc)
 		}
 		ses.SetSeqLastValue(execCtx.proc)
-		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
 		if execCtx.input != nil && execCtx.input.isCursorExecute {
-			// An empty result still has a live server cursor. The required
-			// COM_STMT_FETCH after EXECUTE returns LAST_ROW_SENT and closes it.
-			// Closing it here makes that fetch fail with "no active cursor".
-			status = cursorExecuteStatus(status)
+			// Cursor metadata and its sole execute terminator are emitted after
+			// runner.Run in executeResultRowStmt. Fetch owns the next protocol
+			// packet, including LAST_ROW_SENT for an empty result.
+			return nil
 		}
+		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)
 		err2 := resper.mysqlRrWr.WriteEOFOrOK(0, status)
 		if err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
