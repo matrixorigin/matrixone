@@ -510,6 +510,17 @@ func Test_BuiltIn_IntervalRegistered(t *testing.T) {
 	require.Equal(t, types.T_int64, fn.retType.Oid)
 }
 
+func TestToIntervalCharRegistered(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fn, err := GetFunctionByName(proc.Ctx, "to_interval", []types.Type{
+		types.T_char.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(TO_INTERVAL), fn.fid)
+	require.Equal(t, types.T_int64, fn.retType.Oid)
+}
+
 func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -424,3 +424,23 @@ func TestResetDateFunctionArgsDoesNotFoldVarcharColumn(t *testing.T) {
 	intervalType := extractInt64Value(args[2])
 	require.Equal(t, int64(types.Second), intervalType)
 }
+
+func TestResetDateFunctionArgsDoesNotFoldCharColumn(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	charColumn := makeVarcharColumnExpr(0, 0)
+	charColumn.Typ.Id = int32(types.T_char)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(charColumn, "YEAR_MONTH"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+
+	normalizeExpr := args[1].GetF()
+	require.NotNil(t, normalizeExpr)
+	require.NotNil(t, normalizeExpr.Func)
+	require.Equal(t, "to_interval", normalizeExpr.Func.GetObjName())
+	require.Len(t, normalizeExpr.Args, 2)
+	require.Equal(t, charColumn, normalizeExpr.Args[0])
+	require.Equal(t, int64(types.Year_Month), extractInt64Value(normalizeExpr.Args[1]))
+	require.Equal(t, int64(types.Month), extractInt64Value(args[2]))
+}
