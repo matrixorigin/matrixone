@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -70,23 +69,20 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 	if spec == nil || spec.Index == nil || spec.SourceTable == nil {
 		return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan is missing source or index metadata")
 	}
+	if req.CandidateBudget < req.ResultLimit {
+		return nil, moerr.NewInvalidInputNoCtx("ivfflat candidate budget is smaller than the result limit")
+	}
 	r := &planReader{proc: proc, spec: spec, req: req}
 	r.scanner = &relationScanner{
 		proc:           proc,
-		partitionCount: req.PartitionCount,
-		partitionIndex: req.PartitionIndex,
-		ownsInMemory:   ownsInMemoryPartition(req.PartitionCount, req.PartitionIndex),
-		txnOffset:      req.TxnOffset,
-		snapshot:       cloneIvfSnapshot(spec.ScanSnapshot),
+		partitionCount: req.Identity.PartitionCount,
+		partitionIndex: req.Identity.PartitionIndex,
+		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
+		txnOffset:      req.Identity.TxnOffset,
+		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
 	}
-	if source := spec.SourceTable; source != nil && source.PubInfo != nil {
-		if source.PubInfo.TenantId < 0 {
-			return nil, moerr.NewInvalidInputNoCtx("ivfflat vector scan has an invalid publisher tenant")
-		}
-		accountID := uint32(source.PubInfo.TenantId)
-		r.scanner.accountID = &accountID
-	} else if spec.ScanSnapshot != nil && spec.ScanSnapshot.Tenant != nil {
-		accountID := spec.ScanSnapshot.Tenant.TenantID
+	if req.Identity.PhysicalAccountID != nil {
+		accountID := *req.Identity.PhysicalAccountID
 		r.scanner.accountID = &accountID
 	}
 	return r, nil
@@ -185,7 +181,7 @@ func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
 func (r *planReader) initialize() error {
-	if r.req.CandidateLimit == 0 {
+	if r.req.CandidateBudget == 0 {
 		return nil
 	}
 	if r.req.HasMembershipFilter && len(r.req.MembershipFilter) == 0 {
@@ -239,30 +235,29 @@ func (r *planReader) initialize() error {
 	}
 
 	tblcfg := vectorindex.IndexTableConfig{
-		DbName:              r.spec.SourceTable.SchemaName,
-		SrcTable:            r.spec.SourceTableDef.Name,
-		MetadataTable:       metaTable,
-		IndexTable:          centroidTable,
-		EntriesTable:        entriesTable,
-		ThreadsSearch:       r.spec.ThreadsSearch,
-		Nprobe:              uint(max(uint32(1), r.spec.InitialProbeCount)),
-		PKeyType:            r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
-		PKey:                pkName,
-		KeyPart:             partName,
-		KeyPartType:         r.spec.SourceTableDef.Cols[partPos].Typ.Id,
-		OrigFuncName:        r.spec.DistanceFunction,
-		IncludeColumns:      includeColumns,
-		IncludeColumnTypes:  includeTypes,
-		PostFilterOverFetch: r.spec.PostFilterOverFetch,
+		DbName:             r.spec.SourceTable.SchemaName,
+		SrcTable:           r.spec.SourceTableDef.Name,
+		MetadataTable:      metaTable,
+		IndexTable:         centroidTable,
+		EntriesTable:       entriesTable,
+		ThreadsSearch:      r.spec.ThreadsSearch,
+		Nprobe:             uint(max(uint32(1), r.spec.InitialProbeCount)),
+		PKeyType:           r.spec.SourceTableDef.Cols[pkPos].Typ.Id,
+		PKey:               pkName,
+		KeyPart:            partName,
+		KeyPartType:        r.spec.SourceTableDef.Cols[partPos].Typ.Id,
+		OrigFuncName:       r.spec.DistanceFunction,
+		IncludeColumns:     includeColumns,
+		IncludeColumnTypes: includeTypes,
 	}
 	sqlproc := sqlexec.NewSqlProcess(r.proc)
 	sqlproc.RelationScanner = r.scanner
 	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
 	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
 	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        ivfUint64Expr(r.req.CandidateLimit),
+		Limit:        ivfUint64Expr(r.req.CandidateBudget),
 		OrigFuncName: r.spec.DistanceFunction,
-		DistRange:    r.spec.DistanceRange,
+		DistRange:    r.req.DistanceRange,
 	}
 	version, err := GetVersion(sqlproc, tblcfg)
 	if err != nil {
@@ -376,40 +371,28 @@ func searchPlanReader[T types.RealNumbers](
 	if source := r.spec.SourceTable; source != nil && source.PubInfo != nil {
 		key = fmt.Sprintf("tenant=%d:%s", source.PubInfo.TenantId, key)
 	}
-	if r.req.PartitionCount > 1 {
-		key = fmt.Sprintf("%s:%d/%d", key, r.req.PartitionIndex, r.req.PartitionCount)
+	if r.req.Identity.PartitionCount > 1 {
+		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
 	}
 
-	multiRound := r.spec.FirstRoundLimit != nil || r.spec.BucketExpandStep > 0
+	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
 	if multiRound {
 		cursor = &vectorindex.IvfSearchCursor{}
 	}
-	limit := uint(r.req.CandidateLimit)
-	if uint64(limit) != r.req.CandidateLimit {
+	limit := uint(r.req.CandidateBudget)
+	if uint64(limit) != r.req.CandidateBudget {
 		return moerr.NewInvalidInputNoCtx("IVF candidate limit exceeds platform uint")
-	}
-	if tblcfg.PostFilterOverFetch && limit > 0 {
-		budget := overfetch.FilteredPostModeLimit(uint64(limit))
-		if uint64(uint(budget)) != budget {
-			return moerr.NewInvalidInputNoCtx("IVF over-fetch candidate limit exceeds platform uint")
-		}
-		limit = uint(budget)
 	}
 	if limit == 0 {
 		return nil
 	}
 	firstRoundLimit := uint(0)
-	if expr := r.spec.FirstRoundLimit; expr != nil {
-		lit := expr.GetLit()
-		if lit == nil || lit.Isnull {
-			return moerr.NewInvalidInputNoCtx("IVF first-round limit did not fold at execution")
-		}
-		value, ok := lit.Value.(*plan.Literal_U64Val)
-		if !ok || value.U64Val > uint64(^uint(0)>>1) {
+	if r.req.HasFirstRound {
+		if r.req.FirstRoundLimit > uint64(^uint(0)>>1) {
 			return moerr.NewInvalidInputNoCtx("IVF first-round limit is not a platform uint")
 		}
-		firstRoundLimit = uint(value.U64Val)
+		firstRoundLimit = uint(r.req.FirstRoundLimit)
 	}
 	r.includeData = make(map[string][]any, len(r.spec.IncludedColumns))
 	r.includeNulls = make(map[string][]bool, len(r.spec.IncludedColumns))
@@ -426,7 +409,7 @@ func searchPlanReader[T types.RealNumbers](
 			OrigFuncName:            r.spec.DistanceFunction,
 			RuntimeFilterData:       r.req.MembershipFilter,
 			RequestedIncludeColumns: r.spec.IncludedColumns,
-			PushdownFilters:         r.spec.PreFilters,
+			PushdownFilters:         r.req.PreFilters,
 			IncludeResult:           includeResult,
 			SearchRoundLimit:        firstRoundLimit,
 			BucketExpandStep:        uint(r.spec.BucketExpandStep),
@@ -578,10 +561,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if req.PartitionCount <= 0 {
 		partitionIndex = s.partitionIndex
 	}
-	txnOffset := req.TxnOffset
-	if txnOffset == 0 {
-		txnOffset = s.txnOffset
-	}
+	txnOffset := s.txnOffset
 
 	rsp := &engine.RangesShuffleParam{
 		Node:              &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: tableDef},

@@ -27,6 +27,26 @@ execute s using @lo, @q, @k;
 set @k = 3;
 execute s using @lo, @q, @k;
 deallocate prepare s;
+
+-- A correlated vector provider lowers the scan beneath APPLY. Its covered
+-- pre-filter must be rebound from the immutable template on every EXECUTE.
+create table tc(id bigint primary key, v vecf32(2), category varchar(10) not null);
+create table query_vector(name varchar(10) primary key, v vecf32(2) not null);
+insert into tc values
+    (1,'[0,0]','x'),(2,'[1,0]','x'),(3,'[0,1]','y'),(4,'[2,0]','y');
+insert into query_vector values ('ref','[0,0]');
+create index ix_apply using ivfflat on tc(v) lists=1 op_type 'vector_l2_ops' include(category);
+-- @separator:table
+-- @regex("Vector Index Scan", true)
+explain select tc.id from tc, query_vector q
+where q.name = 'ref' and tc.category = concat('x', '')
+order by l2_distance(tc.v, q.v) limit 2 by rank with option 'mode=include';
+prepare s_apply from 'select tc.id from tc, query_vector q where q.name = ''ref'' and tc.category = concat(?, '''') order by l2_distance(tc.v, q.v) limit 2 by rank with option ''mode=include''';
+set @category = 'x';
+execute s_apply using @category;
+set @category = 'y';
+execute s_apply using @category;
+deallocate prepare s_apply;
 drop database ivf_prepared_limit;
 SET experimental_ivf_index = 0;
 

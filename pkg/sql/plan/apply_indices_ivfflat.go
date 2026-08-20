@@ -656,12 +656,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 	}
 
-	// vectorSortContext.limit already contains the outer LIMIT+OFFSET window.
-	// Filter pressure adds over-fetch on top of that candidate budget below.
+	// vectorSortContext.limit is the semantic outer LIMIT+OFFSET window. Keep it
+	// unchanged in the reusable plan; execution binding derives any candidate
+	// over-fetch budget after prepared parameters are available.
 	outerResultNeedExpr := DeepCopyExpr(limit)
-	// Literal limits are over-fetched in the plan below. Prepared limits must
-	// be over-fetched by the execution reader after their value is known.
-	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter && outerResultNeedExpr.GetLit() == nil
+	postFilterOverFetch := len(remainingFilters) > 0 && !usePreFilter
 
 	firstRoundLimit := uint64(0)
 	var firstRoundLimitExpr *plan.Expr
@@ -754,52 +753,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	// push down the candidate limit to the table function.
+	// Preserve semantic k in the plan for both literal and prepared executions.
 	limitExpr := DeepCopyExpr(outerResultNeedExpr)
-
-	if len(remainingFilters) > 0 && !usePreFilter {
-		// When there are filters, over-fetch to get more candidates.
-		// This ensures we have enough candidates after filtering.
-		// Over-fetch strategy: dynamically adjust factor based on limit size
-		// Smaller limits need more over-fetching due to higher variance
-		if limitConst := limitExpr.GetLit(); limitConst != nil {
-			originalLimit := limitConst.GetU64Val()
-
-			// Filtered post mode needs a larger candidate budget than the historical
-			// default, but we keep it as fixed buckets so the plan is predictable.
-			overFetchFactor := overfetch.FilteredPostModeFactor(originalLimit)
-
-			newLimit := overfetch.Limit(originalLimit, overFetchFactor)
-
-			if ivfCtx.isAutoMode {
-				logutil.Debugf(
-					"Auto mode over-fetch: original_limit=%d, factor=%.2f, filter_count=%d",
-					originalLimit, overFetchFactor, len(remainingFilters),
-				)
-				logutil.Debugf(
-					"Auto mode over-fetch result: original_limit=%d, new_limit=%d",
-					originalLimit, newLimit,
-				)
-			} else {
-				logutil.Debugf(
-					"Vector mode over-fetch: mode=post, original_limit=%d, factor=%.2f, filter_count=%d, new_limit=%d",
-					originalLimit, overFetchFactor, len(remainingFilters), newLimit,
-				)
-			}
-
-			limitExpr = &Expr{
-				Typ: limit.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_U64Val{
-							U64Val: newLimit,
-						},
-					},
-				},
-			}
-		}
-	}
 
 	tableFuncNode.VectorIndexScan.CandidateLimit = DeepCopyExpr(limitExpr)
 	if tableFuncNode.Stats == nil {
@@ -817,7 +772,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	if lit := limitExpr.GetLit(); lit != nil && !lit.Isnull {
 		if value, ok := lit.Value.(*plan.Literal_U64Val); ok {
-			outcnt := float64(value.U64Val)
+			candidateBudget := value.U64Val
+			if postFilterOverFetch {
+				candidateBudget = overfetch.FilteredPostModeLimit(value.U64Val)
+			}
+			outcnt := float64(candidateBudget)
 			tableFuncNode.Stats.Outcnt = outcnt
 			tableFuncNode.Stats.Selectivity = safeSelectivityRatio(outcnt, tableFuncNode.Stats.TableCnt)
 		}

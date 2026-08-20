@@ -543,29 +543,6 @@ func TestNormalizeVectorIndexScanSnapshot(t *testing.T) {
 	require.NotSame(t, topLevelSnapshot, node.VectorIndexScan.ScanSnapshot)
 }
 
-func TestResetVectorIndexScanForExecutionKeepsPreparedTemplateImmutable(t *testing.T) {
-	queryParam := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
-	limitParam := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 2}}}
-	source := &Source{node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
-		QueryVector:    queryParam,
-		CandidateLimit: limitParam,
-	}}}
-
-	first := resetVectorIndexScanForExecution(source)
-	require.NotNil(t, first.QueryVector.GetP())
-	require.NotNil(t, first.CandidateLimit.GetP())
-	first.QueryVector = plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
-	first.CandidateLimit = plan2.MakePlan2Uint64ConstExprWithType(2)
-
-	second := resetVectorIndexScanForExecution(source)
-	require.NotSame(t, first, second)
-	require.Equal(t, int32(1), second.QueryVector.GetP().GetPos())
-	require.Equal(t, int32(2), second.CandidateLimit.GetP().GetPos())
-	require.NotSame(t, source.vectorIndexScanTemplate, second)
-	require.NotNil(t, source.vectorIndexScanTemplate.QueryVector.GetP())
-	require.NotNil(t, source.vectorIndexScanTemplate.CandidateLimit.GetP())
-}
-
 func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
 	rootApply := &apply.Apply{TxnOffset: 3}
 	preScopeApply := &apply.Apply{TxnOffset: 3}

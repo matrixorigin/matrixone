@@ -47,7 +47,7 @@ Project  𝄀
               ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
                     Filter Cond: (phase9_main.category >= 20)  𝄀
               ->  Vector Index Scan on idx_ivf_include_phase9 [l2_distance]  𝄀
-                    Vector Index: idx_ivf_include_phase9, Metric: l2_distance, Candidate Limit: 15, NProbe: 8
+                    Vector Index: idx_ivf_include_phase9, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 explain select id, title, category
 from phase9_main
 where category >= 20

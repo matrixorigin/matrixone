@@ -203,7 +203,7 @@ Project  𝄀
                     ->  Index Table Scan on t_guard.g_tag  𝄀
                           Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
                     ->  Vector Index Scan on g_vec [l2_distance]  𝄀
-                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 15, NProbe: 8
+                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -287,7 +287,7 @@ Project  𝄀
                     ->  Index Table Scan on t_guard.g_tag  𝄀
                           Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
                     ->  Vector Index Scan on g_vec [l2_distance]  𝄀
-                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 15, NProbe: 8
+                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=post'
@@ -318,7 +318,7 @@ Project  𝄀
                     ->  Index Table Scan on t_guard.g_tag  𝄀
                           Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
                     ->  Vector Index Scan on g_vec [l2_distance]  𝄀
-                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 15, NProbe: 8
+                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3 by rank with option 'mode=auto'
@@ -345,7 +345,7 @@ Project  𝄀
                     ->  Index Table Scan on t_guard.g_tag  𝄀
                           Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
                     ->  Vector Index Scan on g_vec [l2_distance]  𝄀
-                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 15, NProbe: 8
+                          Vector Index: g_vec, Metric: l2_distance, Candidate Limit: 3, NProbe: 8
 with knn as (
 select id, l2_distance(v,'[1,1,1,1]') as d from t_guard
 where tag = 1 order by l2_distance(v,'[1,1,1,1]') limit 3

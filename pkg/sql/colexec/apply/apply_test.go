@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	_ "github.com/matrixorigin/matrixone/pkg/indexplugin/all"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -302,14 +303,18 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 	in := batch.NewWithSize(0)
 	in.SetRowCount(1)
 	require.NoError(t, source.ApplyArgsEval(in, proc))
-	require.Equal(t, 1, source.queryVec.Length())
-	require.Equal(t, uint64(3), vector.GetFixedAtNoTypeCheck[uint64](source.limitVec, 0))
-	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](source.firstRoundVec, 0))
+	req, hasQuery, err := source.execution.RequestAt(0, searchplugin.ScanIdentity{})
+	require.NoError(t, err)
+	require.True(t, hasQuery)
+	require.Equal(t, uint64(3), req.ResultLimit)
+	require.Equal(t, uint64(3), req.CandidateBudget)
+	require.Equal(t, uint64(1), req.FirstRoundLimit)
+	require.True(t, req.HasFirstRound)
 
 	// The registered IVF plugin is reached. The test process deliberately has
 	// no transaction, so NewPlanReader rejects it after ApplyStart has passed
 	// the registry and SearchPlugin dispatch boundary.
-	err := source.ApplyStart(0, proc, nil)
+	err = source.ApplyStart(0, proc, nil)
 	require.ErrorContains(t, err, "requires a process, transaction, and storage engine")
 }
 
@@ -329,6 +334,70 @@ func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
 	source, ok := apply.Source.(*vectorSource)
 	require.True(t, ok)
 	require.Equal(t, 17, source.txnOffset)
+}
+
+func TestApplyPreparedVectorSourceRebindsPreFiltersPerGeneration(t *testing.T) {
+	proc := testutil.NewProc(t)
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	concat, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "concat", []*plan.Expr{
+		parameter,
+		plan2.MakePlan2StringConstExprWithType(""),
+	})
+	require.NoError(t, err)
+	preFilter, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
+		{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				ColPos: 2,
+				Name:   "__mo_index_include_category",
+			}},
+		},
+		concat,
+	})
+	require.NoError(t, err)
+	spec := vectorSourceSpec()
+	spec.SourceTable = &plan.ObjectRef{}
+	spec.PreFilters = []*plan.Expr{preFilter}
+
+	arg := NewArgument()
+	arg.VectorIndexScan = spec
+	arg.VectorAttrs = []string{"pkid"}
+	arg.Typs = []types.Type{types.T_int64.ToType()}
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		arg.Release()
+		proc.Free()
+	})
+
+	execute := func(value string) string {
+		t.Helper()
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+		proc.SetPrepareParams(params)
+		require.NoError(t, arg.Prepare(proc))
+		in := batch.NewWithSize(0)
+		in.SetRowCount(1)
+		require.NoError(t, arg.Source.ApplyArgsEval(in, proc))
+		source := arg.Source.(*vectorSource)
+		req, hasQuery, requestErr := source.execution.RequestAt(0, searchplugin.ScanIdentity{})
+		require.NoError(t, requestErr)
+		require.True(t, hasQuery)
+		require.Len(t, req.PreFilters, 1)
+		got := req.PreFilters[0].GetF().Args[1].GetLit().GetSval()
+		arg.Reset(proc, false, nil)
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+		return got
+	}
+
+	require.Equal(t, "x", execute("x"))
+	require.Equal(t, "y", execute("y"))
+	source := arg.Source.(*vectorSource)
+	require.NotNil(t, source.template.PreFilters[0].GetF().Args[1].GetF(),
+		"the immutable template must retain the parameterized concat expression")
 }
 
 func TestVectorSourceReaderLifecycle(t *testing.T) {
@@ -362,17 +431,21 @@ func TestVectorSourceReaderLifecycle(t *testing.T) {
 
 func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
 	proc := testutil.NewProc(t)
-	source := &vectorSource{
-		spec:  vectorSourceSpec(),
-		attrs: []string{"pkid"},
-		types: []types.Type{types.T_int64.ToType()},
+	spec := vectorSourceSpec()
+	spec.QueryVector = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: true,
+			Value:  &plan.Literal_VecVal{},
+		}},
 	}
+	source := NewVectorSource(spec, []string{"pkid"}, []types.Type{types.T_int64.ToType()}).(*vectorSource)
 	t.Cleanup(func() { proc.Free() })
 
-	source.queryVec = vector.NewVec(types.New(types.T_array_float32, 2, 0))
-	require.NoError(t, vector.AppendArray(source.queryVec, []float32(nil), true, proc.Mp()))
-	source.limitVec = vector.NewVec(types.T_uint64.ToType())
-	require.NoError(t, vector.AppendFixed(source.limitVec, uint64(1), false, proc.Mp()))
+	require.NoError(t, source.ApplyPrepare(proc))
+	in := batch.NewWithSize(0)
+	in.SetRowCount(1)
+	require.NoError(t, source.ApplyArgsEval(in, proc))
 	require.NoError(t, source.ApplyStart(0, proc, nil))
 	require.NotNil(t, source.reader)
 	require.NoError(t, source.ApplyEnd(proc))
@@ -385,7 +458,7 @@ func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
 	source.output.SetRowCount(1)
 	source.Reset(proc, false, nil)
 	require.Nil(t, source.reader)
-	require.Nil(t, source.queryVec)
+	require.Nil(t, source.execution)
 	require.Zero(t, source.output.RowCount())
 
 	source.reader = &scriptedVectorReader{closeErr: errors.New("close failed")}

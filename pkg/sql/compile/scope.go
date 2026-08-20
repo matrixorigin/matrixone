@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
-	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -46,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1790,30 +1790,19 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, moerr.NewNotSupportedNoCtxf("vector index algorithm %q has no scan reader", spec.GetIndex().GetIndexAlgo())
 	}
 
-	queryLit := spec.GetQueryVector().GetLit()
-	if queryLit == nil || queryLit.Isnull {
+	membership, hasMembership := vectorScanMembershipFilter(runtimeFilters)
+	identity, err := vectorscan.Identity(spec, s.TxnOffset, s.NodeInfo.CNCNT, s.NodeInfo.CNIDX)
+	if err != nil {
+		return nil, err
+	}
+	req, hasQuery, err := vectorscan.RequestFromScalar(spec, identity, membership, hasMembership)
+	if err != nil {
+		return nil, err
+	}
+	if !hasQuery {
 		return []engine.Reader{new(readutil.EmptyReader)}, nil
 	}
-	limitLit := spec.GetCandidateLimit().GetLit()
-	if limitLit == nil || limitLit.Isnull {
-		return nil, moerr.NewInvalidInputNoCtx("vector index candidate limit did not fold at execution")
-	}
-	limit, ok := limitLit.Value.(*plan.Literal_U64Val)
-	if !ok {
-		return nil, moerr.NewInvalidInputNoCtx("vector index candidate limit is not uint64")
-	}
-
-	membership, hasMembership := vectorScanMembershipFilter(runtimeFilters)
-	reader, err := searcher.Search().NewReader(s.Proc, spec, searchplugin.Request{
-		QueryVector:         []byte(queryLit.GetVecVal()),
-		QueryType:           spec.QueryVector.Typ,
-		CandidateLimit:      limit.U64Val,
-		MembershipFilter:    membership,
-		HasMembershipFilter: hasMembership,
-		PartitionCount:      s.NodeInfo.CNCNT,
-		PartitionIndex:      s.NodeInfo.CNIDX,
-		TxnOffset:           s.TxnOffset,
-	})
+	reader, err := searcher.Search().NewReader(s.Proc, spec, req)
 	if err != nil {
 		return nil, err
 	}

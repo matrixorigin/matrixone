@@ -24,20 +24,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Request contains execution-generation state that is not catalog metadata.
-// QueryVector and CandidateLimit have already been evaluated from the typed
-// plan expressions on the execution CN.
+// ScanIdentity is the physical identity shared by every hidden-relation read
+// in one vector-search execution generation.
+type ScanIdentity struct {
+	PhysicalAccountID *uint32
+	Snapshot          *plan.Snapshot
+	TxnOffset         int
+	PartitionCount    int32
+	PartitionIndex    int32
+}
+
+// Request contains the fully bound state for one vector-search execution.
+// The plan specification passed beside it is immutable catalog/index metadata;
+// readers must not evaluate or mutate its dynamic expressions.
 type Request struct {
 	QueryVector      []byte
 	QueryType        plan.Type
-	CandidateLimit   uint64
+	ResultLimit      uint64
+	CandidateBudget  uint64
+	FirstRoundLimit  uint64
+	HasFirstRound    bool
+	PreFilters       []*plan.Expr
+	DistanceRange    *plan.DistRange
 	MembershipFilter []byte
 	// HasMembershipFilter distinguishes an exact empty key set from the
 	// absence of a runtime membership predicate (for example RF PASS).
 	HasMembershipFilter bool
-	PartitionCount      int32
-	PartitionIndex      int32
-	TxnOffset           int
+	Identity            ScanIdentity
 }
 
 // Hooks builds the reader for one vector-index scan execution generation.

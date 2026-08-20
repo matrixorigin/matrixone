@@ -2604,7 +2604,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
 	}
 	_, err = newScopeFor(nullLimit).buildVectorIndexReaders(nil)
-	require.ErrorContains(t, err, "candidate limit did not fold")
+	require.ErrorContains(t, err, "result limit did not fold")
 
 	wrongLimitType := &plan.VectorIndexScan{
 		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
@@ -2612,7 +2612,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
 	}
 	_, err = newScopeFor(wrongLimitType).buildVectorIndexReaders(nil)
-	require.ErrorContains(t, err, "candidate limit is not uint64")
+	require.ErrorContains(t, err, "result limit is not uint64")
 
 	noReaderPlugin := &plan.VectorIndexScan{
 		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},

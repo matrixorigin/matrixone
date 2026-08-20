@@ -78,6 +78,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -4034,15 +4035,19 @@ func normalizeVectorIndexScanSnapshot(node *plan.Node) {
 	node.VectorIndexScan.ScanSnapshot = plan2.DeepCopySnapshot(node.ScanSnapshot)
 }
 
-func resetVectorIndexScanForExecution(source *Source) *plan.VectorIndexScan {
+func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (*plan.VectorIndexScan, error) {
 	if source == nil || source.node == nil || source.node.VectorIndexScan == nil {
-		return nil
+		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 	if source.vectorIndexScanTemplate == nil {
 		source.vectorIndexScanTemplate = plan2.DeepCopyVectorIndexScan(source.node.VectorIndexScan)
 	}
-	source.node.VectorIndexScan = plan2.DeepCopyVectorIndexScan(source.vectorIndexScanTemplate)
-	return source.node.VectorIndexScan
+	spec, err := vectorscan.PrepareScalar(source.vectorIndexScanTemplate, proc)
+	if err != nil {
+		return nil, err
+	}
+	source.node.VectorIndexScan = spec
+	return spec, nil
 }
 
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
@@ -4133,40 +4138,14 @@ func (c *Compile) compileVectorIndexScanDataSource(s *Scope) error {
 		return moerr.NewInvalidInputNoCtx("vector index scan is missing its specification")
 	}
 
-	spec := resetVectorIndexScanForExecution(s.DataSource)
+	_, err := prepareVectorIndexScanForExecution(s.DataSource, c.proc)
+	if err != nil {
+		return err
+	}
 	normalizeVectorIndexScanSnapshot(node)
 	txnOp, _, err := c.getCompileTableScanDataSourceTxn(s)
 	if err != nil {
 		return err
-	}
-	fold := func(expr **plan.Expr) error {
-		if expr == nil || *expr == nil {
-			return nil
-		}
-		*expr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, *expr, c.proc, true, true)
-		return err
-	}
-	if err = fold(&spec.QueryVector); err != nil {
-		return err
-	}
-	if err = fold(&spec.CandidateLimit); err != nil {
-		return err
-	}
-	if err = fold(&spec.FirstRoundLimit); err != nil {
-		return err
-	}
-	for i := range spec.PreFilters {
-		if err = fold(&spec.PreFilters[i]); err != nil {
-			return err
-		}
-	}
-	if spec.DistanceRange != nil {
-		if err = fold(&spec.DistanceRange.LowerBound); err != nil {
-			return err
-		}
-		if err = fold(&spec.DistanceRange.UpperBound); err != nil {
-			return err
-		}
 	}
 
 	attrs := make([]string, len(node.TableDef.Cols))

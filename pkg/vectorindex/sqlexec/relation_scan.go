@@ -44,7 +44,6 @@ type RelationScanRequest struct {
 	FilterHint        engine.FilterHint
 	PartitionCount    int32
 	PartitionIndex    int32
-	TxnOffset         int
 }
 
 type RelationScanExecutor interface {

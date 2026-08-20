@@ -186,7 +186,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
 	r := &planReader{
 		spec:         &plan.VectorIndexScan{},
-		req:          searchplugin.Request{CandidateLimit: 2},
+		req:          searchplugin.Request{CandidateBudget: 2},
 		keys:         []any{int64(3), int64(1), int64(2)},
 		distances:    []float64{3, 1, 2},
 		includeData:  map[string][]any{"payload": {int32(30), int32(10), int32(20)}},
@@ -720,6 +720,7 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 		})
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(nil, errors.New("snapshot relation unavailable"))
 
+	accountID := uint32(42)
 	reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
@@ -727,7 +728,11 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 			TS:     &snapshotTS,
 			Tenant: &plan.SnapshotTenant{TenantID: 99},
 		},
-	}, searchplugin.Request{})
+	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PhysicalAccountID: &accountID,
+		Snapshot:          &plan.Snapshot{TS: &snapshotTS},
+		PartitionCount:    1,
+	}})
 	require.NoError(t, err)
 	_, err = reader.(*planReader).scanner.ScanRelation(sqlexec.RelationScanRequest{Schema: "db", Table: "entries"})
 	require.ErrorContains(t, err, "snapshot relation unavailable")
@@ -856,15 +861,15 @@ func TestRelationScannerFiltersBeforeApplyingTopLimit(t *testing.T) {
 }
 
 func TestPlanReaderShortCircuitsEmptySearches(t *testing.T) {
-	r := &planReader{req: searchplugin.Request{CandidateLimit: 0}}
+	r := &planReader{req: searchplugin.Request{CandidateBudget: 0}}
 	require.NoError(t, r.initialize())
-	r.req = searchplugin.Request{CandidateLimit: 1, HasMembershipFilter: true}
+	r.req = searchplugin.Request{CandidateBudget: 1, HasMembershipFilter: true}
 	require.NoError(t, r.initialize())
-	r.req = searchplugin.Request{CandidateLimit: 1}
+	r.req = searchplugin.Request{CandidateBudget: 1}
 	r.spec = &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: "not-json"}}
 	require.Error(t, r.initialize())
 
-	r = &planReader{req: searchplugin.Request{CandidateLimit: 0}, spec: &plan.VectorIndexScan{}}
+	r = &planReader{req: searchplugin.Request{CandidateBudget: 0}, spec: &plan.VectorIndexScan{}}
 	require.NoError(t, searchPlanReader(r, nil, vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{}, []float32{1}))
 	require.Empty(t, r.keys)
 }
@@ -952,7 +957,7 @@ func TestPlanReaderRejectsMalformedIndexMetadataBeforeStorageAccess(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			spec := base()
 			test.mutate(spec)
-			err := (&planReader{spec: spec, req: searchplugin.Request{CandidateLimit: 1}}).initialize()
+			err := (&planReader{spec: spec, req: searchplugin.Request{CandidateBudget: 1}}).initialize()
 			require.ErrorContains(t, err, test.want)
 		})
 	}
@@ -962,19 +967,22 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 	idxcfg := vectorindex.IndexConfig{}
 	tblcfg := vectorindex.IndexTableConfig{IndexTable: "round_limit_validation"}
 	reader := &planReader{
-		spec: &plan.VectorIndexScan{FirstRoundLimit: &plan.Expr{}},
-		req:  searchplugin.Request{CandidateLimit: 1},
+		spec: &plan.VectorIndexScan{},
+		req: searchplugin.Request{
+			CandidateBudget: 1,
+			HasFirstRound:   true,
+			FirstRoundLimit: math.MaxUint64,
+		},
 	}
 	err := searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0})
-	require.ErrorContains(t, err, "first-round limit did not fold")
-
-	reader.spec.FirstRoundLimit = ivfInt64Expr(1)
-	err = searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0})
 	require.ErrorContains(t, err, "first-round limit is not a platform uint")
 
 	reader = &planReader{
 		spec: &plan.VectorIndexScan{SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 7}}},
-		req:  searchplugin.Request{PartitionCount: 2, PartitionIndex: 1},
+		req: searchplugin.Request{Identity: searchplugin.ScanIdentity{
+			PartitionCount: 2,
+			PartitionIndex: 1,
+		}},
 	}
 	require.NoError(t, searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}))
 }
@@ -1034,13 +1042,12 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
 	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
 	tblcfg := vectorindex.IndexTableConfig{
-		DbName:              "db",
-		IndexTable:          "centroids_plan_reader",
-		EntriesTable:        "entries_plan_reader",
-		OrigFuncName:        metric.DistFn_L2Distance,
-		IncludeColumns:      []string{"payload"},
-		IncludeColumnTypes:  []int32{int32(types.T_int32)},
-		PostFilterOverFetch: true,
+		DbName:             "db",
+		IndexTable:         "centroids_plan_reader",
+		EntriesTable:       "entries_plan_reader",
+		OrigFuncName:       metric.DistFn_L2Distance,
+		IncludeColumns:     []string{"payload"},
+		IncludeColumnTypes: []int32{int32(types.T_int32)},
 	}
 	r := &planReader{
 		spec: &plan.VectorIndexScan{
@@ -1049,7 +1056,14 @@ func TestSearchPlanReaderUsesDirectCentroidAndEntriesRelations(t *testing.T) {
 			IncludedColumns:   []string{"payload"},
 			SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 		},
-		req: searchplugin.Request{CandidateLimit: 2, PartitionCount: 2, PartitionIndex: 1},
+		req: searchplugin.Request{
+			ResultLimit:     2,
+			CandidateBudget: 12,
+			Identity: searchplugin.ScanIdentity{
+				PartitionCount: 2,
+				PartitionIndex: 1,
+			},
+		},
 	}
 
 	require.NoError(t, searchPlanReader(r, sqlproc, idxcfg, tblcfg, []float32{0, 0}))
@@ -1204,9 +1218,14 @@ func TestPlanReaderInitializesThroughTypedEngineRelations(t *testing.T) {
 		DistanceFunction:  metric.DistFn_L2Distance,
 	}
 	r := &planReader{
-		proc:    proc,
-		spec:    spec,
-		req:     searchplugin.Request{QueryVector: types.ArrayToBytes([]float32{0, 0}), QueryType: spec.QueryVector.Typ, CandidateLimit: 2},
+		proc: proc,
+		spec: spec,
+		req: searchplugin.Request{
+			QueryVector:     types.ArrayToBytes([]float32{0, 0}),
+			QueryType:       spec.QueryVector.Typ,
+			ResultLimit:     2,
+			CandidateBudget: 2,
+		},
 		scanner: &relationScanner{proc: proc},
 	}
 	out := batch.NewWithSize(2)
@@ -1236,10 +1255,18 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
 	require.ErrorContains(t, err, "missing source or index metadata")
+	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
+		Index:       &plan.IndexDef{},
+		SourceTable: &plan.ObjectRef{},
+	}, searchplugin.Request{ResultLimit: 2, CandidateBudget: 1})
+	require.ErrorContains(t, err, "candidate budget is smaller")
 	reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},
-	}, searchplugin.Request{PartitionCount: 2, PartitionIndex: 1})
+	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PartitionCount: 2,
+		PartitionIndex: 1,
+	}})
 	require.NoError(t, err)
 	r := reader.(*planReader)
 	require.False(t, r.scanner.ownsInMemory)
@@ -1249,17 +1276,18 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	r.SetFilterZM(objectio.ZoneMap{})
 	require.NoError(t, r.Close())
 
-	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
-		Index:       &plan.IndexDef{},
-		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: -1}},
-	}, searchplugin.Request{})
-	require.ErrorContains(t, err, "invalid publisher tenant")
+	publisherID := uint32(42)
 	reader, err = NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
-	}, searchplugin.Request{})
+	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PhysicalAccountID: &publisherID,
+		PartitionCount:    1,
+	}})
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), *reader.(*planReader).scanner.accountID)
+	snapshotTS := &timestamp.Timestamp{PhysicalTime: 8}
+	snapshotPublisherID := uint32(3)
 	snapshotReader, err := NewPlanReader(proc, &plan.VectorIndexScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 3}},
@@ -1267,7 +1295,14 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 			TS:     &timestamp.Timestamp{PhysicalTime: 8},
 			Tenant: &plan.SnapshotTenant{TenantID: 99},
 		},
-	}, searchplugin.Request{})
+	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
+		PhysicalAccountID: &snapshotPublisherID,
+		Snapshot: &plan.Snapshot{
+			TS:     snapshotTS,
+			Tenant: &plan.SnapshotTenant{TenantID: 99},
+		},
+		PartitionCount: 1,
+	}})
 	require.NoError(t, err)
 	snapshotPlanReader := snapshotReader.(*planReader)
 	require.Equal(t, uint32(3), *snapshotPlanReader.scanner.accountID)

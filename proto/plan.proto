@@ -814,6 +814,8 @@ message VectorIndexScan {
   Expr query_vector = 5;
   string distance_function = 6;
   OrderBySpec.OrderByFlag direction = 7;
+  // Semantic result window k (including OFFSET compensation). Execution
+  // derives a separate candidate budget when post_filter_over_fetch is set.
   Expr candidate_limit = 8;
   DistRange distance_range = 9;
   repeated Expr pre_filters = 10;
@@ -823,6 +825,8 @@ message VectorIndexScan {
   uint32 bucket_expand_step = 14;
   int64 threads_search = 15;
   Snapshot scan_snapshot = 16;
+  // The execution binder expands candidate_limit after prepared parameters are
+  // available; readers receive both k and the bound candidate budget.
   bool post_filter_over_fetch = 17;
 }
 

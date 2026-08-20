@@ -59,7 +59,7 @@ Project  𝄀
               ->  Table Scan on vector_ivfflat_include_rounds.include_rounds_main  𝄀
                     Filter Cond: (include_rounds_main.category = 20)  𝄀
               ->  Vector Index Scan on idx_ivf_include_rounds [l2_distance]  𝄀
-                    Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 12, NProbe: 10
+                    Vector Index: idx_ivf_include_rounds, Metric: l2_distance, Candidate Limit: 2, NProbe: 10
 explain select id, title, category
 from include_rounds_main
 where category = 20
