@@ -33,6 +33,7 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -445,6 +446,15 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			catalog.SystemSI_IVFFLAT_IncludeColPrefix)
 		if u.limit == 0 && (!u.multiRoundEnabled || len(u.includeColumns) == 0) {
 			u.limit = 1
+		}
+		// When a residual filter will drop candidates after this search (post-filter
+		// JOIN), grow the candidate budget so k rows still survive. For a prepared
+		// LIMIT ? this is the only place k is known; a literal LIMIT was already
+		// over-fetched at plan time and leaves the flag off. Done once here (guarded
+		// by u.inited) so the search budget and the emit cap both see k'. See
+		// pkg/vectorindex/overfetch (#26878).
+		if u.tblcfg.PostFilterOverFetch && u.limit > 0 {
+			u.limit = overfetch.FilteredPostModeLimit(u.limit)
 		}
 		u.inited = true
 	}

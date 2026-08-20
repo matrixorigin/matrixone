@@ -38,8 +38,14 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 12)
-	require.Len(t, clusterUpgEntries, 1)
+	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
+	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
+	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
+	for _, entry := range clusterUpgEntries[1:] {
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
+	}
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {
@@ -93,8 +99,9 @@ func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
 	keyColumnUsage := tenantUpgEntries[5]
 	require.Equal(t, versions.CREATE_VIEW, keyColumnUsage.UpgType)
 	require.Equal(t, "KEY_COLUMN_USAGE", keyColumnUsage.TableName)
-	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.UpgSql)
+	require.Contains(t, strings.ToLower(keyColumnUsage.UpgSql), "drop view if exists information_schema.key_column_usage")
 	require.Contains(t, strings.ToLower(keyColumnUsage.PreSql), "drop table if exists information_schema.key_column_usage")
+	require.Equal(t, sysview.InformationSchemaKeyColumnUsageDDL, keyColumnUsage.PostSql)
 
 	referentialConstraints := tenantUpgEntries[6]
 	require.Equal(t, versions.MODIFY_VIEW, referentialConstraints.UpgType)
@@ -320,11 +327,15 @@ func TestTenantViewDefinitionChecks(t *testing.T) {
 
 	for _, entry := range entries {
 		t.Run(entry.TableName+"/match", func(t *testing.T) {
+			targetDefinition := entry.UpgSql
+			if entry.PostSql != "" {
+				targetDefinition = entry.PostSql
+			}
 			stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
 				if accountID != 42 || schema != sysview.InformationDBConst || viewName != entry.TableName {
 					t.Fatalf("unexpected view check arguments: account=%d schema=%s view=%s", accountID, schema, viewName)
 				}
-				return true, entry.UpgSql, nil
+				return true, targetDefinition, nil
 			})
 			defer stub.Reset()
 
@@ -395,6 +406,37 @@ func TestCheckConstraintViewsUpgradeMixedProtocolInitializedTenant(t *testing.T)
 			require.False(t, matched)
 		})
 	}
+}
+
+func TestKeyColumnUsageViewUpgradeIsOrderedAndIdempotent(t *testing.T) {
+	entry := upgradeInformationSchemaKeyColumnUsage()
+	upgraded := false
+	stub := gostub.Stub(&versions.CheckViewDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, viewName string) (bool, string, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "KEY_COLUMN_USAGE", viewName)
+		if upgraded {
+			return true, sysview.InformationSchemaKeyColumnUsageDDL, nil
+		}
+		return false, "", nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txnExecutor := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.PostSql {
+			upgraded = true
+		}
+		return executor.Result{}, nil
+	})
+
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Equal(t, []string{entry.PreSql, entry.UpgSql, entry.PostSql}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txnExecutor, 42))
+	require.Empty(t, executed)
 }
 
 func TestVersionHandleLifecycleWithNoLegacyDefinitions(t *testing.T) {

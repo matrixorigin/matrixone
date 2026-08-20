@@ -1099,6 +1099,8 @@ func handleCloneDatabaseWithSource(
 	}
 
 	if source.hasFkCycle {
+		oldForeignKeyChecksReplayable, hadForeignKeyChecksReplayability :=
+			ses.getMigrationSystemVarReplayability("foreign_key_checks")
 		oldForeignKeyChecks, getErr := ses.GetSessionSysVar("foreign_key_checks")
 		if getErr != nil {
 			return nil, getErr
@@ -1108,6 +1110,11 @@ func handleCloneDatabaseWithSource(
 		}
 		defer func() {
 			restoreErr := ses.SetSessionSysVar(reqCtx, "foreign_key_checks", oldForeignKeyChecks)
+			ses.restoreMigrationSystemVarReplayability(
+				"foreign_key_checks",
+				oldForeignKeyChecksReplayable,
+				hadForeignKeyChecksReplayability,
+			)
 			if err == nil {
 				err = restoreErr
 			}
