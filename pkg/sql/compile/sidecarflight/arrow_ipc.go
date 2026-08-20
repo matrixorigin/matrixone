@@ -155,9 +155,6 @@ func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) 
 	if err != nil {
 		return arrowField{}, err
 	}
-	if nullable == expected.NotNullable {
-		return arrowField{}, internalErrorf("Arrow nullability does not match MatrixOne type")
-	}
 	typeID, err := table.byteField(2, 0)
 	if err != nil {
 		return arrowField{}, err
@@ -425,7 +422,7 @@ func (s *Schema) decodeRecordBatch(header, body []byte, maxDecodedBytes uint64, 
 }
 
 func decodeColumn(vec *vector.Vector, field arrowField, node arrowNode, buffers []arrowBuffer, body []byte, mp *mpool.MPool) error {
-	if !field.nullable && node.nullCount != 0 {
+	if (!field.nullable || field.expected.NotNullable) && node.nullCount != 0 {
 		return internalErrorf("required field contains nulls")
 	}
 	validity := sliceBuffer(body, buffers[0])

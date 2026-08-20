@@ -433,7 +433,7 @@ func TestBoundInt64SumIsAdvertisedWithDecimalResult(t *testing.T) {
 }
 
 func TestCapabilityHashMatchesSidecarContract(t *testing.T) {
-	require.Equal(t, "600b2a4b0c57e37a2b1aac8e99e9d2b064d5e3d9c652419470009080946fb568", hex.EncodeToString(CapabilityHash[:]))
+	require.Equal(t, "6f788b3d6665ecdd1ac734043fb757968893f14fd7d197fabcfa287764ee6bad", hex.EncodeToString(CapabilityHash[:]))
 }
 
 func TestBoundDecimalUnaryMinusLowersToSubtractFromTypedZero(t *testing.T) {
@@ -593,12 +593,19 @@ func TestStarCountAggregateLowering(t *testing.T) {
 func TestTaeReadStrictWire(t *testing.T) {
 	now := uint64(time.Now().UnixMilli())
 	h := sha256.Sum256([]byte("x"))
-	r := &TaeRead{ProtocolVersion: 1, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 1, DatabaseID: 3, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
+	r := &TaeRead{ProtocolVersion: TaeReadProtocolVersion, ReadRef: bytes.Repeat([]byte{1}, 32), QueryID: []byte("q"), AccountID: 0, DatabaseID: 3, TableID: 2, SnapshotTS: make([]byte, 12), SchemaDigest: h[:], ManifestSHA256: h[:], CapabilityHash: CapabilityHash[:], ExpiresAtUnixMS: now + 1000}
 	b, err := MarshalTaeRead(r)
 	require.NoError(t, err)
 	got, err := UnmarshalTaeRead(b, now)
 	require.NoError(t, err)
 	require.Equal(t, r.TableID, got.TableID)
+	require.Equal(t, uint64(0), got.AccountID)
+	accountField := append(protowire.AppendTag(nil, 5, protowire.VarintType), 0)
+	accountOffset := bytes.Index(b, accountField)
+	require.NotEqual(t, -1, accountOffset)
+	withoutAccount := append(append([]byte(nil), b[:accountOffset]...), b[accountOffset+len(accountField):]...)
+	_, err = UnmarshalTaeRead(withoutAccount, now)
+	require.ErrorContains(t, err, "missing TaeRead field")
 	_, err = UnmarshalTaeRead(append(b, b[:2]...), now)
 	require.Error(t, err)
 }
@@ -1164,7 +1171,7 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	provider.onPrepare = func() { require.True(t, protector.active) }
 	leases := NewLeaseManager(1, protector)
 	now := time.Now()
-	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 1, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
+	wires, err := Admit(context.Background(), AdmissionRequest{Candidate: c, Provider: provider, Leases: leases, AccountID: 0, QueryID: []byte("q"), SnapshotTS: make([]byte, 12), AuthorizedClientSPKIHash: testClientSPKIHash(), TTL: time.Minute, ReadOnly: true, Random: bytes.NewReader(bytes.Repeat([]byte{9}, 32)), Now: now})
 	require.NoError(t, err)
 	require.Equal(t, 1, protector.begun)
 	require.Equal(t, 1, protector.closed)
@@ -1172,6 +1179,7 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	require.Equal(t, 1, protector.registered)
 	tr, err := UnmarshalTaeRead(wires[0], uint64(now.UnixMilli()))
 	require.NoError(t, err)
+	require.Equal(t, uint64(0), tr.AccountID)
 	_, ok := resolveLease(leases, tr.ReadRef)
 	require.True(t, ok)
 }
@@ -1762,7 +1770,6 @@ func TestAdmissionRejectsInvalidInputsBeforePublishing(t *testing.T) {
 		{name: "missing leases", mutate: func(r *AdmissionRequest) { r.Leases = nil }, want: "incomplete admission"},
 		{name: "not read only", mutate: func(r *AdmissionRequest) { r.ReadOnly = false }, want: "read-only snapshot"},
 		{name: "prior writes", mutate: func(r *AdmissionRequest) { r.PriorWrites = true }, want: "read-only snapshot"},
-		{name: "missing account", mutate: func(r *AdmissionRequest) { r.AccountID = 0 }, want: "identity"},
 		{name: "missing query", mutate: func(r *AdmissionRequest) { r.QueryID = nil }, want: "identity"},
 		{name: "bad timestamp", mutate: func(r *AdmissionRequest) { r.SnapshotTS = []byte{1} }, want: "identity"},
 		{name: "missing authorized client", mutate: func(r *AdmissionRequest) { r.AuthorizedClientSPKIHash = nil }, want: "identity"},
@@ -2331,6 +2338,13 @@ func TestEligibilityDeclinesAreDistinctFromMalformedAndOperationalErrors(t *test
 	require.Error(t, err)
 	require.False(t, IsNotEligible(err))
 
+	missingDatabaseID := scanQuery()
+	missingDatabaseID.Nodes[0].ObjRef.Db = 7
+	missingDatabaseID.Nodes[0].TableDef.DbId = 0
+	_, err = Export(missingDatabaseID)
+	require.ErrorContains(t, err, "malformed table identity")
+	require.False(t, IsNotEligible(err))
+
 	candidate, err := Export(scanQuery())
 	require.NoError(t, err)
 	_, err = candidate.Build(nil)
@@ -2484,7 +2498,7 @@ func boundSQLQuery(t *testing.T, sql string) *planpb.Query {
 		require.NotNil(t, node.TableDef)
 		// The mock compiler intentionally leaves catalog IDs unset. Supply only
 		// those physical identities so Export sees an otherwise real bound plan.
-		node.ObjRef.Db = 7
+		node.TableDef.DbId = 7
 		if node.TableDef.TblId == 0 {
 			node.TableDef.TblId = uint64(node.NodeId) + 42
 		}
@@ -2574,7 +2588,7 @@ func scalarFunctionName(plan *spb.Plan, anchor uint32) string {
 }
 
 func scanQuery() *planpb.Query {
-	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Db: 7, Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}
+	return &planpb.Query{StmtType: planpb.Query_SELECT, Steps: []int32{0}, Headings: []string{"a"}, Nodes: []*planpb.Node{{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, ObjRef: &planpb.ObjectRef{Obj: 42, ObjName: "t"}, TableDef: &planpb.TableDef{DbId: 7, TblId: 42, Version: 3, Name: "t", TableType: "r", Cols: []*planpb.ColDef{{Name: "a", ColId: 11, Seqnum: 5, Typ: i64Type()}}}}}}
 }
 func i64Type() planpb.Type  { return planpb.Type{Id: int32(types.T_int64)} }
 func boolType() planpb.Type { return planpb.Type{Id: int32(types.T_bool)} }

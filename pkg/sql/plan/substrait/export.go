@@ -574,8 +574,8 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 	if len(n.Children) != 0 || n.TableDef == nil || n.ObjRef == nil {
 		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has malformed table scan structure", n.NodeId)
 	}
-	if n.ObjRef.Db <= 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId {
-		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has malformed table identity db=%d object=%d table=%d", n.NodeId, n.ObjRef.Db, n.ObjRef.Obj, n.TableDef.TblId)
+	if n.TableDef.DbId == 0 || n.TableDef.TblId == 0 || uint64(n.ObjRef.Obj) != n.TableDef.TblId {
+		return nil, moerr.NewInternalErrorNoCtxf("substrait: node %d has malformed table identity db=%d object=%d table=%d", n.NodeId, n.TableDef.DbId, n.ObjRef.Obj, n.TableDef.TblId)
 	}
 	if n.TableDef.IsTemporary || n.ScanSnapshot != nil || n.ObjRef.Snapshot != nil || n.ObjRef.PubInfo != nil || (n.TableDef.TableType != "" && n.TableDef.TableType != "r") {
 		return nil, notEligiblef(EligibilityPlanShape, "node %d is not a persistent TAE table scan", n.NodeId)
@@ -603,7 +603,7 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 			e.readSeen[n.NodeId] = true
 			e.reads = append(e.reads, Read{
 				NodeID:        n.NodeId,
-				DatabaseID:    uint64(n.ObjRef.Db),
+				DatabaseID:    n.TableDef.DbId,
 				TableID:       n.TableDef.TblId,
 				SchemaVersion: n.TableDef.Version,
 				Columns:       columns,
