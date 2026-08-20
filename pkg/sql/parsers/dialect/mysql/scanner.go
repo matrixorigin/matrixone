@@ -943,20 +943,20 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 	}
 	pos = s.skipBlankAndCommentsFrom(pos)
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
 	}
 	if !hasKeywordAt(s.buf, pos, "left") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("left"))
 	if hasKeywordAt(s.buf, pos, "join") {
-		return s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+		return s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
 	}
 	if !hasKeywordAt(s.buf, pos, "outer") {
 		return false
 	}
 	pos = s.skipBlankAndCommentsFrom(pos + len("outer"))
-	return hasKeywordAt(s.buf, pos, "join") && s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start))
+	return hasKeywordAt(s.buf, pos, "join") && (s.asofDerivedLeftRelation(start) || s.asofTemporalPredicateInJoin(pos+len("join"), s.asofLeftRelationName(start)))
 }
 
 // asofLeftRelationName returns the unqualified name immediately preceding the
