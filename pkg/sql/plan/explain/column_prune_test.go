@@ -193,6 +193,79 @@ func TestSingleTableQueryPrune(t *testing.T) {
 	}
 }
 
+func TestCountStarInnerJoinPrunesOutputColumns(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		countOnly bool
+	}{
+		{
+			name:      "inner equi join",
+			sql:       "select count(*) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+			countOnly: true,
+		},
+		{
+			name: "volatile projection",
+			sql:  "select rand() from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "sum constant",
+			sql:  "select sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "count constant",
+			sql:  "select count(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "multiple aggregates",
+			sql:  "select count(*), sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "constant grouping",
+			sql: "select cast(1 as signed), count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey group by cast(1 as signed)",
+		},
+		{
+			name: "inner non-equi join",
+			sql:  "select count(*) from nation n inner join region r on n.n_regionkey < r.r_regionkey",
+		},
+		{
+			name: "inner equi join with residual",
+			sql: "select count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey and n.n_nationkey > r.r_regionkey",
+		},
+		{
+			name: "left equi join",
+			sql:  "select count(*) from region r left join nation n on r.r_regionkey = n.n_regionkey",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+
+			var join *plan.Node
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				if node.NodeType == plan.Node_JOIN {
+					require.Nil(t, join, "query should contain exactly one join")
+					join = node
+				}
+			}
+			require.NotNil(t, join)
+			if test.countOnly {
+				require.Empty(t, join.ProjectList,
+					"pure inner equi COUNT(*) should expose row count only")
+				require.True(t, join.EmitCompressedRowCount,
+					"the executor contract must be explicit")
+			} else {
+				require.NotEmpty(t, join.ProjectList,
+					"non-count-only join shape needs a row carrier")
+				require.False(t, join.EmitCompressedRowCount)
+			}
+		})
+	}
+}
+
 func TestJoinQueryPrune(t *testing.T) {
 	cases := []struct {
 		name         string

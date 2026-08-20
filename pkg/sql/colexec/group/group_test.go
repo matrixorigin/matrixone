@@ -64,6 +64,20 @@ func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
 
+func countStarLiteralAgg() aggexec.AggFuncExecExpression {
+	return aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfCountStar,
+		false,
+		[]*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+		}},
+		nil,
+	)
+}
+
 func countPreparedParamAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfCountColumn,
@@ -1269,6 +1283,27 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupNoGroupByCountStarConsumesCompressedRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const rows = colexec.DefaultBatchSize * 1024
+	input := batch.NewWithSize(0)
+	input.SetRowCount(rows)
+
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countStarLiteralAgg()})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, int64(rows),
+		vector.MustFixedColNoTypeCheck[int64](results[0].Vecs[0])[0])
+
+	g.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestPreparedCountParamUsesInputRowCount(t *testing.T) {

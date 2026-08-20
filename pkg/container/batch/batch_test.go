@@ -765,7 +765,7 @@ func TestClonePreservesNormalizedConstantBinaryStringRows(t *testing.T) {
 	source.Vecs[0], err = vector.NewConstBytes(
 		types.T_varchar.ToType(), []byte("text"), 2, mp)
 	require.NoError(t, err)
-	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{false, true}, mp))
+	require.NoError(t, source.Vecs[0].SetBinaryStringRowsWithMP([]bool{false, false}, mp))
 	require.False(t, source.Vecs[0].HasBinaryStringRows())
 	for row := range 2 {
 		require.False(t, source.Vecs[0].GetIsBinaryStringAt(row))

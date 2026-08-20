@@ -672,6 +672,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
 			CanSkipProbe:           t.CanSkipProbe,
+			EmitCompressedRowCount: t.EmitCompressedRowCount,
 			IsShuffle:              t.IsShuffle,
 			ShuffleIdx:             t.ShuffleIdx,
 			RelList:                relList,
@@ -1196,6 +1197,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		arg.HashOnPK = t.HashOnPk
 		arg.CanSkipProbe = t.CanSkipProbe
+		arg.EmitCompressedRowCount = t.EmitCompressedRowCount
 		arg.IsShuffle = t.IsShuffle
 		arg.ShuffleIdx = t.ShuffleIdx
 		arg.JoinMapTag = t.JoinMapTag

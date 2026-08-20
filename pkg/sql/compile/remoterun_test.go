@@ -402,6 +402,18 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, original.VectorOpType, restoredProductL2.VectorOpType)
 	})
 
+	t.Run("HashJoinCompressedRowCountContract", func(t *testing.T) {
+		original := &hashjoin.HashJoin{
+			EqConds:                [][]*planpb.Expr{{}, {}},
+			EmitCompressedRowCount: true,
+		}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredHashJoin, ok := restored.(*hashjoin.HashJoin)
+		require.True(t, ok)
+		require.True(t, restoredHashJoin.EmitCompressedRowCount)
+	})
+
 	t.Run("IntersectAll", func(t *testing.T) {
 		restored := roundTrip(t, &intersectall.IntersectAll{})
 		defer restored.Release()
