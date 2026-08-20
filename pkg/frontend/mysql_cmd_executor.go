@@ -1068,8 +1068,9 @@ func estimatePreparedCursorArrayCopyBytes(
 // for COM_STMT_FETCH. The ordinary output callback sends each batch directly
 // to the client; a read-only server cursor must retain those rows until the
 // client asks for them. Retention is bounded and accounted across all active
-// cursors in the session. The result metadata is installed by
-// respColumnDefsWithoutFlush before the pipeline starts.
+// cursors in the session. The result metadata is installed before the pipeline
+// starts; wire column definitions and the cursor terminator are sent only
+// after successful materialization.
 func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch) error {
 	if bat == nil {
 		return nil
