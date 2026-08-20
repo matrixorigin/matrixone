@@ -398,6 +398,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 				objectio.BlockMaxRows,
 				primarySeqnum,
 				primaryIdx,
+				h.tbl.seqnums,
 				rangeMP,
 				rangeFS,
 			)

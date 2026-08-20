@@ -82,7 +82,10 @@ func TestFilterBatchUsesLogicalPrimaryKeyIndex(t *testing.T) {
 
 	t.Run("update delete keeps only latest delete", func(t *testing.T) {
 		data := newData([]int32{7, 8}, []int64{10, 20})
-		tombstone := newTombstone([]int64{30})
+		// The first tombstone is the delete side of the preceding update. The
+		// final tombstone is the delete being tested and must remain as the
+		// latest net effect.
+		tombstone := newTombstone([]int64{5, 30})
 		require.NoError(t, filterBatch(data, tombstone, 1, false, false))
 		require.Zero(t, data.RowCount())
 		require.Equal(t, 1, tombstone.RowCount())
@@ -3518,13 +3521,37 @@ func TestCDCSchema_NoRowIDWhenRetainRowIDFalse(t *testing.T) {
 
 		entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
 		var out *batch.Batch
-		fillInInsertBatch(&out, entry, false, mp)
+		fillInInsertBatch(&out, entry, false, nil, mp)
 		require.NotNil(t, out)
 		require.Equal(t, []string{"pk", "val", objectio.DefaultCommitTS_Attr}, out.Attrs)
 		require.Equal(t, 3, len(out.Vecs))
 		assertNoRowID(t, out)
 		// Trailing column must be commit_ts.
 		require.Equal(t, types.T_TS, out.Vecs[len(out.Vecs)-1].GetType().Oid)
+		out.Clean(mp)
+		src.Clean(mp)
+	})
+
+	t.Run("fillInInsertBatch normalizes physical seqnums to logical order", func(t *testing.T) {
+		src := batch.NewWithSize(5)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id", "payload", "added"})
+		for i, typ := range []types.T{types.T_Rowid, types.T_TS, types.T_int32, types.T_int32, types.T_int32} {
+			src.Vecs[i] = vector.NewVec(typ.ToType())
+		}
+		blk := types.Blockid{}
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], types.NewRowid(&blk, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], types.BuildTS(100, 0), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[3], int32(99), false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[4], int32(7), false, mp))
+		src.SetRowCount(1)
+		entry := &RowEntry{Batch: src, Offset: 0, Time: types.BuildTS(100, 0)}
+		var out *batch.Batch
+		fillInInsertBatch(&out, entry, false, []uint16{2, 0, 1}, mp)
+		require.Equal(t, []string{"added", "id", "payload", objectio.DefaultCommitTS_Attr}, out.Attrs)
+		require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[0], 0))
+		require.Equal(t, int32(1), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[1], 0))
+		require.Equal(t, int32(99), vector.GetFixedAtNoTypeCheck[int32](out.Vecs[2], 0))
 		out.Clean(mp)
 		src.Clean(mp)
 	})

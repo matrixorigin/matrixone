@@ -2355,7 +2355,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator(
 		if checkTS(start, end, entry.Time) {
 			tsMatched++
 			if !entry.Deleted && !tombstone {
-				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, mp)
+				fillInInsertBatch(&bat, entry, p.changesHandle.retainRowID, p.changesHandle.logicalSeqnums, mp)
 				bat.SetRowCount(bat.Vecs[0].Length())
 				emitted++
 			}
@@ -2771,6 +2771,7 @@ type ChangeHandler struct {
 	quick           bool
 	primarySeqnum   int
 	primaryIdx      int
+	logicalSeqnums  []uint16
 	scheduler       tasks.JobScheduler
 	mp              *mpool.MPool
 
@@ -2961,7 +2962,7 @@ func NewChangesHandlerWithPartitionStateRange(
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
 	return NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
-		ctx, state, start, end, skipDeletes, maxRow, primarySeqnum, primarySeqnum, mp, fs,
+		ctx, state, start, end, skipDeletes, maxRow, primarySeqnum, primarySeqnum, nil, mp, fs,
 	)
 }
 
@@ -2975,6 +2976,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 	skipDeletes bool,
 	maxRow uint32,
 	primarySeqnum, primaryIdx int,
+	logicalSeqnums []uint16,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
@@ -3003,6 +3005,7 @@ func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 		LogThreshold:             LogThreshold,
 		primarySeqnum:            primarySeqnum,
 		primaryIdx:               primaryIdx,
+		logicalSeqnums:           append([]uint16(nil), logicalSeqnums...),
 		mp:                       mp,
 		scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
 		enableCommitTSBlockPrune: true,
@@ -3855,19 +3858,33 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 //	}
 //}
 
-func newDataBatchWithBatch(src *batch.Batch, retainRowID bool) (data *batch.Batch) {
+func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []uint16) (data *batch.Batch) {
 	data = batch.NewWithSize(0)
 	if retainRowID {
 		data.Attrs = append(data.Attrs, catalog.Row_ID)
 		data.Vecs = append(data.Vecs, vector.NewVec(types.T_Rowid.ToType()))
 	}
-	data.Attrs = append(data.Attrs, src.Attrs[2:]...)
-	for _, vec := range src.Vecs {
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+	if len(logicalSeqnums) > 0 {
+		for _, seqnum := range logicalSeqnums {
+			idx := 2 + int(seqnum)
+			if idx >= len(src.Vecs) || src.Vecs[idx] == nil {
+				continue
+			}
+			attr := ""
+			if idx < len(src.Attrs) {
+				attr = src.Attrs[idx]
+			}
+			data.Attrs = append(data.Attrs, attr)
+			data.Vecs = append(data.Vecs, vector.NewVec(*src.Vecs[idx].GetType()))
 		}
-		newVec := vector.NewVec(*vec.GetType())
-		data.Vecs = append(data.Vecs, newVec)
+	} else {
+		data.Attrs = append(data.Attrs, src.Attrs[2:]...)
+		for _, vec := range src.Vecs {
+			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+				continue
+			}
+			data.Vecs = append(data.Vecs, vector.NewVec(*vec.GetType()))
+		}
 	}
 	data.Attrs = append(data.Attrs, objectio.DefaultCommitTS_Attr)
 	newVec := vector.NewVec(types.T_TS.ToType())
@@ -3945,20 +3962,32 @@ func appendFromEntry(src, vec *vector.Vector, offset int, mp *mpool.MPool) {
 
 }
 
-func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, mp *mpool.MPool) {
+func fillInInsertBatch(bat **batch.Batch, entry *RowEntry, retainRowID bool, logicalSeqnums []uint16, mp *mpool.MPool) {
 	if *bat == nil {
-		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID)
+		(*bat) = newDataBatchWithBatch(entry.Batch, retainRowID, logicalSeqnums)
 	}
 	dstOffset := 0
 	if retainRowID {
 		appendFromEntry(entry.Batch.Vecs[0], (*bat).Vecs[0], int(entry.Offset), mp)
 		dstOffset = 1
 	}
-	for i, vec := range entry.Batch.Vecs {
-		if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
-			continue
+	if len(logicalSeqnums) > 0 {
+		dstCol := dstOffset
+		for _, seqnum := range logicalSeqnums {
+			idx := 2 + int(seqnum)
+			if idx >= len(entry.Batch.Vecs) || entry.Batch.Vecs[idx] == nil {
+				continue
+			}
+			appendFromEntry(entry.Batch.Vecs[idx], (*bat).Vecs[dstCol], int(entry.Offset), mp)
+			dstCol++
 		}
-		appendFromEntry(vec, (*bat).Vecs[i-2+dstOffset], int(entry.Offset), mp)
+	} else {
+		for i, vec := range entry.Batch.Vecs {
+			if vec.GetType().Oid == types.T_Rowid || vec.GetType().Oid == types.T_TS {
+				continue
+			}
+			appendFromEntry(vec, (*bat).Vecs[i-2+dstOffset], int(entry.Offset), mp)
+		}
 	}
 	appendFromEntry(entry.Batch.Vecs[1], (*bat).Vecs[len((*bat).Vecs)-1], int(entry.Offset), mp)
 
