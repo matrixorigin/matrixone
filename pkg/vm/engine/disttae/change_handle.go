@@ -80,6 +80,14 @@ func (tbl *txnTable) CollectChanges(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
+	// In-memory logtail rows are stored in physical seqnum order, while
+	// table_changes exposes the current logical schema order. Capture the
+	// current logical-to-physical mapping before constructing any deferred
+	// range handle; normal table_changes callers do not pass through the
+	// compaction paths that normally initialize this cache.
+	if tbl.tableDef != nil {
+		tbl.ensureSeqnumsAndTypesExpectRowid()
+	}
 	if from.IsEmpty() && !useBoundedVisibleStateRange(ctx) {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
@@ -367,6 +375,9 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	if snapshotTbl == nil {
 		return moerr.NewErrStaleReadNoCtx(h.currentPSTo.ToString(), h.currentPSFrom.ToString())
 	}
+	if snapshotTbl.tableDef != nil {
+		snapshotTbl.ensureSeqnumsAndTypesExpectRowid()
+	}
 	state, err := snapshotTbl.getPartitionState(ctx)
 	if err != nil {
 		return err
@@ -380,7 +391,8 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
-	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, h.primarySeqnum, h.tbl.primaryIdx
+	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, snapshotTbl.primarySeqnum, snapshotTbl.primaryIdx
+	logicalSeqnums := append([]uint16(nil), snapshotTbl.seqnums...)
 	rangeMP, rangeFS := h.mp, h.fs
 	h.currentChangeHandle = &deferredChangesHandle{
 		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
@@ -398,7 +410,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 				objectio.BlockMaxRows,
 				primarySeqnum,
 				primaryIdx,
-				h.tbl.seqnums,
+				logicalSeqnums,
 				rangeMP,
 				rangeFS,
 			)

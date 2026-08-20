@@ -18,10 +18,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +87,32 @@ func TestCollectChangesRoutesBoundedEmptyWatermarkToVisibleStateRange(t *testing
 	require.NoError(t, err)
 	require.True(t, called)
 	require.Same(t, want, got)
+}
+
+func TestCollectChangesInitializesLogicalSeqnumsBeforeBuildingRange(t *testing.T) {
+	original := newPartitionChangesHandle
+	t.Cleanup(func() { newPartitionChangesHandle = original })
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	var got []uint16
+	newPartitionChangesHandle = func(
+		_ context.Context, tbl *txnTable, _, _ types.TS, _ bool,
+		_ engine.SnapshotReadPolicy, _ *mpool.MPool,
+	) (engine.ChangesHandle, error) {
+		got = append([]uint16(nil), tbl.seqnums...)
+		return &stubChangesHandle{}, nil
+	}
+	tbl := &txnTable{tableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+		{Name: "added", Typ: plan2.Type{Id: int32(types.T_int32)}, Seqnum: 2},
+		{Name: "id", Typ: plan2.Type{Id: int32(types.T_int32)}, Seqnum: 0},
+		{Name: "payload", Typ: plan2.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+		{Name: catalog.Row_ID, Typ: plan2.Type{Id: int32(types.T_Rowid)}, Seqnum: uint32(objectio.SEQNUM_ROWID)},
+	}}}
+	ctx := engine.WithSnapshotReadPolicy(context.Background(), engine.SnapshotReadPolicyVisibleState)
+	ctx = engine.WithChangeRangeLimit(ctx, engine.ChangeRangeLimit{MaxInMemoryBytes: 64 << 20})
+	_, err := tbl.CollectChanges(ctx, types.TS{}, types.BuildTS(20, 0), false, mp)
+	require.NoError(t, err)
+	require.Equal(t, []uint16{2, 0, 1}, got)
 }
 
 func TestPartitionChangesHandleCloseClosesCurrentHandle(t *testing.T) {
