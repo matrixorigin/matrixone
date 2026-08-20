@@ -196,19 +196,10 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
 		}
-		if cursorExecute {
-			// Send column definitions and the single cursor-marked EOF/OK only
-			// after Run has completed. This keeps failed materialization from
-			// advertising a fetchable cursor.
-			if resper, ok := execCtx.resper.(*MysqlResp); ok {
-				err = resper.respCursorColumnDefs(ses, execCtx, columns)
-			} else {
-				err = moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
-			}
-			if err != nil {
-				return
-			}
-		}
+		// Cursor metadata is retained above for decoding, but its wire response
+		// is emitted by respStreamResultRow after transaction finalization. This
+		// prevents a later autocommit commit error from following a successful
+		// cursor response on the same connection.
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
@@ -329,11 +320,12 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 }
 
 // respCursorColumnDefs writes the complete COM_STMT_EXECUTE cursor response
-// after the pipeline has successfully materialized the result. A server cursor
-// response has one and only one execute terminator: the EOF/OK packet following
-// the column definitions, carrying SERVER_STATUS_CURSOR_EXISTS. Keeping this
-// packet after runner.Run prevents a failed decode, limit check, or pipeline
-// error from advertising a cursor that cannot be fetched.
+// after the pipeline has successfully materialized the result and transaction
+// finalization has succeeded. A server cursor response has one and only one
+// execute terminator: the EOF/OK packet following the column definitions,
+// carrying SERVER_STATUS_CURSOR_EXISTS. Delaying this packet prevents a failed
+// decode, limit check, pipeline, or commit operation from advertising a cursor
+// that cannot be fetched.
 func (resper *MysqlResp) respCursorColumnDefs(ses *Session, execCtx *ExecCtx, columns []any) error {
 	if execCtx.inMigration {
 		return nil
@@ -417,9 +409,23 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 		}
 		ses.SetSeqLastValue(execCtx.proc)
 		if execCtx.input != nil && execCtx.input.isCursorExecute {
-			// Cursor metadata and its sole execute terminator are emitted after
-			// runner.Run in executeResultRowStmt. Fetch owns the next protocol
-			// packet, including LAST_ROW_SENT for an empty result.
+			// The execute pipeline has already materialized the retained rows. Emit
+			// the column definitions and the sole cursor terminator only now: this
+			// callback runs after executeStmtWithWorkspace has finalized the
+			// transaction. Fetch owns the next protocol packet, including
+			// LAST_ROW_SENT for an empty result.
+			if execCtx.prepareStmt == nil || execCtx.prepareStmt.cursor == nil ||
+				execCtx.prepareStmt.cursor.result == nil || len(execCtx.prepareStmt.cursor.result.Columns) == 0 {
+				err = moerr.NewInternalError(execCtx.reqCtx, "prepared cursor result metadata is missing")
+				return
+			}
+			columns := make([]any, len(execCtx.prepareStmt.cursor.result.Columns))
+			for i, column := range execCtx.prepareStmt.cursor.result.Columns {
+				columns[i] = column
+			}
+			if err = resper.respCursorColumnDefs(ses, execCtx, columns); err != nil {
+				return
+			}
 			return nil
 		}
 		status := checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt)

@@ -2439,6 +2439,19 @@ func (mp *MysqlProtocolImpl) appendResultSetBinaryRow(mrs *MysqlResultSet, rowId
 					return err
 				}
 			}
+		case defines.MYSQL_TYPE_BIT:
+			if value, err := mrs.GetUint64(mp.ctx, rowIdx, i); err != nil {
+				return err
+			} else {
+				bitLength := mysqlColumn.ColumnImpl.Length()
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&value)[:byteLength]
+				slices.Reverse(b)
+				err = AppendCountOfBytesLenEnc(mp, b)
+				if err != nil {
+					return err
+				}
+			}
 		case defines.MYSQL_TYPE_FLOAT:
 			if value, err := mrs.GetValue(mp.ctx, rowIdx, i); err != nil {
 				return err

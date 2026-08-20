@@ -3978,6 +3978,55 @@ func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
 	require.NotZero(t, status&SERVER_STATUS_LAST_ROW_SENT)
 }
 
+func TestExecuteStmtFetchBitColumn(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	setSessionAlloc("", NewLeakCheckAllocator())
+
+	conn := &testConn{}
+	ioses, err := NewIOSession(conn, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+	t.Cleanup(proto.Close)
+	ses := NewSession(context.Background(), "", proto, nil)
+	proto.ses = ses
+	ses.SetCmd(COM_STMT_FETCH)
+	ses.prepareStmts = make(map[string]*PrepareStmt)
+
+	column := &MysqlColumn{}
+	column.SetName("b")
+	column.SetColumnType(defines.MYSQL_TYPE_BIT)
+	column.SetLength(8)
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(273),
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{
+			Columns: []Column{column},
+			Data:    [][]any{{uint64(0xab)}},
+		}},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 273)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.Nil(t, stmt.cursor)
+	packets := splitProtocolPackets(t, conn.data)
+	require.Len(t, packets, 2)
+	// COM_STMT_FETCH uses a binary row: OK header, one-byte null bitmap,
+	// then the length-encoded BIT payload.  The value must be emitted as the
+	// requested one-byte big-endian representation, not as an unsupported
+	// generic uint64 value.
+	require.Equal(t, []byte{defines.OKHeader, 0, 1, 0xab}, packets[0])
+	require.Equal(t, byte(defines.EOFHeader), packets[1][0])
+}
+
 func TestNewPreparedStmtCursorUsesSessionBudget(t *testing.T) {
 	noSession := newPreparedStmtCursor(nil)
 	require.Equal(t, preparedCursorDefaultMaxBytes, noSession.maxBytes)
@@ -4067,6 +4116,44 @@ func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
 	require.NoError(t, err)
 	displayBytes := uint64(len(types.ArrayToString(values)))
 	require.GreaterOrEqual(t, estimated, displayBytes)
+}
+
+func TestPreparedCursorDecimal256MaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal256, 65, 0)
+	value, err := types.ParseDecimal256(strings.Repeat("9", 65), typ.Width, typ.Scale)
+	require.NoError(t, err)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	display := value.Format(typ.Scale)
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, estimated, uint64(len(display))+32)
+
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+		result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+		maxBytes: estimated - 1,
+		maxRows:  1,
+	}}
+	ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+	err = capturePreparedCursorBatch(ses, ctx, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Empty(t, stmt.cursor.result.Data)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+
+	stmt.cursor.maxBytes = estimated
+	require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+	require.Equal(t, display, stmt.cursor.result.Data[0][0])
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
 func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {

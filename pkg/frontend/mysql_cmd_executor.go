@@ -930,9 +930,10 @@ func estimatePreparedCursorBatchBytes(bat *batch.Batch) (uint64, error) {
 }
 
 // estimatePreparedCursorMaterializedBytes charges allocations that are created
-// while fillResultSet converts vectors into retained []any rows.  In
-// particular, vecuint8 values are rendered with ArrayToString, so their
-// retained representation can be several times larger than the raw vector.
+// while fillResultSet converts vectors into retained []any rows. In
+// particular, vecuint8 values are rendered with ArrayToString and decimal
+// values with Format, so their retained representations can be several times
+// larger than the raw vector.
 // Other array families are copied into a new typed slice and are charged for
 // that second backing store as well.
 func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
@@ -994,6 +995,24 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
 				return 0, err
 			}
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				var display string
+				switch vec.GetType().Oid {
+				case types.T_decimal64:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal128:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row).Format(vec.GetType().Scale)
+				case types.T_decimal256:
+					display = vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row).Format(vec.GetType().Scale)
+				}
+				if err := addFormattedPreparedCursorValueBytes(uint64(len(display)), add); err != nil {
+					return 0, err
+				}
+			}
 		case types.T_geometry, types.T_geometry32:
 			// fillResultSet exposes geometry values as WKT bytes rather than
 			// retaining the compact WKB payload.  A WKB point uses 16 bytes
@@ -1022,6 +1041,17 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 		}
 	}
 	return total, nil
+}
+
+func addFormattedPreparedCursorValueBytes(displayBytes uint64, add func(uint64) error) error {
+	// fillResultSet retains a separately allocated string for formatted values.
+	// Include the string backing allocation and allocator/header slack in
+	// addition to the displayed bytes; the []any slot is charged by the row
+	// overhead in estimatePreparedCursorBatchBytes.
+	if displayBytes > math.MaxUint64-32 {
+		return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return add(displayBytes + 32)
 }
 
 func estimatePreparedCursorArrayCopyBytes(
@@ -4728,6 +4758,11 @@ func executeStmtWithResponse(ses *Session,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
+	// executeStmtWithMaxExecutionTime returns only after
+	// executeStmtWithWorkspace has run its deferred transaction finalizer.
+	// Cursor responses are staged by executeResultRowStmt and emitted by
+	// RespPostMeta below, so a commit error can never follow an advertised
+	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
 		return abortStagedReturning(execCtx, err)
