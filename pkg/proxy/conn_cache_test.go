@@ -395,6 +395,43 @@ func TestConnCache(t *testing.T) {
 	})
 }
 
+func TestConnCachePopClearsReadDeadlineAfterConnectionID(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local}
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+		}
+		assert.True(t, cc.Push("tenant-a", sc))
+
+		popped := cc.Pop("tenant-a", 1, nil, nil, clientInfo{})
+		require.Same(t, sc, popped)
+		require.True(t, raw.readDeadline().IsZero(),
+			"cache Pop must clear the deadline armed by SET CONNECTION ID")
+		assert.NoError(t, popped.Close())
+	})
+}
+
+func TestConnCachePopDiscardsReadDeadlineClearFailure(t *testing.T) {
+	runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local, failClear: true}
+		sc := &deadlineRearmingServerConn{
+			ServerConn: newMockServerConn(raw),
+			raw:        raw,
+		}
+		assert.True(t, cc.Push("tenant-a", sc))
+
+		assert.Nil(t, cc.Pop("tenant-a", 1, nil, nil, clientInfo{}))
+		assert.Zero(t, cc.Count(),
+			"a backend whose handoff deadline cannot be cleared must be discarded")
+		assert.False(t, raw.readDeadline().IsZero())
+	})
+}
+
 func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 	ctx := context.Background()
 	logger := runtime.DefaultRuntime().Logger()
