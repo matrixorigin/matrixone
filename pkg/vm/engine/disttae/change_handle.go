@@ -380,7 +380,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 	debugLabel := engine.CollectChangesDebugLabelFromContext(ctx)
 	retainRowID := engine.RetainRowIDFromContext(ctx)
 	rangeFrom, rangeTo := h.currentPSFrom, h.currentPSTo
-	skipDeletes, primarySeqnum := h.skipDeletes, h.primarySeqnum
+	skipDeletes, primarySeqnum, primaryIdx := h.skipDeletes, h.primarySeqnum, h.tbl.primaryIdx
 	rangeMP, rangeFS := h.mp, h.fs
 	h.currentChangeHandle = &deferredChangesHandle{
 		build: func(nextCtx context.Context) (engine.ChangesHandle, error) {
@@ -389,7 +389,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 			nextCtx = engine.WithChangeRangeSpill(nextCtx, spillConfig)
 			nextCtx = engine.WithCollectChangesDebugLabel(nextCtx, debugLabel)
 			nextCtx = engine.WithRetainRowID(nextCtx, retainRowID)
-			return logtailreplay.NewChangesHandlerWithPartitionStateRange(
+			return logtailreplay.NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
 				nextCtx,
 				state,
 				rangeFrom,
@@ -397,6 +397,7 @@ func (h *PartitionChangesHandle) swapCurrentHandleToSnapshotStateRange(ctx conte
 				skipDeletes,
 				objectio.BlockMaxRows,
 				primarySeqnum,
+				primaryIdx,
 				rangeMP,
 				rangeFS,
 			)
