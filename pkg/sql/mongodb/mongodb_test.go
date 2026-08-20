@@ -1204,6 +1204,36 @@ func TestConnectionValidationAndRedaction(t *testing.T) {
 	require.Equal(t, "server selection failed for mongodb+srv://db.example/x token=******", redacted)
 }
 
+func TestDefaultRuntimeConfigEnablesSQLButDeniesNetworkEndpoints(t *testing.T) {
+	ctx := context.Background()
+	cfg := DefaultRuntimeConfig()
+	require.True(t, cfg.EnabledFor(0))
+	require.True(t, cfg.EnabledFor(42))
+	require.False(t, cfg.EnablePerAccount)
+	require.False(t, cfg.AllowLoopback)
+	require.Empty(t, cfg.AllowedHostSuffixes)
+	require.Empty(t, cfg.AllowedCIDRs)
+
+	base := Connection{
+		Name: "c", CredentialSecretRef: "secret://mongodb/reader",
+		AuthMechanism: "SCRAM-SHA-256", TLSMode: "required",
+		ReadPreference: "primary", ReadConcern: "majority",
+	}
+	for name, host := range map[string]string{
+		"hostname":       "db.example:27017",
+		"literal IP":     "10.10.1.5:27017",
+		"loopback":       "127.0.0.1:27017",
+		"link local":     "169.254.1.1:27017",
+		"cloud metadata": "100.100.100.200:27017",
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection := base
+			connection.Hosts = host
+			require.Error(t, ValidateConnection(ctx, connection, cfg))
+		})
+	}
+}
+
 func TestDriverOptionsFailClosedOnIncompleteResolvedSecrets(t *testing.T) {
 	connection := Connection{
 		Name: "c", Hosts: "127.0.0.1:27017", CredentialSecretRef: "secret://env/MONGO",
