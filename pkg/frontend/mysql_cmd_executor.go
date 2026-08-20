@@ -46,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -540,8 +539,13 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 		if err = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "yes"); err != nil {
 			return
 		}
+		ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		defer func() {
-			_ = ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no")
+			if restoreErr := ses.SetSessionSysVar(ctx, "mo_table_stats.force_update", "no"); restoreErr != nil {
+				ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", false)
+				return
+			}
+			ses.markMigrationSystemVarReplayable("mo_table_stats.force_update", true)
 		}()
 
 		sqlBuilder := strings.Builder{}
@@ -1266,6 +1270,33 @@ func doSetVar(
 		valueType               plan.Type
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
+	type systemVarReplayabilitySnapshot struct {
+		replayable bool
+		tracked    bool
+	}
+	previousSystemReplayability := make(map[string]systemVarReplayabilitySnapshot)
+	captureSystemReplayability := func(name string) {
+		name = canonicalSystemVariableName(name)
+		if _, captured := previousSystemReplayability[name]; captured {
+			return
+		}
+		replayable, tracked := ses.getMigrationSystemVarReplayability(name)
+		previousSystemReplayability[name] = systemVarReplayabilitySnapshot{
+			replayable: replayable,
+			tracked:    tracked,
+		}
+	}
+	for _, assign := range sv.Assignments {
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				captureSystemReplayability(name)
+			}
+		} else if assign.System {
+			captureSystemReplayability(assign.Name)
+		}
+	}
 	evaluateAssignment := func(assign *tree.VarAssignmentExpr) (evaluatedAssignment, error) {
 		isBin := false
 		prepareParamKind := vector.PrepareParamNone
@@ -1332,13 +1363,58 @@ func doSetVar(
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithTypeAndKind(
-				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind)
+			err = ses.setUserDefinedVarWithTypeAndKindAndReplayability(
+				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind,
+				!preparedExpression && sql != "" && execCtx.singleStatementQuery)
 			if err != nil {
 				return err
 			}
 		}
 		return nil
+	}
+	markSystemReplayability := func(assign *tree.VarAssignmentExpr) {
+		mark := func(name string, replayable bool) {
+			name = canonicalSystemVariableName(name)
+			if replayable {
+				if previous, captured := previousSystemReplayability[name]; captured && previous.tracked && !previous.replayable {
+					// A later captured assignment cannot prove that an earlier
+					// prepared assignment was replayable.
+					replayable = false
+				}
+			}
+			ses.markMigrationSystemVarReplayable(name, replayable)
+		}
+		if !assign.System && !assign.SetNames {
+			return
+		}
+		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
+		if assign.SetNames {
+			for _, name := range []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			} {
+				mark(name, replayable)
+			}
+			return
+		}
+		if assign.Global {
+			if def, ok := gSysVarsDefs[canonicalSystemVariableName(assign.Name)]; ok && def.Scope == ScopeBoth {
+				// SET GLOBAL changes the value inherited by a future session but
+				// leaves this session's value unchanged. Replaying it on a legacy
+				// target after the handshake would therefore lose the source value.
+				ses.markMigrationSystemVarReplayable(assign.Name, false)
+				return
+			}
+			// Only global variables with a session-migration runtime side
+			// effect need replayability tracking. A prepared or multi-statement
+			// SET GLOBAL for these variables is not present in the proxy raw
+			// stream, so legacy targets must fail closed instead of silently
+			// losing the source runtime value.
+			if hasMigrationRuntimeSideEffect(assign.Name) {
+				mark(assign.Name, replayable)
+			}
+			return
+		}
+		mark(assign.Name, replayable)
 	}
 
 	applyAssignment := func(item evaluatedAssignment) error {
@@ -1380,8 +1456,13 @@ func doSetVar(
 				}
 				allowCurrentStatementTxn := execCtx.txnOpt.activeTxnAtStartKnown &&
 					!execCtx.txnOpt.activeTxnAtStart
-				return txnHandler.setNextTxnIsolation(
-					execCtx.reqCtx, isolation, allowCurrentStatementTxn)
+				if err := txnHandler.setNextTxnIsolation(
+					execCtx.reqCtx, isolation, allowCurrentStatementTxn); err != nil {
+					return err
+				}
+				ses.markMigrationSystemVarReplayable(
+					migrationNextTxnIsolationKey, !preparedExpression && sql != "" && execCtx.singleStatementQuery)
+				return nil
 			case tree.TransactionScopeSession:
 				return setVarFunc(true, false, name, value, sql)
 			case tree.TransactionScopeGlobal:
@@ -1432,26 +1513,25 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("optimizer_hints", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_in", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_bloom_filter" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			runtime.ServiceRuntime(ses.service).SetGlobalVariables("runtime_filter_limit_bloom_filter", value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "disable_agg_statement" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
 				return err
 			}
-			boolVal := InitSystemVariableBoolType("_")
-			ses.disableAgg = boolVal.IsTrue(value)
+			ses.applySessionSysVarSideEffects(name, value)
 		} else {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
@@ -1506,6 +1586,7 @@ func doSetVar(
 			if err = applyAssignment(item); err != nil {
 				return err
 			}
+			markSystemReplayability(assign)
 		}
 		completed = true
 		return nil
@@ -1519,6 +1600,7 @@ func doSetVar(
 		if err = applyAssignment(item); err != nil {
 			return err
 		}
+		markSystemReplayability(assign)
 	}
 	return nil
 }
@@ -1612,6 +1694,7 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		); err != nil {
 			return err
 		}
+		ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, false)
 	case tree.TransactionScopeSession:
 		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_isolation", value); err != nil {
 			return err
@@ -5429,6 +5512,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.txnOpt.Close()
 		execCtx.stmt = stmt
 		execCtx.isLastStmt = !hasMoreStatements
+		execCtx.singleStatementQuery = singleStatement
 		execCtx.tenant = tenant
 		execCtx.userName = userNameOnly
 		execCtx.sqlOfStmt = currentSQLRecord

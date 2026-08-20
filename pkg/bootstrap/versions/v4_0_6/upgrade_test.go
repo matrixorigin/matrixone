@@ -38,8 +38,14 @@ import (
 
 func TestUpgradeEntries(t *testing.T) {
 	require.Len(t, tenantUpgEntries, 12)
-	require.Len(t, clusterUpgEntries, 1)
+	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
+	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
+	require.Equal(t, catalog.MO_VIEW_REFRESH, clusterUpgEntries[2].TableName)
+	for _, entry := range clusterUpgEntries[1:] {
+		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
+		require.Contains(t, strings.ToLower(entry.UpgSql), "create cluster table mo_catalog.mo_view_")
+	}
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
 	require.Equal(t, mongodb.TableMappings, tenantUpgEntries[1].TableName)
 	for _, entry := range tenantUpgEntries[:2] {

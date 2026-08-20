@@ -847,6 +847,143 @@ func TestBoundedGapFillConvertsTimestampBoundsInSessionTimezone(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestTimestampDayWindowsPreserveDSTCivilBoundaries(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name      string
+		start     string
+		end       string
+		secondDay string
+	}{
+		{name: "spring-forward", start: "2026-03-08 00:00:00", end: "2026-03-10 00:00:00", secondDay: "2026-03-09 00:00:00"},
+		{name: "fall-back", start: "2026-11-01 00:00:00", end: "2026-11-03 00:00:00", secondDay: "2026-11-02 00:00:00"},
+	} {
+		for _, gapFill := range []bool{false, true} {
+			t.Run(tc.name+"/"+map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
+				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				var arg *TimeWin
+				if gapFill {
+					arg = newBoundedPartArg(t, proc, tc.start, tc.end, false)
+				} else {
+					arg = newPartArg(t, proc, types.Datetime(types.SecsPerDay*types.MicroSecsPerSec), false)
+				}
+				arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+				arg.Interval = types.Datetime(types.SecsPerDay * types.MicroSecsPerSec)
+				arg.Sliding = arg.Interval
+				proc.GetSessionInfo().TimeZone = zone
+
+				startTS, parseErr := types.ParseTimestamp(zone, tc.start, 6)
+				require.NoError(t, parseErr)
+				if gapFill {
+					arg.GapFillStart = timestampBound(t, zone, tc.start)
+					arg.GapFillEnd = timestampBound(t, zone, tc.end)
+				}
+				secondDay, parseErr := types.ParseDatetime(tc.secondDay, 6)
+				require.NoError(t, parseErr)
+
+				in := batch.New([]string{"ts", "val"})
+				in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+				require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+					types.Datetime(startTS),
+					types.Datetime(secondDay.ToTimestamp(zone)),
+				}, nil, proc.Mp()))
+				in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+				in.SetRowCount(2)
+
+				starts, sums := runTemporalBoundArg(t, arg, proc, in)
+				require.Equal(t, []types.Datetime{
+					mustDatetime(t, tc.start),
+					secondDay,
+				}, starts)
+				require.Equal(t, []int64{1, 2}, sums)
+
+				arg.Free(proc, false, nil)
+				in.Clean(proc.Mp())
+				proc.Free()
+				require.Equal(t, int64(0), proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+func TestTimestampFoldGapFillKeepsBothCivilOccurrences(t *testing.T) {
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+	for _, gapFill := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "gapfill"}[gapFill], func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := newPartArg(t, proc, hour, false)
+			arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+			arg.Interval = hour
+			arg.Sliding = hour
+			arg.GapFill = gapFill
+			proc.GetSessionInfo().TimeZone = zone
+
+			in := batch.New([]string{"ts", "val"})
+			in.Vecs[0] = vector.NewVec(types.T_datetime.ToTypeWithScale(6))
+			require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Datetime{
+				types.Datetime(first),
+				types.Datetime(second),
+			}, nil, proc.Mp()))
+			in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+			in.SetRowCount(2)
+
+			starts, sums := runTemporalBoundArg(t, arg, proc, in)
+			require.Equal(t, []types.Datetime{
+				mustDatetime(t, "2026-11-01 01:00:00"),
+				mustDatetime(t, "2026-11-01 01:00:00"),
+			}, starts)
+			require.Equal(t, []int64{1, 2}, sums)
+
+			arg.Free(proc, false, nil)
+			in.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedTimestampNonDivisorFoldGapFill(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	ninetyMinutes := types.Datetime(90 * types.SecsPerMinute * types.MicroSecsPerSec)
+	arg := newPartArg(t, proc, ninetyMinutes, false)
+	arg.GapFill = true
+	arg.TsType = plan.Type{Id: int32(types.T_timestamp), Scale: 6}
+	arg.Interval = ninetyMinutes
+	arg.Sliding = ninetyMinutes
+	arg.GapFillStart = timestampBound(t, zone, "2026-11-01 01:30:00")
+	arg.GapFillEnd = timestampBound(t, zone, "2026-11-01 03:00:00")
+	first := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+	second := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+
+	in := batch.New([]string{"ts", "val"})
+	in.Vecs[0] = vector.NewVec(types.T_timestamp.ToTypeWithScale(6))
+	require.NoError(t, vector.AppendFixedList(in.Vecs[0], []types.Timestamp{first, second}, nil, proc.Mp()))
+	in.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	in.SetRowCount(2)
+
+	starts, sums := runTemporalBoundArg(t, arg, proc, in)
+	require.Equal(t, []int64{1, 2}, sums)
+	require.Equal(t, []types.Datetime{
+		first.ToDatetime(zone),
+		second.ToDatetime(zone),
+	}, starts)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func TestBoundedGapFillConvertsDateBounds(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := newBoundedPartArg(
@@ -941,6 +1078,157 @@ func TestBoundedGapFillEmitsGridForEmptyInput(t *testing.T) {
 	require.Equal(t, int64(3), arg.ctr.gapFillWindows)
 
 	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillTimestampDSTBoundarySequence(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	hour := types.Datetime(types.SecsPerHour * types.MicroSecsPerSec)
+	parse := func(s string) types.Timestamp {
+		ts, err := types.ParseTimestamp(zone, s, 6)
+		require.NoError(t, err)
+		return ts
+	}
+	firstFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC).UnixMicro())
+	secondFold := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC).UnixMicro())
+
+	t.Run("observed-row-skip-keeps-both-fold-instants", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-11-01 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-11-01 03:00:00")),
+		}
+		flushed, err := ctr.advanceBoundedTumblingGap(arg, types.Datetime(parse("2026-11-01 02:00:00")), proc)
+		require.NoError(t, err)
+		require.False(t, flushed)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-11-01 00:00:00")),
+			types.Datetime(firstFold),
+			types.Datetime(secondFold),
+		}, ctr.wStart)
+		require.Equal(t, types.Datetime(parse("2026-11-01 02:00:00")), ctr.left)
+	})
+
+	t.Run("empty-spring-forward-domain-excludes-finish", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-03-08 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-03-08 04:00:00")),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-03-08 00:00:00")),
+			types.Datetime(parse("2026-03-08 01:00:00")),
+			types.Datetime(parse("2026-03-08 03:00:00")),
+		}, ctr.wStart)
+	})
+
+	t.Run("empty-fall-back-domain-keeps-both-fold-instants", func(t *testing.T) {
+		arg := &TimeWin{GapFill: true, Interval: hour, Sliding: hour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(parse("2026-11-01 00:00:00")),
+			gapFillEnd: types.Datetime(parse("2026-11-01 03:00:00")),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(parse("2026-11-01 00:00:00")),
+			types.Datetime(firstFold),
+			types.Datetime(secondFold),
+			types.Datetime(parse("2026-11-01 02:00:00")),
+		}, ctr.wStart)
+	})
+
+	t.Run("sub-hour-second-fold-advances-forward", func(t *testing.T) {
+		halfHour := types.Datetime(30 * types.SecsPerMinute * types.MicroSecsPerSec)
+		firstFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC).UnixMicro())
+		secondFoldHalfHour := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC).UnixMicro())
+		secondFoldTwoHours := types.UnixMicroToTimestamp(time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).UnixMicro())
+		arg := &TimeWin{GapFill: true, Interval: halfHour, Sliding: halfHour}
+		ctr := &container{
+			tsOid:      types.T_timestamp,
+			left:       types.Datetime(firstFoldHalfHour),
+			gapFillEnd: types.Datetime(secondFoldTwoHours),
+		}
+		complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+		require.NoError(t, err)
+		require.True(t, complete)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(firstFoldHalfHour),
+			types.Datetime(secondFold),
+			types.Datetime(secondFoldHalfHour),
+		}, ctr.wStart)
+		require.Equal(t, []types.Datetime{
+			types.Datetime(secondFold),
+			types.Datetime(secondFoldHalfHour),
+			types.Datetime(secondFoldTwoHours),
+		}, ctr.wEnd)
+	})
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBoundedGapFillLordHoweNonHourlyFold(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	zone, err := time.LoadLocation("Australia/Lord_Howe")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+	fiveMinutes := types.Datetime(5 * types.SecsPerMinute * types.MicroSecsPerSec)
+	atUTC := func(hour, minute int) types.Timestamp {
+		return types.UnixMicroToTimestamp(time.Date(2026, 4, 4, hour, minute, 0, 0, time.UTC).UnixMicro())
+	}
+	first := atUTC(14, 30)
+	finish := atUTC(15, 30)
+	arg := &TimeWin{GapFill: true, Interval: fiveMinutes, Sliding: fiveMinutes}
+	ctr := &container{
+		tsOid:      types.T_timestamp,
+		left:       types.Datetime(first),
+		gapFillEnd: types.Datetime(finish),
+	}
+
+	complete, err := ctr.closeBoundedGapFillTail(arg, proc)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.Equal(t, []types.Datetime{
+		types.Datetime(atUTC(14, 30)),
+		types.Datetime(atUTC(14, 35)),
+		types.Datetime(atUTC(14, 40)),
+		types.Datetime(atUTC(14, 45)),
+		types.Datetime(atUTC(14, 50)),
+		types.Datetime(atUTC(14, 55)),
+		types.Datetime(atUTC(15, 0)),
+		types.Datetime(atUTC(15, 5)),
+		types.Datetime(atUTC(15, 10)),
+		types.Datetime(atUTC(15, 15)),
+		types.Datetime(atUTC(15, 20)),
+		types.Datetime(atUTC(15, 25)),
+	}, ctr.wStart)
+	require.Equal(t, []types.Datetime{
+		types.Datetime(atUTC(14, 35)),
+		types.Datetime(atUTC(14, 40)),
+		types.Datetime(atUTC(14, 45)),
+		types.Datetime(atUTC(14, 50)),
+		types.Datetime(atUTC(14, 55)),
+		types.Datetime(atUTC(15, 0)),
+		types.Datetime(atUTC(15, 5)),
+		types.Datetime(atUTC(15, 10)),
+		types.Datetime(atUTC(15, 15)),
+		types.Datetime(atUTC(15, 20)),
+		types.Datetime(atUTC(15, 25)),
+		types.Datetime(atUTC(15, 30)),
+	}, ctr.wEnd)
+
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -1610,7 +1898,7 @@ func TestTimeWinSkipsInvisibleEmptySlidingWindows(t *testing.T) {
 		status:      fill,
 	}
 
-	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}))
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding}, proc))
 	require.Equal(t, int32(fill), ctr.status)
 	require.LessOrEqual(t, ctr.left, nextValue)
 	require.Greater(t, ctr.right, nextValue)
@@ -1642,7 +1930,7 @@ func TestTimeWinDoesNotSkipGapFillEmptySlidingWindows(t *testing.T) {
 		status:      fill,
 	}
 
-	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}))
+	require.NoError(t, ctr.fillRows(&TimeWin{Interval: interval, Sliding: sliding, GapFill: true}, proc))
 	require.Equal(t, int32(nextWindow), ctr.status)
 	require.Equal(t, base, ctr.left)
 	require.Equal(t, base+interval, ctr.right)

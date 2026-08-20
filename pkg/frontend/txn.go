@@ -442,6 +442,15 @@ func (th *TxnHandler) setNextTxnIsolation(
 	return nil
 }
 
+func (th *TxnHandler) nextTxnIsolationSnapshot() (pbtxn.TxnIsolation, bool) {
+	if th == nil {
+		return 0, false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.nextTxnIsolation, th.hasNextTxnIsolation
+}
+
 // txnIsolationUnsafe returns the isolation override for the transaction being
 // created and whether a next-transaction override must be consumed after New
 // successfully publishes an owned operator. The caller must hold th.mu.
@@ -676,7 +685,7 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	} else if isolation, ok, consumeNext := th.txnIsolationUnsafe(
-		statementConsumesNextTxnIsolation(execCtx.stmt),
+		statementConsumesNextTxnIsolation(execCtx.stmt, execCtx.txnOpt.autoCommit),
 	); ok {
 		opts = append(opts, txnclient.WithTxnIsolation(isolation))
 		consumeNextTxnIsolation = consumeNext
@@ -701,6 +710,9 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 	if consumeNextTxnIsolation {
 		th.hasNextTxnIsolation = false
+		if ses, ok := execCtx.ses.(*Session); ok {
+			ses.markMigrationSystemVarReplayable(migrationNextTxnIsolationKey, true)
+		}
 	}
 	return err
 }
@@ -1021,13 +1033,18 @@ func statementContainsTransactionCharacteristic(stmt tree.Statement) bool {
 }
 
 // statementConsumesNextTxnIsolation marks semantic transaction admission.
-// SET statements can create an implementation-only frontend transaction for
-// expression evaluation or catalog writes; that temporary owner must never
-// consume a NEXT override intended for the next application transaction.
-func statementConsumesNextTxnIsolation(stmt tree.Statement) bool {
+// SET statements and autocommit PREPARE statements can create an
+// implementation-only frontend transaction; those temporary owners must never
+// consume a NEXT override intended for the next application transaction. With
+// autocommit disabled, PREPARE owns the user transaction that remains active
+// after the statement, so it must consume the NEXT override consistently with
+// the transaction it creates.
+func statementConsumesNextTxnIsolation(stmt tree.Statement, autoCommit bool) bool {
 	switch stmt.(type) {
 	case *tree.SetVar, *tree.SetTransaction:
 		return false
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar:
+		return !autoCommit
 	default:
 		return true
 	}

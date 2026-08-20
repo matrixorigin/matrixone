@@ -229,17 +229,22 @@ func TestAllocationAccountCapacityClassReleaseDoesNotInvertRegistryLock(t *testi
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
-	for (account.Snapshot().Used != 0 || account.inflight.Load() != 0) &&
-		time.Now().Before(deadline) {
-		runtime.Gosched()
-	}
-	progressed := account.Snapshot().Used == 0 && account.inflight.Load() == 0
+	progressed := false
 	capacityAvailable := false
-	if progressed {
-		capacityAvailable = account.capacityMu.TryLock()
-		if capacityAvailable {
-			account.capacityMu.Unlock()
+	for time.Now().Before(deadline) {
+		snapshot := account.Snapshot()
+		if snapshot.Used == 0 && account.inflight.Load() == 0 {
+			progressed = true
+			// releaseWithCapacityClass publishes the zero state before it
+			// drops capacityMu. Keep waiting through that handoff instead of
+			// sampling a transient TryLock failure as a lock-order violation.
+			if account.capacityMu.TryLock() {
+				capacityAvailable = true
+				account.capacityMu.Unlock()
+				break
+			}
 		}
+		runtime.Gosched()
 	}
 	registry.mu.Unlock()
 	<-released
