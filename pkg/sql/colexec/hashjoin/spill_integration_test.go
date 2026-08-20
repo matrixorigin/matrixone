@@ -211,6 +211,74 @@ func TestShuffleJoinFiniteBudgetInitialSpillAndReSpill(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestShuffleJoinCompressedRowCountAcrossSpilledBuckets(t *testing.T) {
+	tc := newTestCase(
+		t, []bool{false}, []types.Type{types.T_int32.ToType()}, nil,
+		[][]*plan.Expr{makeKeyExpr(), makeKeyExpr()},
+	)
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		budget, err := tc.proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Zero(t, budget.Used())
+		require.Zero(t, budget.SpillDiskUsed())
+		require.Zero(t, budget.SpillFDUsed())
+		tc.proc.Free()
+		tc.cancel()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+
+	tc.proc.Base.Lim.Size = 8 << 20
+	tc.proc.Base.Lim.SpillSize = 64 << 20
+	const distinctRows = 8192
+	probeValues := make([]int32, distinctRows)
+	buildValues := make([]int32, distinctRows*2)
+	for i := range probeValues {
+		probeValues[i] = int32(i)
+		buildValues[i*2] = int32(i)
+		buildValues[i*2+1] = int32(i)
+	}
+
+	tc.arg.JoinType = plan.Node_INNER
+	tc.arg.NonEqCond = nil
+	tc.arg.EmitCompressedRowCount = true
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 50
+	tc.barg.IsShuffle = true
+	tc.barg.ShuffleIdx = 0
+	tc.barg.SpillThreshold = 50
+	tc.barg.NeedBatches = false
+	tc.barg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 1100}
+	resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, probeValues))
+	resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, buildValues))
+
+	spillBefore := promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1"))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	buildResult, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, buildResult.Batch)
+
+	resultRows := 0
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch != nil {
+			require.Empty(t, result.Batch.Vecs)
+			resultRows += result.Batch.RowCount()
+		}
+		if result.Status == vm.ExecStop {
+			break
+		}
+	}
+	require.Equal(t, len(buildValues), resultRows)
+	require.Greater(t, promtestutil.ToFloat64(
+		metricv2.HashBuildSpillDepthCounter.WithLabelValues("spill", "1")), spillBefore)
+}
+
 func TestShuffleFullOuterSpillTracksBuildMatchesWithoutRightOrientation(t *testing.T) {
 	tc := newTestCase(
 		t,
