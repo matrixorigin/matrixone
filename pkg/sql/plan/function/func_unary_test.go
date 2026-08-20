@@ -11616,6 +11616,14 @@ func TestStringTimeExtractOracleOwnershipMatrix(t *testing.T) {
 		{input: "1:01::56 é ", want: want{null: true}},
 		{input: "12:34::56 x ", want: want{null: true}},
 		{input: "12:34::56 + ", want: want{null: true}},
+		{input: "12:34:56: x", want: want{hour: 12, minute: 34, second: 56}},
+		{input: "12:34:56: x ", want: want{null: true}},
+		{input: "12:34:56:: x", want: want{null: true}},
+		{input: "12:34:56:: x ", want: want{null: true}},
+		{input: "1:01:01: x", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01: x ", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01:: x", want: want{hour: 1, minute: 1, second: 1}},
+		{input: "1:01:01:: x ", want: want{}},
 	}
 
 	inputs := make([]string, 0, len(cases))
