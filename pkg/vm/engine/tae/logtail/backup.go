@@ -81,10 +81,6 @@ func (layout backupSpecialColumnLayout) Resolve(seqnum uint16) (uint16, bool) {
 	}
 }
 
-func (layout backupSpecialColumnLayout) resolve(seqnum uint16) (uint16, bool) {
-	return layout.Resolve(seqnum)
-}
-
 func resolveBackupSpecialColumnLayout(block objectio.BlockObject) backupSpecialColumnLayout {
 	resolved := objectio.ResolveSpecialColumnLayout(block)
 	layout := backupSpecialColumnLayout{
