@@ -74,5 +74,69 @@ id    s
 1    10
 2    30
 3    50
+create table fall_back_fold(id int primary key, ts timestamp(6), v int);
+insert into fall_back_fold values
+(1, '2024-11-03 05:00:00.000000', 1),
+(2, '2024-11-03 05:30:00.000000', 2),
+(3, '2024-11-03 05:59:00.000000', 3),
+(4, '2024-11-03 06:00:00.000000', 4),
+(5, '2024-11-03 06:30:00.000000', 5),
+(6, '2024-11-03 06:59:00.000000', 6),
+(7, '2024-11-03 07:00:00.000000', 7),
+(8, '2024-11-03 07:30:00.000000', 8);
+set time_zone = 'America/New_York';
+select id, sum(v) over (
+order by ts
+range between interval 30 minute preceding and current row
+) as s from fall_back_fold order by id;
+id    s
+1     5
+2     12
+3     16
+4     5
+5     12
+6     16
+7     23
+8     15
+select id, sum(v) over (
+order by ts
+range between current row and interval 30 minute following
+) as s from fall_back_fold order by id;
+id    s
+1     12
+2     23
+3     16
+4     12
+5     23
+6     16
+7     15
+8     8
+select id, sum(v) over (
+order by ts desc
+range between interval 30 minute preceding and current row
+) as s from fall_back_fold order by id;
+id    s
+1     12
+2     23
+3     16
+4     12
+5     23
+6     16
+7     15
+8     8
+select id, sum(v) over (
+order by ts desc
+range between current row and interval 30 minute following
+) as s from fall_back_fold order by id;
+id    s
+1     5
+2     12
+3     16
+4     5
+5     12
+6     16
+7     23
+8     15
+drop table fall_back_fold;
 set time_zone = @old_time_zone_window_timestamp_range_dst;
 drop database window_timestamp_range_dst;
