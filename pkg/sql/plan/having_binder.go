@@ -107,6 +107,14 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		var found, ambiguous bool
 		if astExpr.NumParts == 1 {
 			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
+			if !found && !ambiguous {
+				// MySQL also keeps the unqualified source spelling visible when
+				// the source column is directly projected under a different alias
+				// (for example SELECT a AS x ... HAVING a). Resolve this only after
+				// output-name lookup so aliases still have precedence and duplicate
+				// output names remain ambiguous.
+				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
+			}
 		} else {
 			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 		}

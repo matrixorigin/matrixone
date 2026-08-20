@@ -2133,6 +2133,32 @@ func TestOnlyFullGroupByExplicitHavingAliasPrecedesUnprojectedSource(t *testing.
 	require.NoError(t, err)
 }
 
+func TestOnlyFullGroupByAllowsProjectedSourceWithDifferentHavingAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS region_key
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByRejectsUnprojectedOrEmbeddedHavingSource(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n_regionkey AS region_key
+		 FROM nation
+		 HAVING n_nationkey > 0`,
+		`SELECT n_regionkey + 1 AS region_key
+		 FROM nation
+		 HAVING n_regionkey > 0`,
+	} {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "must appear in the GROUP BY clause", sql)
+	}
+}
+
 func TestOnlyFullGroupByAllowsUnaryPlusImplicitHavingName(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
