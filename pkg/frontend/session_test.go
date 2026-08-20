@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -39,7 +40,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -52,6 +55,65 @@ import (
 type legacyZeroRunSQLTxnOperator struct {
 	client.TxnOperator
 	exited chan uint64
+}
+
+type preparedCursorResultStager struct {
+	nonNilBatches int
+	nilBatches    int
+	published     int
+	aborted       int
+}
+
+func (s *preparedCursorResultStager) Stage(_ *ExecCtx, _ *perfcounter.CounterSet, _ *batch.Batch) error {
+	s.nonNilBatches++
+	return nil
+}
+
+func (s *preparedCursorResultStager) FinishStage(_ *ExecCtx) error {
+	s.nilBatches++
+	return nil
+}
+
+func (s *preparedCursorResultStager) Publish(_ *ExecCtx) error {
+	s.published++
+	return nil
+}
+
+func (s *preparedCursorResultStager) Abort(_ *ExecCtx) error {
+	s.aborted++
+	return nil
+}
+
+func TestPreparedCursorOutputCallbackPreservesResultSaver(t *testing.T) {
+	saver := &preparedCursorResultStager{}
+	ses := &Session{}
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+	execCtx := &ExecCtx{
+		reqCtx:            context.Background(),
+		ses:               ses,
+		stmt:              &tree.Select{},
+		prepareStmt:       stmt,
+		input:             &UserInput{isCursorExecute: true},
+		cursorResultSaver: saver,
+	}
+	callback := ses.GetOutputCallback(execCtx)
+	empty := batch.NewWithSize(0)
+	empty.SetRowCount(0)
+	require.NoError(t, callback(empty, nil))
+	require.NoError(t, callback(nil, nil))
+	require.Equal(t, 1, saver.nonNilBatches)
+	require.Equal(t, 1, saver.nilBatches)
+
+	require.NoError(t, publishPreparedCursorQueryResult(execCtx))
+	require.Equal(t, 1, saver.published)
+	require.Nil(t, execCtx.cursorResultSaver)
+
+	// A second execution can stage a new result and must release it when the
+	// statement fails before the transaction is finalized.
+	execCtx.cursorResultSaver = saver
+	require.Error(t, abortPreparedCursorQueryResult(execCtx, context.Canceled))
+	require.Equal(t, 1, saver.aborted)
+	require.Nil(t, execCtx.cursorResultSaver)
 }
 
 func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {

@@ -4765,7 +4765,7 @@ func executeStmtWithResponse(ses *Session,
 	// cursor on the wire.
 	err = executeStmtWithMaxExecutionTime(ses, execCtx)
 	if err != nil {
-		return abortStagedReturning(execCtx, err)
+		return abortPreparedCursorQueryResult(execCtx, abortStagedReturning(execCtx, err))
 	}
 
 	// Record the rows affected by this statement so the ROW_COUNT() builtin in a

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -382,6 +383,49 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 		}
 	}
 	return nil
+}
+
+// stagePreparedCursorQueryResult keeps cursor query-result blocks invisible
+// until transaction finalization succeeds. The metadata marker is published
+// by publishPreparedCursorQueryResult after the execute transaction commits.
+func stagePreparedCursorQueryResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
+	if execCtx == nil || execCtx.ses == nil {
+		return moerr.NewInternalErrorNoCtx("prepared cursor execution context is missing")
+	}
+	if execCtx.cursorResultSaver == nil {
+		ses := execCtx.ses.(*Session)
+		if !canSaveQueryResult(execCtx.reqCtx, ses) {
+			return nil
+		}
+		execCtx.cursorResultSaver = &QueryResult{}
+	}
+	if bat == nil {
+		return execCtx.cursorResultSaver.FinishStage(execCtx)
+	}
+	return execCtx.cursorResultSaver.Stage(execCtx, crs, bat)
+}
+
+func publishPreparedCursorQueryResult(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return nil
+	}
+	saver := execCtx.cursorResultSaver
+	if err := saver.Publish(execCtx); err != nil {
+		abortErr := saver.Abort(execCtx)
+		execCtx.cursorResultSaver = nil
+		return errors.Join(err, abortErr)
+	}
+	execCtx.cursorResultSaver = nil
+	return nil
+}
+
+func abortPreparedCursorQueryResult(execCtx *ExecCtx, cause error) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return cause
+	}
+	abortErr := execCtx.cursorResultSaver.Abort(execCtx)
+	execCtx.cursorResultSaver = nil
+	return errors.Join(cause, abortErr)
 }
 
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {

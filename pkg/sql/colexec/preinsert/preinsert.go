@@ -49,10 +49,6 @@ func (preInsert *PreInsert) OpType() vm.OpType {
 }
 
 func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
-	// A PreInsert can be reused by the VM for another statement.  Reset the
-	// statement-local LAST_INSERT_ID marker before that statement starts, while
-	// leaving it untouched between input batches in the current execution.
-	preInsert.ctr.firstGeneratedValueSet = false
 	if preInsert.OpAnalyzer == nil {
 		preInsert.OpAnalyzer = process.NewAnalyzer(preInsert.GetIdx(), preInsert.IsFirst, preInsert.IsLast, "preinsert")
 	} else {
@@ -576,10 +572,14 @@ retryInsertValues:
 		}
 	}
 
-	if lastInsertValue != 0 && !preInsert.ctr.firstGeneratedValueSet {
-		proc.SetLastInsertID(lastInsertValue)
-		proc.SetStatementLastInsertID(lastInsertValue)
-		preInsert.ctr.firstGeneratedValueSet = true
+	if lastInsertValue != 0 {
+		// A parallel INSERT ... SELECT has one PreInsert operator per scope,
+		// all sharing the statement-wide process state.  Publish the smallest
+		// generated value through the shared coordinator so scheduling cannot make
+		// LAST_INSERT_ID depend on which scope happens to finish first.  Subsequent
+		// batches in a serial scope naturally keep the first value because
+		// auto-increment allocations are monotonic.
+		proc.SetStatementLastInsertIDIfEarlier(lastInsertValue)
 	}
 	return nil
 }

@@ -32,11 +32,6 @@ type container struct {
 	canFreeVecIdx     map[int]bool //auto incr & expand constant vecotr.need free
 	clusterByExecutor colexec.ExpressionExecutor
 	compPkExecutor    colexec.ExpressionExecutor
-	// firstGeneratedValueSet keeps LAST_INSERT_ID stable while one preinsert
-	// operator consumes multiple input batches.  The incremental service is
-	// called once per batch, but MySQL exposes the first generated value for the
-	// whole statement.
-	firstGeneratedValueSet bool
 	// tblId is a local copy of TableDef.TblId, refreshed by
 	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
 	// shared *plan.TableDef that other operators may read concurrently.
@@ -108,7 +103,6 @@ func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, er
 	if preInsert.ctr.clusterByExecutor != nil {
 		preInsert.ctr.clusterByExecutor.ResetForNextQuery()
 	}
-	preInsert.ctr.firstGeneratedValueSet = false
 }
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {

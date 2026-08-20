@@ -981,6 +981,7 @@ type ExecCtx struct {
 	resper            Responser
 	results           []ExecResult
 	prepareColDef     [][]byte
+	cursorResultSaver StagedBinaryWriter
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
 	isIssue3482       bool
@@ -1007,6 +1008,10 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
+		_ = execCtx.cursorResultSaver.Abort(execCtx)
+	}
+	execCtx.cursorResultSaver = nil
 	if execCtx.returning != nil {
 		_ = execCtx.returning.Close(execCtx)
 		execCtx.returning = nil

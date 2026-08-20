@@ -17,6 +17,7 @@ package preinsert
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -879,6 +881,79 @@ func TestGenAutoIncrColKeepsFirstGeneratedIDAcrossBatches(t *testing.T) {
 	second := makeBatch()
 	defer second.Clean(proc.Mp())
 	require.NoError(t, genAutoIncrCol(second, proc, preInsert))
+	require.Equal(t, uint64(1), proc.GetLastInsertID())
+}
+
+func TestGenAutoIncrColCoordinatesParallelFirstGeneratedID(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	firstCallStarted := make(chan struct{})
+	releaseFirstCall := make(chan struct{})
+	var calls int32
+	incrService.EXPECT().InsertValues(gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1)).
+		Times(2).DoAndReturn(func(context.Context, uint64, uint32, client.TxnOperator, []*vector.Vector, int, int64) (uint64, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			close(firstCallStarted)
+			<-releaseFirstCall
+			return uint64(8193), nil
+		}
+		return uint64(1), nil
+	})
+
+	proc := testutil.NewProc(t)
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+	makePreInsert := func() *PreInsert {
+		preInsert := &PreInsert{
+			HasAutoCol: true,
+			TableDef: &plan.TableDef{
+				Name:        "parallel_auto_increment",
+				TblId:       100,
+				IsTemporary: true,
+				Cols: []*plan.ColDef{{
+					Name: catalog.FakePrimaryKeyColName,
+					Typ:  i32typ,
+				}},
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			},
+			Attrs:             []string{catalog.FakePrimaryKeyColName},
+			EstimatedRowCount: 1,
+		}
+		preInsert.ctr.tblId = preInsert.TableDef.TblId
+		return preInsert
+	}
+	makeBatch := func() *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		return bat
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		bat := makeBatch()
+		defer bat.Clean(proc.Mp())
+		firstErr <- genAutoIncrCol(bat, proc, makePreInsert())
+	}()
+	<-firstCallStarted
+
+	secondErr := make(chan error, 1)
+	go func() {
+		bat := makeBatch()
+		defer bat.Clean(proc.Mp())
+		secondErr <- genAutoIncrCol(bat, proc, makePreInsert())
+	}()
+
+	// The second scope publishes 1 while the first scope is still blocked
+	// after allocating 8193.  The statement-wide coordinator must keep the
+	// lower value when the first scope resumes.
+	close(releaseFirstCall)
+	require.NoError(t, <-firstErr)
+	require.NoError(t, <-secondErr)
+	require.Equal(t, uint64(1), proc.GetStatementLastInsertID())
 	require.Equal(t, uint64(1), proc.GetLastInsertID())
 }
 
