@@ -205,6 +205,27 @@ func TestCountStarInnerJoinPrunesOutputColumns(t *testing.T) {
 			countOnly: true,
 		},
 		{
+			name: "volatile projection",
+			sql:  "select rand() from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "sum constant",
+			sql:  "select sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "count constant",
+			sql:  "select count(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "multiple aggregates",
+			sql:  "select count(*), sum(1) from nation n inner join region r on n.n_regionkey = r.r_regionkey",
+		},
+		{
+			name: "constant grouping",
+			sql: "select cast(1 as signed), count(*) from nation n inner join region r " +
+				"on n.n_regionkey = r.r_regionkey group by cast(1 as signed)",
+		},
+		{
 			name: "inner non-equi join",
 			sql:  "select count(*) from nation n inner join region r on n.n_regionkey < r.r_regionkey",
 		},
@@ -234,9 +255,12 @@ func TestCountStarInnerJoinPrunesOutputColumns(t *testing.T) {
 			if test.countOnly {
 				require.Empty(t, join.ProjectList,
 					"pure inner equi COUNT(*) should expose row count only")
+				require.True(t, join.EmitCompressedRowCount,
+					"the executor contract must be explicit")
 			} else {
 				require.NotEmpty(t, join.ProjectList,
 					"non-count-only join shape needs a row carrier")
+				require.False(t, join.EmitCompressedRowCount)
 			}
 		})
 	}

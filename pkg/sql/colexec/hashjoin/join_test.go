@@ -236,6 +236,7 @@ func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
 	tc.arg.JoinType = plan.Node_INNER
 	tc.arg.NonEqCond = nil
+	tc.arg.EmitCompressedRowCount = true
 	tc.barg.NeedBatches = false
 
 	const duplicateRows = colexec.DefaultBatchSize*2 + 17
@@ -272,6 +273,55 @@ func TestHashJoinCountOnlyCollapsesDuplicateMatches(t *testing.T) {
 	res, err = vm.Exec(tc.arg, tc.proc)
 	require.NoError(t, err)
 	require.Nil(t, res.Batch)
+}
+
+func TestHashJoinCountOnlyRequiresLoadedMap(t *testing.T) {
+	hashJoin := &HashJoin{
+		JoinType:               plan.Node_INNER,
+		EmitCompressedRowCount: true,
+	}
+	require.False(t, hashJoin.canEmitMatchCountOnly())
+}
+
+func TestHashJoinEmptyProjectionWithoutCountContractStaysBoundedAndCancelable(t *testing.T) {
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	tc := newTestCase(t, []bool{false}, []types.Type{typ}, nil, conditions)
+	tc.arg.JoinType = plan.Node_INNER
+	tc.arg.NonEqCond = nil
+	tc.barg.NeedBatches = false
+
+	const duplicateRows = colexec.DefaultBatchSize*2 + 17
+	buildValues := make([]int32, duplicateRows)
+	for i := range buildValues {
+		buildValues[i] = 1
+	}
+	resetHashBuildChildrenWithBatch(tc.barg, makeInt32Batch(tc.proc, buildValues))
+	resetChildrenWithBatch(tc.arg, makeInt32Batch(tc.proc, []int32{1}))
+
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.barg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		tc.cancel()
+	}()
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.NoError(t, tc.barg.Prepare(tc.proc))
+	res, err := vm.Exec(tc.barg, tc.proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
+
+	res, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, res.Batch)
+	require.Empty(t, res.Batch.Vecs)
+	require.Equal(t, colexec.DefaultBatchSize, res.Batch.RowCount())
+
+	ctx, cancel := context.WithCancel(tc.proc.Ctx)
+	tc.proc.Ctx = ctx
+	cancel()
+	_, err = vm.Exec(tc.arg, tc.proc)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 type recursiveHashJoinProbe struct {

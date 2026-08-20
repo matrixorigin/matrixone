@@ -331,13 +331,13 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-// canEmitMatchCountOnly identifies an inner equi-join whose parent pruned all
-// result columns.  This is the physical shape produced for COUNT(*) over an
-// inner join: the consumer needs the number of matches, not one materialized
-// row per match.
+// canEmitMatchCountOnly checks the explicit planner/executor contract and the
+// currently loaded hashmap. Spilled joins install one in-memory hashmap per
+// ready bucket; empty spilled buckets never enter this path.
 func (hashJoin *HashJoin) canEmitMatchCountOnly() bool {
-	return hashJoin.IsInner() && hashJoin.NonEqCond == nil &&
-		len(hashJoin.ResultCols) == 0
+	return hashJoin.EmitCompressedRowCount && hashJoin.IsInner() &&
+		hashJoin.NonEqCond == nil && len(hashJoin.ResultCols) == 0 &&
+		hashJoin.ctr.mp != nil
 }
 
 // probeMatchCountOnly emits one zero-column batch for the complete probe
