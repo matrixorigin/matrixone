@@ -75,6 +75,12 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 			typ:       view,
 			createSql: "create view `d`.`v` as select 1",
 		},
+		{
+			dbName:    "d",
+			tblName:   "seq",
+			relKind:   catalog.SystemSequenceRel,
+			createSql: "create sequence `d`.`seq` as bigint no cycle",
+		},
 	}
 
 	deps, err := getFkDepsFromTableInfos(context.Background(), tableInfos)
@@ -82,6 +88,92 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
 	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
 	require.NotContains(t, deps, genKey("d", "v"))
+	require.NotContains(t, deps, genKey("d", "seq"))
+}
+
+func TestSequenceRestoreMetadataAndOrdering(t *testing.T) {
+	t.Run("table enumeration includes sequences", func(t *testing.T) {
+		whereClause := buildTableInfoListWhereClause("db1", "", uint32(sysAccountID))
+		require.NotContains(t, whereClause,
+			fmt.Sprintf("relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel)))
+		require.Contains(t, whereClause, "relkind not in")
+		require.Contains(t, whereClause,
+			fmt.Sprintf("relkind != %s", quoteSQLStringLiteral(catalog.SystemPartitionRel)))
+	})
+
+	t.Run("sequence DDL is reconstructed from historical type and state", func(t *testing.T) {
+		const snapshotTS = int64(12345)
+		var queries []string
+		query := func(_ context.Context, sql string, _ ...uint64) ([][]string, error) {
+			queries = append(queries, sql)
+			if strings.Contains(sql, "mo_catalog.mo_columns") {
+				return [][]string{{"BIGINT UNSIGNED"}}, nil
+			}
+			return [][]string{{"1", "18446744073709551615", "11", "3", "1"}}, nil
+		}
+
+		createSQL, err := getCreateSequenceSQL(
+			context.Background(), snapshotTS, "db-name", "seq-name", query)
+		require.NoError(t, err)
+		require.Equal(t,
+			"create sequence `db-name`.`seq-name` as BIGINT UNSIGNED increment by 3 minvalue 1 maxvalue 18446744073709551615 start with 11 cycle",
+			createSQL)
+		require.Len(t, queries, 2)
+		require.Contains(t, queries[0], "mo_catalog.mo_columns {MO_TS = 12345}")
+		require.Contains(t, queries[1], "from `db-name`.`seq-name` {MO_TS = 12345}")
+	})
+
+	t.Run("sequences are restored before tables and views", func(t *testing.T) {
+		ordinary := &tableInfo{tblName: "ordinary", relKind: catalog.SystemOrdinaryRel}
+		sequence := &tableInfo{tblName: "sequence", relKind: catalog.SystemSequenceRel}
+		viewInfo := &tableInfo{tblName: "view", relKind: catalog.SystemViewRel}
+
+		ordered, err := fillTableCreateSQLsForRestore(
+			"", "test", []*tableInfo{ordinary, sequence, viewInfo},
+			func(tblInfo *tableInfo) (string, error) { return tblInfo.tblName, nil })
+		require.NoError(t, err)
+		require.Equal(t, []*tableInfo{sequence, ordinary, viewInfo}, ordered)
+	})
+}
+
+func TestRestoreSequenceState(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(10))
+	const createSQL = "create sequence `dst-db`.`seq` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"
+
+	t.Run("copies the exact historical state", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+			"delete from `dst-db`.`seq` where true",
+			"insert into `dst-db`.`seq` select * from `src-db`.`seq` {MO_TS = 12345}",
+		}, bh.executedSQLs)
+	})
+
+	t.Run("stops before copying state when creation fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := moerr.NewInternalErrorNoCtx("create failed")
+		bh.sql2err[createSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+		}, bh.executedSQLs)
+	})
 }
 
 func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {

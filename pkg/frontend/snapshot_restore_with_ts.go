@@ -180,6 +180,17 @@ func getTableInfosFromTS(ctx context.Context,
 		fmt.Sprintf("%d:%d", from, ts),
 		tableInfos,
 		func(tblInfo *tableInfo) (string, error) {
+			if isSequence(tblInfo) {
+				return getCreateSequenceSQL(
+					newCtx,
+					ts,
+					tblInfo.dbName,
+					tblInfo.tblName,
+					func(queryCtx context.Context, sql string, colIndices ...uint64) ([][]string, error) {
+						return getStringColsListFromTS(queryCtx, bh, sql, from, to, colIndices...)
+					},
+				)
+			}
 			return getCreateTableSqlFromTS(newCtx, bh, tblInfo.dbName, tblInfo.tblName, ts, from, to)
 		},
 	)
@@ -523,6 +534,20 @@ func recreateTableFromTS(
 ) (err error) {
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+	}
+	if isSequence(tblInfo) {
+		return restoreSequence(
+			ctx,
+			bh,
+			tblInfo.createSql,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			tblInfo.dbName,
+			tblInfo.tblName,
+			snapshotTs,
+			restoreAccount,
+			toAccountId,
+		)
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to restore table: %v, restore timestamp: %d", restoreAccount, snapshotTs, tblInfo.tblName, snapshotTs))
