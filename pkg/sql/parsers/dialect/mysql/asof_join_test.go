@@ -102,6 +102,8 @@ func TestAsofJoinNamesDoNotChangeContext(t *testing.T) {
 	for _, sql := range []string{
 		"select * from l asof join asof on l.k = asof.k and l.ts >= asof.ts",
 		"select * from l asof join r asof on l.k = r.k and l.ts >= r.ts",
+		"select * from l asof join r asof on l.k = asof.k and l.ts >= asof.ts",
+		"select * from t as `l` asof join r on `l`.k = r.k and `l`.ts >= r.ts",
 	} {
 		stmt, err := ParseOne(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
