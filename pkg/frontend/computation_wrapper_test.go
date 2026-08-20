@@ -2064,8 +2064,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
-		{name: "prepared decimal upgrade", from: defines.MORPCVersion21, to: defines.MORPCVersion22},
-		{name: "prepared decimal rollback", from: defines.MORPCVersion22, to: defines.MORPCVersion21},
+		{name: "prepared decimal upgrade", from: defines.MORPCVersion22, to: defines.MORPCVersion23},
+		{name: "prepared decimal rollback", from: defines.MORPCVersion23, to: defines.MORPCVersion22},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
@@ -2104,7 +2104,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("1e100"), false, cw.proc.Mp()))
 	prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 
 	_, queryPlan, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
@@ -2117,7 +2117,7 @@ func TestProtocolUpgradeRebuildUsesPreparedDecimalBinding(t *testing.T) {
 func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 
 	for _, tc := range []struct {
 		name      string
@@ -2141,7 +2141,7 @@ func TestBinaryIntegerAndBooleanRebuildUseStableDecimalDomain(t *testing.T) {
 					serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 				}
 			}()
-			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion22)
+			serviceRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion23)
 			prepareStmt.params = vector.NewVec(types.T_text.ToType())
 			require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
 			prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0}

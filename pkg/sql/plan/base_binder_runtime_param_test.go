@@ -34,14 +34,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestPreparedDecimalPrefixCastStartsAtMORPCVersion22(t *testing.T) {
+func TestPreparedDecimalPrefixCastStartsAtMORPCVersion23(t *testing.T) {
 	rt := runtime.ServiceRuntime("")
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	proc := testutil.NewProc(t)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion21)
-	require.False(t, preparedDecimalPrefixCastEnabled(proc))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
+	require.False(t, preparedDecimalPrefixCastEnabled(proc))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion23)
 	require.True(t, preparedDecimalPrefixCastEnabled(proc))
 }
 
