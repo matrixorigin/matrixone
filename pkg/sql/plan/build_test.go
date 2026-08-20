@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -8410,6 +8411,17 @@ func buildRepeatedAliasUpdateSQL(aliasCount int) string {
 }
 
 func TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate(t *testing.T) {
+	const childEnv = "MO_UPDATE_IGNORE_ALIAS_STRESS_CHILD"
+	if os.Getenv(childEnv) == "" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0],
+			"-test.run=^TestUpdateIgnoreRepeatedAliasPlanningSharesOneMergeAggregate$",
+			"-test.count=1")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		return
+	}
+
 	for _, aliasCount := range []int{8, 16, 24} {
 		t.Run(fmt.Sprintf("%d aliases", aliasCount), func(t *testing.T) {
 			mock := NewMockOptimizer(true)
