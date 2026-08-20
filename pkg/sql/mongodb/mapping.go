@@ -108,12 +108,23 @@ func ParseTableMappingSpec(
 		if !strings.EqualFold(column.Name.ColName(), planned.Name) {
 			return TableMappingSpec{}, moerr.NewInternalError(ctx, "MongoDB parsed and planned column order diverged")
 		}
+		if planned.GeneratedCol != nil {
+			return TableMappingSpec{}, moerr.NewNotSupportedf(ctx, "MongoDB external table does not support generated column '%s'", planned.Name)
+		}
 		path := planned.Name
 		conversion := mapping.Conversion
 		seenPath := false
 		seenConversion := false
 		for _, attribute := range column.Attributes {
 			switch typed := attribute.(type) {
+			case *tree.AttributeDefault:
+				// Missing BSON fields are materialized as SQL NULL. Until the
+				// external scan defines default substitution semantics, accepting
+				// any other default would preserve metadata that is never applied.
+				if !isExplicitNullDefault(typed.Expr) {
+					return TableMappingSpec{}, moerr.NewNotSupportedf(ctx,
+						"MongoDB external tables do not support non-NULL DEFAULT values (column %s)", planned.Name)
+				}
 			case *tree.AttributeMongoDBPath:
 				if seenPath {
 					return TableMappingSpec{}, moerr.NewInvalidInputf(ctx, "duplicate MONGODB_PATH for column %s", planned.Name)
@@ -155,4 +166,16 @@ func ParseTableMappingSpec(
 		return TableMappingSpec{}, err
 	}
 	return TableMappingSpec{Mapping: mapping}, nil
+}
+
+func isExplicitNullDefault(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	null, ok := expr.(*tree.NumVal)
+	return ok && (null.ValType == tree.P_null || null.ValType == tree.P_nulltext)
 }
