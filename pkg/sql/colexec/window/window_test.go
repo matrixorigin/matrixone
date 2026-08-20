@@ -2937,4 +2937,34 @@ func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
 			require.Error(t, err, "an invalid interval magnitude must not be treated as a domain boundary")
 		})
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_max_microsecond_above_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_max_microsecond_below_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
 }
