@@ -39,7 +39,9 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaTableConstraints(),
 	upgradeInformationSchemaColumnsHideInternalColumns(),
 	dropUserDefinedFunctionNameIndex(),
-	addUserDefinedFunctionNameDatabaseIndex(),
+	addUserDefinedFunctionArgumentTypesColumn(),
+	backfillUserDefinedFunctionArgumentTypes(),
+	addUserDefinedFunctionSignatureIndex(),
 }
 
 // Keep this as a separate upgrade entry so tenants that already completed
@@ -110,15 +112,47 @@ func dropUserDefinedFunctionNameIndex() versions.UpgradeEntry {
 	}
 }
 
-func addUserDefinedFunctionNameDatabaseIndex() versions.UpgradeEntry {
+func addUserDefinedFunctionArgumentTypesColumn() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.ADD_COLUMN,
+		UpgSql: "alter table mo_catalog.mo_user_defined_function " +
+			"add column arg_types varchar(1024) not null default '' after args",
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			column, err := versions.CheckTableColumn(
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "arg_types",
+			)
+			return column.IsExits, err
+		},
+	}
+}
+
+func backfillUserDefinedFunctionArgumentTypes() versions.UpgradeEntry {
+	const canonicalArgumentTypes = "coalesce(cast(json_extract(args, '$[*].type') as char), '')"
+	return versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.MODIFY_METADATA,
+		UpgSql:    "update mo_catalog.mo_user_defined_function set arg_types = " + canonicalArgumentTypes,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			mismatch, err := versions.CheckTableDataExist(txn, accountID,
+				"select 1 from mo_catalog.mo_user_defined_function where arg_types != "+canonicalArgumentTypes+" limit 1",
+			)
+			return !mismatch, err
+		},
+	}
+}
+
+func addUserDefinedFunctionSignatureIndex() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:    catalog.MO_CATALOG,
 		TableName: "mo_user_defined_function",
 		UpgType:   versions.ADD_INDEX,
-		UpgSql:    "create index name_db on mo_catalog.mo_user_defined_function(name, db)",
+		UpgSql:    "create unique index name_db_arg_types on mo_catalog.mo_user_defined_function(name, db, arg_types)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckIndexDefinition(
-				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db",
+				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types",
 			)
 		},
 	}

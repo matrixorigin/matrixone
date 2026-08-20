@@ -37,7 +37,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 15)
+	require.Len(t, tenantUpgEntries, 17)
 	require.Len(t, clusterUpgEntries, 3)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, catalog.MO_VIEW_DEPENDENCIES, clusterUpgEntries[1].TableName)
@@ -94,15 +94,25 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctions.Schema)
 	require.Equal(t, "mo_user_defined_function", userDefinedFunctions.TableName)
 	require.Contains(t, strings.ToLower(userDefinedFunctions.UpgSql), "drop index name")
-	userDefinedFunctionLookup := tenantUpgEntries[14]
-	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionLookup.UpgType)
-	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionLookup.Schema)
-	require.Equal(t, "mo_user_defined_function", userDefinedFunctionLookup.TableName)
-	require.Contains(t, strings.ToLower(userDefinedFunctionLookup.UpgSql), "name_db")
+	userDefinedFunctionArgumentTypes := tenantUpgEntries[14]
+	require.Equal(t, versions.ADD_COLUMN, userDefinedFunctionArgumentTypes.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionArgumentTypes.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionArgumentTypes.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionArgumentTypes.UpgSql), "arg_types")
+	userDefinedFunctionBackfill := tenantUpgEntries[15]
+	require.Equal(t, versions.MODIFY_METADATA, userDefinedFunctionBackfill.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionBackfill.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionBackfill.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionBackfill.UpgSql), "json_extract(args")
+	userDefinedFunctionSignatureIndex := tenantUpgEntries[16]
+	require.Equal(t, versions.ADD_INDEX, userDefinedFunctionSignatureIndex.UpgType)
+	require.Equal(t, catalog.MO_CATALOG, userDefinedFunctionSignatureIndex.Schema)
+	require.Equal(t, "mo_user_defined_function", userDefinedFunctionSignatureIndex.TableName)
+	require.Contains(t, strings.ToLower(userDefinedFunctionSignatureIndex.UpgSql), "unique index name_db_arg_types")
 }
 
 func TestForeignKeyMetadataTenantUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 15)
+	require.Len(t, tenantUpgEntries, 17)
 
 	for i, column := range []string{"referenced_index_name", "on_delete_origin", "on_update_origin"} {
 		entry := tenantUpgEntries[2+i]

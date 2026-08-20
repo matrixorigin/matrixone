@@ -227,14 +227,19 @@ func getUserDefinedFunctionInfos(
 
 	functions := make([]userDefinedFunctionDefinition, len(rows))
 	for i, row := range rows {
+		argTypes, err := userDefinedFunctionArgumentTypesFromJSON(row[1])
+		if err != nil {
+			return nil, err
+		}
 		functions[i] = userDefinedFunctionDefinition{
-			name:    row[0],
-			args:    row[1],
-			retType: row[2],
-			body:    row[3],
-			lang:    row[4],
-			sqlMode: row[5],
-			dbName:  dbName,
+			name:     row[0],
+			args:     row[1],
+			argTypes: argTypes,
+			retType:  row[2],
+			body:     row[3],
+			lang:     row[4],
+			sqlMode:  row[5],
+			dbName:   dbName,
 		}
 	}
 	return functions, nil

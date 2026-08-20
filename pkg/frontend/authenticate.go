@@ -1133,6 +1133,7 @@ var (
 			name,
 			owner,
 			args,
+			arg_types,
 			retType,
 			body,
 			language,
@@ -1146,11 +1147,12 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation,
-			sql_mode) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
 			    args = '%s',
+			    arg_types = '%s',
 			    retType = '%s',
 			    body = "%s",
 			    language = '%s',
@@ -1542,7 +1544,7 @@ const (
 
 	checkUdfWithDb = `select function_id,body from mo_catalog.mo_user_defined_function where db = "%s" order by function_id;`
 
-	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and json_extract(args, '$[*].type') %s order by function_id;`
+	checkUdfExistence = `select function_id from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s" and arg_types = %s order by function_id;`
 
 	checkStoredProcedureArgs = `select proc_id, args from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
@@ -10012,26 +10014,6 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	return false, nil
 }
 
-func lockDatabaseForUDFCreation(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
-	accountID, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return false, err
-	}
-	lockSQL := fmt.Sprintf(
-		"select dat_id from mo_catalog.mo_database where datname = %s and account_id = %d for update;",
-		escapeSQLString(dbName), accountID,
-	)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, lockSQL); err != nil {
-		return false, err
-	}
-	resultSet, err := getResultSet(ctx, bh)
-	if err != nil {
-		return false, err
-	}
-	return execResultArrayHasData(resultSet), nil
-}
-
 type createAccount struct {
 	IfNotExists  bool
 	Name         string
@@ -11028,18 +11010,8 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	bh := ses.GetBackgroundExec(execCtx.reqCtx)
 	defer bh.Close()
 
-	// The database-row lock is the write-time serialization boundary for
-	// CREATE FUNCTION overloads. The older global unique(name) index was too
-	// broad, but a pre-transaction existence read leaves an exact signature
-	// race once names can be reused in another database.
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
+	// Authenticate the target database before building the function metadata.
+	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -11073,14 +11045,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return err
 	}
 
-	if len(typeList) == 0 {
-		argsCondition = "is null"
-	} else if len(typeList) == 1 {
-		argsCondition = fmt.Sprintf(`= '"%v"'`, typeList[0])
-	} else {
-		typesJson, _ := json.Marshal(typeList)
-		argsCondition = fmt.Sprintf(`= '%v'`, string(typesJson))
+	argTypes, err := userDefinedFunctionArgumentTypes(typeList)
+	if err != nil {
+		return err
 	}
+	argsCondition = fmt.Sprintf("'%s'", argTypes)
 
 	// validate duplicate function declaration
 	bh.ClearExecResultSet()
@@ -11097,6 +11066,13 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 
 	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
+	}
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if err != nil {
+		return err
 	}
 
 	var body string
@@ -11141,13 +11117,14 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = string(byt)
 	}
 	definition := userDefinedFunctionDefinition{
-		name:    string(cf.Name.Name.ObjectName),
-		args:    string(argsJson),
-		retType: retTypeStr,
-		body:    body,
-		lang:    cf.Language,
-		sqlMode: sessionSQLModeForParser(ses),
-		dbName:  dbName,
+		name:     string(cf.Name.Name.ObjectName),
+		args:     string(argsJson),
+		argTypes: argTypes,
+		retType:  retTypeStr,
+		body:     body,
+		lang:     cf.Language,
+		sqlMode:  sessionSQLModeForParser(ses),
+		dbName:   dbName,
 	}
 	if execResultArrayHasData(erArray) { // replace
 		id, err := erArray[0].GetInt64(execCtx.reqCtx, 0, 0)
@@ -11195,13 +11172,44 @@ func escapeSQLStringForDoubleQuotes(s string) string {
 // userDefinedFunctionDefinition is the function metadata kept outside
 // mo_tables. Callers control the transaction that persists it.
 type userDefinedFunctionDefinition struct {
-	name    string
-	args    string
-	retType string
-	body    string
-	lang    string
-	sqlMode string
-	dbName  string
+	name     string
+	args     string
+	argTypes string
+	retType  string
+	body     string
+	lang     string
+	sqlMode  string
+	dbName   string
+}
+
+// userDefinedFunctionArgumentTypes is the canonical identity of a function
+// overload. Argument names do not participate in function resolution, while
+// their ordered types do. Keep the zero-argument identity empty to match the
+// legacy json_extract(args, '$[*].type') IS NULL representation.
+func userDefinedFunctionArgumentTypes(types []string) (string, error) {
+	if len(types) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(types)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func userDefinedFunctionArgumentTypesFromJSON(args string) (string, error) {
+	if args == "" || args == "{}" {
+		return "", nil
+	}
+	var argList []function.Arg
+	if err := json.Unmarshal([]byte(args), &argList); err != nil {
+		return "", err
+	}
+	types := make([]string, len(argList))
+	for i := range argList {
+		types[i] = argList[i].Type
+	}
+	return userDefinedFunctionArgumentTypes(types)
 }
 
 // persistUserDefinedFunction writes function metadata into the caller-owned
@@ -11220,7 +11228,7 @@ func persistUserDefinedFunction(
 		return bh.Exec(ctx, fmt.Sprintf(updateMoUserDefinedFunctionFormat,
 			ownerRoleID,
 			definition.args,
-			definition.retType, body, definition.lang,
+			definition.argTypes, definition.retType, body, definition.lang,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
 			int32(*functionID)))
 	}
@@ -11228,7 +11236,7 @@ func persistUserDefinedFunction(
 		definition.name,
 		ownerRoleID,
 		definition.args,
-		definition.retType, body, definition.lang, definition.dbName,
+		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
 		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
 }
 

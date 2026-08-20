@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -29,7 +28,6 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type accountRecordingBackgroundExec struct {
@@ -48,77 +46,6 @@ func (bt *accountRecordingBackgroundExec) Exec(ctx context.Context, sql string) 
 type erroringBackgroundExec struct {
 	*backgroundExecTest
 	err error
-}
-
-// udfCreationGate models the database-row lock that serializes concurrent
-// CREATE FUNCTION statements. Each fake executor owns one transaction; the
-// gate is held from SELECT ... FOR UPDATE through COMMIT or ROLLBACK.
-type udfCreationGate struct {
-	txnMu            sync.Mutex
-	callsMu          sync.Mutex
-	lockCalls        int
-	exists           bool
-	inserts          int
-	firstLocked      chan struct{}
-	secondWaiting    chan struct{}
-	allowFirstCommit chan struct{}
-}
-
-type lockingUDFBackgroundExec struct {
-	*backgroundExecTest
-	gate      *udfCreationGate
-	holdsLock bool
-	result    ExecResult
-}
-
-func (bt *lockingUDFBackgroundExec) Exec(ctx context.Context, sql string) error {
-	bt.currentSql = sql
-	bt.executedSQLs = append(bt.executedSQLs, sql)
-
-	switch {
-	case sql == "begin;":
-		return nil
-	case strings.HasPrefix(sql, "select dat_id from mo_catalog.mo_database"):
-		bt.gate.callsMu.Lock()
-		bt.gate.lockCalls++
-		call := bt.gate.lockCalls
-		bt.gate.callsMu.Unlock()
-
-		if call == 1 {
-			bt.gate.txnMu.Lock()
-			close(bt.gate.firstLocked)
-			<-bt.gate.allowFirstCommit
-		} else {
-			close(bt.gate.secondWaiting)
-			bt.gate.txnMu.Lock()
-		}
-		bt.holdsLock = true
-		bt.result = newMrsForPasswordOfUser([][]interface{}{{int64(1)}})
-		return nil
-	case strings.HasPrefix(sql, "select function_id from mo_catalog.mo_user_defined_function"):
-		if bt.gate.exists {
-			bt.result = newMrsForPasswordOfUser([][]interface{}{{int64(1)}})
-		} else {
-			bt.result = newMrsForPasswordOfUser(nil)
-		}
-		return nil
-	case strings.HasPrefix(sql, "insert into mo_catalog.mo_user_defined_function"):
-		bt.gate.exists = true
-		bt.gate.inserts++
-		return nil
-	case sql == "commit;" || sql == "rollback;":
-		if bt.holdsLock {
-			bt.holdsLock = false
-			bt.gate.txnMu.Unlock()
-		}
-		return nil
-	default:
-		return bt.backgroundExecTest.Exec(ctx, sql)
-	}
-}
-
-func (bt *lockingUDFBackgroundExec) GetExecResultSet() []interface{} {
-	return []interface{}{bt.result}
 }
 
 func (bt *erroringBackgroundExec) Exec(ctx context.Context, sql string) error {
@@ -204,7 +131,7 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	base := &backgroundExecTest{}
 	base.init()
 	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
-		{"f_answer", "{}", "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
 	})
 	bh := &accountRecordingBackgroundExec{backgroundExecTest: base}
 
@@ -212,13 +139,14 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(7), bh.accountID)
 	require.Equal(t, []userDefinedFunctionDefinition{{
-		name:    "f_answer",
-		args:    "{}",
-		retType: "int",
-		body:    "select 42",
-		lang:    "sql",
-		sqlMode: "PIPES_AS_CONCAT",
-		dbName:  dbName,
+		name:     "f_answer",
+		args:     `[{"name":"arg","type":"int"}]`,
+		argTypes: `["int"]`,
+		retType:  "int",
+		body:     "select 42",
+		lang:     "sql",
+		sqlMode:  "PIPES_AS_CONCAT",
+		dbName:   dbName,
 	}}, functions)
 
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
@@ -351,83 +279,6 @@ func TestResolveCloneDatabaseRoutineTenantUsesTargetAdministrator(t *testing.T) 
 	require.NoError(t, err)
 	require.Same(t, sameAccount, got)
 	require.Equal(t, []string{query}, bh.executedSQLs)
-}
-
-func TestInitFunctionSerializesConcurrentExactSignatures(t *testing.T) {
-	const databaseName = "clone_target"
-	gate := &udfCreationGate{
-		firstLocked:      make(chan struct{}),
-		secondWaiting:    make(chan struct{}),
-		allowFirstCommit: make(chan struct{}),
-	}
-	newExecutor := func() *lockingUDFBackgroundExec {
-		base := &backgroundExecTest{}
-		base.init()
-		return &lockingUDFBackgroundExec{backgroundExecTest: base, gate: gate}
-	}
-	firstExec := newExecutor()
-	secondExec := newExecutor()
-
-	originalNewBackgroundExec := NewBackgroundExec
-	var execMu sync.Mutex
-	executors := []BackgroundExec{firstExec, secondExec}
-	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
-		execMu.Lock()
-		defer execMu.Unlock()
-		executor := executors[0]
-		executors = executors[1:]
-		return executor
-	}
-	t.Cleanup(func() { NewBackgroundExec = originalNewBackgroundExec })
-
-	locale := ""
-	functionStatement := func() *tree.CreateFunction {
-		return &tree.CreateFunction{
-			Name: tree.NewFuncName("f_exact", tree.ObjectNamePrefix{
-				SchemaName:     tree.Identifier(databaseName),
-				ExplicitSchema: true,
-			}),
-			ReturnType: tree.NewReturnType(&tree.T{InternalType: tree.InternalType{
-				Family:       tree.IntFamily,
-				FamilyString: "INT",
-				Width:        24,
-				Locale:       &locale,
-				Oid:          uint32(defines.MYSQL_TYPE_INT24),
-			}}),
-			Body:     "1",
-			Language: string(tree.SQL),
-		}
-	}
-	tenant := &TenantInfo{
-		Tenant:        "acc1",
-		User:          "root1",
-		TenantID:      7,
-		UserID:        1,
-		DefaultRole:   accountAdminRoleName,
-		DefaultRoleID: accountAdminRoleID,
-	}
-	newSession := func() *Session {
-		return &Session{feSessionImpl: feSessionImpl{tenant: tenant}}
-	}
-	ctx := defines.AttachAccountId(context.Background(), tenant.GetTenantID())
-	errs := make(chan error, 2)
-
-	go func() {
-		errs <- InitFunction(newSession(), &ExecCtx{reqCtx: ctx}, tenant, functionStatement())
-	}()
-	<-gate.firstLocked
-	go func() {
-		errs <- InitFunction(newSession(), &ExecCtx{reqCtx: ctx}, tenant, functionStatement())
-	}()
-	<-gate.secondWaiting
-	close(gate.allowFirstCommit)
-
-	firstErr := <-errs
-	secondErr := <-errs
-	require.NoError(t, firstErr)
-	require.Error(t, secondErr)
-	require.Equal(t, 1, gate.inserts)
-	require.Equal(t, 2, gate.lockCalls)
 }
 
 func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {

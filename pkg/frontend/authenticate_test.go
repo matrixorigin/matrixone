@@ -72,6 +72,33 @@ func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
 	))
 }
 
+func TestUserDefinedFunctionArgumentTypes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		types []string
+		want  string
+	}{
+		{name: "no arguments", want: ""},
+		{name: "one argument", types: []string{"int"}, want: `["int"]`},
+		{name: "overload signature", types: []string{"varchar", "decimal(10,2)"}, want: `["varchar","decimal(10,2)"]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := userDefinedFunctionArgumentTypes(test.types)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, err := userDefinedFunctionArgumentTypesFromJSON(`[{"name":"arg","type":"int"}]`)
+	require.NoError(t, err)
+	require.Equal(t, `["int"]`, got)
+	got, err = userDefinedFunctionArgumentTypesFromJSON(`[]`)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	_, err = userDefinedFunctionArgumentTypesFromJSON(`not json`)
+	require.Error(t, err)
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {

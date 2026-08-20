@@ -44,6 +44,19 @@ call p_source_qualified();
 select f_clone_answer();
 select * from v_clone_answer;
 
+-- A routine may execute ALTER through the normal-SQL path. Nested foreign-key
+-- references must bind the clone after its source database has been removed.
+drop database if exists db_alter_clone_source;
+drop database if exists db_alter_clone_copy;
+create database db_alter_clone_source;
+create table db_alter_clone_source.parent (id int primary key);
+create table db_alter_clone_source.child (parent_id int);
+create procedure db_alter_clone_source.p_add_fk() 'begin alter table db_alter_clone_source.child add constraint fk_child_parent foreign key (parent_id) references db_alter_clone_source.parent(id); end';
+create database db_alter_clone_copy clone db_alter_clone_source;
+drop database db_alter_clone_source;
+call db_alter_clone_copy.p_add_fk();
+drop database db_alter_clone_copy;
+
 -- View dependency sorting runs before the restore loop. Its UDF lookup must
 -- therefore use the source snapshot, even after the live source is gone.
 drop database if exists db_snapshot_udf;

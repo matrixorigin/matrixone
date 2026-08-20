@@ -42,8 +42,8 @@ func (remap remapDbContext) lookup(database string) (string, bool) {
 // covers SELECT and INSERT/UPDATE/DELETE (including their target tables, read
 // sources, expression containers, INSERT ... SELECT bodies and CTE bodies),
 // SQL procedure compound/control-flow bodies, executable statement wrappers
-// (EXPLAIN, CHECK, LOCK, MERGE, LOAD/DUMP and sequence operations), table-level
-// DDL, ANALYZE TABLE, and prepared statement bodies.
+// (EXPLAIN, CHECK, LOCK, MERGE, LOAD/DUMP and sequence operations), audited
+// table-level DDL, ANALYZE TABLE, and prepared statement bodies.
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
@@ -395,12 +395,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.CreateIndex:
 		remapTableName(s.Table, remap)
 	case *tree.AlterTable:
-		remapTableName(s.Table, remap)
-		for _, opt := range s.Options {
-			if rename, ok := opt.(*tree.AlterOptionTableName); ok {
-				remapObjectName(rename.Name, remap)
-			}
-		}
+		remappable = remapDbInAlterTable(s, remap)
 	case *tree.AlterView:
 		remapTableName(s.Name, remap)
 		if s.AsSource != nil {
@@ -425,11 +420,8 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 			if at == nil {
 				continue
 			}
-			remapTableName(at.Table, remap)
-			for _, opt := range at.Options {
-				if rn, ok := opt.(*tree.AlterOptionTableName); ok {
-					remapObjectName(rn.Name, remap)
-				}
+			if !remapDbInAlterTable(at, remap) {
+				remappable = false
 			}
 		}
 	default:
@@ -437,6 +429,63 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		return false
 	}
 	return remappable
+}
+
+// remapDbInAlterTable audits ALTER TABLE's nested option AST before a cloned
+// routine can persist it. The target table alone is not enough: ADD CONSTRAINT
+// carries a foreign-key reference, and column clauses can carry reference and
+// expression children. Unrecognized options and partition forms are rejected
+// by the clone-specific caller instead of retaining a source-database name.
+func remapDbInAlterTable(stmt *tree.AlterTable, remap remapDbContext) bool {
+	if stmt == nil || stmt.PartitionOption != nil {
+		return false
+	}
+	remapTableName(stmt.Table, remap)
+	for _, option := range stmt.Options {
+		if !remapDbInAlterTableOption(option, remap) {
+			return false
+		}
+	}
+	return true
+}
+
+func remapDbInAlterTableOption(option tree.AlterTableOption, remap remapDbContext) bool {
+	switch opt := option.(type) {
+	case *tree.AlterOptionTableName:
+		remapObjectName(opt.Name, remap)
+	case *tree.AlterOptionAdd:
+		return remapDbInTableDef(opt.Def, remap)
+	case *tree.AlterTableModifyColumnClause:
+		return remapDbInColumnTableDef(opt.NewColumn, remap)
+	case *tree.AlterTableChangeColumnClause:
+		remapColumnName(opt.OldColumnName, remap)
+		return remapDbInColumnTableDef(opt.NewColumn, remap)
+	case *tree.AlterTableAddColumnClause:
+		for _, column := range opt.NewColumns {
+			if !remapDbInColumnTableDef(column, remap) {
+				return false
+			}
+		}
+	case *tree.AlterTableAlterColumnClause:
+		remapColumnName(opt.ColumnName, remap)
+		if opt.DefaultExpr != nil {
+			return remapDbInColumnAttribute(opt.DefaultExpr, remap)
+		}
+	case *tree.AlterTableRenameColumnClause:
+		remapColumnName(opt.OldColumnName, remap)
+		remapColumnName(opt.NewColumnName, remap)
+	case *tree.AlterTableOrderByColumnClause:
+		for _, order := range opt.AlterOrderByList {
+			if order != nil {
+				remapColumnName(order.Column, remap)
+			}
+		}
+	case *tree.AlterAddCol:
+		return remapDbInColumnTableDef(opt.Column, remap)
+	default:
+		return false
+	}
+	return true
 }
 
 func remapDbInStatements(stmts []tree.Statement, remap remapDbContext) bool {
@@ -563,31 +612,46 @@ func remapDbInTableExpr(te tree.TableExpr, remap remapDbContext) {
 // cloned routine is allowed to persist it.
 func remapDbInTableDefs(defs tree.TableDefs, remap remapDbContext) bool {
 	for _, def := range defs {
-		switch d := def.(type) {
-		case *tree.ColumnTableDef:
-			remapColumnName(d.Name, remap)
-			for _, attribute := range d.Attributes {
-				if !remapDbInColumnAttribute(attribute, remap) {
-					return false
-				}
-			}
-		case *tree.PrimaryKeyIndex:
-			remapDbInKeyParts(d.KeyParts, remap)
-		case *tree.Index:
-			remapDbInKeyParts(d.KeyParts, remap)
-		case *tree.UniqueIndex:
-			remapDbInKeyParts(d.KeyParts, remap)
-		case *tree.ForeignKey:
-			remapDbInKeyParts(d.KeyParts, remap)
-			remapDbInAttributeReference(d.Refer, remap)
-		case *tree.FullTextIndex:
-			remapDbInKeyParts(d.KeyParts, remap)
-		case *tree.CheckIndex:
-			remapDbInExpr(d.Expr, remap)
-		case nil:
-			// Parsed CREATE TABLE definitions are never nil, but tolerate one in
-			// callers constructing an AST directly.
-		default:
+		if !remapDbInTableDef(def, remap) {
+			return false
+		}
+	}
+	return true
+}
+
+func remapDbInTableDef(def tree.TableDef, remap remapDbContext) bool {
+	switch d := def.(type) {
+	case *tree.ColumnTableDef:
+		return remapDbInColumnTableDef(d, remap)
+	case *tree.PrimaryKeyIndex:
+		remapDbInKeyParts(d.KeyParts, remap)
+	case *tree.Index:
+		remapDbInKeyParts(d.KeyParts, remap)
+	case *tree.UniqueIndex:
+		remapDbInKeyParts(d.KeyParts, remap)
+	case *tree.ForeignKey:
+		remapDbInKeyParts(d.KeyParts, remap)
+		remapDbInAttributeReference(d.Refer, remap)
+	case *tree.FullTextIndex:
+		remapDbInKeyParts(d.KeyParts, remap)
+	case *tree.CheckIndex:
+		remapDbInExpr(d.Expr, remap)
+	case nil:
+		// Parsed CREATE/ALTER TABLE definitions are never nil, but tolerate one
+		// in callers constructing an AST directly.
+	default:
+		return false
+	}
+	return true
+}
+
+func remapDbInColumnTableDef(column *tree.ColumnTableDef, remap remapDbContext) bool {
+	if column == nil {
+		return false
+	}
+	remapColumnName(column.Name, remap)
+	for _, attribute := range column.Attributes {
+		if !remapDbInColumnAttribute(attribute, remap) {
 			return false
 		}
 	}

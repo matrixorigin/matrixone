@@ -100,6 +100,7 @@ var (
 				name     varchar(100),
 				owner  int unsigned,
 				args     json,
+				arg_types varchar(1024) not null default '',
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -115,7 +116,7 @@ var (
 				database_collation varchar(64),
 				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				primary key(function_id),
-				key name_db(name, db)
+				unique key name_db_arg_types(name, db, arg_types)
 			)`
 
 	MoCatalogMoMysqlCompatibilityModeDDL = `create table mo_catalog.mo_mysql_compatibility_mode (

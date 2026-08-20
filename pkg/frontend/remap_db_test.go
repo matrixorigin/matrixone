@@ -618,6 +618,29 @@ func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T)
 		require.NotContains(t, out, "source_db")
 	})
 
+	t.Run("alter table add foreign key reference", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			alter table source_db.child
+				add constraint fk_child_parent foreign key (parent_id)
+				references source_db.parent(id);
+		end`)
+		require.Contains(t, out, "alter table target_db.child")
+		require.Contains(t, out, "references target_db.parent")
+		require.NotContains(t, out, "source_db")
+	})
+
+	t.Run("unrecognized alter option is rejected", func(t *testing.T) {
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+			`alter table source_db.child drop column parent_id`, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		err = remapCloneRoutineStatements(
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cannot be safely remapped")
+	})
+
 	t.Run("table function arguments and embedded select", func(t *testing.T) {
 		out := remapRoutine(t,
 			`select * from unnest((select id from source_db.argument_source)) as f`)
