@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	partitionop "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
@@ -366,6 +367,42 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	for _, owner := range owners {
 		require.True(t, owner.released)
 	}
+}
+
+func TestSQLCalcFoundRowsOwnsPreparedSQLSelectLimit(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	proc := c.proc
+	proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == plan2.SQLSelectLimitVariable {
+			return uint64(1), nil
+		}
+		return nil, nil
+	})
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.isPrepare = true
+	input := newLazyUnionAllLeaf(c, nil)
+	query := &plan.Query{
+		StmtType:            plan.Query_SELECT,
+		ApplySqlSelectLimit: true,
+		Steps:               []int32{0},
+		Nodes:               []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+	}
+
+	result, err := c.compileSteps(query, []*Scope{input}, 0)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, c.foundRowsOwnerNode)
+
+	foundOwner := false
+	require.NoError(t, vm.HandleAllOp(result[0].RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if limitArg, ok := op.(*limitop.Limit); ok && limitArg.IsFoundRowsOwner() {
+			foundOwner = true
+		}
+		return nil
+	}))
+	require.True(t, foundOwner)
+	freeLazyUnionAllTestScope(c, result[0])
 }
 
 func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {

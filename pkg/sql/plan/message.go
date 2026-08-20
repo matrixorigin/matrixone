@@ -141,7 +141,7 @@ func (builder *QueryBuilder) handleMessageFromTopToScan(nodeID int32) {
 	scanNode.RecvMsgList = append(scanNode.RecvMsgList, msgHeader)
 	scanNode.OrderBy = append(scanNode.OrderBy, scanOrderBy)
 	if enableOrderedLimit {
-		applyRegularIndexOrderedLimitParam(scanNode, scanOrderBy, node.Limit)
+		builder.applyRegularIndexOrderedLimitParam(scanNode, scanOrderBy, node.Limit)
 	}
 }
 

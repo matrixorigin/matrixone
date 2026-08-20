@@ -79,6 +79,44 @@ select found_rows() as after_nested_prepared_second;
 after_nested_prepared_second
 3
 deallocate prepare ps_nested_found_rows;
+create table indexed_t(id bigint primary key, grp int, index idx_grp(grp));
+insert into indexed_t values (1, 1), (2, 1), (3, 1), (4, 2);
+select sql_calc_found_rows id from indexed_t where grp = 1 order by id limit 1;
+id
+1
+select found_rows() as after_ordered_index;
+after_ordered_index
+3
+select sql_calc_found_rows id from t where id <= 3 limit 1;
+id
+1
+select found_rows(), id from t where id <= 3 order by id;
+found_rows()	id
+3	1
+3	2
+3	3
+set sql_select_limit = 1;
+select sql_calc_found_rows id from t where id <= 3 order by id;
+id
+1
+select found_rows() as after_sql_select_limit;
+after_sql_select_limit
+3
+prepare ps_session_limit from 'select sql_calc_found_rows id from t where id <= 3 order by id';
+execute ps_session_limit;
+id
+1
+select found_rows() as after_prepared_sql_select_limit;
+after_prepared_sql_select_limit
+3
+execute ps_session_limit;
+id
+1
+select found_rows() as after_prepared_sql_select_limit_second;
+after_prepared_sql_select_limit_second
+3
+deallocate prepare ps_session_limit;
+set sql_select_limit = 18446744073709551615;
 select id from t order by id limit 2;
 id
 1

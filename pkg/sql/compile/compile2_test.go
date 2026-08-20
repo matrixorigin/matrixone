@@ -132,6 +132,17 @@ func TestFindFoundRowsOwnerPrefersOuterPagination(t *testing.T) {
 	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
 }
 
+func TestFindFoundRowsOwnerIncludesMaterializedSQLSelectLimit(t *testing.T) {
+	root := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	query := &plan.Query{Nodes: []*plan.Node{root}, Steps: []int32{0}}
+
+	require.True(t, statementHasSQLCalcFoundRows(sqlCalcFoundRowsTestStatement()))
+	require.Same(t, root, findFoundRowsOwnerNode(query, query.Steps[0]))
+}
+
 func TestSQLCalcFoundRowsLimitHasSingleCoordinatorOwner(t *testing.T) {
 	c := newLazyUnionAllTestCompile(t)
 	c.stmt = sqlCalcFoundRowsTestStatement()
