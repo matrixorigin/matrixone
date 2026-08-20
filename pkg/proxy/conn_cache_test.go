@@ -631,12 +631,13 @@ func TestPreparedShortConnectionQuitPublishesReusableBackend(t *testing.T) {
 		tun.mu.scp = &pipe{}
 		tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
 
-		// COM_STMT_CLOSE is a response-free prepared-statement command. Once it
-		// has crossed the tunnel, QUIT must see a clean boundary and may publish
-		// the backend after ResetSession completes.
-		stmtClose := makeSimplePacket("stmt close")
-		stmtClose[4] = byte(frontend.COM_STMT_CLOSE)
-		tun.trackClientRequest(stmtClose)
+		// A completed prepared-statement request has a response fence. QUIT must
+		// see that clean boundary and may publish the backend after ResetSession
+		// completes.
+		prepare := makeSimplePacket("select 1")
+		prepare[4] = byte(frontend.COM_STMT_PREPARE)
+		tun.trackClientRequest(prepare)
+		tun.trackServerResponse(makePrepareOKPacket(0, 0))
 		require.False(t, tun.hasInFlightClientRequest())
 
 		clientSide, backendSide := net.Pipe()
