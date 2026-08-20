@@ -23,6 +23,7 @@ import "lock.proto";
 import "txn.proto";
 import "timestamp.proto";
 import "statsinfo.proto";
+import "plan.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -556,6 +557,22 @@ message MigrateConnFromResponse {
   int64 LastAffectedRows = 3;
   repeated UserLevelLock UserLevelLocks = 4;
   bool UserLevelLockReleaseSupported = 5;
+  repeated MigrateUserDefinedVar UserDefinedVars = 6;
+  bool UserDefinedVarsExported = 7;
+  repeated MigrateSystemVariable SystemVariables = 8;
+  bool SystemVariablesExported = 9;
+  // Whether the proxy's raw COM_QUERY SET history is complete for the
+  // corresponding typed state. A false value requires a v22 target.
+  bool UserDefinedVarsReplayable = 10;
+  bool SystemVariablesReplayable = 11;
+  // Whether the typed system-variable snapshot was omitted because it exceeded
+  // the migration size limit. Pre-v22 targets may use complete raw replay;
+  // v22 targets must fail closed rather than apply an unsafe projection.
+  bool SystemVariablesSnapshotTooLarge = 12;
+  // Whether the typed user-variable snapshot was omitted because it exceeded
+  // the migration size limit. Pre-v22 targets may use complete raw replay;
+  // v22 targets must fail closed rather than re-evaluate raw SET expressions.
+  bool UserDefinedVarsSnapshotTooLarge = 13;
 }
 
 message MigrateConnToRequest {
@@ -565,6 +582,24 @@ message MigrateConnToRequest {
   repeated PrepareStmt PrepareStmts = 4;
   int64 LastAffectedRows = 5;
   repeated UserLevelLock UserLevelLocks = 6;
+  repeated MigrateUserDefinedVar UserDefinedVars = 7;
+  bool UserDefinedVarsExported = 8;
+  repeated MigrateSystemVariable SystemVariables = 9;
+  bool SystemVariablesExported = 10;
+  // Whether the proxy's raw COM_QUERY SET history is complete for the
+  // corresponding typed state. A false value requires a v22 target on the
+  // next migration hop.
+  bool UserDefinedVarsReplayable = 11;
+  bool SystemVariablesReplayable = 12;
+}
+
+message MigrateUserDefinedVar {
+  string Name = 1;
+  plan.Expr Value = 2;
+  string Sql = 3;
+  bool IsBin = 4;
+  uint32 PrepareParamKind = 5;
+  plan.Type Type = 6;
 }
 
 message UserLevelLock {
@@ -740,4 +775,15 @@ message MongoDBClientRetireRequest {
 
 message MongoDBClientRetireResponse {
   bool Success = 1;
+}
+
+message MigrateSystemVariable {
+  string Name = 1;
+  plan.Expr Value = 2;
+  bool NextTransaction = 3;
+  // RuntimeValue carries the effective service-runtime value for variables
+  // whose SQL SET path updates service-global planner state. It is kept
+  // separate from the session snapshot so a source SET GLOBAL cannot be
+  // overwritten by an inherited session value during migration.
+  plan.Expr RuntimeValue = 4;
 }
