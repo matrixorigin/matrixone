@@ -1,5 +1,7 @@
 drop snapshot if exists issue27049_sp;
 drop snapshot if exists issue27049_table_sp;
+drop snapshot if exists issue27049_kind_table_sp;
+drop snapshot if exists issue27049_kind_view_sp;
 drop database if exists issue27049_seq_only_src;
 drop database if exists issue27049_seq_only_dst;
 drop database if exists issue27049_src;
@@ -225,6 +227,45 @@ select * from issue27049_src.seq_table_restore;
 select nextval('seq_table_restore');
 ➤ nextval(seq_table_restore)[12,65535,0]  𝄀
 25
+create sequence seq_kind_table increment by 5 start with 41 no cycle;
+select nextval('seq_kind_table');
+➤ nextval(seq_kind_table)[12,65535,0]  𝄀
+41
+create snapshot issue27049_kind_table_sp for table issue27049_src seq_kind_table;
+drop sequence seq_kind_table;
+create table seq_kind_table(a int);
+insert into seq_kind_table values (1);
+restore table issue27049_src.seq_kind_table{snapshot = 'issue27049_kind_table_sp'};
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = 'issue27049_src' and relname = 'seq_kind_table';
+➤ relname[12,5000,0]  ¦  relkind[12,5000,0]  𝄀
+seq_kind_table  ¦  S
+select * from issue27049_src.seq_kind_table;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+41  ¦  1  ¦  9223372036854775807  ¦  41  ¦  5  ¦  0  ¦  1
+select nextval('seq_kind_table');
+➤ nextval(seq_kind_table)[12,65535,0]  𝄀
+46
+create sequence seq_kind_view increment by 6 start with 51 no cycle;
+select nextval('seq_kind_view');
+➤ nextval(seq_kind_view)[12,65535,0]  𝄀
+51
+create snapshot issue27049_kind_view_sp for table issue27049_src seq_kind_view;
+drop sequence seq_kind_view;
+create view seq_kind_view as select 999 as n;
+restore table issue27049_src.seq_kind_view{snapshot = 'issue27049_kind_view_sp'};
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = 'issue27049_src' and relname = 'seq_kind_view';
+➤ relname[12,5000,0]  ¦  relkind[12,5000,0]  𝄀
+seq_kind_view  ¦  S
+select * from issue27049_src.seq_kind_view;
+➤ last_seq_num[-5,64,0]  ¦  min_value[-5,64,0]  ¦  max_value[-5,64,0]  ¦  start_value[-5,64,0]  ¦  increment_value[-5,64,0]  ¦  cycle[-7,1,0]  ¦  is_called[-7,1,0]  𝄀
+51  ¦  1  ¦  9223372036854775807  ¦  51  ¦  6  ¦  0  ¦  1
+select nextval('seq_kind_view');
+➤ nextval(seq_kind_view)[12,65535,0]  𝄀
+57
 create database issue27049_atomic_src;
 create sequence issue27049_atomic_src.seq1 start with 5;
 create table issue27049_atomic_src.t1(a int);
@@ -251,6 +292,8 @@ where reldatabase = 'issue27049_atomic_dst';
 ➤ atomic_relation_count[-5,64,0]  𝄀
 0
 drop snapshot if exists issue27049_table_sp;
+drop snapshot if exists issue27049_kind_table_sp;
+drop snapshot if exists issue27049_kind_view_sp;
 drop snapshot if exists issue27049_sp;
 drop database if exists issue27049_seq_only_src;
 drop database if exists issue27049_seq_only_dst;

@@ -2380,6 +2380,38 @@ func getCreateSequenceSQL(
 	), nil
 }
 
+func dropCurrentRestoreObject(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	tblName string,
+) error {
+	tableInfos, err := showFullTables(ctx, "", bh, nil, dbName, tblName)
+	if err != nil {
+		return err
+	}
+	if len(tableInfos) == 0 {
+		return nil
+	}
+	if len(tableInfos) != 1 {
+		return moerr.NewInternalErrorf(ctx,
+			"found %d current objects named %s.%s during restore", len(tableInfos), dbName, tblName)
+	}
+
+	current := tableInfos[0]
+	name := qualifiedTableName(dbName, tblName)
+	var dropSQL string
+	switch current.relKind {
+	case catalog.SystemSequenceRel:
+		dropSQL = "drop sequence if exists " + name
+	case catalog.SystemViewRel:
+		dropSQL = "drop view if exists " + name
+	default:
+		dropSQL = dropTableIfExistsSQL(dbName, tblName)
+	}
+	return bh.Exec(ctx, dropSQL)
+}
+
 func restoreSequence(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -2394,7 +2426,7 @@ func restoreSequence(
 ) error {
 	toCtx := defines.AttachAccountId(ctx, toAccountID)
 	dstName := qualifiedTableName(dstDBName, dstTblName)
-	if err := bh.Exec(toCtx, "drop sequence if exists "+dstName); err != nil {
+	if err := dropCurrentRestoreObject(toCtx, bh, dstDBName, dstTblName); err != nil {
 		return err
 	}
 	if err := bh.Exec(toCtx, createSQL); err != nil {

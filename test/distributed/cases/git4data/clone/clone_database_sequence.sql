@@ -3,6 +3,8 @@
 
 drop snapshot if exists issue27049_sp;
 drop snapshot if exists issue27049_table_sp;
+drop snapshot if exists issue27049_kind_table_sp;
+drop snapshot if exists issue27049_kind_view_sp;
 drop database if exists issue27049_seq_only_src;
 drop database if exists issue27049_seq_only_dst;
 drop database if exists issue27049_src;
@@ -137,6 +139,33 @@ restore table issue27049_src.seq_table_restore{snapshot = 'issue27049_table_sp'}
 select * from issue27049_src.seq_table_restore;
 select nextval('seq_table_restore');
 
+-- Restoring a historical sequence must replace a current object with the same
+-- name according to its actual relkind, rather than assuming it is a sequence.
+create sequence seq_kind_table increment by 5 start with 41 no cycle;
+select nextval('seq_kind_table');
+create snapshot issue27049_kind_table_sp for table issue27049_src seq_kind_table;
+drop sequence seq_kind_table;
+create table seq_kind_table(a int);
+insert into seq_kind_table values (1);
+restore table issue27049_src.seq_kind_table{snapshot = 'issue27049_kind_table_sp'};
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = 'issue27049_src' and relname = 'seq_kind_table';
+select * from issue27049_src.seq_kind_table;
+select nextval('seq_kind_table');
+
+create sequence seq_kind_view increment by 6 start with 51 no cycle;
+select nextval('seq_kind_view');
+create snapshot issue27049_kind_view_sp for table issue27049_src seq_kind_view;
+drop sequence seq_kind_view;
+create view seq_kind_view as select 999 as n;
+restore table issue27049_src.seq_kind_view{snapshot = 'issue27049_kind_view_sp'};
+select relname, relkind
+from mo_catalog.mo_tables
+where reldatabase = 'issue27049_src' and relname = 'seq_kind_view';
+select * from issue27049_src.seq_kind_view;
+select nextval('seq_kind_view');
+
 -- A failure after sequence creation must still roll back the whole database.
 create database issue27049_atomic_src;
 create sequence issue27049_atomic_src.seq1 start with 5;
@@ -154,6 +183,8 @@ from mo_catalog.mo_tables
 where reldatabase = 'issue27049_atomic_dst';
 
 drop snapshot if exists issue27049_table_sp;
+drop snapshot if exists issue27049_kind_table_sp;
+drop snapshot if exists issue27049_kind_view_sp;
 drop snapshot if exists issue27049_sp;
 drop database if exists issue27049_seq_only_src;
 drop database if exists issue27049_seq_only_dst;
