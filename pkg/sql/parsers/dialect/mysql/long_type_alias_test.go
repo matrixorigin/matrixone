@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -59,6 +60,35 @@ func TestLongStringTypeAliases(t *testing.T) {
 			require.Equal(t, test.family, typ.InternalType.Family)
 			require.Equal(t, test.familyString, typ.InternalType.FamilyString)
 			require.Equal(t, uint32(test.oid), typ.InternalType.Oid)
+		})
+	}
+}
+
+func TestTextAndBlobDisplayLength(t *testing.T) {
+	tests := []struct {
+		typeSQL string
+		width   int32
+		oid     defines.MysqlType
+	}{
+		{typeSQL: "text(4000)", width: 4000, oid: defines.MYSQL_TYPE_TEXT},
+		{typeSQL: "blob(4000)", width: 4000, oid: defines.MYSQL_TYPE_BLOB},
+		{typeSQL: "text", width: 0, oid: defines.MYSQL_TYPE_TEXT},
+		{typeSQL: "blob", width: 0, oid: defines.MYSQL_TYPE_BLOB},
+	}
+
+	for _, test := range tests {
+		t.Run(test.typeSQL, func(t *testing.T) {
+			typ := parseColumnType(t, test.typeSQL)
+			require.Equal(t, tree.BlobFamily, typ.InternalType.Family)
+			require.Equal(t, test.width, typ.InternalType.DisplayWith)
+			require.Equal(t, uint32(test.oid), typ.InternalType.Oid)
+
+			stmt, err := ParseOne(context.Background(), "create table t (g "+test.typeSQL+")", 1)
+			require.NoError(t, err)
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "g "+test.typeSQL+")")
+			_, err = ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err, formatted)
 		})
 	}
 }
