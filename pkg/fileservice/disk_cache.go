@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/maphash"
 	"io"
@@ -55,6 +56,10 @@ type DiskCache struct {
 	async         diskCacheAsyncState
 	writeFailures diskCacheWriteFailureState
 	fileSync      func(*os.File) error
+	load          struct {
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
@@ -63,7 +68,10 @@ type DiskCache struct {
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
 // are not required to have distinct addresses in Go, but the path owner uses
 // pointer identity as its generation token.
-type diskCachePathUpdate struct{ _ byte }
+type diskCachePathUpdate struct {
+	_               byte
+	evictionPending bool
+}
 
 func NewDiskCache(
 	ctx context.Context,
@@ -137,18 +145,18 @@ func newDiskCacheWithMetricScope(
 		func(ctx context.Context, path string, _ struct{}, size int64, _ uint64) {
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacityFunc()))
-			doneUpdate, ok := ret.tryStartUpdate(path)
+			doneUpdate, ok := ret.startEviction(path)
 			if !ok {
 				return
 			}
-			defer doneUpdate()
-			if ret.cache.Contains(path) {
-				return
-			}
-			err := os.Remove(path)
-			if err == nil {
-				metric.FSDiskCacheEvictCounter.Add(1)
-			} else if !os.IsNotExist(err) {
+			defer func() {
+				if err := doneUpdate(); err != nil {
+					logutil.Error("finish disk cache eviction",
+						zap.Any("error", err),
+					)
+				}
+			}()
+			if err := ret.removeEvictedFile(path); err != nil {
 				logutil.Error("delete disk cache file",
 					zap.Any("error", err),
 				)
@@ -160,11 +168,21 @@ func newDiskCacheWithMetricScope(
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
 	ret.initAsyncUpdates()
 	ret.initWriteFailureState()
+	loadCtx, loadCancel := context.WithCancel(ctx)
+	ret.load.cancel = loadCancel
+	ret.load.done = make(chan struct{})
+	runLoad := func() {
+		defer func() {
+			loadCancel()
+			close(ret.load.done)
+		}()
+		ret.loadCache(loadCtx)
+	}
 
 	if asyncLoad {
-		go ret.loadCache(ctx)
+		go runLoad()
 	} else {
-		ret.loadCache(ctx)
+		runLoad()
 	}
 
 	if name != "" {
@@ -189,14 +207,21 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for work := range works {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case work, ok := <-works:
+					if !ok {
+						return
+					}
+					info, err := work.Entry.Info()
+					if err != nil {
+						continue // ignore
+					}
 
-				info, err := work.Entry.Info()
-				if err != nil {
-					continue // ignore
+					d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 				}
-
-				d.cache.Set(ctx, work.Path, struct{}{}, int64(fileSize(info)))
 			}
 		}()
 	}
@@ -204,6 +229,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	var numFiles, numCacheFiles, numTempFiles, numDeleted int
 
 	_ = filepath.WalkDir(d.path, func(path string, entry os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return fs.SkipAll
+		}
 		numFiles++
 		if err != nil {
 			return nil //ignore
@@ -240,9 +268,12 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		}
 
 		numCacheFiles++
-		works <- Info{
-			Path:  path,
-			Entry: entry,
+		select {
+		case works <- Info{
+			Path: path, Entry: entry,
+		}:
+		case <-ctx.Done():
+			return fs.SkipAll
 		}
 
 		return nil
@@ -258,6 +289,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		zap.Any("deleted files", numDeleted),
 		zap.Any("time", time.Since(t0)),
 	)
+	if ctx.Err() != nil {
+		return
+	}
 
 	done := make(chan int64, 1)
 	d.cache.Evict(ctx, done, 0)
@@ -306,6 +340,9 @@ func (d *DiskCache) Read(
 	}
 
 	openedFiles := make(map[string]*os.File)
+	// All path waits in one Read share a single budget. Start it lazily on the
+	// first contended path so uncontended reads do not pay for a timer.
+	var waitDeadline time.Time
 	defer func() {
 		LogEvent(ctx, str_close_disk_files_begin)
 		for _, file := range openedFiles {
@@ -345,7 +382,7 @@ func (d *DiskCache) Read(
 			}
 		} else {
 			// open file
-			if d.waitUpdateCompleteFor(ctx, diskPath, shortIOWaitDuration) {
+			if d.waitUpdateCompleteWithin(ctx, diskPath, &waitDeadline, shortIOWaitDuration) {
 				LogEvent(ctx, str_disk_cache_file_open_begin)
 				diskFile, err := os.Open(diskPath)
 				LogEvent(ctx, str_disk_cache_file_open_end)
@@ -372,7 +409,7 @@ func (d *DiskCache) Read(
 				}
 			} else {
 				// open file
-				if d.waitUpdateCompleteFor(ctx, diskPath, shortIOWaitDuration) {
+				if d.waitUpdateCompleteWithin(ctx, diskPath, &waitDeadline, shortIOWaitDuration) {
 					LogEvent(ctx, str_disk_cache_file_open_begin)
 					diskFile, err := os.Open(diskPath)
 					LogEvent(ctx, str_disk_cache_file_open_end)
@@ -785,7 +822,12 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	return fromOSPath(path), nil
 }
 
-func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, timeout time.Duration) bool {
+func (d *DiskCache) waitUpdateCompleteWithin(
+	ctx context.Context,
+	path string,
+	deadline *time.Time,
+	timeout time.Duration,
+) bool {
 	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
 	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
 	d.updatingPaths.L.Lock()
@@ -798,8 +840,15 @@ func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, time
 		d.updatingPaths.L.Unlock()
 		return false
 	}
+	if deadline.IsZero() {
+		*deadline = time.Now().Add(timeout)
+	}
+	if !time.Now().Before(*deadline) {
+		d.updatingPaths.L.Unlock()
+		return false
+	}
 	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, timeout)
+	ctx, cancel = context.WithDeadline(ctx, *deadline)
 	defer cancel()
 	stopWakeup := context.AfterFunc(ctx, func() {
 		d.updatingPaths.L.Lock()
@@ -809,7 +858,7 @@ func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, time
 	for d.updatingPaths.m[path] != nil && ctx.Err() == nil {
 		d.updatingPaths.Wait()
 	}
-	completed := d.updatingPaths.m[path] == nil
+	completed := d.updatingPaths.m[path] == nil && ctx.Err() == nil
 	d.updatingPaths.L.Unlock()
 	stopWakeup()
 	return completed
@@ -876,28 +925,13 @@ func (d *DiskCache) startUpdateWithCleanupContext(
 	if stopWakeup != nil {
 		stopWakeup()
 	}
-	var once sync.Once
-	var cleanupErr error
-	done = func() error {
-		once.Do(func() {
-			defer func() {
-				d.updatingPaths.L.Lock()
-				if d.updatingPaths.m[path] == update {
-					delete(d.updatingPaths.m, path)
-					d.updatingPaths.Broadcast()
-				}
-				d.updatingPaths.L.Unlock()
-			}()
-			if cleanup != nil {
-				cleanupErr = cleanup()
-			}
-		})
-		return cleanupErr
-	}
-	return done, nil
+	return d.newPathUpdateDone(path, update, cleanup), nil
 }
 
-func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
+func (d *DiskCache) tryStartUpdateWithCleanup(
+	path string,
+	cleanup func() error,
+) (done func() error, ok bool) {
 	d.updatingPaths.L.Lock()
 	if d.updatingPaths.m[path] != nil {
 		d.updatingPaths.L.Unlock()
@@ -906,38 +940,77 @@ func (d *DiskCache) tryStartUpdate(path string) (done func(), ok bool) {
 	update := new(diskCachePathUpdate)
 	d.updatingPaths.m[path] = update
 	d.updatingPaths.L.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			d.updatingPaths.L.Lock()
-			if d.updatingPaths.m[path] == update {
-				delete(d.updatingPaths.m, path)
-				d.updatingPaths.Broadcast()
-			}
-			d.updatingPaths.L.Unlock()
-		})
-	}, true
+	return d.newPathUpdateDone(path, update, cleanup), true
 }
 
-func (d *DiskCache) tryStartUpdateWithCleanup(
-	path string,
-	cleanup func() error,
-) (done func() error, ok bool) {
-	release, ok := d.tryStartUpdate(path)
-	if !ok {
+// startEviction either owns the path cleanup or transfers that responsibility
+// to the current path owner. Both decisions happen while holding the same lock,
+// so eviction cannot be lost between observing and releasing a generation.
+func (d *DiskCache) startEviction(path string) (done func() error, ok bool) {
+	d.updatingPaths.L.Lock()
+	if update := d.updatingPaths.m[path]; update != nil {
+		update.evictionPending = true
+		d.updatingPaths.L.Unlock()
 		return nil, false
 	}
+	update := new(diskCachePathUpdate)
+	d.updatingPaths.m[path] = update
+	d.updatingPaths.L.Unlock()
+	return d.newPathUpdateDone(path, update, nil), true
+}
+
+func (d *DiskCache) newPathUpdateDone(
+	path string,
+	update *diskCachePathUpdate,
+	cleanup func() error,
+) func() error {
 	var once sync.Once
 	var cleanupErr error
 	return func() error {
 		once.Do(func() {
+			defer func() {
+				cleanupErr = errors.Join(cleanupErr, d.finishPathUpdate(path, update))
+			}()
 			if cleanup != nil {
 				cleanupErr = cleanup()
 			}
-			release()
 		})
 		return cleanupErr
-	}, true
+	}
+}
+
+func (d *DiskCache) finishPathUpdate(path string, update *diskCachePathUpdate) (err error) {
+	for {
+		d.updatingPaths.L.Lock()
+		if d.updatingPaths.m[path] != update {
+			d.updatingPaths.L.Unlock()
+			return err
+		}
+		if !update.evictionPending {
+			delete(d.updatingPaths.m, path)
+			d.updatingPaths.Broadcast()
+			d.updatingPaths.L.Unlock()
+			return err
+		}
+		update.evictionPending = false
+		d.updatingPaths.L.Unlock()
+
+		err = errors.Join(err, d.removeEvictedFile(path))
+	}
+}
+
+func (d *DiskCache) removeEvictedFile(path string) error {
+	if d.cache.Contains(path) {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	metric.FSDiskCacheEvictCounter.Add(1)
+	return nil
 }
 
 func (d *DiskCache) removeUnindexedFile(path string) error {
@@ -1036,6 +1109,11 @@ func (d *DiskCache) Close(ctx context.Context) {
 	// A canceled ctx means terminal draining is incomplete. Callers must not
 	// reuse the cache directory for a new DiskCache generation until a later
 	// Close returns with a live context.
+	d.load.cancel()
 	d.closeAsyncUpdates(ctx)
+	select {
+	case <-d.load.done:
+	case <-ctx.Done():
+	}
 	allDiskCaches.Delete(d)
 }

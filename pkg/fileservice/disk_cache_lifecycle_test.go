@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,6 +157,62 @@ func TestDiskCacheIOEntryWaitIsBoundedDuringAsyncFinalize(t *testing.T) {
 	require.Equal(t, []byte("x"), vector.Entries[0].Data)
 }
 
+func TestDiskCacheReadSharesWaitBudgetAcrossEntries(t *testing.T) {
+	originalShortWait := shortIOWaitDuration
+	shortIOWaitDuration = 20 * time.Millisecond
+	t.Cleanup(func() { shortIOWaitDuration = originalShortWait })
+
+	for _, tc := range []struct {
+		name      string
+		holdPaths func(*DiskCache, []IOEntry) []string
+	}{
+		{
+			name: "full file",
+			holdPaths: func(cache *DiskCache, _ []IOEntry) []string {
+				return []string{cache.pathForFile("foo")}
+			},
+		},
+		{
+			name: "distinct ranges",
+			holdPaths: func(cache *DiskCache, entries []IOEntry) []string {
+				paths := make([]string, 0, len(entries))
+				for _, entry := range entries {
+					paths = append(paths, cache.pathForIOEntry("foo", entry))
+				}
+				return paths
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := newLifecycleTestDiskCache(t)
+			entries := make([]IOEntry, 64)
+			for i := range entries {
+				entries[i] = IOEntry{Offset: int64(i), Size: 1}
+			}
+
+			var releases []func()
+			for _, path := range tc.holdPaths(cache, entries) {
+				releases = append(releases, cache.startUpdate(path))
+			}
+			releaseAll := sync.OnceFunc(func() {
+				for _, release := range releases {
+					release()
+				}
+			})
+			t.Cleanup(releaseAll)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			require.NoError(t, cache.Read(ctx, &IOVector{
+				FilePath: "foo",
+				Entries:  entries,
+			}))
+			require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
+			releaseAll()
+		})
+	}
+}
+
 func TestDiskCacheSynchronousUpdateWaitHonorsCancellation(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	locker := installNotifyingDiskCacheLocker(cache)
@@ -268,6 +326,65 @@ func TestDiskCacheCleanupKeepsSamePathExcluded(t *testing.T) {
 	doneSecond, err := cache.startUpdateContext(context.Background(), "same")
 	require.NoError(t, err)
 	doneSecond()
+}
+
+func TestDiskCacheEvictionTransfersToCleanupOwner(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	ctx := context.Background()
+	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.WriteFile(diskPath, []byte("payload"), 0o644))
+	cache.cache.Set(ctx, diskPath, struct{}{}, int64(len("payload")))
+
+	cleanupObservedIndex := make(chan bool, 1)
+	releaseCleanup := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseCleanup) })
+	t.Cleanup(unblock)
+	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+		cleanupObservedIndex <- cache.cache.Contains(diskPath)
+		<-releaseCleanup
+		return nil
+	})
+	updateDone := make(chan error, 1)
+	go func() { updateDone <- doneUpdate() }()
+
+	select {
+	case contained := <-cleanupObservedIndex:
+		require.True(t, contained)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("cleanup owner did not reach its index check")
+	}
+
+	cache.cache.ForceEvictWithWait(ctx, int64(len("payload")))
+	require.False(t, cache.cache.Contains(diskPath))
+	unblock()
+	select {
+	case err := <-updateDone:
+		require.NoError(t, err)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("cleanup owner did not release the path")
+	}
+	_, err := os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCacheEvictionTransfersToPlainPathOwner(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	ctx := context.Background()
+	diskPath := cache.pathForFile("foo")
+	require.NoError(t, os.WriteFile(diskPath, []byte("payload"), 0o644))
+	cache.cache.Set(ctx, diskPath, struct{}{}, int64(len("payload")))
+
+	release := cache.startUpdate(diskPath)
+	releaseOnce := sync.OnceFunc(release)
+	t.Cleanup(releaseOnce)
+	cache.cache.ForceEvictWithWait(ctx, int64(len("payload")))
+	require.False(t, cache.cache.Contains(diskPath))
+	_, err := os.Stat(diskPath)
+	require.NoError(t, err)
+
+	releaseOnce()
+	_, err = os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestDiskCacheCompletedOwnerCannotReleaseNextGeneration(t *testing.T) {
@@ -618,6 +735,90 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	defer finishCancel()
 	cache.Close(finishCtx)
 	require.NoError(t, finishCtx.Err())
+}
+
+func TestDiskCacheCloseOwnsAsyncLoaderGeneration(t *testing.T) {
+	dir := t.TempDir()
+	diskPath := filepath.Join(dir, "fullfoo"+cacheFileSuffix)
+	require.NoError(t, os.WriteFile(diskPath, []byte("old"), 0o644))
+
+	loaderReachedEviction := make(chan struct{})
+	releaseLoader := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseLoader) })
+	t.Cleanup(unblock)
+	var capacityCalls atomic.Int32
+	var signalLoader sync.Once
+	capacity := func() int64 {
+		if capacityCalls.Add(1) > 1 {
+			signalLoader.Do(func() { close(loaderReachedEviction) })
+			<-releaseLoader
+			return 0
+		}
+		return 1 << 20
+	}
+
+	oldCache, err := NewDiskCache(
+		context.Background(),
+		dir,
+		capacity,
+		nil,
+		true,
+		nil,
+		"",
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		unblock()
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.Background(),
+			diskCacheLifecycleTestTimeout,
+		)
+		defer cleanupCancel()
+		oldCache.Close(cleanupCtx)
+	})
+	select {
+	case <-loaderReachedEviction:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async loader did not reach eviction")
+	}
+
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer expiredCancel()
+	oldCache.Close(expiredCtx)
+	require.ErrorIs(t, expiredCtx.Err(), context.DeadlineExceeded)
+	select {
+	case <-oldCache.load.done:
+		t.Fatal("Close returned before the old loader generation stopped")
+	default:
+	}
+
+	unblock()
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	oldCache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	select {
+	case <-oldCache.load.done:
+	default:
+		t.Fatal("successful Close did not join the old loader generation")
+	}
+
+	require.NoError(t, os.WriteFile(diskPath, []byte("new"), 0o644))
+	newCache, err := NewDiskCache(
+		context.Background(),
+		dir,
+		fscache.ConstCapacity(1<<20),
+		nil,
+		false,
+		nil,
+		"",
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { newCache.Close(context.Background()) })
+	require.True(t, newCache.cache.Contains(diskPath))
+	data, err := os.ReadFile(diskPath)
+	require.NoError(t, err)
+	require.Equal(t, []byte("new"), data)
 }
 
 func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {
