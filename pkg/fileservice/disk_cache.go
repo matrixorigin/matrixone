@@ -785,20 +785,7 @@ func (d *DiskCache) decodeFilePath(diskPath string) (string, error) {
 	return fromOSPath(path), nil
 }
 
-func (d *DiskCache) waitUpdateComplete(ctx context.Context, path string) bool {
-	return d.waitUpdateCompleteWithTimeout(ctx, path, 0, false)
-}
-
 func (d *DiskCache) waitUpdateCompleteFor(ctx context.Context, path string, timeout time.Duration) bool {
-	return d.waitUpdateCompleteWithTimeout(ctx, path, timeout, true)
-}
-
-func (d *DiskCache) waitUpdateCompleteWithTimeout(
-	ctx context.Context,
-	path string,
-	timeout time.Duration,
-	bounded bool,
-) bool {
 	LogEvent(ctx, str_disk_cache_wait_update_complete_begin)
 	defer LogEvent(ctx, str_disk_cache_wait_update_complete_end)
 	d.updatingPaths.L.Lock()
@@ -807,15 +794,13 @@ func (d *DiskCache) waitUpdateCompleteWithTimeout(
 		d.updatingPaths.L.Unlock()
 		return completed
 	}
-	if bounded {
-		if timeout <= 0 {
-			d.updatingPaths.L.Unlock()
-			return false
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	if timeout <= 0 {
+		d.updatingPaths.L.Unlock()
+		return false
 	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, timeout)
+	defer cancel()
 	stopWakeup := context.AfterFunc(ctx, func() {
 		d.updatingPaths.L.Lock()
 		d.updatingPaths.Broadcast()
