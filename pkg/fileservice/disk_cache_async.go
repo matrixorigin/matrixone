@@ -414,19 +414,25 @@ func (d *DiskCache) closeAsyncUpdates(ctx context.Context) {
 		a.mu.Lock()
 		a.mu.closed = true
 		a.mu.Unlock()
-		a.submitters.Wait()
 		a.cancel()
-		for {
-			select {
-			case job := <-a.jobs:
-				d.releaseAsyncUpdate(job)
-			default:
-				a.startOnce.Do(func() {
-					close(a.done)
-				})
-				return
+
+		// Waiting for submitters and releasing canceled jobs can execute file
+		// close/remove cleanup. Keep that work off the Close caller so its
+		// context remains a real upper bound even when a filesystem call stalls.
+		go func() {
+			a.submitters.Wait()
+			for {
+				select {
+				case job := <-a.jobs:
+					d.releaseAsyncUpdate(job)
+				default:
+					a.startOnce.Do(func() {
+						close(a.done)
+					})
+					return
+				}
 			}
-		}
+		}()
 	})
 
 	d.flushAsyncUpdates(ctx)

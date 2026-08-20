@@ -575,9 +575,12 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	// A merge leader must not wake its waiters until successful cache updates
-	// have completed. Cache updates are deferred below, so register this defer
+	// A merge leader must not wake its waiters until caller-visible cache work
+	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
+	// Async disk finalization is intentionally outside this generation: the
+	// foreground read only admits that bounded work, and subsequent disk-cache
+	// readers use their own bounded wait before falling back to object storage.
 	var finishMerge func()
 	defer func() {
 		if finishMerge != nil {

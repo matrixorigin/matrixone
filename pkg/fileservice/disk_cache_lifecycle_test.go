@@ -461,6 +461,116 @@ func TestDiskCacheCloseDrainsQueuedFileFinalize(t *testing.T) {
 	require.NoError(t, finishCtx.Err())
 }
 
+func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseSync) })
+	t.Cleanup(unblock)
+	cache.fileSync = func(file *os.File) error {
+		close(syncStarted)
+		<-releaseSync
+		return file.Sync()
+	}
+
+	require.NoError(t, cache.setFile(
+		context.Background(),
+		"active",
+		func(context.Context) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("payload")), nil
+		},
+		true,
+	))
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async full-file finalizer did not start")
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	cache.Close(closeCtx)
+	require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	unblock()
+
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	cache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	diskPath := cache.pathForFile("active")
+	require.False(t, cache.isUpdating(diskPath))
+	_, err := os.Stat(diskPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCacheCloseDeadlineDoesNotWaitForQueuedCleanup(t *testing.T) {
+	cache := newLifecycleTestDiskCache(t)
+	diskPath := cache.pathForFile("queued")
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	unblockCleanup := sync.OnceFunc(func() { close(releaseCleanup) })
+	t.Cleanup(unblockCleanup)
+	doneUpdate := cache.startUpdateWithCleanup(diskPath, func() error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return nil
+	})
+
+	tempFile, err := os.CreateTemp(cache.path, "close-deadline-*")
+	require.NoError(t, err)
+	a := &cache.async
+	a.mu.Lock()
+	a.slots <- struct{}{}
+	a.mu.idle = make(chan struct{})
+	a.mu.pending[diskPath] = struct{}{}
+	a.mu.Unlock()
+	a.jobs <- &diskCacheAsyncUpdate{
+		diskPath: diskPath,
+		finalize: &diskCacheAsyncFileFinalize{
+			file:       tempFile,
+			doneUpdate: doneUpdate,
+		},
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	closeReturned := make(chan struct{})
+	go func() {
+		cache.Close(closeCtx)
+		close(closeReturned)
+	}()
+
+	select {
+	case <-cleanupStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblockCleanup()
+		<-closeReturned
+		t.Fatal("queued cleanup did not start during close")
+	}
+	select {
+	case <-closeReturned:
+		require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		unblockCleanup()
+		<-closeReturned
+		t.Fatal("Close exceeded its context deadline while queued cleanup was blocked")
+	}
+	require.True(t, cache.isUpdating(diskPath))
+
+	unblockCleanup()
+	finishCtx, finishCancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
+	defer finishCancel()
+	cache.Close(finishCtx)
+	require.NoError(t, finishCtx.Err())
+	require.False(t, cache.isUpdating(diskPath))
+	require.Empty(t, cache.async.slots)
+	cache.async.mu.Lock()
+	require.Empty(t, cache.async.mu.pending)
+	cache.async.mu.Unlock()
+	_, err = os.Stat(tempFile.Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
 	cache.async.mu.Lock()

@@ -676,7 +676,16 @@ func (d *DiskCache) finalizeFile(
 	diskPath string,
 	f *os.File,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := d.fileSync(f); err != nil {
+		return err
+	}
+	// Sync is an uninterruptible syscall on the supported platforms. Recheck
+	// cancellation after it returns so Close cannot publish an async cache file
+	// after the cache has entered its terminal generation.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	fadviseDontNeed(f, 0, 0)
@@ -689,6 +698,9 @@ func (d *DiskCache) finalizeFile(
 	tempPath := f.Name()
 
 	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(tempPath, diskPath); err != nil {
