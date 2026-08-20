@@ -16,9 +16,13 @@ package fileservice
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"syscall"
 	"testing"
 
@@ -39,10 +43,30 @@ func TestIsRetryableErrorTypedStartupFailures(t *testing.T) {
 		{name: "too many requests", err: minio.ErrorResponse{StatusCode: http.StatusTooManyRequests}, want: true},
 		{name: "internal server error", err: minio.ErrorResponse{StatusCode: http.StatusInternalServerError}, want: true},
 		{name: "service unavailable", err: fmt.Errorf("bucket validation: %w", minio.ErrorResponse{StatusCode: http.StatusServiceUnavailable}), want: true},
+		{
+			name: "minio connection closed by foreign host",
+			err: &url.Error{
+				Op:  http.MethodGet,
+				URL: "http://minio/mo-test/?location=",
+				Err: errors.New("Connection closed by foreign host http://minio/mo-test/?location=. Retry again."),
+			},
+			want: true,
+		},
 		{name: "bad request", err: minio.ErrorResponse{StatusCode: http.StatusBadRequest}, want: false},
 		{name: "unauthorized", err: minio.ErrorResponse{StatusCode: http.StatusUnauthorized}, want: false},
 		{name: "forbidden", err: minio.ErrorResponse{StatusCode: http.StatusForbidden}, want: false},
 		{name: "not found", err: minio.ErrorResponse{StatusCode: http.StatusNotFound}, want: false},
+		{
+			name: "certificate verification",
+			err: &url.Error{
+				Op:  http.MethodGet,
+				URL: "https://minio/mo-test/?location=",
+				Err: &tls.CertificateVerificationError{
+					Err: x509.UnknownAuthorityError{},
+				},
+			},
+			want: false,
+		},
 		{name: "canceled", err: context.Canceled, want: false},
 	}
 

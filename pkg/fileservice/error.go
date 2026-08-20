@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -60,6 +61,17 @@ func IsRetryableError(err error) bool {
 			statusCode >= http.StatusInternalServerError {
 			return true
 		}
+	}
+
+	// MinIO wraps an EOF returned by its HTTP transport in a url.Error whose
+	// inner error has no typed sentinel. Use the SDK's canonical classifier for
+	// that case, but keep certificate verification failures fail-fast.
+	var certificateErr *tls.CertificateVerificationError
+	if errors.As(err, &certificateErr) {
+		return false
+	}
+	if minio.IsNetworkOrHostDown(err, false) {
+		return true
 	}
 
 	var dnsErr *net.DNSError
