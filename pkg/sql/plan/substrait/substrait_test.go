@@ -562,6 +562,34 @@ func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
 	require.True(t, supported)
 }
 
+func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
+	resolved, err := function.GetFunctionByName(
+		context.Background(),
+		"=",
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+
+	notNullColumn := col(0)
+	notNullColumn.Typ.NotNullable = true
+	nonNullLiteral := i64(1)
+	require.False(t, nonNullLiteral.Typ.NotNullable, "the planner literal annotation is deliberately conservative")
+	require.True(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nonNullLiteral}))
+
+	nullLiteral := i64(1)
+	nullLiteral.GetLit().Isnull = true
+	require.False(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{notNullColumn, nullLiteral}))
+	nullableColumn := col(0)
+	require.False(t, semanticNotNullable(
+		resolved.GetEncodedOverloadID(), []*planpb.Expr{nullableColumn, nonNullLiteral}))
+
+	query := boundSQLQuery(t, "select a = 1, case when a > 0 then a else 0 end from select_test.bind_select")
+	_, err = Export(query)
+	require.NoError(t, err)
+}
+
 func TestExportRequiresCompleteBoundOutputHeadings(t *testing.T) {
 	q := scanQuery()
 	q.Headings = nil
@@ -2286,10 +2314,44 @@ func TestSubstraitTypeAndLiteralMappings(t *testing.T) {
 	require.ErrorContains(t, err, "outside the supported bound")
 
 	charType := planpb.Type{Id: int32(types.T_char), Width: 5}
-	_, err = substraitType(&charType)
-	require.True(t, IsNotEligible(err))
-	_, err = literal(&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "fixed"}}, &charType)
-	require.True(t, IsNotEligible(err))
+	mappedChar, err := substraitType(&charType)
+	require.NoError(t, err)
+	require.Equal(t, int32(5), mappedChar.GetVarchar().GetLength())
+	charLiteral, err := literal(
+		&planpb.Literal{Value: &planpb.Literal_Sval{Sval: "x  "}}, &charType)
+	require.NoError(t, err)
+	require.Equal(t, "x  ", charLiteral.GetLiteral().GetVarChar().GetValue(), "wire canonicalization must not trim or pad CHAR bytes")
+	require.Equal(t, uint32(5), charLiteral.GetLiteral().GetVarChar().GetLength())
+	_, err = substraitType(&planpb.Type{Id: int32(types.T_char), Width: -1})
+	require.ErrorContains(t, err, "negative char width")
+}
+
+func TestCharUsesTheVarcharSemanticFamily(t *testing.T) {
+	charType := planpb.Type{Id: int32(types.T_char), Width: 10, NotNullable: true}
+	varcharType := planpb.Type{Id: int32(types.T_varchar), Width: 10, NotNullable: true}
+	charExpr := &planpb.Expr{Typ: charType, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	varcharExpr := &planpb.Expr{Typ: varcharType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Value: &planpb.Literal_Sval{Sval: "AIR "},
+	}}}
+	out := boolType()
+	out.NotNullable = true
+	require.NoError(t, validateScalarSignature("equal", &out, []*planpb.Expr{charExpr, varcharExpr}))
+	require.NoError(t, validateScalarSignature("like", &out, []*planpb.Expr{charExpr, varcharExpr}))
+
+	resolved, err := function.GetFunctionByName(
+		context.Background(), "=", []types.Type{types.New(types.T_char, 10, 0), types.New(types.T_char, 10, 0)})
+	require.NoError(t, err)
+	charLiteral := *varcharExpr
+	charLiteral.Typ = charType
+	supported, err := hasSemanticCapability(
+		semanticScalar,
+		"equal",
+		&planpb.ObjectRef{Obj: resolved.GetEncodedOverloadID(), ObjName: "="},
+		[]*planpb.Expr{charExpr, &charLiteral},
+		&out,
+	)
+	require.NoError(t, err)
+	require.True(t, supported)
 }
 
 func TestExportAcceptsDateAndRejectsTimestamp(t *testing.T) {

@@ -202,7 +202,7 @@ func parseArrowField(table flatTable, expected planpb.Type) (arrowField, error) 
 		}
 		field.bitWidth = map[types.T]int32{types.T_float32: 32, types.T_float64: 64}[moType]
 	case arrowTypeUTF8:
-		if moType != types.T_varchar {
+		if moType != types.T_char && moType != types.T_varchar {
 			return arrowField{}, typeMismatch(typeID, moType)
 		}
 		field.bufferCount = 3

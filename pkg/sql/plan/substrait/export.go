@@ -1320,11 +1320,9 @@ func substraitType(t *planpb.Type) (*spb.Type, error) {
 		return &spb.Type{Kind: &spb.Type_Fp32{Fp32: &spb.Type_FP32{Nullability: n}}}, nil
 	case types.T_float64:
 		return &spb.Type{Kind: &spb.Type_Fp64{Fp64: &spb.Type_FP64{Nullability: n}}}, nil
-	case types.T_char:
-		return nil, notEligiblef(EligibilityType, "unsupported type %s", types.T(t.Id).String())
-	case types.T_varchar:
+	case types.T_char, types.T_varchar:
 		if t.Width < 0 {
-			return nil, notEligiblef(EligibilityType, "negative varchar width %d", t.Width)
+			return nil, notEligiblef(EligibilityType, "negative %s width %d", strings.ToLower(types.T(t.Id).String()), t.Width)
 		}
 		return &spb.Type{Kind: &spb.Type_Varchar{Varchar: &spb.Type_VarChar{Length: t.Width, Nullability: n}}}, nil
 	case types.T_decimal64, types.T_decimal128:
@@ -1407,7 +1405,7 @@ func literal(l *planpb.Literal, typ *planpb.Type) (*spb.Expression, error) {
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_Fp64{Fp64: v.Dval}}), nil
 	case *planpb.Literal_Sval:
-		if oid != types.T_varchar {
+		if !isTPCHStringType(oid) {
 			return mismatch()
 		}
 		return wrap(&spb.Expression_Literal{LiteralType: &spb.Expression_Literal_VarChar_{VarChar: &spb.Expression_Literal_VarChar{Value: v.Sval, Length: uint32(typ.Width)}}}), nil
@@ -1669,13 +1667,13 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "starts_with":
 			declared = functionID == function.PREFIX_EQ && varcharArgs(args, 2)
 		case "substring":
-			declared = functionID == function.SUBSTRING && len(args) == 3 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_int64 && types.T(args[2].Typ.Id) == types.T_int64
+			declared = functionID == function.SUBSTRING && len(args) == 3 && isTPCHStringType(types.T(args[0].Typ.Id)) && types.T(args[1].Typ.Id) == types.T_int64 && types.T(args[2].Typ.Id) == types.T_int64
 		case "cast":
 			declared = functionID == function.CAST && len(args) == 2 && tpchCastType(types.T(args[0].Typ.Id)) && tpchCastType(types.T(out.Id))
 		case "if_then":
 			declared = functionID == function.CASE && len(args) >= 3 && len(args)%2 == 1 && tpchCaseArgs(args, out)
 		case "singular_or_list":
-			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || types.T(args[0].Typ.Id) == types.T_varchar)
+			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
 			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
 		}
@@ -1705,7 +1703,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		if _, exists := function.GetFunctionByIdWithoutError(ref.Obj); !exists || types.T(out.Id) != types.T_bool {
 			return false, nil
 		}
-		return function.DeduceNotNullable(ref.Obj, args) == out.NotNullable, nil
+		return semanticNotNullable(ref.Obj, args) == out.NotNullable, nil
 	}
 	inputs := make([]types.Type, len(args))
 	for i, argument := range args {
@@ -1725,7 +1723,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 	if int32(result.Oid) != out.Id || result.Width != out.Width || result.Scale != out.Scale {
 		return false, nil
 	}
-	notNullable := function.DeduceNotNullable(resolved.GetEncodedOverloadID(), args)
+	notNullable := semanticNotNullable(resolved.GetEncodedOverloadID(), args)
 	if kind == semanticAggregate && aggregateCanReturnNullOnEmpty(functionID) && !out.NotNullable {
 		return true, nil
 	}
@@ -1734,6 +1732,10 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 
 func isDecimalType(value types.T) bool {
 	return value == types.T_decimal64 || value == types.T_decimal128
+}
+
+func isTPCHStringType(value types.T) bool {
+	return value == types.T_char || value == types.T_varchar
 }
 
 func decimalArgs(args []*planpb.Expr) bool {
@@ -1757,11 +1759,12 @@ func comparableTPCHArgs(args []*planpb.Expr) bool {
 		return false
 	}
 	family := types.T(args[0].Typ.Id)
-	if family != types.T_date && family != types.T_int32 && family != types.T_int64 && family != types.T_varchar && !isDecimalType(family) {
+	if family != types.T_date && family != types.T_int32 && family != types.T_int64 && !isTPCHStringType(family) && !isDecimalType(family) {
 		return false
 	}
 	for _, argument := range args[1:] {
-		if argument == nil || types.T(argument.Typ.Id) != family {
+		if argument == nil || (types.T(argument.Typ.Id) != family &&
+			!(isTPCHStringType(family) && isTPCHStringType(types.T(argument.Typ.Id)))) {
 			return false
 		}
 	}
@@ -1773,7 +1776,7 @@ func varcharArgs(args []*planpb.Expr, count int) bool {
 		return false
 	}
 	for _, argument := range args {
-		if argument == nil || types.T(argument.Typ.Id) != types.T_varchar {
+		if argument == nil || !isTPCHStringType(types.T(argument.Typ.Id)) {
 			return false
 		}
 	}
@@ -1782,7 +1785,7 @@ func varcharArgs(args []*planpb.Expr, count int) bool {
 
 func tpchCastType(value types.T) bool {
 	switch value {
-	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_varchar:
+	case types.T_int32, types.T_int64, types.T_decimal64, types.T_decimal128, types.T_char, types.T_varchar:
 		return true
 	default:
 		return false
@@ -1812,6 +1815,27 @@ func semanticTypeFromPlan(value *planpb.Type) semanticTypeKey {
 	return semanticTypeKey{id: value.Id, width: value.Width, scale: value.Scale, notNullable: value.NotNullable}
 }
 
+// The binder may retain a conservative nullable type annotation on a concrete
+// non-NULL literal while proving the enclosing expression non-nullable. Honor
+// that value fact when re-deriving the bound overload contract; no other
+// nullable expression is strengthened.
+func semanticNotNullable(overloadID int64, args []*planpb.Expr) bool {
+	normalized := make([]*planpb.Expr, len(args))
+	for i, argument := range args {
+		normalized[i] = argument
+		if argument == nil || argument.Typ.NotNullable {
+			continue
+		}
+		literal := argument.GetLit()
+		if literal != nil && !literal.Isnull {
+			copy := *argument
+			copy.Typ.NotNullable = true
+			normalized[i] = &copy
+		}
+	}
+	return function.DeduceNotNullable(overloadID, normalized)
+}
+
 func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr) error {
 	isBool := func(t *planpb.Type) bool { return t != nil && types.T(t.Id) == types.T_bool }
 	same := func() bool {
@@ -1819,7 +1843,8 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return false
 		}
 		for _, a := range args {
-			if a == nil || a.Typ.Id != args[0].Typ.Id {
+			if a == nil || (a.Typ.Id != args[0].Typ.Id &&
+				!(isTPCHStringType(types.T(a.Typ.Id)) && isTPCHStringType(types.T(args[0].Typ.Id)))) {
 				return false
 			}
 		}
@@ -1858,11 +1883,11 @@ func validateScalarSignature(name string, out *planpb.Type, args []*planpb.Expr)
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "like", "starts_with":
-		if !isBool(out) || len(args) != 2 || types.T(args[0].Typ.Id) != types.T_varchar || types.T(args[1].Typ.Id) != types.T_varchar {
+		if !isBool(out) || len(args) != 2 || !isTPCHStringType(types.T(args[0].Typ.Id)) || !isTPCHStringType(types.T(args[1].Typ.Id)) {
 			return notEligiblef(EligibilityExpression, "unsupported %s signature", name)
 		}
 	case "substring":
-		if types.T(out.Id) != types.T_varchar || len(args) != 3 || types.T(args[0].Typ.Id) != types.T_varchar || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
+		if types.T(out.Id) != types.T_varchar || len(args) != 3 || !isTPCHStringType(types.T(args[0].Typ.Id)) || types.T(args[1].Typ.Id) != types.T_int64 || types.T(args[2].Typ.Id) != types.T_int64 {
 			return notEligiblef(EligibilityExpression, "unsupported substring signature")
 		}
 	}

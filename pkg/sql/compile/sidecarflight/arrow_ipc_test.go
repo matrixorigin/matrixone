@@ -75,6 +75,16 @@ func TestArrowIPCDecodesNegotiatedTPCHTypes(t *testing.T) {
 	require.Equal(t, uint32(42), vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[11], 0))
 	bat.Clean(mp)
 
+	charTypes := append([]planpb.Type(nil), typesOut...)
+	charTypes[7] = planpb.Type{Id: int32(types.T_char), Width: 8}
+	charSchema, err := ParseSchema(schemaWire, charTypes, headings)
+	require.NoError(t, err)
+	charBatch, err := charSchema.decodeRecordBatch(header, body, 1<<20, mp)
+	require.NoError(t, err)
+	require.Equal(t, types.T_char, charBatch.Vecs[7].GetType().Oid)
+	require.Equal(t, "tpch", charBatch.Vecs[7].GetStringAt(0))
+	charBatch.Clean(mp)
+
 	requiredTypes := append([]planpb.Type(nil), typesOut...)
 	requiredTypes[0].NotNullable = true
 	requiredSchema, err := ParseSchema(schemaWire, requiredTypes, headings)
