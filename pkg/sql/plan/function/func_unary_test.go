@@ -11527,6 +11527,76 @@ func TestStringTimeExtractReviewerOwnershipMatrix(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractSeparatorWhitespaceOwnership(t *testing.T) {
+	// The separator and token boundaries are independent grammar dimensions:
+	// one or two interstitial spaces, one/two/three trailing separators, and a
+	// terminal space after a signed/bare token all affect MySQL ownership.
+	for _, sign := range []string{"+", "-"} {
+		for _, tc := range []struct {
+			input string
+			want  string
+		}{
+			{input: "1:34:56: " + sign, want: "1/34/56"},
+			{input: "1:34:56: " + sign + " ", want: "1/34/56"},
+			{input: "1:34:56:  " + sign, want: "1/34/56"},
+			{input: "1:34:56:  " + sign + " ", want: "NULL"},
+			{input: "1:34:56:: " + sign, want: "1/34/56"},
+			{input: "1:34:56:: " + sign + " ", want: "NULL"},
+			{input: "1:34:56::  " + sign, want: "NULL"},
+			{input: "1:34:56::  " + sign + " ", want: "NULL"},
+			{input: "1:34:56::: " + sign, want: "NULL"},
+			{input: "1:34:56::: " + sign + " ", want: "NULL"},
+			{input: "1:34:56:::  " + sign, want: "NULL"},
+			{input: "1:34:56:::  " + sign + " ", want: "NULL"},
+			// Compact one-digit fields remain TIME for short three-separator
+			// candidates; the fully terminated form crosses the DATETIME gate.
+			{input: "1:1:1::: " + sign, want: "1/1/1"},
+			{input: "1:1:1::: " + sign + " ", want: "1/1/1"},
+			{input: "1:1:1:::  " + sign, want: "1/1/1"},
+			{input: "1:1:1:::  " + sign + " ", want: "0/0/0"},
+		} {
+			t.Run(tc.input, func(t *testing.T) {
+				hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+				if tc.want == "NULL" {
+					require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+					return
+				}
+				require.True(t, ok)
+				require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+			})
+		}
+	}
+
+	for _, sign := range []string{"+1", "-1"} {
+		for _, tc := range []struct {
+			input string
+			want  string
+		}{
+			{input: "0:01:34: " + sign, want: "0/1/34"},
+			{input: "0:01:34:  " + sign, want: "NULL"},
+			{input: "0:01:34:  " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34:: " + sign, want: "NULL"},
+			{input: "0:01:34:: " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34::  " + sign, want: "NULL"},
+			{input: "0:01:34::  " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34::: " + sign, want: "NULL"},
+			{input: "0:01:34::: " + sign + " ", want: "0/1/34"},
+			{input: "0:01:34:::  " + sign, want: "NULL"},
+			{input: "0:01:34:::  " + sign + " ", want: "0/1/34"},
+		} {
+			t.Run(tc.input, func(t *testing.T) {
+				hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+				if tc.want == "NULL" {
+					require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+					return
+				}
+				require.True(t, ok)
+				require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+			})
+		}
+	}
+}
+
 func TestStringTimeExtractAmbiguousCandidateMatrix(t *testing.T) {
 	inputs := []string{
 		"01:01: abc", "1:1: abc", "12:34: 123",

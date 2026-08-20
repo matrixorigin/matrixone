@@ -5650,11 +5650,21 @@ func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, t
 		token.byteLen != 1 || (token.token != "+" && token.token != "-") {
 		return false
 	}
+	// MySQL keeps one interstitial separator before a bare sign, but a second
+	// separator changes ownership once the candidate has an omitted/repeated
+	// clock boundary. Leave that case to the complete-candidate length gate;
+	// compact one-digit fields can still remain TIME while wider fields become
+	// an invalid date-shaped candidate.
+	if candidate.trailingSeparatorCount >= 2 && token.leadingWhitespaceCount > 1 &&
+		!token.trailingWhitespace {
+		return false
+	}
 	// A one-digit leading field remains a TIME prefix for short inputs even
 	// when the sign is whitespace-terminated. For the length-gated two-digit
 	// date candidate, the DATETIME scanner owns that same boundary instead.
 	if candidate.leadingDigits == 1 &&
-		(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace) {
+		(candidate.trailingSeparatorCount <= 2 &&
+			(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace)) {
 		return true
 	}
 	// With an attached single separator, MySQL keeps one- and two-digit hour
@@ -5677,6 +5687,14 @@ func mysqlConsumedSuffixLengthForExtract(suffix string) int {
 
 func mysqlSignedNumericTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
 	if candidate.fieldCount != 3 || !mysqlSignedNumericTimeSuffixForExtract(token) {
+		return false
+	}
+	// The whitespace separating a signed token from the clock is part of the
+	// ownership grammar. One separator is a TIME suffix boundary; two or more
+	// separators without a terminating whitespace token make the complete
+	// candidate date-shaped in MySQL. Keep terminated tokens on the existing
+	// TIME path, then let the caller apply the full-candidate length rule.
+	if token.leadingWhitespaceCount > 1 && !token.trailingWhitespace {
 		return false
 	}
 	// Once the signed token is terminated by whitespace, MySQL keeps the
@@ -5718,12 +5736,13 @@ func mysqlSignedNumericTimeSuffixForExtract(token mysqlTimeSuffixToken) bool {
 }
 
 type mysqlTimeSuffixToken struct {
-	present            bool
-	valid              bool
-	allDigits          bool
-	trailingWhitespace bool
-	byteLen            int
-	token              string
+	present                bool
+	valid                  bool
+	allDigits              bool
+	trailingWhitespace     bool
+	leadingWhitespaceCount int
+	byteLen                int
+	token                  string
 }
 
 // mysqlTimeSuffixTokenForExtract keeps the complete token after the first
@@ -5731,6 +5750,10 @@ type mysqlTimeSuffixToken struct {
 // scanner consumes a byte-oriented prefix, so two ASCII bytes and one
 // two-byte UTF-8 rune occupy the same boundary while two UTF-8 runes do not.
 func mysqlTimeSuffixTokenForExtract(suffix string) mysqlTimeSuffixToken {
+	leadingWhitespaceCount := 0
+	for leadingWhitespaceCount < len(suffix) && mysqlWhitespaceForExtract(suffix[leadingWhitespaceCount]) {
+		leadingWhitespaceCount++
+	}
 	suffix = mysqlTrimLeftWhitespaceForExtract(suffix)
 	if suffix == "" {
 		return mysqlTimeSuffixToken{}
@@ -5746,11 +5769,12 @@ func mysqlTimeSuffixTokenForExtract(suffix string) mysqlTimeSuffixToken {
 	}
 
 	result := mysqlTimeSuffixToken{
-		present:   true,
-		valid:     true,
-		allDigits: true,
-		byteLen:   len(token),
-		token:     token,
+		present:                true,
+		valid:                  true,
+		allDigits:              true,
+		leadingWhitespaceCount: leadingWhitespaceCount,
+		byteLen:                len(token),
+		token:                  token,
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
