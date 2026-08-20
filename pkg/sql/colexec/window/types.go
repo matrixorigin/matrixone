@@ -15,9 +15,12 @@
 package window
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -66,6 +69,19 @@ type container struct {
 	rBat       *batch.Batch
 
 	runtimeFrames []*plan.FrameClause
+
+	// timestampCivilOrder records whether a sorted TIMESTAMP partition becomes
+	// non-monotonic after conversion to the session civil time. It is scoped to
+	// the materialized input generation and is cleared by resetParam.
+	timestampCivilOrder map[timestampCivilOrderKey]bool
+	timestampRangeRows  []int
+}
+
+type timestampCivilOrderKey struct {
+	vec        *vector.Vector
+	loc        *time.Location
+	start, end int
+	desc       bool
 }
 
 type Window struct {
@@ -142,6 +158,8 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.cleanOutput(proc.Mp())
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
+	ctr.timestampRangeRows = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
@@ -165,6 +183,8 @@ func (ctr *container) resetParam() {
 	ctr.ps = nil
 	ctr.os = nil
 	ctr.runtimeFrames = nil
+	ctr.timestampCivilOrder = nil
+	ctr.timestampRangeRows = nil
 }
 
 // cleanOutput releases the batch returned by the previous Call. Input-column
