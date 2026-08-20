@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"testing"
 	"time"
@@ -97,7 +98,7 @@ func (w *cursorMetadataProtocolWriter) WriteEOFOrOK(_, status uint16) error {
 	return nil
 }
 
-func TestPreparedCursorAdvertisedOnMetadataAndEmptyResultTerminators(t *testing.T) {
+func TestPreparedCursorMetadataAndEmptyResultTerminators(t *testing.T) {
 	writer := &cursorMetadataProtocolWriter{}
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().SeqLastValue = []string{""}
@@ -120,7 +121,10 @@ func TestPreparedCursorAdvertisedOnMetadataAndEmptyResultTerminators(t *testing.
 	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 	require.NoError(t, NewMysqlResp(writer).respColumnDefsWithoutFlush(ses, execCtx, []any{column}))
 	require.NotNil(t, stmt.cursor.result)
-	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.metadataStatus&SERVER_STATUS_CURSOR_EXISTS)
+	// The metadata EOF only terminates column definitions.  It must not
+	// advertise a cursor before the pipeline has successfully materialized the
+	// result.
+	require.Zero(t, writer.metadataStatus&SERVER_STATUS_CURSOR_EXISTS)
 	require.Zero(t, writer.metadataStatus&SERVER_STATUS_LAST_ROW_SENT)
 
 	// The final EXECUTE response keeps the empty cursor open. The first FETCH
@@ -128,6 +132,69 @@ func TestPreparedCursorAdvertisedOnMetadataAndEmptyResultTerminators(t *testing.
 	require.NoError(t, NewMysqlResp(writer).respStreamResultRow(ses, execCtx))
 	require.Equal(t, uint16(SERVER_STATUS_CURSOR_EXISTS), writer.resultStatus&SERVER_STATUS_CURSOR_EXISTS)
 	require.Zero(t, writer.resultStatus&SERVER_STATUS_LAST_ROW_SENT)
+}
+
+func TestPreparedCursorPacketSequence(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		deprecateEOF    bool
+		expectedPackets int
+	}{
+		{name: "legacy EOF", expectedPackets: 4},
+		{name: "deprecate EOF", deprecateEOF: true, expectedPackets: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			pu.SV.KillRountinesInterval = 0
+			setPu("", pu)
+			setSessionAlloc("", NewLeakCheckAllocator())
+
+			conn := &prepareResponseCaptureConn{}
+			ioses, err := NewIOSession(conn, pu, "")
+			require.NoError(t, err)
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+			if !tc.deprecateEOF {
+				proto.capability &^= CLIENT_DEPRECATE_EOF
+			}
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().SeqLastValue = []string{""}
+			ses := &Session{feSessionImpl: feSessionImpl{
+				txnHandler: &TxnHandler{},
+				mrs:        &MysqlResultSet{},
+			}, proc: proc, seqLastValue: new(string)}
+			ses.SetCmd(COM_STMT_EXECUTE)
+			proto.SetSession(ses)
+
+			stmt := &PrepareStmt{cursor: &preparedStmtCursor{result: &MysqlResultSet{}}}
+			execCtx := &ExecCtx{
+				reqCtx:      context.Background(),
+				ses:         ses,
+				proc:        proc,
+				stmt:        &tree.Select{},
+				prepareStmt: stmt,
+				input:       &UserInput{isCursorExecute: true},
+			}
+			column := &MysqlColumn{}
+			column.SetName("v")
+			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+			require.NoError(t, NewMysqlResp(proto).respColumnDefsWithoutFlush(ses, execCtx, []any{column}))
+			require.NoError(t, NewMysqlResp(proto).respStreamResultRow(ses, execCtx))
+
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, tc.expectedPackets)
+			if !tc.deprecateEOF {
+				// Metadata EOF is not the cursor execute terminator. The sole
+				// cursor status is on the final execute EOF after materialization.
+				require.Equal(t, byte(defines.EOFHeader), packets[2][0])
+				require.Zero(t, binary.LittleEndian.Uint16(packets[2][3:5])&SERVER_STATUS_CURSOR_EXISTS)
+			}
+			finalPacket := packets[len(packets)-1]
+			require.NotZero(t, binary.LittleEndian.Uint16(finalPacket[3:5])&SERVER_STATUS_CURSOR_EXISTS)
+		})
+	}
 }
 
 func TestCursorExecuteStatusClearsTerminalFlags(t *testing.T) {

@@ -64,3 +64,16 @@ func TestBindCurrentTimeFamilyKeepsDefaultForRuntimeFSP(t *testing.T) {
 		})
 	}
 }
+
+func TestBindCurrentTimeFamilyDefaultsToZeroFSP(t *testing.T) {
+	for _, name := range []string{
+		"now", "current_timestamp", "localtime", "localtimestamp", "sysdate",
+		"current_time", "curtime",
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, nil)
+			require.NoError(t, err)
+			require.Equal(t, int32(0), expr.Typ.Scale)
+		})
+	}
+}

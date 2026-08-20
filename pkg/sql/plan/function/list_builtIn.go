@@ -8969,7 +8969,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -9000,7 +9000,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {
@@ -9032,7 +9032,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:        true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
+					typ.Scale = 0
 					return typ
 				},
 				newOp: func() executeLogicOfOverload {

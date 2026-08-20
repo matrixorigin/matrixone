@@ -66,6 +66,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -992,6 +993,31 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 		case types.T_array_int8:
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
 				return 0, err
+			}
+		case types.T_geometry, types.T_geometry32:
+			// fillResultSet exposes geometry values as WKT bytes rather than
+			// retaining the compact WKB payload.  A WKB point uses 16 bytes
+			// per coordinate pair (8 for GEOMETRY32), while the rendered WKT
+			// can be substantially larger for large LINESTRING/POLYGON values.
+			// Decode the same payload before reserving the cursor budget so the
+			// retained representation cannot exceed the reservation.
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(row))
+				if err != nil {
+					return 0, err
+				}
+				// Include the []byte backing allocation and allocator/header
+				// slack in addition to the WKT characters.
+				textBytes := uint64(len(text))
+				if textBytes > math.MaxUint64-32 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(textBytes + 32); err != nil {
+					return 0, err
+				}
 			}
 		}
 	}

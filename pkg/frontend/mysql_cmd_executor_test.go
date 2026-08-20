@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -60,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -4065,6 +4067,61 @@ func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
 	require.NoError(t, err)
 	displayBytes := uint64(len(types.ArrayToString(values)))
 	require.GreaterOrEqual(t, estimated, displayBytes)
+}
+
+func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	points := make([]geo.Coord, 5000)
+	for i := range points {
+		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
+	}
+	line := geo.LineString{Points: points}
+
+	for _, tc := range []struct {
+		name    string
+		typ     types.T
+		payload []byte
+	}{
+		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ.ToType())
+			require.NoError(t, vector.AppendBytes(vec, tc.payload, false, mp))
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vec
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+
+			wantText, err := planfunction.GeometryPayloadToText(tc.payload)
+			require.NoError(t, err)
+			estimated, err := estimatePreparedCursorBatchBytes(bat)
+			require.NoError(t, err)
+			// The WKT allocation is retained in cursor.result.Data. The
+			// reservation must include it in addition to the compact WKB.
+			require.GreaterOrEqual(t, estimated, uint64(len(wantText))+32)
+
+			ses := &Session{}
+			stmt := &PrepareStmt{cursor: &preparedStmtCursor{
+				result:   &MysqlResultSet{Columns: []Column{&MysqlColumn{}}},
+				maxBytes: estimated - 1,
+				maxRows:  1,
+			}}
+			ctx := &ExecCtx{reqCtx: context.Background(), prepareStmt: stmt}
+			err = capturePreparedCursorBatch(ses, ctx, bat)
+			require.ErrorContains(t, err, "memory limit")
+			require.Empty(t, stmt.cursor.result.Data)
+			require.Zero(t, ses.preparedCursorBytes.Load())
+
+			stmt.cursor.maxBytes = estimated
+			require.NoError(t, capturePreparedCursorBatch(ses, ctx, bat))
+			require.Equal(t, []byte(wantText), stmt.cursor.result.Data[0][0])
+			stmt.closeCursor()
+			require.Zero(t, ses.preparedCursorBytes.Load())
+		})
+	}
 }
 
 func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {

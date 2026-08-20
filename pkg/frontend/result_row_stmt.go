@@ -343,15 +343,13 @@ func (resper *MysqlResp) respColumnDefsWithoutFlush(ses *Session, execCtx *ExecC
 		mysql COM_QUERY response: End after the column has been sent.
 		send EOF packet
 	*/
-	metadataStatus := ses.GetTxnHandler().GetServerStatus()
-	if execCtx.input != nil && execCtx.input.isCursorExecute {
-		// Connector/J inspects the legacy metadata terminator (when
-		// CLIENT_DEPRECATE_EOF is disabled) before it decides whether to create
-		// a ResultsetRowsCursor. Advertise the server cursor on this packet too;
-		// the final terminator below describes the same still-open cursor.
-		metadataStatus = cursorExecuteStatus(metadataStatus)
-	}
-	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, metadataStatus)
+	// The metadata terminator is part of the column-definition phase, not the
+	// execute result terminator.  In the legacy-EOF protocol a cursor execute
+	// therefore sends a plain metadata EOF here and advertises CURSOR_EXISTS
+	// only on the final packet after the result has been materialized.  Setting
+	// the cursor bit before the pipeline runs both emits two cursor terminators
+	// and advertises success before a limit/decode/pipeline error can occur.
+	err = resper.mysqlRrWr.WriteEOFIFAndNoFlush(0, ses.GetTxnHandler().GetServerStatus())
 	if err != nil {
 		return
 	}

@@ -4420,12 +4420,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "current_timestamp", "now", "localtime", "localtimestamp", "sysdate", "current_time", "curtime":
 		// The overloads use the default FSP because their return-type callback
 		// receives only argument types. A literal FSP is nevertheless known at
-		// bind time and must be reflected in the plan metadata; otherwise the
-		// protocol advertises NOW(0)/NOW(3) as a six-digit timestamp and
-		// CURTIME(6) as a zero-digit TIME.
+		// bind time and must be reflected in the plan metadata. For a runtime
+		// FSP expression, retain the timestamp family's conservative six-digit
+		// bound; with no argument, the overload's MySQL default FSP=0 remains in
+		// effect.
 		if len(args) == 1 {
 			if fsp, ok := temporalFunctionFSPFromPlanExpr(args[0]); ok {
 				returnType.Scale = fsp
+			} else if returnType.Oid == types.T_timestamp {
+				returnType.Scale = 6
 			}
 		}
 
