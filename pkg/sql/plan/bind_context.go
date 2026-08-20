@@ -799,6 +799,15 @@ func (bc *BindContext) sameHavingOutputExpr(left, right tree.Expr) bool {
 // same source column is itself a SELECT output. An expression such as
 // "a + 1 AS x" does not make the qualified source reference "t.a" visible.
 func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree.Expr, bool, bool) {
+	if ref.NumParts == 1 {
+		// An existing nil entry records an ambiguous unqualified source name.
+		// Do not let the spelling fallback below select one projected table's
+		// column and silently hide that ambiguity.
+		if binding, ok := bc.bindingByCol[ref.ColName()]; ok && binding == nil {
+			return nil, false, false
+		}
+	}
+
 	var selected tree.Expr
 	var selectedColumn *tree.UnresolvedName
 	found := false

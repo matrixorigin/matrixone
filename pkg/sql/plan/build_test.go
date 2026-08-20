@@ -2159,6 +2159,17 @@ func TestOnlyFullGroupByRejectsUnprojectedOrEmbeddedHavingSource(t *testing.T) {
 	}
 }
 
+func TestOnlyFullGroupByRejectsAmbiguousProjectedSourceName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n1.n_regionkey AS region_key
+		FROM nation n1
+		JOIN nation n2 ON n1.n_nationkey = n2.n_nationkey
+		HAVING n_regionkey > 0`)
+	require.ErrorContains(t, err, "ambiguous column reference")
+}
+
 func TestOnlyFullGroupByAllowsUnaryPlusImplicitHavingName(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
