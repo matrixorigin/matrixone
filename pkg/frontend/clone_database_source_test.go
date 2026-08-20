@@ -233,6 +233,30 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	})
 }
 
+func TestUdfCatalogLookupUsesSnapshot(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42},
+		Tenant: &plan.SnapshotTenant{TenantID: 7},
+	}
+
+	queryCtx, sql := udfCatalogLookup(context.Background(), snapshot, "f_snapshot", "source_db")
+	accountID, err := defines.GetAccountId(queryCtx)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), accountID)
+	require.Equal(t,
+		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where name = "f_snapshot" and db = "source_db";`,
+		sql,
+	)
+
+	queryCtx, sql = udfCatalogLookup(context.Background(), nil, "f_live", "live_db")
+	_, err = defines.GetAccountId(queryCtx)
+	require.Error(t, err)
+	require.Equal(t,
+		`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "f_live" and db = "live_db";`,
+		sql,
+	)
+}
+
 func TestGetCloneDatabaseRoutineInfosRespectsSubscriptionBoundary(t *testing.T) {
 	t.Run("database source collects functions and procedures", func(t *testing.T) {
 		const dbName = "source_db"
@@ -646,9 +670,19 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 			body: "$1 + 1",
 		},
 		{
-			name: "f_uppercase_select",
+			name: "f_uppercase_select_literal",
 			lang: "sql",
-			body: "SELECT count(*) FROM SOURCE_DB.uppercase_t",
+			body: "concat('SELECT', $1)",
+		},
+		{
+			name: "f_uppercase_select_comment",
+			lang: "sql",
+			body: "/* SELECT */ $1 + 1",
+		},
+		{
+			name: "f_uppercase_select_identifier",
+			lang: "sql",
+			body: "SELECT_value + $1",
 		},
 	}
 
@@ -656,12 +690,13 @@ func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 		context.Background(), functions, "source_db", "target_db", 1,
 	)
 	require.NoError(t, err)
-	require.Len(t, rewritten, 3)
+	require.Len(t, rewritten, 5)
 	require.Contains(t, rewritten[0].body, "from `target_db`.`control_t`")
 	require.Contains(t, rewritten[0].body, "$1")
 	require.Equal(t, "$1 + 1", rewritten[1].body)
-	require.Contains(t, rewritten[2].body, "from `target_db`.`uppercase_t`")
-	require.NotContains(t, rewritten[2].body, "SOURCE_DB.uppercase_t")
+	require.Equal(t, functions[2].body, rewritten[2].body)
+	require.Equal(t, functions[3].body, rewritten[3].body)
+	require.Equal(t, functions[4].body, rewritten[4].body)
 	require.Equal(t, "select count(*) from SOURCE_DB.control_t where id = $1", functions[0].body)
 }
 

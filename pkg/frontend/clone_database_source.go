@@ -421,9 +421,9 @@ func rewriteCloneUserDefinedFunctionBodies(
 	return rewritten, nil
 }
 
-// SQL UDF query bodies follow the same parsing rule as the binder. Scalar
-// expressions cannot contain a qualified table reference, so they need no
-// database remap and remain byte-for-byte unchanged.
+// SQL UDF query bodies follow the same case-sensitive parsing rule as the
+// binder. Scalar expressions cannot contain a qualified table reference, so
+// they need no database remap and remain byte-for-byte unchanged.
 func rewriteCloneSQLFunctionBody(
 	ctx context.Context,
 	body string,
@@ -432,7 +432,7 @@ func rewriteCloneSQLFunctionBody(
 	dstDBName string,
 	lowerCaseTableNames int64,
 ) (string, error) {
-	if !strings.Contains(strings.ToLower(body), "select") {
+	if !strings.Contains(body, "select") {
 		return body, nil
 	}
 	return rewriteCloneSQLRoutineBody(

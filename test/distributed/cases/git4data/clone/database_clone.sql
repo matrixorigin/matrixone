@@ -44,6 +44,25 @@ call p_source_qualified();
 select f_clone_answer();
 select * from v_clone_answer;
 
+-- View dependency sorting runs before the restore loop. Its UDF lookup must
+-- therefore use the source snapshot, even after the live source is gone.
+drop database if exists db_snapshot_udf;
+drop database if exists db_snapshot_udf_copy;
+drop snapshot if exists sp_snapshot_udf;
+create database db_snapshot_udf;
+create table db_snapshot_udf.t(a int);
+insert into db_snapshot_udf.t values (7);
+create function db_snapshot_udf.f_snapshot_answer() returns int language sql as 'select count(*) from db_snapshot_udf.t';
+create view db_snapshot_udf.v_snapshot_answer as select f_snapshot_answer() as answer;
+create snapshot sp_snapshot_udf for database db_snapshot_udf;
+drop database db_snapshot_udf;
+create database db_snapshot_udf_copy clone db_snapshot_udf {snapshot = "sp_snapshot_udf"};
+use db_snapshot_udf_copy;
+select f_snapshot_answer();
+select * from v_snapshot_answer;
+drop snapshot sp_snapshot_udf;
+drop database db_snapshot_udf_copy;
+
 drop database if exists db1;
 create database db1;
 use db1;

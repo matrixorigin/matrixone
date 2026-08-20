@@ -26,6 +26,7 @@ type remapDbContext struct {
 	databases           map[string]string
 	lowerCaseTableNames int64
 	remapUseDatabase    bool
+	unsupported         *bool
 }
 
 func (remap remapDbContext) lookup(database string) (string, bool) {
@@ -107,14 +108,21 @@ func remapCloneRoutineStatements(
 	if err != nil {
 		return err
 	}
+	unsupported := false
 	if !remapDbInStatements(stmts, remapDbContext{
-		databases: normalized, lowerCaseTableNames: lowerCaseTableNames, remapUseDatabase: true,
-	}) {
+		databases: normalized, lowerCaseTableNames: lowerCaseTableNames, remapUseDatabase: true, unsupported: &unsupported,
+	}) || unsupported {
 		return moerr.NewNotSupported(ctx,
 			"cloned SQL routine contains a statement whose database references cannot be safely remapped",
 		)
 	}
 	return nil
+}
+
+func (remap remapDbContext) markUnsupported() {
+	if remap.unsupported != nil {
+		*remap.unsupported = true
+	}
 }
 
 // remapDbInStmt returns false when a statement cannot be structurally audited
@@ -372,6 +380,10 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 	case *tree.CreateTable:
 		remapTableName(&s.Table, remap)
 		remapTableName(&s.LikeTableName, remap)
+		if !remapDbInTableDefs(s.Defs, remap) {
+			remap.markUnsupported()
+			remappable = false
+		}
 		if s.AsSource != nil {
 			remapDbInSelect(s.AsSource, remap)
 		}
@@ -421,6 +433,7 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 			}
 		}
 	default:
+		remap.markUnsupported()
 		return false
 	}
 	return remappable
@@ -486,6 +499,9 @@ func remapDbInSelectStatement(s tree.SelectStatement, remap remapDbContext) {
 		for _, row := range c.Rows {
 			remapDbInExprs(row, remap)
 		}
+	case nil:
+	default:
+		remap.markUnsupported()
 	}
 }
 
@@ -528,7 +544,116 @@ func remapDbInTableExpr(te tree.TableExpr, remap remapDbContext) {
 		if t.Statement != nil {
 			remapDbInStmt(t.Statement, remap)
 		}
+	case *tree.TableFunction:
+		if t.Func != nil {
+			remapDbInExpr(t.Func, remap)
+		}
+		if t.SelectStmt != nil {
+			remapDbInSelect(t.SelectStmt, remap)
+		}
+	case nil:
+	default:
+		remap.markUnsupported()
 	}
+}
+
+// remapDbInTableDefs closes CREATE TABLE over every child that can carry a
+// qualified relation or a nested expression. Keep this switch aligned with
+// tree.TableDefs: a new definition kind must be deliberately audited before a
+// cloned routine is allowed to persist it.
+func remapDbInTableDefs(defs tree.TableDefs, remap remapDbContext) bool {
+	for _, def := range defs {
+		switch d := def.(type) {
+		case *tree.ColumnTableDef:
+			remapColumnName(d.Name, remap)
+			for _, attribute := range d.Attributes {
+				if !remapDbInColumnAttribute(attribute, remap) {
+					return false
+				}
+			}
+		case *tree.PrimaryKeyIndex:
+			remapDbInKeyParts(d.KeyParts, remap)
+		case *tree.Index:
+			remapDbInKeyParts(d.KeyParts, remap)
+		case *tree.UniqueIndex:
+			remapDbInKeyParts(d.KeyParts, remap)
+		case *tree.ForeignKey:
+			remapDbInKeyParts(d.KeyParts, remap)
+			remapDbInAttributeReference(d.Refer, remap)
+		case *tree.FullTextIndex:
+			remapDbInKeyParts(d.KeyParts, remap)
+		case *tree.CheckIndex:
+			remapDbInExpr(d.Expr, remap)
+		case nil:
+			// Parsed CREATE TABLE definitions are never nil, but tolerate one in
+			// callers constructing an AST directly.
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func remapDbInColumnAttribute(attribute tree.ColumnAttribute, remap remapDbContext) bool {
+	switch a := attribute.(type) {
+	case nil,
+		*tree.AttributeNull,
+		*tree.AttributeAutoIncrement,
+		*tree.AttributeUniqueKey,
+		*tree.AttributeUnique,
+		*tree.AttributeKey,
+		*tree.AttributePrimaryKey,
+		*tree.AttributeCollate,
+		*tree.AttributeCharset,
+		*tree.AttributeColumnFormat,
+		*tree.AttributeStorage,
+		*tree.AttributeLowCardinality,
+		*tree.AttributeAutoRandom,
+		*tree.AttributeSRID,
+		*tree.AttributeVisable,
+		*tree.AttributeMongoDBPath,
+		*tree.AttributeMongoDBConvert:
+		return true
+	case *tree.AttributeDefault:
+		remapDbInExpr(a.Expr, remap)
+	case *tree.AttributeComment:
+		remapDbInExpr(a.CMT, remap)
+	case *tree.AttributeCheckConstraint:
+		remapDbInExpr(a.Expr, remap)
+	case *tree.AttributeGeneratedAlways:
+		remapDbInExpr(a.Expr, remap)
+	case *tree.AttributeReference:
+		remapDbInAttributeReference(a, remap)
+	case *tree.AttributeOnUpdate:
+		remapDbInExpr(a.Expr, remap)
+	case *tree.KeyPart:
+		remapDbInKeyPart(a, remap)
+	default:
+		return false
+	}
+	return true
+}
+
+func remapDbInAttributeReference(reference *tree.AttributeReference, remap remapDbContext) {
+	if reference == nil {
+		return
+	}
+	remapTableName(reference.TableName, remap)
+	remapDbInKeyParts(reference.KeyParts, remap)
+}
+
+func remapDbInKeyParts(parts []*tree.KeyPart, remap remapDbContext) {
+	for _, part := range parts {
+		remapDbInKeyPart(part, remap)
+	}
+}
+
+func remapDbInKeyPart(part *tree.KeyPart, remap remapDbContext) {
+	if part == nil {
+		return
+	}
+	remapColumnName(part.ColName, remap)
+	remapDbInExpr(part.Expr, remap)
 }
 
 func remapDbInExprs(exprs tree.Exprs, remap remapDbContext) {

@@ -760,9 +760,9 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		}
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	queryCtx, sql := udfCatalogLookup(ctx, tcc.GetSnapshot(), name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
+	err = bh.Exec(queryCtx, sql)
 	if err != nil {
 		return nil, err
 	}
@@ -884,6 +884,33 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	} else {
 		return nil, moerr.NewNotSupportedf(ctx, "function or operator '%s'", name)
 	}
+}
+
+// udfCatalogLookup keeps UDF resolution aligned with the compiler context's
+// relation lookup. View dependency sorting installs a snapshot on that context
+// before it plans views, so function metadata must use the same timestamp and
+// tenant even though ResolveUdf reads it through a background executor.
+func udfCatalogLookup(
+	ctx context.Context,
+	snapshot *plan2.Snapshot,
+	name string,
+	database string,
+) (context.Context, string) {
+	catalogTable := "mo_catalog.mo_user_defined_function"
+	if snapshot != nil {
+		if snapshot.TS != nil {
+			catalogTable += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+		}
+		if snapshot.Tenant != nil {
+			ctx = defines.AttachAccountId(ctx, snapshot.Tenant.TenantID)
+		}
+	}
+	return ctx, fmt.Sprintf(
+		`select args, body, language, rettype, db, modified_time, sql_mode from %s where name = "%s" and db = "%s";`,
+		catalogTable,
+		name,
+		database,
+	)
 }
 
 func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (varValue interface{}, err error) {

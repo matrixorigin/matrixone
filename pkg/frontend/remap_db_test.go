@@ -593,6 +593,100 @@ func TestRemapDbInStmtRewritesExecutableWrapperReferences(t *testing.T) {
 	})
 }
 
+func TestRemapCloneRoutineStatementsClosesNestedDatabaseReferences(t *testing.T) {
+	remapRoutine := func(t *testing.T, sql string) string {
+		t.Helper()
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		require.NoError(t, remapCloneRoutineStatements(
+			context.Background(), stmts, map[string]string{"source_db": "target_db"}, 1,
+		))
+		return tree.StringWithOpts(stmts[0], dialect.MYSQL, tree.WithSingleQuoteString())
+	}
+
+	t.Run("create table foreign key reference", func(t *testing.T) {
+		out := remapRoutine(t, `begin
+			create table source_db.child (
+				id int,
+				parent_id int,
+				foreign key (parent_id) references source_db.parent(id)
+			);
+		end`)
+		require.Contains(t, out, "target_db.child")
+		require.Contains(t, out, "references target_db.parent")
+		require.NotContains(t, out, "source_db")
+	})
+
+	t.Run("table function arguments and embedded select", func(t *testing.T) {
+		out := remapRoutine(t,
+			`select * from unnest((select id from source_db.argument_source)) as f`)
+		require.Contains(t, out, "target_db.argument_source")
+		require.NotContains(t, out, "source_db")
+
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL,
+			`select * from source_db.embedded_source`, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		function := &tree.TableFunction{SelectStmt: stmts[0].(*tree.Select)}
+		remapDbInTableExpr(function, remapDbContext{
+			databases:           map[string]string{"source_db": "target_db"},
+			lowerCaseTableNames: 1,
+		})
+		require.Contains(t,
+			tree.StringWithOpts(function.SelectStmt, dialect.MYSQL, tree.WithSingleQuoteString()),
+			"target_db.embedded_source",
+		)
+	})
+
+	t.Run("every create table definition is audited", func(t *testing.T) {
+		qualifiedColumn := func(table, name string) *tree.UnresolvedName {
+			return tree.NewUnresolvedName(
+				tree.NewCStr("source_db", 1),
+				tree.NewCStr(table, 1),
+				tree.NewCStr(name, 1),
+			)
+		}
+		qualified := func(name string) *tree.TableName {
+			return tree.NewTableName(tree.Identifier(name), tree.ObjectNamePrefix{
+				SchemaName: "source_db", ExplicitSchema: true,
+			}, nil)
+		}
+		column := qualifiedColumn("child", "value")
+		keyPart := &tree.KeyPart{ColName: qualifiedColumn("child", "value")}
+		defs := tree.TableDefs{
+			&tree.ColumnTableDef{
+				Name: column,
+				Attributes: []tree.ColumnAttribute{
+					&tree.AttributeNull{}, &tree.AttributeAutoIncrement{}, &tree.AttributeUniqueKey{},
+					&tree.AttributeUnique{}, &tree.AttributeKey{}, &tree.AttributePrimaryKey{},
+					&tree.AttributeCollate{}, &tree.AttributeCharset{}, &tree.AttributeColumnFormat{},
+					&tree.AttributeStorage{}, &tree.AttributeLowCardinality{}, &tree.AttributeAutoRandom{},
+					&tree.AttributeSRID{}, &tree.AttributeVisable{}, &tree.AttributeMongoDBPath{},
+					&tree.AttributeMongoDBConvert{}, &tree.AttributeDefault{}, &tree.AttributeComment{},
+					&tree.AttributeCheckConstraint{}, &tree.AttributeGeneratedAlways{}, &tree.AttributeOnUpdate{},
+					&tree.AttributeReference{TableName: qualified("attribute_parent")}, keyPart,
+				},
+			},
+			&tree.PrimaryKeyIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.Index{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.UniqueIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.ForeignKey{
+				KeyParts: []*tree.KeyPart{keyPart},
+				Refer:    &tree.AttributeReference{TableName: qualified("foreign_parent")},
+			},
+			&tree.FullTextIndex{KeyParts: []*tree.KeyPart{keyPart}},
+			&tree.CheckIndex{},
+		}
+		require.True(t, remapDbInTableDefs(defs, remapDbContext{
+			databases:           map[string]string{"source_db": "target_db"},
+			lowerCaseTableNames: 1,
+		}))
+		require.Equal(t, "target_db", column.DbNameOrigin())
+		require.Equal(t, tree.Identifier("target_db"), defs[4].(*tree.ForeignKey).Refer.TableName.SchemaName)
+	})
+}
+
 func TestApplyRemapDbByStatementKeepsPolicyBoundaries(t *testing.T) {
 	ctx := context.Background()
 	stmts, err := parsers.Parse(ctx, dialect.MYSQL,
