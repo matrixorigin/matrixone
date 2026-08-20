@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -256,6 +257,14 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 	validDefs := func(attributes ...tree.ColumnAttribute) tree.TableDefs {
 		return tree.TableDefs{&tree.ColumnTableDef{Name: tree.NewUnresolvedColName("value"), Attributes: attributes}}
 	}
+	setDefs := func(values ...string) tree.TableDefs {
+		return tree.TableDefs{&tree.ColumnTableDef{
+			Name: tree.NewUnresolvedColName("value"),
+			Type: &tree.T{InternalType: tree.InternalType{
+				Family: tree.SetFamily, Oid: uint32(defines.MYSQL_TYPE_SET), EnumValues: values,
+			}},
+		}}
+	}
 	validTable := func() *planpb.TableDef {
 		return &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
 	}
@@ -291,7 +300,8 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
 		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
-		{name: "unsupported set type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}}}}},
+		{name: "unsupported set type", param: validOptions(), defs: setDefs("a", "b"), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}}}}},
+		{name: "unsupported single empty set member", param: validOptions(), defs: setDefs(""), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64)}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseTableMappingSpec(ctx, tc.param, tc.defs, tc.table)

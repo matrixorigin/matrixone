@@ -4201,29 +4201,56 @@ func TestBuildMongoDBExternalTableRejectsSetColumns(t *testing.T) {
 		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
 	}))
 
-	for _, nullability := range []struct {
+	for _, members := range []struct {
 		name string
 		sql  string
 	}{
-		{name: "nullable"},
-		{name: "not_null", sql: "NOT NULL"},
+		{name: "nonempty", sql: "'a','b'"},
+		{name: "single_empty", sql: "''"},
 	} {
-		for _, conversion := range []string{sqlmongodb.ConversionStrict, sqlmongodb.ConversionTryNull} {
-			t.Run(nullability.name+"/"+conversion, func(t *testing.T) {
-				sql := fmt.Sprintf(`
+		for _, nullability := range []struct {
+			name string
+			sql  string
+		}{
+			{name: "nullable"},
+			{name: "not_null", sql: "NOT NULL"},
+		} {
+			for _, conversion := range []string{sqlmongodb.ConversionStrict, sqlmongodb.ConversionTryNull} {
+				t.Run(members.name+"/"+nullability.name+"/"+conversion, func(t *testing.T) {
+					sql := fmt.Sprintf(`
 					CREATE EXTERNAL TABLE tpch.mongo_set (
-						v SET('a','b') %s MONGODB_PATH 'device_id'
+						v SET(%s) %s MONGODB_PATH 'device_id'
 					) ENGINE=MONGODB WITH (
 						"connection"='source', "database"='telemetry', "collection"='samples',
 						"schema_mode"='explicit', "conversion_mode"='%s', "max_parallelism"='1'
-					)`, nullability.sql, conversion)
+					)`, members.sql, nullability.sql, conversion)
 
-				logicPlan, err := runOneStmt(mock, t, sql)
-				require.ErrorContains(t, err, "MongoDB mapping target type SET")
-				require.Nil(t, logicPlan, "failed CREATE must not retain a DDL plan or catalog mapping")
-			})
+					logicPlan, err := runOneStmt(mock, t, sql)
+					require.ErrorContains(t, err, "MongoDB mapping target type SET")
+					require.Nil(t, logicPlan, "failed CREATE must not retain a DDL plan or catalog mapping")
+				})
+			}
 		}
 	}
+}
+
+func TestBuildMongoDBExternalTableAcceptsUnsignedBigInt(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_unsigned (
+			v BIGINT UNSIGNED MONGODB_PATH 'device_id'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples',
+			"schema_mode"='explicit', "conversion_mode"='strict', "max_parallelism"='1'
+		)`)
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+	require.Equal(t, int32(types.T_uint64), logicPlan.GetDdl().GetCreateTable().GetTableDef().Cols[0].Typ.Id)
 }
 
 func TestBuildCreateExternalTableInlineIndexError(t *testing.T) {
