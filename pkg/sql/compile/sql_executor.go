@@ -601,7 +601,7 @@ func (exec *txnExecutor) Exec(
 		)
 	}
 
-	result.LastInsertID = proc.GetLastInsertID()
+	result.LastInsertID = proc.GetStatementLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
 	result.LogicalPlan = pn.GetQuery()

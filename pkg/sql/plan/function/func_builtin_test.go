@@ -986,6 +986,35 @@ func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin text family with len",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
 func Test_BuiltIn_Repeat(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{

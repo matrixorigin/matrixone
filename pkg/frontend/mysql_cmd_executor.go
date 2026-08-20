@@ -793,10 +793,11 @@ func getDataFromPipeline(obj FeSession, execCtx *ExecCtx, bat *batch.Batch, crs 
 func newPreparedStmtCursor(ses *Session) *preparedStmtCursor {
 	limit := currentPreparedCursorLimit(ses, preparedCursorDefaultMaxBytes)
 	return &preparedStmtCursor{
-		result:   &MysqlResultSet{},
-		maxBytes: limit,
-		maxRows:  preparedCursorMaxRows,
-		owner:    ses,
+		result:      &MysqlResultSet{},
+		maxBytes:    limit,
+		maxBytesSet: ses != nil && ses.sesSysVars != nil,
+		maxRows:     preparedCursorMaxRows,
+		owner:       ses,
 	}
 }
 
@@ -815,21 +816,26 @@ func currentPreparedCursorLimit(ses *Session, fallback uint64) uint64 {
 	if ses.sesSysVars != nil {
 		if value, err := ses.GetSessionSysVar(QueryResultMaxsize); err == nil {
 			var megabytes uint64
+			valid := false
 			switch v := value.(type) {
 			case uint64:
 				megabytes = v
+				valid = true
 			case int64:
-				if v > 0 {
+				if v >= 0 {
 					megabytes = uint64(v)
+					valid = true
 				}
 			case uint32:
 				megabytes = uint64(v)
+				valid = true
 			case int32:
-				if v > 0 {
+				if v >= 0 {
 					megabytes = uint64(v)
+					valid = true
 				}
 			}
-			if megabytes > 0 {
+			if valid {
 				maxMegabytes := preparedCursorHardMaxBytes / preparedCursorBytesPerMegabyte
 				if megabytes > maxMegabytes {
 					megabytes = maxMegabytes
@@ -907,7 +913,125 @@ func estimatePreparedCursorBatchBytes(bat *batch.Batch) (uint64, error) {
 	if uint64(dataBytes) > math.MaxUint64-overhead {
 		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
 	}
-	return uint64(dataBytes) + overhead, nil
+	total := uint64(dataBytes) + overhead
+	materialized, err := estimatePreparedCursorMaterializedBytes(bat)
+	if err != nil {
+		return 0, err
+	}
+	if materialized > math.MaxUint64-total {
+		return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+	}
+	return total + materialized, nil
+}
+
+// estimatePreparedCursorMaterializedBytes charges allocations that are created
+// while fillResultSet converts vectors into retained []any rows.  In
+// particular, vecuint8 values are rendered with ArrayToString, so their
+// retained representation can be several times larger than the raw vector.
+// Other array families are copied into a new typed slice and are charged for
+// that second backing store as well.
+func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() == 0 {
+		return 0, nil
+	}
+	var total uint64
+	add := func(value uint64) error {
+		if value > math.MaxUint64-total {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		total += value
+		return nil
+	}
+	for _, vec := range bat.Vecs {
+		if vec == nil || vec.IsConstNull() {
+			continue
+		}
+		rows := bat.RowCount()
+		switch vec.GetType().Oid {
+		case types.T_array_uint8:
+			for row := 0; row < rows; row++ {
+				if vec.GetNulls().Contains(uint64(row)) {
+					continue
+				}
+				arr := vector.GetArrayAt[uint8](vec, row)
+				// ArrayToString uses at most three decimal digits per
+				// uint8 plus ", " separators and two brackets.
+				displayBytes := uint64(2)
+				if len(arr) > 0 {
+					if uint64(len(arr)) > math.MaxUint64/5 {
+						return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+					}
+					displayBytes = uint64(len(arr)) * 5
+				}
+				// Include the string header/allocation slack in addition to
+				// the character bytes. The row/column overhead above covers
+				// the []any slot itself.
+				if displayBytes > math.MaxUint64-16 {
+					return 0, moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+				}
+				if err := add(displayBytes + 16); err != nil {
+					return 0, err
+				}
+			}
+		case types.T_array_float32:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_float64:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 8, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_bf16, types.T_array_float16:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
+				return 0, err
+			}
+		case types.T_array_int8:
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return total, nil
+}
+
+func estimatePreparedCursorArrayCopyBytes(
+	vec *vector.Vector,
+	rows int,
+	elementBytes uint64,
+	add func(uint64) error,
+) error {
+	for row := 0; row < rows; row++ {
+		if vec.GetNulls().Contains(uint64(row)) {
+			continue
+		}
+		var length int
+		switch vec.GetType().Oid {
+		case types.T_array_float32:
+			length = len(vector.GetArrayAt[float32](vec, row))
+		case types.T_array_float64:
+			length = len(vector.GetArrayAt[float64](vec, row))
+		case types.T_array_bf16:
+			length = len(vector.GetArrayAt[types.BF16](vec, row))
+		case types.T_array_float16:
+			length = len(vector.GetArrayAt[types.Float16](vec, row))
+		case types.T_array_int8:
+			length = len(vector.GetArrayAt[int8](vec, row))
+		}
+		bytes := uint64(length)
+		if bytes > math.MaxUint64/elementBytes {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		bytes *= elementBytes
+		// Account for the slice header and allocator slack in the copied
+		// value. The raw element bytes are the dominant component.
+		if bytes > math.MaxUint64-24 {
+			return moerr.NewInternalErrorNoCtx("prepared cursor result size overflow")
+		}
+		if err := add(bytes + 24); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // capturePreparedCursorBatch materializes a binary prepared-statement result
@@ -933,8 +1057,11 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	if cursor.owner == nil {
 		cursor.owner = ses
 	}
-	if cursor.maxBytes == 0 {
-		cursor.maxBytes = preparedCursorDefaultMaxBytes
+	if !cursor.maxBytesSet {
+		if cursor.maxBytes == 0 {
+			cursor.maxBytes = preparedCursorDefaultMaxBytes
+		}
+		cursor.maxBytesSet = true
 	}
 	if cursor.maxRows == 0 {
 		cursor.maxRows = preparedCursorMaxRows
@@ -5243,6 +5370,11 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// clear the previous statement's run result so a statement that does not
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
+		// The process is reused for every statement in a multi-statement
+		// COM_QUERY.  The generated-key field belongs to this statement's OK
+		// packet, so clear it before executing each statement while leaving the
+		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
+		proc.SetStatementLastInsertID(0)
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error

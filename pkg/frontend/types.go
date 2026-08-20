@@ -349,8 +349,11 @@ type preparedStmtCursor struct {
 	offset   uint64
 	bytes    uint64
 	maxBytes uint64
-	maxRows  uint64
-	owner    *Session
+	// maxBytesSet distinguishes an explicit zero query_result_maxsize from
+	// an in-memory test/legacy cursor that has not been initialized yet.
+	maxBytesSet bool
+	maxRows     uint64
+	owner       *Session
 }
 
 func (cursor *preparedStmtCursor) close() {

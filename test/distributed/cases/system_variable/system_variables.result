@@ -333,7 +333,7 @@ EVENT_OBJECT_SCHEMA  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 EVENT_OBJECT_TABLE  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ACTION_ORDER  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ACTION_CONDITION  ¦  BINARY(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ACTION_STATEMENT  ¦  TEXT(2147483647)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ACTION_STATEMENT  ¦  LONGTEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ACTION_ORIENTATION  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ACTION_TIMING  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ACTION_REFERENCE_OLD_TABLE  ¦  BINARY(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

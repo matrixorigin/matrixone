@@ -556,3 +556,13 @@ select result from generate_series(1, 20000) g;
 select last_insert_id();
 select min(id), max(id), count(*) from auto_increment_multi_batch;
 drop table auto_increment_multi_batch;
+
+-- An all-manual INSERT reports zero in its OK packet but must not change the
+-- session value observed by LAST_INSERT_ID().
+drop table if exists auto_increment_manual_result;
+create table auto_increment_manual_result(id bigint auto_increment primary key, v int);
+insert into auto_increment_manual_result(v) values (1);
+select last_insert_id();
+insert into auto_increment_manual_result(id, v) values (100, 2);
+select last_insert_id();
+drop table auto_increment_manual_result;

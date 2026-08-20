@@ -3860,6 +3860,52 @@ func TestPreparedCursorLimitFollowsDynamicSessionValue(t *testing.T) {
 	third.close()
 }
 
+func TestPreparedCursorLimitHonorsExplicitZero(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: map[string]interface{}{
+				QueryResultMaxsize: uint64(0),
+			}},
+		},
+	}
+	cursor := newPreparedStmtCursor(ses)
+	require.True(t, cursor.maxBytesSet)
+	require.Zero(t, cursor.maxBytes)
+
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 1)
+	defer bat.Clean(mp)
+	stmt := &PrepareStmt{cursor: cursor}
+	err := capturePreparedCursorBatch(ses, &ExecCtx{
+		reqCtx:      context.Background(),
+		prepareStmt: stmt,
+	}, bat)
+	require.ErrorContains(t, err, "memory limit")
+	require.Zero(t, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+}
+
+func TestEstimatePreparedCursorBatchBytesIncludesArrayDisplay(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_array_uint8.ToType())
+	values := make([]uint8, types.MaxArrayDimension)
+	for i := range values {
+		values[i] = 255
+	}
+	require.NoError(t, vector.AppendArray(vec, values, false, mp))
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	estimated, err := estimatePreparedCursorBatchBytes(bat)
+	require.NoError(t, err)
+	displayBytes := uint64(len(types.ArrayToString(values)))
+	require.GreaterOrEqual(t, estimated, displayBytes)
+}
+
 func TestPreparedCursorHelpersRejectInvalidStateAndReleaseSafely(t *testing.T) {
 	require.NoError(t, func() error {
 		_, err := estimatePreparedCursorBatchBytes(nil)

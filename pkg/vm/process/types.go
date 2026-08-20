@@ -363,6 +363,11 @@ type BaseProcess struct {
 	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID *uint64
+	// StatementLastInsertID is the generated-key value reported by the
+	// current statement's OK packet.  LastInsertID intentionally keeps the
+	// session value so LAST_INSERT_ID() continues to observe the previous
+	// value when an INSERT supplies all auto-increment values explicitly.
+	StatementLastInsertID *uint64
 	// AffectedRows carries the number of rows affected by the previous
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
@@ -638,6 +643,12 @@ func (proc *Process) SetLastInsertID(num uint64) {
 	}
 }
 
+func (proc *Process) SetStatementLastInsertID(num uint64) {
+	if proc.Base.StatementLastInsertID != nil {
+		atomic.StoreUint64(proc.Base.StatementLastInsertID, num)
+	}
+}
+
 func (proc *Process) GetSessionInfo() *SessionInfo {
 	return &proc.Base.SessionInfo
 }
@@ -646,6 +657,13 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) GetStatementLastInsertID() uint64 {
+	if proc.Base.StatementLastInsertID != nil {
+		return atomic.LoadUint64(proc.Base.StatementLastInsertID)
 	}
 	return 0
 }

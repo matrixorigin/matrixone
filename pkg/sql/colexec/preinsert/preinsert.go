@@ -578,6 +578,7 @@ retryInsertValues:
 
 	if lastInsertValue != 0 && !preInsert.ctr.firstGeneratedValueSet {
 		proc.SetLastInsertID(lastInsertValue)
+		proc.SetStatementLastInsertID(lastInsertValue)
 		preInsert.ctr.firstGeneratedValueSet = true
 	}
 	return nil

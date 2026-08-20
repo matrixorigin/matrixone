@@ -372,6 +372,17 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				ret = fmt.Sprintf("%s(%d,%d)", ts, typ.Width, typ.Scale)
 			} else if typ.Oid == types.T_geometry || typ.Oid == types.T_geometry32 {
 				ret = geometryShowColumnType(typ)
+			} else if typ.Oid == types.T_text {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYTEXT"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMTEXT"
+				case types.MaxLongTextLen:
+					ret = "LONGTEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}

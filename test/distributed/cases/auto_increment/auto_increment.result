@@ -805,3 +805,14 @@ select min(id), max(id), count(*) from auto_increment_multi_batch;
 min(id)    max(id)    count(*)
 1    20000    20000
 drop table auto_increment_multi_batch;
+drop table if exists auto_increment_manual_result;
+create table auto_increment_manual_result(id bigint auto_increment primary key, v int);
+insert into auto_increment_manual_result(v) values (1);
+select last_insert_id();
+last_insert_id()
+1
+insert into auto_increment_manual_result(id, v) values (100, 2);
+select last_insert_id();
+last_insert_id()
+1
+drop table auto_increment_manual_result;
