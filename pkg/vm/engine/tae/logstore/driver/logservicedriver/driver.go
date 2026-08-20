@@ -23,15 +23,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-)
-
-const (
-	MaxReadBatchSize = mpool.MB * 64
 )
 
 type replayState struct {
@@ -217,7 +212,7 @@ func (d *LogServiceDriver) Replay(
 	replayer := newReplayer(
 		h,
 		d,
-		MaxReadBatchSize,
+		d.config.ReplayReadSize,
 		opts...,
 	)
 

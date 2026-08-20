@@ -45,9 +45,17 @@ type StoreImpl struct {
 func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
 ) *StoreImpl {
+	return NewLogserviceHandleWithReplayReadSize(factory, 0)
+}
+
+func NewLogserviceHandleWithReplayReadSize(
+	factory logservicedriver.LogServiceClientFactory,
+	replayReadSize int,
+) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
+		logservicedriver.WithConfigOptReplayReadSize(replayReadSize),
 	)
 	driver := logservicedriver.NewLogServiceDriver(&cfg)
 	return NewStore(driver)

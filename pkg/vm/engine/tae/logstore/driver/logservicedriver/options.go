@@ -28,15 +28,20 @@ import (
 const (
 	DefaultMaxClient           = 100
 	DefaultClientBufSize       = 2 * mpool.MB
+	DefaultReplayReadSize      = 64 * mpool.MB
 	DefaultMaxTimeout          = time.Minute * 3
 	DefaultOneTryTimeout       = time.Minute
 	DefaultClientMaxEntryCount = 50
+	// MaxReadBatchSize is kept for source compatibility. ReplayReadSize is the
+	// configurable replacement.
+	MaxReadBatchSize = DefaultReplayReadSize
 )
 
 type Config struct {
 	ClientMaxCount      int
 	ClientBufSize       int
 	ClientMaxEntryCount int
+	ReplayReadSize      int
 
 	MaxTimeout time.Duration
 
@@ -94,6 +99,12 @@ func WithConfigOptClientBufSize(bufSize int) ConfigOption {
 	}
 }
 
+func WithConfigOptReplayReadSize(readSize int) ConfigOption {
+	return func(cfg *Config) {
+		cfg.ReplayReadSize = readSize
+	}
+}
+
 func WithConfigOptMaxTimeout(timeout time.Duration) ConfigOption {
 	return func(cfg *Config) {
 		cfg.MaxTimeout = timeout
@@ -128,6 +139,8 @@ func (cfg Config) String() string {
 	w.WriteString(strconv.Itoa(cfg.ClientMaxCount))
 	w.WriteString(",ClientBufSize:")
 	w.WriteString(strconv.Itoa(cfg.ClientBufSize))
+	w.WriteString(",ReplayReadSize:")
+	w.WriteString(strconv.Itoa(cfg.ReplayReadSize))
 	w.WriteString(",MaxTimeout:")
 	w.WriteString(cfg.MaxTimeout.String())
 	w.WriteString(",IsMockBackend:")
@@ -142,6 +155,9 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.ClientBufSize <= 0 {
 		cfg.ClientBufSize = DefaultClientBufSize
+	}
+	if cfg.ReplayReadSize <= 0 {
+		cfg.ReplayReadSize = DefaultReplayReadSize
 	}
 	if cfg.MaxTimeout <= 0 {
 		cfg.MaxTimeout = DefaultMaxTimeout

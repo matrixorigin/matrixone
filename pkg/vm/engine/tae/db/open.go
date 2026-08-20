@@ -120,7 +120,10 @@ func Open(
 
 	logutil.Info(Phase_Open + "-open-wal-start")
 	if opts.WalClientFactory != nil {
-		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
+		db.Wal = wal.NewLogserviceHandleWithReplayReadSize(
+			opts.WalClientFactory,
+			opts.WalReplayReadSize,
+		)
 	} else {
 		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}

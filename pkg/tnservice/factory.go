@@ -216,6 +216,7 @@ func (s *store) newTAEStorage(
 		LocalFs:              localFs,
 		TmpFs:                tmpFs.(*fileservice.TmpFileService),
 		WalClientFactory:     logservicedriver.LogServiceClientFactory(factory),
+		WalReplayReadSize:    int(s.cfg.LogService.ReplayReadSize),
 		Shard:                shard,
 		CheckpointCfg:        ckpcfg,
 		GCCfg:                gcCfg,

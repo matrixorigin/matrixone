@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ var (
 	defaultDiscoveryTimeout      = time.Second * 30
 	defaultHeatbeatInterval      = time.Second
 	defaultConnectTimeout        = time.Second * 30
+	defaultReplayReadSize        = toml.ByteSize(64 * mpool.MB)
 	defaultHeatbeatTimeout       = time.Second * 3
 
 	defaultFlushInterval         = time.Second * 60
@@ -108,6 +110,11 @@ type Config struct {
 	LogService struct {
 		// ConnectTimeout timeout for connect to logservice. Default is 30s.
 		ConnectTimeout toml.Duration `toml:"connect-timeout"`
+		// ReplayReadSize is the maximum amount of WAL data read from logservice
+		// in one replay batch. In a mo-service config this is configured under
+		// [tn.logservice] or the legacy-compatible [dn.logservice] table.
+		// Default is 64 MiB.
+		ReplayReadSize toml.ByteSize `toml:"replay-read-size"`
 	}
 
 	// RPC configuration
@@ -254,6 +261,16 @@ func (c *Config) Validate() error {
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
 	}
+	if c.LogService.ReplayReadSize > toml.ByteSize(math.MaxInt) {
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"logservice replay-read-size %d exceeds max int",
+			c.LogService.ReplayReadSize,
+		)
+	}
+	if c.LogService.ReplayReadSize == 0 {
+		c.LogService.ReplayReadSize = defaultReplayReadSize
+	}
 	if c.Ckp.ScanInterval.Duration == 0 {
 		c.Ckp.ScanInterval.Duration = defaultScanInterval
 	}
@@ -320,6 +337,14 @@ func (c *Config) Validate() error {
 	}
 
 	c.RPC.Adjust()
+	if c.LogService.ReplayReadSize > c.RPC.MaxMessageSize {
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"logservice replay-read-size %d exceeds TN RPC max-message-size %d",
+			c.LogService.ReplayReadSize,
+			c.RPC.MaxMessageSize,
+		)
+	}
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -369,6 +394,9 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.LogService.ConnectTimeout.Duration == 0 {
 		c.LogService.ConnectTimeout.Duration = defaultConnectTimeout
+	}
+	if c.LogService.ReplayReadSize == 0 {
+		c.LogService.ReplayReadSize = defaultReplayReadSize
 	}
 	if c.Ckp.ScanInterval.Duration == 0 {
 		c.Ckp.ScanInterval.Duration = defaultScanInterval

@@ -16,13 +16,14 @@ package main
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/stretchr/testify/assert"
 )
@@ -73,6 +74,40 @@ func TestParseTNConfig(t *testing.T) {
 	assert.Equal(t, "local", cfg.FileServices[0].Name)
 	assert.Equal(t, defines.SharedFileServiceName, cfg.FileServices[1].Name)
 	assert.Equal(t, 2, len(cfg.getTNServiceConfig().HAKeeper.ClientConfig.ServiceAddresses))
+}
+
+func TestParseDNReplayReadSize(t *testing.T) {
+	data := `
+service-type = "DN"
+
+[dn]
+uuid = "dn1"
+
+[dn.logservice]
+replay-read-size = "256MiB"
+
+[dn.rpc]
+max-message-size = "320MiB"
+`
+	cfg := NewConfig()
+	assert.NoError(t, parseFromString(data, cfg))
+
+	tnCfg := cfg.getTNServiceConfig()
+	assert.NoError(t, tnCfg.Validate())
+	assert.Equal(t, uint64(256*mpool.MB), uint64(tnCfg.LogService.ReplayReadSize))
+	assert.Equal(t, uint64(320*mpool.MB), uint64(tnCfg.RPC.MaxMessageSize))
+}
+
+func TestParseLogServiceRPCMaxMessageSize(t *testing.T) {
+	data := `
+service-type = "LOG"
+
+[logservice.rpc]
+max-message-size = "320MiB"
+`
+	cfg := NewConfig()
+	assert.NoError(t, parseFromString(data, cfg))
+	assert.Equal(t, uint64(320*mpool.MB), uint64(cfg.getLogServiceConfig().RPC.MaxMessageSize))
 }
 
 func TestFileServiceFactory(t *testing.T) {

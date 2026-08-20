@@ -40,6 +40,20 @@ func initTest(t *testing.T) (*logservice.Service, *logservice.ClientConfig) {
 	return service, &ccfg
 }
 
+func TestReplayReadSizeConfig(t *testing.T) {
+	_, factory := NewMockServiceAndClientFactory()
+	defaultCfg := NewConfig("", WithConfigOptClientFactory(factory))
+	assert.Equal(t, DefaultReplayReadSize, defaultCfg.ReplayReadSize)
+
+	customCfg := NewConfig(
+		"",
+		WithConfigOptClientFactory(factory),
+		WithConfigOptReplayReadSize(1024*mpool.MB),
+	)
+	assert.Equal(t, 1024*mpool.MB, customCfg.ReplayReadSize)
+	assert.Contains(t, customCfg.String(), "ReplayReadSize:1073741824")
+}
+
 func restartDriver(t *testing.T, d *LogServiceDriver, h func(*entry.Entry)) *LogServiceDriver {
 	assert.NoError(t, d.Close())
 	t.Log("Addr:")

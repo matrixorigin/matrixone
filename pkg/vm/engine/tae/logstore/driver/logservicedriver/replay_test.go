@@ -107,7 +107,7 @@ func Test_AppendSkipCmd(t *testing.T) {
 	driver := NewLogServiceDriver(&cfg)
 	defer driver.Close()
 
-	r := newReplayer(nil, driver, MaxReadBatchSize)
+	r := newReplayer(nil, driver, DefaultReplayReadSize)
 	r.AppendSkipCmd(context.Background(), nil)
 }
 
@@ -515,6 +515,33 @@ func Test_Replayer1(t *testing.T) {
 	assert.NoError(t, err)
 	logutil.Info("DEBUG", r.exportFields(2)...)
 	assert.Equal(t, []uint64{39, 40, 41, 42, 43}, appliedDSNs)
+}
+
+func TestReplayerReadWindowCoversLateLowerDSN(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		// MetaType,PSN,DSN-S,DSN-E,Safe
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 1, 1, 0},
+			{uint64(Cmd_Normal), 2, 3, 3, 3},
+			{uint64(Cmd_Normal), 3, 2, 2, 0},
+		},
+		2,
+	)
+	var appliedDSNs []uint64
+	r := newReplayer(
+		mockHandleFactory(1, func(e *entry.Entry) {
+			appliedDSNs = append(appliedDSNs, e.DSN)
+		}),
+		mockDriver,
+		3,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	assert.NoError(t, r.Replay(ctx))
+	assert.Equal(t, []uint64{1, 2, 3}, appliedDSNs)
 }
 
 func Test_Replayer2(t *testing.T) {

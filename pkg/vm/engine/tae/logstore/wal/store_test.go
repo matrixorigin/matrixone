@@ -366,3 +366,13 @@ func TestReplayWithCheckpoint(t *testing.T) {
 	assert.Equal(t, map[uint64]uint64{3: 10, 4: 11}, wal.lsn2dsn.mapping[200000])
 
 }
+
+func TestNewLogserviceHandleWithReplayReadSize(t *testing.T) {
+	_, clientFactory := logservicedriver.NewMockServiceAndClientFactory()
+	w := NewLogserviceHandleWithReplayReadSize(clientFactory, 1024*mpool.MB)
+	defer w.Close()
+
+	d, ok := w.driver.(*logservicedriver.LogServiceDriver)
+	assert.True(t, ok)
+	assert.Equal(t, 1024*mpool.MB, d.GetCfg().ReplayReadSize)
+}
