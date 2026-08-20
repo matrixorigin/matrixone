@@ -42,6 +42,11 @@ RUN mkdir -p /mo-prebuilt && touch /mo-prebuilt/warm-status
 # instrumentation changes the compiled objects.
 RUN make build GOBUILD_OPT=-cover
 
+# Warm the plain flavor consumed by merge-trigger-tke. Coverage instrumentation
+# changes Go's compile cache keys, so the normal post-merge binary needs its
+# own complete warm build instead of reusing only the -cover objects.
+RUN make build
+
 # Warm the UT compile flavors without running any test: -exec /bin/true
 # replaces test-binary execution and -vet=off keeps vet findings out of the
 # nightly warm (PR CI runs vet itself). The CGO_* values mirror
