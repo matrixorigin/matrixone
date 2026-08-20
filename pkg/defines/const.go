@@ -57,7 +57,7 @@ const (
 	MORPCVersion19     int64 = 19 // remote bounded partition Top-N operator
 	MORPCVersion20     int64 = 20 // target-aware multi-table UPDATE pipeline fields
 	MORPCVersion21     int64 = 21 // lookup-only RIGHT DEDUP for proven-unique insert input
-	MORPCVersion22     int64 = 22 // native ASOF join pipeline payload
+	MORPCVersion22     int64 = 22 // typed user-defined variables during connection migration
 	MORPCLatestVersion       = MORPCVersion22
 )
 

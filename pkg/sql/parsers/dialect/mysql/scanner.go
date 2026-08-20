@@ -960,9 +960,82 @@ func (s *Scanner) asofJoinPhraseAhead(start, pos int) bool {
 }
 
 func (s *Scanner) asofQualifierInJoin(pos int) bool {
-	rest := strings.ToLower(s.buf[pos:])
-	on := strings.Index(rest, " on ")
-	return on >= 0 && strings.Contains(rest[on:], "asof.")
+	// The ASOF/implicit-alias spelling is ambiguous at the lexer level.  Treat
+	// `asof` as the join modifier only when the ON expression actually
+	// qualifies a column with `asof.`.  Scan SQL tokens here (rather than using
+	// a raw suffix search), so quoted strings, comments, and line breaks cannot
+	// manufacture a qualifier or hide one.
+	inOn, escaped := false, false
+	var quote byte
+	for i := pos; i < len(s.buf); {
+		ch := s.buf[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				i++
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				i++
+				continue
+			}
+			if ch == quote {
+				quote = 0
+			}
+			i++
+			continue
+		}
+		if ch == '\'' || ch == '"' || ch == '`' {
+			quote = ch
+			i++
+			continue
+		}
+		if ch == '#' || strings.HasPrefix(s.buf[i:], "//") ||
+			(strings.HasPrefix(s.buf[i:], "--") && (i+2 == len(s.buf) || isMySQLDashCommentBlank(s.buf[i+2]))) {
+			for i < len(s.buf) && s.buf[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(s.buf[i:], "/*") {
+			if end := strings.Index(s.buf[i+2:], "*/"); end >= 0 {
+				i += end + 4
+			} else {
+				return inOn
+			}
+			continue
+		}
+		if !isUnquotedIdentifierLetterAt(s.buf, i) && !isDigit(s.buf[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(s.buf) && (isUnquotedIdentifierLetterAt(s.buf, i) || isDigit(s.buf[i]) || s.buf[i] == '_') {
+			i++
+		}
+		word := strings.ToLower(s.buf[start:i])
+		if !inOn {
+			if word == "on" {
+				inOn = true
+				continue
+			}
+			if word == "join" || word == "where" || word == "group" || word == "order" || word == "limit" {
+				continue
+			}
+			continue
+		}
+		if word == "where" || word == "group" || word == "order" || word == "limit" || word == "having" || word == "union" {
+			break
+		}
+		if word == "asof" {
+			j := s.skipBlankAndCommentsFrom(i)
+			if j < len(s.buf) && s.buf[j] == '.' {
+				return false
+			}
+		}
+	}
+	return inOn
 }
 
 func (s *Scanner) previousSignificantPos(pos int) int {

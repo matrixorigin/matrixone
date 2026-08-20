@@ -7368,7 +7368,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}
@@ -10226,7 +10231,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -10238,7 +10242,13 @@ func (builder *QueryBuilder) bindView(
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
 	}
-	originStmts, err := mysql.ParseWithSQLMode(builder.GetContext(), viewData.Stmt, ctx.lower, parserSQLMode)
+	viewLowerCaseTableNames := ctx.lower
+	if viewData.LowerCaseTableNames != nil {
+		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
+	}
+	viewCtx.lower = viewLowerCaseTableNames
+	originStmts, err := mysql.ParseWithSQLMode(
+		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
 		for _, s := range originStmts {
 			s.Free()
@@ -10301,6 +10311,10 @@ func (builder *QueryBuilder) bindView(
 		builder.isForUpdate = savedIsForUpdate
 	}()
 
+	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
+		capture.enterNestedView()
+		defer capture.leaveNestedView()
+	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -10310,7 +10324,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	viewCtx.markViewCTASDefaultBoundary()
+	viewCtx.markViewCTASDefaultBoundary(tableDef.Cols)
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
 			return 0, moerr.NewViewWrongList(builder.GetContext())
@@ -10830,6 +10844,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, err
 		}
 
+		// Compiler contexts return immutable catalog metadata. Own the planner
+		// shell and column slice, which are replaced locally, without copying the
+		// immutable column definitions, indexes, constraints, or expressions.
+		tableDef = CloneTableDefForPlan(tableDef, true)
 		tableDef.Name2ColIndex = map[string]int32{}
 		var tbColToDataCol map[string]int32 = make(map[string]int32, 0)
 		for i := 0; i < len(tableDef.Cols); i++ {
@@ -11184,7 +11202,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {
