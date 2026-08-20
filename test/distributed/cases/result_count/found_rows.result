@@ -1,0 +1,115 @@
+drop database if exists found_rows_regression;
+create database found_rows_regression;
+use found_rows_regression;
+create table t(id bigint);
+insert into t select result from generate_series(1, 100000, 1) g;
+select sql_calc_found_rows id from t where id <= 3 order by id;
+id
+1
+2
+3
+select found_rows() as calc_without_limit;
+calc_without_limit
+3
+select sql_calc_found_rows id from t limit 0;
+id
+select found_rows() as after_zero;
+after_zero
+100000
+select sql_calc_found_rows id from t order by id limit 2;
+id
+1
+2
+select found_rows() as after_parallel;
+after_parallel
+100000
+select sql_calc_found_rows id from t order by id limit 2 offset 10;
+id
+11
+12
+select found_rows() as after_offset;
+after_offset
+100000
+select sql_calc_found_rows id from t where id < 0 limit 1;
+id
+select found_rows() as after_empty;
+after_empty
+0
+select sql_calc_found_rows *
+from (select id from t order by id limit 5) d
+where id <= 3
+limit 1;
+id
+1
+select found_rows() as after_derived_limit;
+after_derived_limit
+3
+with d as (select id from t order by id limit 7)
+select sql_calc_found_rows * from d where id <= 4 limit 1;
+id
+1
+select found_rows() as after_cte_limit;
+after_cte_limit
+4
+prepare ps_found_rows from 'select sql_calc_found_rows id from t order by id limit 1';
+execute ps_found_rows;
+id
+1
+select found_rows() as after_prepared_first;
+after_prepared_first
+100000
+execute ps_found_rows;
+id
+1
+select found_rows() as after_prepared_second;
+after_prepared_second
+100000
+deallocate prepare ps_found_rows;
+prepare ps_nested_found_rows from 'select sql_calc_found_rows * from (select id from t order by id limit 5) d where id <= 3 limit 1';
+execute ps_nested_found_rows;
+id
+1
+select found_rows() as after_nested_prepared_first;
+after_nested_prepared_first
+3
+execute ps_nested_found_rows;
+id
+1
+select found_rows() as after_nested_prepared_second;
+after_nested_prepared_second
+3
+deallocate prepare ps_nested_found_rows;
+select id from t order by id limit 2;
+id
+1
+2
+select found_rows() as after_plain;
+after_plain
+2
+select id from t where id <= 3 order by id;
+id
+1
+2
+3
+select found_rows() as plain_without_limit;
+plain_without_limit
+3
+select id from t order by id limit 2;
+id
+1
+2
+create table status_does_not_replace_found_rows(id int);
+select found_rows() as after_status;
+after_status
+2
+select id from t order by id limit 2;
+id
+1
+2
+select * from missing_found_rows_table;
+-- @regex("does not exist", true)
+SQL parser error: table "missing_found_rows_table" does not exist
+select found_rows() as after_error;
+after_error
+2
+drop database found_rows_regression;

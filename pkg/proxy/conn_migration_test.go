@@ -110,6 +110,7 @@ func runTestWithQueryServiceHandlers(
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB:                            "d1",
 					LastAffectedRows:              7,
+					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
 				}
 				return nil
@@ -170,12 +171,28 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
 		assert.Equal(t, int64(7), resp.LastAffectedRows)
+		assert.Equal(t, uint64(11), resp.FoundRows)
 	})
 }
 
 func TestQueryServiceMigrateTo(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
-	runTestWithQueryService(t, cn, func(cc *clientConn, addr string) {
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		if req.MigrateConnToRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		if req.MigrateConnToRequest.LastAffectedRows != 7 {
+			return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
+				req.MigrateConnToRequest.LastAffectedRows)
+		}
+		if req.MigrateConnToRequest.FoundRows != 11 {
+			return moerr.NewInternalErrorf(ctx, "unexpected found rows: %d",
+				req.MigrateConnToRequest.FoundRows)
+		}
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, addr string) {
 		resp, err := cc.migrateConnFrom(addr)
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)

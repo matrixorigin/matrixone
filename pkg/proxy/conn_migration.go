@@ -185,6 +185,7 @@ func (c *clientConn) migrateConnToContext(
 		DB:                        info.DB,
 		PrepareStmts:              info.PrepareStmts,
 		LastAffectedRows:          info.LastAffectedRows,
+		FoundRows:                 info.FoundRows,
 		UserDefinedVars:           nil,
 		UserDefinedVarsExported:   false,
 		SystemVariables:           nil,
