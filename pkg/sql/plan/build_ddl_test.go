@@ -3875,6 +3875,26 @@ func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
 	require.ErrorContains(t, err, "MongoDB external table column 'ts' does not support ON UPDATE")
 }
 
+func TestBuildMongoDBExternalTableRejectsForeignKeys(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_fk (
+			n_nationkey INT MONGODB_PATH '_id',
+			CONSTRAINT fk_mongo_nation FOREIGN KEY (n_nationkey)
+				REFERENCES tpch.nation (n_nationkey)
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.Nil(t, logicPlan)
+	require.ErrorContains(t, err, "FOREIGN KEY constraints on MongoDB external tables")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err.Error())
+}
+
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	ctx := mock.CurrentContext().(*MockCompilerContext)
