@@ -2788,6 +2788,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		case *tree.ForeignKey:
+			if stmt.MongoDBParam != nil {
+				return moerr.NewNotSupported(
+					ctx.GetContext(),
+					"FOREIGN KEY constraints on MongoDB external tables",
+				)
+			}
 			if createTable.Temporary {
 				return moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 			}
