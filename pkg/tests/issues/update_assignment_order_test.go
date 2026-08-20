@@ -79,6 +79,45 @@ func TestUpdateAssignmentEvaluationIsLeftToRight(t *testing.T) {
 		t.Logf("swap assignment: a=%d b=%d", a, b)
 		assert.Equal(t, []int{2, 2}, []int{a, b})
 
+		exec("update " + database + ".t set a = 1, b = 0, c = 0 where id = 1")
+		exec("update " + database + ".t set a = a + 1, a = a + 1, b = a where id = 1")
+		query("select a, b from "+database+".t where id = 1", &a, &b)
+		t.Logf("repeated assignment: a=%d b=%d", a, b)
+		assert.Equal(t, []int{3, 3}, []int{a, b})
+
+		exec("update " + database + ".t set a = 1, b = 0, c = 0 where id = 1")
+		exec("update " + database + ".t set a = a + 1, a = a * 10, b = a where id = 1")
+		query("select a, b from "+database+".t where id = 1", &a, &b)
+		t.Logf("repeated assignment uses the immediately preceding value: a=%d b=%d", a, b)
+		assert.Equal(t, []int{20, 20}, []int{a, b})
+
+		exec("create table " + database + ".source_values (id int primary key, v int)")
+		exec("insert into " + database + ".source_values values (1, 7)")
+		exec("update " + database + ".t set a = 1, b = 0, c = 0 where id = 1")
+		exec("update " + database + ".t as x set a = (select s.v from " + database + ".source_values s where s.id = x.id), b = a, c = b where x.id = 1")
+		query("select a, b, c from "+database+".t where id = 1", &a, &b, &columnC)
+		t.Logf("early correlated scalar subquery: a=%d b=%d c=%d", a, b, columnC)
+		assert.Equal(t, []int{7, 7, 7}, []int{a, b, columnC})
+
+		exec("update " + database + ".t set a = 1, b = 0, c = 0 where id = 1")
+		exec("update " + database + ".t as x set a = x.a + 1, b = a, c = (select s.v from " + database + ".source_values s where s.id = x.id) where x.id = 1")
+		query("select a, b, c from "+database+".t where id = 1", &a, &b, &columnC)
+		t.Logf("late correlated scalar subquery and qualified target: a=%d b=%d c=%d", a, b, columnC)
+		assert.Equal(t, []int{2, 2, 7}, []int{a, b, columnC})
+		_, err = conn.ExecContext(ctx, "update "+database+".t as x set a = nosuch.a, b = a where x.id = 1")
+		require.ErrorContains(t, err, "missing FROM-clause entry for table 'nosuch'",
+			"invalid qualified target reference must not be rebound as an unqualified column")
+
+		exec("create table " + database + ".numeric_values (id int primary key, sal decimal(7,2), comm decimal(7,2))")
+		exec("insert into " + database + ".numeric_values values (1, 0, 0)")
+		exec("prepare numeric_update from 'update " + database + ".numeric_values set sal = abs(?), comm = sal where id = 1'")
+		exec("set @prepared_sal = -12.34")
+		exec("execute numeric_update using @prepared_sal")
+		exec("deallocate prepare numeric_update")
+		var sal, comm string
+		query("select sal, comm from "+database+".numeric_values where id = 1", &sal, &comm)
+		require.Equal(t, []string{"12.34", "12.34"}, []string{sal, comm})
+
 		exec("update " + database + ".t set a = 1, b = 10, c = 100 where id = 1")
 		exec("prepare chained_update from 'update " + database + ".t set a = a + 1, b = a, c = b where id = 1'")
 		exec("execute chained_update")
