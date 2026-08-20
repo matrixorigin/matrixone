@@ -871,9 +871,10 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg     bool
-	rollupHaving  bool
-	bindingHaving bool
+	insideAgg             bool
+	bindingProjectedAlias bool
+	rollupHaving          bool
+	bindingHaving         bool
 }
 
 type ProjectionBinder struct {
