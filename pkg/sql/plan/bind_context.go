@@ -160,6 +160,16 @@ func (bc *BindContext) cteInBinding(name string) bool {
 	return false
 }
 
+func (bc *BindContext) activeRecursiveCteState(cte *CTERef) (CteBindState, bool) {
+	for cur := bc; cur != nil; cur = cur.parent {
+		state := cur.cteState
+		if state.cte == cte && state.cteBindType == CteBindTypeRecurStmt {
+			return state, true
+		}
+	}
+	return CteBindState{}, false
+}
+
 func (bc *BindContext) viewInBinding(schema, name string, view *tree.CreateView) bool {
 	cur := bc
 	pair := [2]string{schema, name}

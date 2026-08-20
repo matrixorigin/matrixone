@@ -279,6 +279,27 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 				)
 				select * from r`,
 		},
+		{
+			name: "nested recursive cte cannot add an outer recursive source",
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select n + 1
+					from r
+					where n < 3
+					  and exists (
+						with recursive x(m) as (
+							select 1
+							union all
+							select x.m + 1
+							from x join r z on false
+						)
+						select 1 from x
+					  )
+				)
+				select * from r`,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := runOneStmt(mock, t, test.sql)
@@ -287,11 +308,13 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name string
-		sql  string
+		name           string
+		sql            string
+		recursiveScans int
 	}{
 		{
-			name: "top-level recursive source in join remains valid",
+			name:           "top-level recursive source in join remains valid",
+			recursiveScans: 1,
 			sql: `
 				with recursive r(n) as (
 					select 1
@@ -303,7 +326,8 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 				select * from r`,
 		},
 		{
-			name: "correlated subquery without recursive source remains valid",
+			name:           "correlated subquery without recursive source remains valid",
+			recursiveScans: 1,
 			sql: `
 				with recursive r(n) as (
 					select 1
@@ -311,6 +335,27 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 					select n + 1
 					from r
 					where exists (select 1 where r.n < 3)
+				)
+				select * from r`,
+		},
+		{
+			name:           "nested recursive cte without outer recursive source remains valid",
+			recursiveScans: 2,
+			sql: `
+				with recursive r(n) as (
+					select 1
+					union all
+					select n + 1
+					from r
+					where n < 3
+					  and exists (
+						with recursive x(m) as (
+							select 1
+							union all
+							select m + 1 from x where m < 1
+						)
+						select 1 from x where r.n > 0
+					  )
 				)
 				select * from r`,
 		},
@@ -325,7 +370,7 @@ func TestRecursiveCTEQueryBlockReferenceScope(t *testing.T) {
 					recursiveScans++
 				}
 			}
-			require.Equal(t, 1, recursiveScans)
+			require.Equal(t, test.recursiveScans, recursiveScans)
 		})
 	}
 }

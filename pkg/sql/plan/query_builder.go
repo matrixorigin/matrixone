@@ -10708,14 +10708,14 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "cte %s reference itself", table)
 					}
 				}
-				// Only the CTE currently being expanded is backed by the
-				// recursive scan. Other CTEs visible from the declaration scope
-				// must still be bound as their own producers.
-				if ctx.bindingRecurStmt() && cteRef == ctx.cteState.cte {
-					if ctx.queryBlockOwner != ctx.cteState.recursiveRefQueryBlock {
+				// An outer recursive CTE can remain active while a nested recursive
+				// CTE replaces the current state. Find the state that owns this
+				// exact CTE before deciding whether to reuse its recursive scan.
+				if recursiveState, active := ctx.activeRecursiveCteState(cteRef); active {
+					if ctx.queryBlockOwner != recursiveState.recursiveRefQueryBlock {
 						return 0, moerr.NewParseErrorf(builder.GetContext(), "In recursive query block of Recursive Common Table Expression %s, the recursive table must be referenced only once, and not in any subquery", table)
 					}
-					nodeID = ctx.cteState.recScanNodeId
+					nodeID = recursiveState.recScanNodeId
 					return
 				}
 

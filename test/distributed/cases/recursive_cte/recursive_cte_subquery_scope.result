@@ -32,6 +32,27 @@ select 1
 union all
 select n + 1
 from r
+where n < 3
+and exists (
+with recursive x(m) as (
+select 1
+union all
+select x.m + 1
+from x join r z on false
+)
+select 1 from x
+)
+)
+select * from r;
+SQL parser error: In recursive query block of Recursive Common Table Expression r, the recursive table must be referenced only once, and not in any subquery
+select 'after nested recursive error' as service_status;
+➤ service_status[12,28,0]  𝄀
+after nested recursive error
+with recursive r(n) as (
+select 1
+union all
+select n + 1
+from r
 where exists (select 1 where r.n < 3)
 )
 select * from r order by n;
