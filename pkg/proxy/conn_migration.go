@@ -145,6 +145,13 @@ func (c *clientConn) migrateConnToContext(
 			}
 		}
 	}
+	// The final control read above re-arms the frontend IOSession's
+	// SessionTimeout. Clear that phase-owned deadline before the backend is
+	// handed to the tunnel; otherwise an actively used migrated connection can
+	// still expire at the end of the session timeout period.
+	if err := clearServerConnReadDeadline(sc); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
 
 	// Then, migrate other info with RPC.
 	if addr == "" {

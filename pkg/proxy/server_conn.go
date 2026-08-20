@@ -346,6 +346,23 @@ func (s *serverConn) RawConn() net.Conn {
 	return nil
 }
 
+// clearServerConnReadDeadline removes the frontend IOSession's phase timeout
+// before a backend connection enters the long-lived tunnel. IOSession applies
+// SessionTimeout before every protocol read, so a control statement executed
+// after the handshake can re-arm the deadline that HandleHandshake cleared.
+// Test-only ServerConn implementations may not expose a raw transport; those
+// connections do not own a socket deadline and are treated as already clear.
+func clearServerConnReadDeadline(sc ServerConn) error {
+	if sc == nil {
+		return nil
+	}
+	raw := sc.RawConn()
+	if raw == nil {
+		return nil
+	}
+	return raw.SetReadDeadline(time.Time{})
+}
+
 type cacheReuseServerConn interface {
 	waitCacheReuseReady(context.Context) error
 	rebindTunnel(*tunnel) bool
