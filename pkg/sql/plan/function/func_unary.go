@@ -5385,17 +5385,57 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 				prefix = prefix[:clockEnd]
 			}
 		} else {
-			// A date-shaped or repeated-separator prefix keeps its ownership
-			// decision until the complete suffix is visible. The candidate scanner
-			// below decides whether that suffix terminates the already consumed
-			// TIME fields or invalidates the whole candidate.
-			if mysqlTimePrefixSuffixRejectsForExtract(prefix[:space], suffix) {
-				return 0, 0, 0, false
+			// Carry the bytes after the actual clock boundary into the same
+			// ownership decision as the whitespace suffix. Previously the parser
+			// classified only bytes after the first whitespace, so an attached
+			// tail such as `123:34:34:+ ` was silently discarded by the clock
+			// parser before MySQL's date/TIME ownership rule could see it.
+			clock := prefix[:space]
+			if _, _, _, consumed, ok := mysqlClockFieldsWithBoundaryForExtract(clock); ok && consumed < len(clock) {
+				base := clock[:consumed]
+				attached := clock[consumed:]
+				// Short numeric tails after an omitted-seconds boundary are
+				// already covered by the legacy whole-candidate classifier (for
+				// example `12:34::56 78`). Split only the four-or-more digit
+				// date-shaped tail, or a punctuation tail after complete seconds.
+				splitAttached := strings.HasPrefix(attached, ":") ||
+					(asciiDigits(attached) && len(attached) >= 4)
+				if !splitAttached {
+					if mysqlTimePrefixSuffixRejectsForExtract(clock, suffix) {
+						return 0, 0, 0, false
+					}
+					prefix = clock
+					// The original whole-candidate path owns short numeric tails.
+					// Do not reinterpret them as a new H:M prefix.
+				} else {
+					// A separator immediately after a complete H:M:S belongs to the
+					// repeated-boundary candidate. Keep it on the candidate side and
+					// classify the remaining token as the suffix. Omitted seconds
+					// already include their repeated separator in `consumed`.
+					separatorEnd := 0
+					for separatorEnd < len(attached) && attached[separatorEnd] == ':' {
+						separatorEnd++
+					}
+					candidateClock := base + attached[:separatorEnd]
+					candidateSuffix := attached[separatorEnd:] + suffix
+					if mysqlTimePrefixSuffixRejectsAttachedForExtract(candidateClock, candidateSuffix) {
+						return 0, 0, 0, false
+					}
+					prefix = candidateClock
+				}
+			} else {
+				// A date-shaped or repeated-separator prefix keeps its ownership
+				// decision until the complete suffix is visible. The candidate
+				// scanner below decides whether that suffix terminates the already
+				// consumed TIME fields or invalidates the whole candidate.
+				if mysqlTimePrefixSuffixRejectsForExtract(clock, suffix) {
+					return 0, 0, 0, false
+				}
+				// A clock prefix followed by whitespace keeps the fields consumed
+				// before that whitespace. It is not a day separator unless every
+				// byte before it is a digit.
+				prefix = clock
 			}
-			// A clock prefix followed by whitespace keeps the fields consumed
-			// before that whitespace. It is not a day separator unless every
-			// byte before it is a digit.
-			prefix = prefix[:space]
 		}
 	}
 
@@ -5512,12 +5552,32 @@ func mysqlTimePrefixCandidateForExtract(clock string) mysqlTimePrefixCandidate {
 }
 
 func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
+	return mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix, false)
+}
+
+// mysqlTimePrefixSuffixRejectsAttachedForExtract applies the same ownership
+// rules when the suffix begins immediately after a valid clock prefix. The
+// caller has moved any trailing colon(s) into clock so the candidate scanner
+// sees the complete repeated-separator boundary.
+func mysqlTimePrefixSuffixRejectsAttachedForExtract(clock, suffix string) bool {
+	return mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix, true)
+}
+
+func mysqlTimePrefixSuffixRejectsWithAttachedForExtract(clock, suffix string, attached bool) bool {
 	candidate := mysqlTimePrefixCandidateForExtract(clock)
 	token := mysqlTimeSuffixTokenForExtract(suffix)
 	if !token.present || candidate.hasOmittedMinute {
 		return false
 	}
 	if candidate.hasOmittedSeconds && candidate.fieldCount == 2 {
+		// For an attached numeric tail after omitted seconds, the complete
+		// candidate length is the DATETIME ownership gate. Short tails such as
+		// `12:34::56 ` remain the consumed H:M prefix; a four-digit tail makes
+		// the 12-byte candidate invalid, as in MySQL's `01:01::0100 `.
+		if attached && token.valid && (token.allDigits || mysqlSignedNumericTimeSuffixForExtract(token)) &&
+			len(token.token) >= 4 && len(clock)+len(suffix) >= 12 {
+			return true
+		}
 		return false
 	}
 	if candidate.hasOmittedSeconds && candidate.fieldCount >= 3 {
@@ -5558,11 +5618,26 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 		trimmed := mysqlTrimLeftWhitespaceForExtract(suffix)
 		return strings.Contains(trimmed, ":")
 	}
+	if attached && token.trailingWhitespace && token.byteLen == 1 &&
+		(token.token == "+" || token.token == "-") {
+		// An attached bare sign is accepted while the complete candidate stays
+		// below MySQL's 12-byte DATETIME gate. A three-digit hour with one
+		// separator (`123:34:34:+ `) and a two-digit hour with two separators
+		// cross that gate and belong to the invalid date-shaped candidate.
+		return len(clock)+len(suffix) >= 12
+	}
 	// A bare sign after a trailing separator belongs to the already consumed
 	// TIME candidate when its boundary is still unambiguous. Keep this decision
 	// in the shared candidate state; the DATETIME owner handles the same sign
 	// when its length gate has established a complete date-shaped candidate.
-	if mysqlBareSignTimeSuffixBelongsToClock(candidate, token) {
+	if mysqlBareSignTimeSuffixBelongsToClock(candidate, token, attached) {
+		return false
+	}
+	if attached && token.trailingWhitespace && !token.allDigits &&
+		!mysqlSignedNumericTimeSuffixForExtract(token) {
+		// Attached textual punctuation (for example `:x `) terminates the
+		// already consumed H:M:S clock. Only the sign/numeric forms below are
+		// ambiguous date candidates.
 		return false
 	}
 	// MySQL's full-DATETIME attempt is length based. Numeric tokens followed by
@@ -5577,7 +5652,7 @@ func mysqlTimePrefixSuffixRejectsForExtract(clock, suffix string) bool {
 	return len(clock)+len(suffix) >= 12
 }
 
-func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken) bool {
+func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, token mysqlTimeSuffixToken, attached bool) bool {
 	if candidate.fieldCount != 3 || candidate.trailingSeparatorCount == 0 ||
 		token.byteLen != 1 || (token.token != "+" && token.token != "-") {
 		return false
@@ -5585,8 +5660,15 @@ func mysqlBareSignTimeSuffixBelongsToClock(candidate mysqlTimePrefixCandidate, t
 	// A one-digit leading field remains a TIME prefix for short inputs even
 	// when the sign is whitespace-terminated. For the length-gated two-digit
 	// date candidate, the DATETIME scanner owns that same boundary instead.
-	return candidate.leadingDigits == 1 &&
-		(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace)
+	if candidate.leadingDigits == 1 &&
+		(candidate.trailingSeparatorCount == 1 || !token.trailingWhitespace) {
+		return true
+	}
+	// With an attached single separator, MySQL keeps one- and two-digit hour
+	// fields as TIME. A three-digit leading field crosses the full-date length
+	// gate once the sign is followed by whitespace and is rejected instead.
+	return attached && token.trailingWhitespace && candidate.trailingSeparatorCount == 1 &&
+		candidate.leadingDigits == 2
 }
 
 // mysqlConsumedSuffixLengthForExtract reports the suffix bytes consumed by
@@ -5744,8 +5826,19 @@ func mysqlDayTimeClockCandidateForExtract(str string) bool {
 }
 
 func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
+	hour, minute, second, _, ok := mysqlClockFieldsWithBoundaryForExtract(str)
+	return hour, minute, second, ok
+}
+
+// mysqlClockFieldsWithBoundaryForExtract parses the same prefix as
+// mysqlClockFieldsForExtract and also returns the first byte not consumed by
+// the clock grammar. The boundary is needed before suffix ownership is
+// decided: the generic clock parser intentionally ignores tolerated trailing
+// punctuation, but those bytes still participate in MySQL's full-candidate
+// length and date/TIME ownership rules.
+func mysqlClockFieldsWithBoundaryForExtract(str string) (uint64, uint8, uint8, int, bool) {
 	if len(str) == 0 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 
 	pos := 0
@@ -5758,30 +5851,30 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		// keeps inputs such as "12-.abc" as 00:00:12 without turning a
 		// date-looking value such as "2024-12-20" into a compact TIME here.
 		if len(hourText) == 0 || !mysqlCompactTimePrefixBoundary(hourText, str[pos:]) {
-			return 0, 0, 0, false
+			return 0, 0, 0, 0, false
 		}
 		switch len(hourText) {
 		case 1, 2:
 			second := mysqlClampedDigitsForExtract(hourText, 60)
 			if second >= 60 {
-				return 0, 0, 0, false
+				return 0, 0, 0, 0, false
 			}
-			return 0, 0, uint8(second), true
+			return 0, 0, uint8(second), len(hourText), true
 		case 3, 4:
 			minute := mysqlClampedDigitsForExtract(hourText[:len(hourText)-2], 60)
 			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
 			if minute >= 60 || second >= 60 {
-				return 0, 0, 0, false
+				return 0, 0, 0, 0, false
 			}
-			return 0, uint8(minute), uint8(second), true
+			return 0, uint8(minute), uint8(second), len(hourText), true
 		default:
 			hour := mysqlClampedDigitsForExtract(hourText[:len(hourText)-4], 839)
 			minute := mysqlClampedDigitsForExtract(hourText[len(hourText)-4:len(hourText)-2], 60)
 			second := mysqlClampedDigitsForExtract(hourText[len(hourText)-2:], 60)
 			if minute >= 60 || second >= 60 {
-				return 0, 0, 0, false
+				return 0, 0, 0, 0, false
 			}
-			return hour, uint8(minute), uint8(second), true
+			return hour, uint8(minute), uint8(second), len(hourText), true
 		}
 	}
 
@@ -5796,14 +5889,21 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		// to the preceding digits. This also stops at the first colon in
 		// "12::56", preserving 00:00:12 rather than rejecting the input.
 		if len(hourText) == 0 {
-			return 0, 0, 0, false
+			return 0, 0, 0, 0, false
 		}
-		return mysqlClockFieldsForExtract(hourText)
+		hour, minute, second, _, ok := mysqlClockFieldsWithBoundaryForExtract(hourText)
+		if !ok {
+			return 0, 0, 0, 0, false
+		}
+		// An omitted minute is a compact-TIME spelling (`12::56`), not an
+		// attached suffix boundary. Preserve the entire input for the existing
+		// compact coercion path.
+		return hour, minute, second, len(str), true
 	}
 
 	minute := mysqlClampedDigitsForExtract(minuteText, 60)
 	if minute >= 60 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	hour := uint64(0)
 	if len(hourText) > 0 {
@@ -5812,7 +5912,7 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	if pos == len(str) || str[pos] != ':' {
 		// Stop at the valid HOUR:MINUTE prefix. mysqlTimePrefixForExtract has
 		// already retained intentionally tolerated trailing text.
-		return hour, uint8(minute), 0, true
+		return hour, uint8(minute), 0, pos, true
 	}
 
 	pos++
@@ -5823,15 +5923,21 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 	secondText := str[secondStart:pos]
 	if len(secondText) == 0 {
 		// A trailing second separator is a valid prefix with omitted seconds.
-		return hour, uint8(minute), 0, true
+		// Include all repeated separators in the consumed boundary. This is
+		// what distinguishes `12:34::0100` (omitted seconds + attached tail)
+		// from a plain `12:34:...` prefix.
+		for pos < len(str) && str[pos] == ':' {
+			pos++
+		}
+		return hour, uint8(minute), 0, pos, true
 	}
 	second := mysqlClampedDigitsForExtract(secondText, 60)
 	if second >= 60 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	// Stop after a complete HOUR:MINUTE:SECOND prefix. Following punctuation,
 	// including a third colon, does not discard the parsed clock.
-	return hour, uint8(minute), uint8(second), true
+	return hour, uint8(minute), uint8(second), pos, true
 }
 
 func mysqlCompactTimePrefixBoundary(prefix, suffix string) bool {

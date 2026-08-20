@@ -11251,6 +11251,9 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 		{input: "123:34:56 x", want: "123/34/56"},
 		{input: "123:34:56 xy", want: "NULL"},
 		{input: "123:34:56 abc", want: "NULL"},
+		{input: "123:34:34:+", want: "123/34/34"},
+		{input: "123:34:34:+ ", want: "NULL"},
+		{input: "01:01::0100 ", want: "NULL"},
 		{input: "12:34:56: 78", want: "NULL"},
 		{input: "12:34:56: x", want: "12/34/56"},
 		{input: "12:34:56: +1", want: "NULL"},
@@ -11276,6 +11279,39 @@ func TestStringTimeExtractSuffixTokenOwnership(t *testing.T) {
 		{input: " 12:34:56: x", want: "12/34/56"},
 		{input: " 12:34::56 x", want: "12/34/0"},
 		{input: " 12::56 x", want: "0/0/12"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			hour, minute, second, ok := timeStringToClockForExtract(tc.input)
+			if tc.want == "NULL" {
+				require.False(t, ok, "got %d/%d/%d", hour, minute, second)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.want, fmt.Sprintf("%d/%d/%d", hour, minute, second))
+		})
+	}
+}
+
+func TestStringTimeExtractAttachedSuffixOwnership(t *testing.T) {
+	testCases := []struct {
+		input string
+		want  string
+	}{
+		{input: "1:01:01:+ ", want: "1/1/1"},
+		{input: "01:01:01:+ ", want: "1/1/1"},
+		{input: "12:34:56:+ ", want: "12/34/56"},
+		{input: "123:34:34:+ ", want: "NULL"},
+		{input: "1:01:01::+ ", want: "1/1/1"},
+		{input: "12:34:56::+ ", want: "NULL"},
+		{input: "123:34:34::+ ", want: "NULL"},
+		{input: "01:01::0100 ", want: "NULL"},
+		{input: "12:34::0100 ", want: "NULL"},
+		{input: "1:01::0100 ", want: "1/1/0"},
+		{input: "12:34::56 ", want: "12/34/0"},
+		{input: "12:34::56 78", want: "NULL"},
+		{input: "123:34::0100 ", want: "NULL"},
+		{input: "123:34::56 ", want: "123/34/0"},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.input, func(t *testing.T) {
