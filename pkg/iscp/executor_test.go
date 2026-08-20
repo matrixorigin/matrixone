@@ -171,6 +171,38 @@ func TestNewJobEntryRestoresPersistedLSN(t *testing.T) {
 	require.Equal(t, uint64(5), job.currentLSN)
 }
 
+func TestNewJobWithInFlightPersistedStateCanBeScheduled(t *testing.T) {
+	exec := &ISCPTaskExecutor{}
+	table := NewTableEntry(exec, 1, 2, 3, "db", "table")
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"job",
+		&JobSpec{},
+		&JobStatus{LSN: 1},
+		1,
+		types.TS{},
+		ISCPJobState_Running,
+		0,
+	)
+
+	job := table.jobs[JobKey{JobName: "job", JobID: 1}]
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	table.AddOrUpdateSinker(
+		context.Background(),
+		"job",
+		&JobSpec{},
+		&JobStatus{LSN: 1},
+		1,
+		types.TS{},
+		ISCPJobState_Running,
+		0,
+	)
+	require.Equal(t, ISCPJobState_Completed, job.state)
+	iters, _ := table.getCandidate()
+	require.Len(t, iters, 1)
+	require.True(t, iters[0].fromTS.IsEmpty())
+}
+
 func TestPublishRebuiltStateReplacesAbandonedGeneration(t *testing.T) {
 	exec := &ISCPTaskExecutor{tables: newISCPTableTree()}
 	oldTable := NewTableEntry(exec, 1, 2, 3, "db", "table")

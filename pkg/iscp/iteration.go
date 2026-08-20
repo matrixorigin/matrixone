@@ -52,6 +52,14 @@ type DataRetrieverConsumer interface {
 	Close()
 }
 
+// changePayloadConsumer lets a consumer opt out of decoding an iteration's
+// row payload when the iteration boundary alone is sufficient. Consumers that
+// do not implement this interface conservatively keep the historical payload
+// delivery behavior.
+type changePayloadConsumer interface {
+	NeedsChangePayload(dataType int8) bool
+}
+
 type iterationSourceChanges struct {
 	tableID uint64
 	rel     engine.Relation
@@ -490,6 +498,18 @@ func runISCPTaskIterationConsumers(
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	needsChangePayload := false
+	for _, consumer := range consumers {
+		if consumer == nil {
+			continue
+		}
+		payloadConsumer, ok := consumer.(changePayloadConsumer)
+		if !ok || payloadConsumer.NeedsChangePayload(typ) {
+			needsChangePayload = true
+			break
+		}
+	}
+
 	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	for i := range consumers {
 		if consumers[i] == nil {
@@ -524,6 +544,28 @@ func runISCPTaskIterationConsumers(
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
 		defer changeHandelWg.Done()
+		if !needsChangePayload {
+			// The consumer will evaluate its definition at iterCtx.toTS. The
+			// change handles are still opened and closed by the iteration, but
+			// scanning and converting every source row would add no information.
+			data := NewISCPData(true, nil, nil, nil)
+			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
+			for i := range dataRetrievers {
+				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() {
+					active = append(active, dataRetrievers[i])
+				}
+			}
+			data.Set(len(active))
+			if len(active) == 0 {
+				data.Close()
+			}
+			for _, retriever := range active {
+				if !retriever.SetNextBatch(data) {
+					data.Done()
+				}
+			}
+			return
+		}
 		for {
 			select {
 			case <-ctxWithCancel.Done():

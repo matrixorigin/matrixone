@@ -90,6 +90,15 @@ func (jobEntry *JobEntry) update(
 	if jobEntry.state == ISCPJobState_Error {
 		return
 	}
+	// Running/Pending is an admission state, not durable progress.  A job
+	// that is still Completed in this executor generation has no worker that
+	// can be represented by an incoming in-flight catalog row.  Keep it
+	// schedulable; otherwise a transient task-runner lookup failure can
+	// repeatedly demote the job and strand its initial snapshot.
+	if jobEntry.state == ISCPJobState_Completed &&
+		(state == ISCPJobState_Pending || state == ISCPJobState_Running) {
+		return
+	}
 	needApply := false
 	if jobEntry.currentLSN < jobStatus.LSN {
 		needApply = true

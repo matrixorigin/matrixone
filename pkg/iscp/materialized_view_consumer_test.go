@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 )
 
 func TestNewMaterializedViewConsumerValidatesSpec(t *testing.T) {
@@ -49,6 +50,62 @@ func TestMaterializedViewRefreshAtMultipleSources(t *testing.T) {
 		[]TableInfo{{DBName: "db1", TableName: "a"}, {DBName: "db2", TableName: "b"}}, ts)
 	require.NoError(t, err)
 	require.Equal(t,
-		"select * from `db1`.`a`{MO_TS = '100-7'} as x join `db2`.`b`{MO_TS = '100-7'} as y on x.id = y.id",
+		"select * from `db1`.`a`{MO_TS = '100-7'} as `x` inner join `db2`.`b`{MO_TS = '100-7'} as `y` on `x`.`id` = `y`.`id`",
 		query)
+}
+
+func TestMaterializedViewRefreshAtCommaJoinSources(t *testing.T) {
+	ts := types.BuildTS(100, 7)
+	query, err := materializedViewRefreshAtSources(
+		"select x.id, y.id from db1.a as x, db2.b as y where x.id = y.id",
+		[]TableInfo{
+			{DBName: "db1", TableName: "a"},
+			{DBName: "db2", TableName: "b"},
+		}, ts)
+	require.NoError(t, err)
+	require.Equal(t,
+		"select `x`.`id`, `y`.`id` from `db1`.`a`{MO_TS = '100-7'} as `x` cross join `db2`.`b`{MO_TS = '100-7'} as `y` where `x`.`id` = `y`.`id`",
+		query)
+}
+
+func TestMaterializedViewRefreshAtSourcesDoesNotRewriteColumnReferences(t *testing.T) {
+	ts := types.BuildTS(100, 7)
+	query, err := materializedViewRefreshAtSources(
+		"select l_returnflag, l_linestatus, sum(l_quantity) from lineitem group by l_returnflag, l_linestatus",
+		[]TableInfo{{DBName: "tpch", TableName: "lineitem"}}, ts)
+	require.NoError(t, err)
+	require.Equal(t,
+		"select `l_returnflag`, `l_linestatus`, sum(`l_quantity`) from `tpch`.`lineitem`{MO_TS = '100-7'} group by `l_returnflag`, `l_linestatus`",
+		query)
+}
+
+func TestMaterializedViewDrainSkipsRowsForFullRefresh(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		dtype int8
+		spec  string
+	}{
+		{name: "snapshot", dtype: ISCPDataType_Snapshot, spec: "incremental"},
+		{name: "tail without incremental spec", dtype: ISCPDataType_Tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A nil Src would panic if materializedViewRowsFromBatch tried to
+			// decode this row. Full-refresh paths must only drain and release it.
+			rows := btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64})
+			rows.Set(AtomicBatchRow{})
+			r := &MockRetriever{
+				dtype:       tc.dtype,
+				insertBatch: &AtomicBatch{Rows: rows},
+			}
+			consumer := &MaterializedViewConsumer{info: &ConsumerInfo{
+				DBName: "db", TableName: "mv", IncrementalSpec: tc.spec,
+			}}
+			collect := r.GetDataType() == ISCPDataType_Tail && consumer.info.IncrementalSpec != ""
+			inserts, deletes, canIncrement, err := consumer.drainChanges(r, collect)
+			require.NoError(t, err)
+			require.False(t, canIncrement)
+			require.Empty(t, inserts)
+			require.Empty(t, deletes)
+		})
+	}
 }

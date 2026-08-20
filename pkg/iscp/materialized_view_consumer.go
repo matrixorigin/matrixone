@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -96,8 +98,42 @@ func NewMaterializedViewConsumer(
 }
 
 func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever) error {
-	var inserts, deletes []materializedViewChangeRow
-	collectChanges := true
+	collectChanges := r.GetDataType() == ISCPDataType_Tail && c.info.IncrementalSpec != ""
+	inserts, deletes, collectChanges, err := c.drainChanges(r, collectChanges)
+	if err != nil {
+		return err
+	}
+
+	if collectChanges {
+		if err := c.consumeIncremental(ctx, r, inserts, deletes); err == nil {
+			return nil
+		} else {
+			logutil.Warnf("materialized view incremental refresh fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, err)
+		}
+		// Incremental refresh is deliberately fail-closed: the fallback starts
+		// a new transaction, so a partial delta can never be committed.
+	}
+
+	return c.consumeFullRefresh(ctx, r)
+}
+
+// NeedsChangePayload reports whether this iteration can use row deltas. The
+// initial snapshot and full-refresh-only tails only need the consistent toTS
+// boundary; their definition query reads source tables at that timestamp.
+func (c *MaterializedViewConsumer) NeedsChangePayload(dataType int8) bool {
+	return dataType == ISCPDataType_Tail && c.info.IncrementalSpec != ""
+}
+
+// drainChanges always advances the ISCP stream to its iteration boundary, but
+// only materializes row values when this tail can use incremental maintenance.
+// Snapshot and full-refresh-only tails use the stream as a synchronization
+// barrier; retaining their row payload would add an unnecessary table-sized
+// memory copy before the boundary query runs.
+func (c *MaterializedViewConsumer) drainChanges(
+	r DataRetriever,
+	collectChanges bool,
+) (inserts, deletes []materializedViewChangeRow, canIncrement bool, err error) {
+	canIncrement = collectChanges
 	for {
 		data := r.Next()
 		if data == nil {
@@ -105,23 +141,23 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 		}
 		if data.err != nil {
 			data.Done()
-			return data.err
+			return nil, nil, false, data.err
 		}
-		if collectChanges {
+		if canIncrement {
 			if data.insertBatch != nil {
-				rows, err := materializedViewRowsFromBatch(data.insertBatch, true)
-				if err != nil {
-					logutil.Warnf("materialized view incremental batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, err)
-					collectChanges = false
+				rows, decodeErr := materializedViewRowsFromBatch(data.insertBatch, true)
+				if decodeErr != nil {
+					logutil.Warnf("materialized view incremental batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, decodeErr)
+					canIncrement = false
 				} else {
 					inserts = append(inserts, rows...)
 				}
 			}
 			if data.deleteBatch != nil {
-				rows, err := materializedViewRowsFromBatch(data.deleteBatch, false)
-				if err != nil {
-					logutil.Warnf("materialized view incremental delete batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, err)
-					collectChanges = false
+				rows, decodeErr := materializedViewRowsFromBatch(data.deleteBatch, false)
+				if decodeErr != nil {
+					logutil.Warnf("materialized view incremental delete batch fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, decodeErr)
+					canIncrement = false
 				} else {
 					deletes = append(deletes, rows...)
 				}
@@ -133,18 +169,7 @@ func (c *MaterializedViewConsumer) Consume(ctx context.Context, r DataRetriever)
 			break
 		}
 	}
-
-	if r.GetDataType() == ISCPDataType_Tail && collectChanges && c.info.IncrementalSpec != "" {
-		if err := c.consumeIncremental(ctx, r, inserts, deletes); err == nil {
-			return nil
-		} else {
-			logutil.Warnf("materialized view incremental refresh fallback: mv=%s.%s err=%v", c.info.DBName, c.info.TableName, err)
-		}
-		// Incremental refresh is deliberately fail-closed: the fallback starts
-		// a new transaction, so a partial delta can never be committed.
-	}
-
-	return c.consumeFullRefresh(ctx, r)
+	return inserts, deletes, canIncrement, nil
 }
 
 func (c *MaterializedViewConsumer) consumeFullRefresh(ctx context.Context, r DataRetriever) error {
@@ -540,27 +565,102 @@ func materializedViewRefreshAtInDatabase(query, source, database string, ts type
 }
 
 // materializedViewRefreshAtSources adds the same snapshot boundary to every
-// direct source relation in a refresh query. The planner only emits direct
-// base-table FROM/JOIN expressions for MVs, so keeping this rewrite lexical
-// avoids reparsing SQL in the background consumer.
+// direct source relation in a refresh query. The MV planner only accepts a
+// top-level SelectClause whose FROM tree contains direct base tables, so the
+// parsed FROM tree is the authoritative place to rewrite JOIN and comma-join
+// forms without mistaking qualified column references for table references.
 func materializedViewRefreshAtSources(query string, sources []TableInfo, ts types.TS) (string, error) {
 	if len(sources) == 0 {
 		return "", fmt.Errorf("materialized view has no source tables")
 	}
-	refresh := query
+	stmt, err := mysql.ParseOne(context.Background(), query, 1)
+	if err != nil {
+		return "", fmt.Errorf("parse materialized view refresh query: %w", err)
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return "", fmt.Errorf("materialized view refresh query is %T, expected select", stmt)
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || clause.From == nil {
+		return "", fmt.Errorf("materialized view refresh query has no direct source tables")
+	}
+
+	type sourceKey struct {
+		database string
+		table    string
+	}
+	sourceByKey := make(map[sourceKey]TableInfo, len(sources))
+	found := make(map[sourceKey]bool, len(sources))
 	for _, source := range sources {
 		if source.DBName == "" || source.TableName == "" {
 			return "", fmt.Errorf("materialized view has incomplete source table")
 		}
-		qualified := fmt.Sprintf("`%s`.`%s`", strings.ReplaceAll(source.DBName, "`", "``"), strings.ReplaceAll(source.TableName, "`", "``"))
-		replacement := fmt.Sprintf("${1} %s{MO_TS = '%s'}", qualified, ts.ToString())
-		name := regexp.QuoteMeta(source.TableName)
-		pattern := regexp.MustCompile(`(?i)(\bfrom\b|\bjoin\b|,)\s+(?:` + regexp.QuoteMeta(source.DBName) + `\s*\.\s*)?` + name + `\b`)
-		updated := pattern.ReplaceAllString(refresh, replacement)
-		if updated == refresh {
-			return "", fmt.Errorf("materialized view source %q not found in refresh query", source.TableName)
-		}
-		refresh = updated
+		key := sourceKey{database: strings.ToLower(source.DBName), table: strings.ToLower(source.TableName)}
+		sourceByKey[key] = source
+		found[key] = false
 	}
-	return refresh, nil
+
+	var rewriteTableExpr func(tree.TableExpr) error
+	rewriteTableExpr = func(expr tree.TableExpr) error {
+		switch node := expr.(type) {
+		case *tree.AliasedTableExpr:
+			return rewriteTableExpr(node.Expr)
+		case *tree.JoinTableExpr:
+			if err := rewriteTableExpr(node.Left); err != nil {
+				return err
+			}
+			// The MySQL parser represents a single table reference as a
+			// degenerate join whose right side and condition are nil.
+			if node.Right == nil && node.Cond == nil {
+				return nil
+			}
+			return rewriteTableExpr(node.Right)
+		case *tree.ParenTableExpr:
+			return rewriteTableExpr(node.Expr)
+		case *tree.TableName:
+			tableName := strings.ToLower(string(node.ObjectName))
+			var matchKey sourceKey
+			matches := 0
+			for key := range sourceByKey {
+				if key.table != tableName {
+					continue
+				}
+				if node.ExplicitSchema && key.database != strings.ToLower(string(node.SchemaName)) {
+					continue
+				}
+				matchKey = key
+				matches++
+			}
+			if matches == 0 {
+				return fmt.Errorf("materialized view source %q not found in refresh metadata", node.ObjectName)
+			}
+			if matches > 1 {
+				return fmt.Errorf("materialized view source %q is ambiguous without a database qualifier", node.ObjectName)
+			}
+			source := sourceByKey[matchKey]
+			node.SchemaName = tree.Identifier(source.DBName)
+			node.ExplicitSchema = true
+			node.AtTsExpr = &tree.AtTimeStamp{
+				Type: tree.ATMOTIMESTAMP,
+				Expr: tree.NewStrVal("'" + ts.ToString() + "'"),
+			}
+			found[matchKey] = true
+			return nil
+		default:
+			return fmt.Errorf("materialized view source must be a direct base table (table=%T)", expr)
+		}
+	}
+	for _, expr := range clause.From.Tables {
+		if err := rewriteTableExpr(expr); err != nil {
+			return "", err
+		}
+	}
+	for key, wasFound := range found {
+		if !wasFound {
+			return "", fmt.Errorf("materialized view source %q not found in refresh query", key.table)
+		}
+	}
+	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier()), nil
 }

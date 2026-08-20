@@ -1508,6 +1508,15 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		if sourceDB == "" {
 			sourceDB = ctx.DefaultDatabase()
 		}
+		for _, source := range sources {
+			dbName := string(source.SchemaName)
+			if dbName == "" {
+				dbName = ctx.DefaultDatabase()
+			}
+			if err := validateMaterializedViewSourceTable(ctx, dbName, string(source.ObjectName)); err != nil {
+				return nil, err
+			}
+		}
 		createView.TableDef.ViewSql = nil
 		// Store the result as an ordinary physical table. The materialized-view
 		// marker below is persisted in the create SQL and is used to keep user
@@ -1600,6 +1609,30 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}, nil
 }
 
+// validateMaterializedViewSourceTable keeps MV registration limited to
+// ordinary persistent tables. Views, external tables, temporary tables and
+// catalog/special relations do not provide the ordinary-table CDC contract
+// required to keep an asynchronously maintained result correct.
+func validateMaterializedViewSourceTable(ctx CompilerContext, dbName, tableName string) error {
+	_, def, err := ctx.Resolve(dbName, tableName, nil)
+	if err != nil {
+		return err
+	}
+	if def == nil {
+		return moerr.NewNoSuchTablef(ctx.GetContext(), "materialized view source table %q does not exist", tableName)
+	}
+	if IsMaterializedViewTableDef(def) {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use materialized view %s.%s as source", dbName, tableName)
+	}
+	if def.IsTemporary || def.TableType == catalog.SystemTemporaryTable {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use temporary table %s.%s as source", dbName, tableName)
+	}
+	if def.TableType != catalog.SystemOrdinaryRel {
+		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view cannot use relation type %q for source %s.%s", def.TableType, dbName, tableName)
+	}
+	return nil
+}
+
 // IsMaterializedViewTableDef identifies materialized views from their marker
 // and supports the dedicated relation kind used by earlier plans.
 func IsMaterializedViewTableDef(def *plan.TableDef) bool {
@@ -1679,12 +1712,8 @@ func ValidateMaterializedViewSources(ctx CompilerContext, def *plan.TableDef) er
 			if dbName == "" {
 				dbName = def.GetDbName()
 			}
-			_, sourceDef, resolveErr := ctx.Resolve(dbName, string(source.ObjectName), nil)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			if sourceDef == nil {
-				return moerr.NewNoSuchTablef(ctx.GetContext(), "materialized view source table %q does not exist", string(source.ObjectName))
+			if err := validateMaterializedViewSourceTable(ctx, dbName, string(source.ObjectName)); err != nil {
+				return err
 			}
 		}
 	}

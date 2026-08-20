@@ -70,6 +70,16 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
+		// Pending/Running is only durable while an iteration is being
+		// admitted or executed.  If this is the first time this job is seen
+		// by the current executor generation, there cannot be an in-flight
+		// worker for it.  Treat the state as completed so the initial
+		// snapshot (or the interrupted iteration) can be scheduled again.
+		// Without this, a transient task-runner lookup failure can leave a
+		// newly registered job permanently invisible to getCandidate().
+		if state == ISCPJobState_Pending || state == ISCPJobState_Running {
+			state = ISCPJobState_Completed
+		}
 		jobEntry = NewJobEntryWithStatus(t, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 		t.jobs[key] = jobEntry
 		return

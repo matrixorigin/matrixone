@@ -1263,8 +1263,35 @@ func TestValidateMaterializedViewSources(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "missing_orders")
 
-	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch"}
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel}
 	require.NoError(t, ValidateMaterializedViewSources(ctx, mv))
+}
+
+func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel}
+	ctx.tables["external_orders"] = &plan.TableDef{Name: "external_orders", DbName: "tpch", TableType: catalog.SystemExternalRel}
+	ctx.tables["view_orders"] = &plan.TableDef{Name: "view_orders", DbName: "tpch", TableType: catalog.SystemViewRel}
+	ctx.tables["temp_orders"] = &plan.TableDef{Name: "temp_orders", DbName: "tpch", TableType: catalog.SystemTemporaryTable}
+	ctx.tables["mv_orders"] = &plan.TableDef{
+		Name: "mv_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel,
+		Createsql: "create materialized view mv_orders as select * from tpch.missing_orders",
+	}
+
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "external_orders", want: "external"},
+		{name: "view_orders", want: "relation type"},
+		{name: "temp_orders", want: "temporary"},
+		{name: "mv_orders", want: "materialized view"},
+	} {
+		err := validateMaterializedViewSourceTable(ctx, "tpch", tc.name)
+		require.Error(t, err, tc.name)
+		require.Contains(t, err.Error(), tc.want, tc.name)
+	}
+	require.NoError(t, validateMaterializedViewSourceTable(ctx, "tpch", "missing_orders"))
 }
 
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {

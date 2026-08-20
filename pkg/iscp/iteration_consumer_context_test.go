@@ -95,6 +95,19 @@ func (c drainingIterationConsumer) Consume(ctx context.Context, data DataRetriev
 	}
 }
 
+type boundaryOnlyIterationConsumer struct {
+	gotBoundary bool
+}
+
+func (c *boundaryOnlyIterationConsumer) NeedsChangePayload(int8) bool { return false }
+
+func (c *boundaryOnlyIterationConsumer) Consume(_ context.Context, data DataRetriever) error {
+	d := data.Next()
+	c.gotBoundary = d.noMoreData && d.insertBatch == nil && d.deleteBatch == nil && d.err == nil
+	d.Done()
+	return nil
+}
+
 func testIterationContext(jobNames ...string) *IterationContext {
 	if len(jobNames) == 0 {
 		jobNames = []string{"job"}
@@ -160,6 +173,63 @@ func runIterationConsumersWithStatusesForTest(
 		)
 	}()
 	return done, statuses
+}
+
+func TestRunIterationSkipsChangesForBoundaryOnlyConsumers(t *testing.T) {
+	nextCalled := false
+	changes := &iterationChangesHandle{next: func(
+		context.Context,
+		*mpool.MPool,
+	) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		nextCalled = true
+		return nil, nil, engine.ChangesHandle_Snapshot, nil
+	}}
+	consumer := &boundaryOnlyIterationConsumer{}
+	mp := mpool.MustNewZero()
+	done := runIterationConsumersForTest(
+		context.Background(),
+		testIterationContext(),
+		changes,
+		[]Consumer{consumer},
+		ISCPDataType_Snapshot,
+		mp,
+	)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("boundary-only iteration did not finish")
+	}
+	require.False(t, nextCalled)
+	require.True(t, consumer.gotBoundary)
+}
+
+func TestRunIterationKeepsChangesForMixedConsumers(t *testing.T) {
+	nextCalled := false
+	changes := &iterationChangesHandle{next: func(
+		context.Context,
+		*mpool.MPool,
+	) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+		nextCalled = true
+		return nil, nil, engine.ChangesHandle_Snapshot, nil
+	}}
+	boundaryConsumer := &boundaryOnlyIterationConsumer{}
+	done := runIterationConsumersForTest(
+		context.Background(),
+		testIterationContext("boundary", "legacy"),
+		changes,
+		[]Consumer{boundaryConsumer, drainingIterationConsumer{}},
+		ISCPDataType_Snapshot,
+		mpool.MustNewZero(),
+	)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("mixed-consumer iteration did not finish")
+	}
+	require.True(t, nextCalled)
+	require.True(t, boundaryConsumer.gotBoundary)
 }
 
 func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {
