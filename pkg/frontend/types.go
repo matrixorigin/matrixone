@@ -725,6 +725,10 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	}
 }
 
+func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
+	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+}
+
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
