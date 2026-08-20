@@ -349,4 +349,15 @@ var (
 			Help:      "Total number of disk cache errors",
 		},
 	)
+
+	// FSDiskCacheAsyncUpdateDroppedCounter tracks optional cache fills that are
+	// dropped when the bounded asynchronous queue cannot admit more work.
+	FSDiskCacheAsyncUpdateDroppedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "disk_cache_async_update_dropped_total",
+			Help:      "Total number of disk cache async updates dropped by admission control",
+		},
+	)
 )

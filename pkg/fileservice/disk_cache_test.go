@@ -1008,6 +1008,7 @@ func TestDiskCacheBadWrite(t *testing.T) {
 	ctx := context.Background()
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
+	defer cache.Close(ctx)
 
 	written, err := cache.writeFile(
 		ctx,
@@ -1017,7 +1018,7 @@ func TestDiskCacheBadWrite(t *testing.T) {
 			return nil, io.ErrUnexpectedEOF
 		},
 	)
-	assert.Nil(t, err)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	if written {
 		t.Fatal()
 	}

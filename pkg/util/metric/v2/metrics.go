@@ -126,6 +126,7 @@ func initFileServiceMetrics() {
 
 	registry.MustRegister(FSDiskCacheEvictCounter)
 	registry.MustRegister(FSDiskCacheErrorCounter)
+	registry.MustRegister(FSDiskCacheAsyncUpdateDroppedCounter)
 }
 
 func initLogtailMetrics() {

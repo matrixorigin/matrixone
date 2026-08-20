@@ -411,11 +411,12 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	}
 
 	// load to disk cache
-	if err := s.diskCache.SetFile(
+	if err := s.diskCache.setFile(
 		ctx, path.File,
 		func(ctx context.Context) (io.ReadCloser, error) {
 			return s.newReadCloser(ctx, filePath)
 		},
+		s.asyncUpdate,
 	); err != nil {
 		return err
 	}
@@ -562,9 +563,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	if writeDiskCache {
 		content := diskCacheBuf.Bytes()
 		diskCacheStart := time.Now()
-		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		if err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
-		}); err != nil {
+		}, s.asyncUpdate); err != nil {
 			return 0, err
 		}
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
@@ -1194,9 +1195,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		!vector.Policy.Any(SkipDiskCacheWrites) {
 		t0 := time.Now()
 		LogEvent(ctx, str_disk_cache_setfile_begin)
-		err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+		err := s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(contentBytes)), nil
-		})
+		}, s.asyncUpdate)
 		LogEvent(ctx, str_disk_cache_setfile_end)
 		metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 		if err != nil {
@@ -1301,7 +1302,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 
 	t0 := time.Now()
 	LogEvent(ctx, str_disk_cache_setfile_begin)
-	err = s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
+	err = s.diskCache.setFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 		reader, err := getReader(ctx, ptrTo[int64](0), nil)
 		if err != nil {
 			return nil, err
@@ -1309,7 +1310,7 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		stream.reader = reader
 		stream.opened = true
 		return stream, nil
-	})
+	}, s.asyncUpdate)
 	LogEvent(ctx, str_disk_cache_setfile_end)
 	metric.FSReadDurationSetCachedData.Observe(time.Since(t0).Seconds())
 	if err != nil {
@@ -1499,6 +1500,9 @@ func (s *S3FS) Close(ctx context.Context) {
 func (s *S3FS) FlushCache(ctx context.Context) {
 	if s.memCache != nil {
 		s.memCache.Flush(ctx)
+	}
+	if s.diskCache != nil {
+		s.diskCache.Flush(ctx)
 	}
 }
 
