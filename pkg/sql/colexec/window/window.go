@@ -489,7 +489,7 @@ func (ctr *container) processAggregateFuncRange(
 		}
 
 		left, right, err := ctr.buildInterval(
-			j, partitionStart, partitionEnd, frame)
+			proc, j, partitionStart, partitionEnd, frame)
 		if err != nil {
 			return nil, err
 		}
@@ -1048,7 +1048,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, err := ctr.buildInterval(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1078,7 +1078,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, err := ctr.buildInterval(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1133,7 +1133,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
+			left, right, err := ctr.buildInterval(proc, j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -1231,7 +1231,7 @@ func appendDefaultOrNull(result *vector.Vector, defaultVec *vector.Vector, rowId
 	return result.UnionOne(defaultVec, srcRow, mp)
 }
 
-func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
+func (ctr *container) buildInterval(proc *process.Process, rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)
@@ -1243,7 +1243,16 @@ func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameCla
 	}
 
 	// FrameClause_Range
-	return ctr.buildRangeInterval(rowIdx, start, end, frame)
+	return ctr.buildRangeIntervalWithLocation(windowSessionLocation(proc), rowIdx, start, end, frame)
+}
+
+func windowSessionLocation(proc *process.Process) *time.Location {
+	if proc != nil {
+		if sessionInfo := proc.GetSessionInfo(); sessionInfo != nil && sessionInfo.TimeZone != nil {
+			return sessionInfo.TimeZone
+		}
+	}
+	return time.Local
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
@@ -1293,6 +1302,10 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 }
 
 func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
+	return ctr.buildRangeIntervalWithLocation(time.Local, rowIdx, start, end, frame)
+}
+
+func (ctr *container) buildRangeIntervalWithLocation(loc *time.Location, rowIdx int, start, end int, frame *plan.FrameClause) (int, int, error) {
 	var err error
 	var desc bool
 	if len(ctr.desc) > 0 {
@@ -1303,20 +1316,20 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		if len(ctr.os) > 0 || end-start <= 1 {
 			start, _ = buildPeerInterval(ctr.os, rowIdx, start, end)
 		} else {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
+			start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_FOLLOWING:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
+		start, err = searchLeftWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
@@ -1327,19 +1340,19 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 		if len(ctr.os) > 0 || end-start <= 1 {
 			_, end = buildPeerInterval(ctr.os, rowIdx, start, end)
 		} else {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false, desc)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_PRECEDING:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
+		end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true, desc)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
+			end, err = searchRightWithLocation(loc, start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false, desc)
 			if err != nil {
 				return start, end, err
 			}
@@ -1612,6 +1625,10 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 }
 
 func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	return searchLeftWithLocation(time.Local, start, end, rowIdx, vec, expr, plus, desc)
+}
+
+func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the start of the NULL peer group
 		left := rowIdx
@@ -1964,13 +1981,13 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if plus {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
 					return left, err
 				}
 				left = genericSearchLeft(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
 					return left, err
 				}
@@ -2029,13 +2046,40 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 }
 
+// timestampRangeBoundary resolves a session-civil frame boundary back to a
+// timestamp instant. Go maps nonexistent civil times in a DST gap to one side
+// of the transition; clamp that result to the transition instant so RANGE uses
+// the first valid local time after the gap, matching MySQL semantics.
+func timestampRangeBoundary(civil types.Datetime, loc *time.Location) types.Timestamp {
+	boundary := civil.ToTimestamp(loc)
+	roundTrip := boundary.ToDatetime(loc)
+	if roundTrip == civil {
+		return boundary
+	}
+
+	instant := time.UnixMicro(
+		int64(boundary) - int64(types.UnixToTimestamp(0))).In(loc)
+	transitionStart, transitionEnd := instant.ZoneBounds()
+	if roundTrip < civil && !transitionEnd.IsZero() {
+		return types.UnixMicroToTimestamp(transitionEnd.UnixMicro())
+	}
+	if roundTrip > civil && !transitionStart.IsZero() {
+		return types.UnixMicroToTimestamp(transitionStart.UnixMicro())
+	}
+	return boundary
+}
+
 func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	return searchRightWithLocation(time.Local, start, end, rowIdx, vec, expr, sub, desc)
+}
+
+func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
 		right := rowIdx + 1
@@ -2397,13 +2441,13 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 			diff := expr.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			unit := expr.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 			if sub {
-				fol, err := doTimestampSub(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampSub(loc, col[rowIdx], diff, unit)
 				if err != nil {
 					return right, err
 				}
 				right = genericSearchRight(start, end-1, col, fol, genericEqual[types.Timestamp], cmpl)
 			} else {
-				fol, err := doTimestampAdd(time.Local, col[rowIdx], diff, unit)
+				fol, err := doTimestampAdd(loc, col[rowIdx], diff, unit)
 				if err != nil {
 					return right, err
 				}
@@ -2464,7 +2508,7 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
-		return dt.ToTimestamp(loc), nil
+		return timestampRangeBoundary(dt, loc), nil
 	} else {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}

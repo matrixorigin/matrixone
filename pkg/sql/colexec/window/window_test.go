@@ -20,6 +20,7 @@ import (
 	"math"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3071,4 +3072,106 @@ func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
 		defer vec.Free(mp)
 		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
+}
+
+func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+	}
+
+	for _, test := range []struct {
+		name             string
+		utcValues        []string
+		rowIdx           int
+		newYorkPreceding [2]int
+		utcPreceding     [2]int
+		newYorkFollowing [2]int
+		utcFollowing     [2]int
+	}{
+		{
+			name: "spring forward",
+			utcValues: []string{
+				"2024-03-10 06:59:59.999999",
+				"2024-03-10 07:00:00.000000",
+				"2024-03-10 07:30:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{1, 3},
+			utcPreceding:     [2]int{0, 3},
+			newYorkFollowing: [2]int{0, 2},
+			utcFollowing:     [2]int{0, 3},
+		},
+		{
+			name: "fall back",
+			utcValues: []string{
+				"2024-11-03 05:30:00.000000",
+				"2024-11-03 06:30:00.000000",
+				"2024-11-03 07:00:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{0, 3},
+			utcPreceding:     [2]int{1, 3},
+			newYorkFollowing: [2]int{0, 3},
+			utcFollowing:     [2]int{0, 2},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Equal(t, int64(0), mp.CurrNB())
+			}()
+
+			values := make([]types.Timestamp, len(test.utcValues))
+			for i, value := range test.utcValues {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err := ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkPreceding, [2]int{start, end})
+
+			// Reuse the same process/container generation after a session zone change.
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcPreceding, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkFollowing, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcFollowing, [2]int{start, end})
+		})
+	}
 }
