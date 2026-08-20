@@ -2055,6 +2055,239 @@ func TestOnlyFullGroupByNonAggregateHavingBuildsFilter(t *testing.T) {
 	require.True(t, found)
 }
 
+func TestOnlyFullGroupByAllowsNonAggregateHavingOnInformationSchemaView(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	p, err := runOneStmt(mock, t, `
+		SELECT TABLE_SCHEMA AS TABLE_CAT,
+		       NULL AS TABLE_SCHEM,
+		       TABLE_NAME,
+		       CASE
+		           WHEN TABLE_TYPE = 'BASE TABLE' THEN
+		               CASE
+		                   WHEN TABLE_SCHEMA = 'mysql'
+		                       OR TABLE_SCHEMA = 'performance_schema'
+		                   THEN 'SYSTEM TABLE'
+		                   ELSE 'TABLE'
+		               END
+		           WHEN TABLE_TYPE = 'TEMPORARY' THEN 'LOCAL_TEMPORARY'
+		           ELSE TABLE_TYPE
+		       END AS TABLE_TYPE,
+		       TABLE_COMMENT AS REMARKS,
+		       NULL AS TYPE_CAT,
+		       NULL AS TYPE_SCHEM,
+		       NULL AS TYPE_NAME,
+		       NULL AS SELF_REFERENCING_COL_NAME,
+		       NULL AS REF_GENERATION
+		FROM information_schema.tables
+		WHERE TABLE_SCHEMA = 'benchbase'
+		HAVING TABLE_TYPE IN ('TABLE', NULL, NULL, NULL, NULL)
+		ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME`)
+	require.NoError(t, err)
+	for _, node := range p.GetQuery().Nodes {
+		require.NotEqual(t, plan.Node_AGG, node.NodeType)
+	}
+}
+
+func TestOnlyFullGroupByRejectsNonAggregateHavingAnonymousExpression(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey + 1
+		FROM nation
+		HAVING n_regionkey + 1 > 1`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
+func TestOnlyFullGroupByAllowsNonAggregateHavingDirectAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS region_key
+		FROM nation
+		HAVING region_key > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsNonAggregateHavingDirectColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByRejectsExplicitImplicitHavingNameCollision(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_nationkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.ErrorContains(t, err, "Column 'n_regionkey' in having clause is ambiguous")
+}
+
+func TestOnlyFullGroupByAllowsEquivalentExplicitImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByExplicitHavingAliasPrecedesUnprojectedSource(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_nationkey AS n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsProjectedSourceWithDifferentHavingAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS region_key
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByRejectsUnprojectedOrEmbeddedHavingSource(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n_regionkey AS region_key
+		 FROM nation
+		 HAVING n_nationkey > 0`,
+		`SELECT n_regionkey + 1 AS region_key
+		 FROM nation
+		 HAVING n_regionkey > 0`,
+	} {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err := runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "must appear in the GROUP BY clause", sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsAmbiguousProjectedSourceName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n1.n_regionkey AS region_key
+		FROM nation n1
+		JOIN nation n2 ON n1.n_nationkey = n2.n_nationkey
+		HAVING n_regionkey > 0`)
+	require.ErrorContains(t, err, "ambiguous column reference")
+}
+
+func TestOnlyFullGroupByAllowsUnaryPlusImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsNestedUnaryPlusImplicitHavingName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT ++n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsUnaryPlusQualifiedHavingProjectedColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +nation.n_regionkey
+		FROM nation
+		HAVING nation.n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsEquivalentUnaryPlusHavingOutputs(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT +n_regionkey AS n_regionkey, n_regionkey
+		FROM nation
+		HAVING n_regionkey > 0`)
+	require.NoError(t, err)
+}
+
+func TestOnlyFullGroupByAllowsQualifiedHavingProjectedColumn(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT nation.n_regionkey
+		 FROM nation
+		 HAVING nation.n_regionkey > 0`,
+		`SELECT n_regionkey AS region_key
+		 FROM nation
+		 HAVING nation.n_regionkey > 0`,
+		`SELECT nation.n_regionkey
+		 FROM tpch.nation
+		 HAVING tpch.nation.n_regionkey > 0`,
+		`SELECT tpch.nation.n_regionkey
+		 FROM tpch.nation
+		 HAVING nation.n_regionkey > 0`,
+	} {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+		_, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestOnlyFullGroupByRejectsQualifiedColumnInsideAnonymousProjection(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey + 1 AS region_key
+		FROM nation
+		HAVING nation.n_regionkey > 0`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
+func TestOnlyFullGroupByRejectsAmbiguousHavingAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS x, n_nationkey AS x
+		FROM nation
+		HAVING x > 0`)
+	require.ErrorContains(t, err, "Column 'x' in having clause is ambiguous")
+}
+
+func TestOnlyFullGroupByAllowsEquivalentDuplicateHavingAlias(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey AS x, n_regionkey AS x
+		FROM nation
+		HAVING x > 0`)
+	require.NoError(t, err)
+}
+
+func TestMatrixOneNativeStillRejectsNonAggregateHavingColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.SetSqlModeOverride("ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE")
+	_, err := runOneStmt(mock, t, `
+		SELECT n_regionkey
+		FROM nation
+		HAVING n_nationkey > 0`)
+	require.ErrorContains(t, err, "must appear in the GROUP BY clause")
+}
+
 func TestOnlyFullGroupByWindowOnlyHavingBuildsPreWindowFilter(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t, `
