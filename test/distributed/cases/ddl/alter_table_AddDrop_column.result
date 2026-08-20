@@ -194,7 +194,7 @@ Carol    23
 Dora    29
 show create table t1;
 Table    Create Table
-t1    CREATE TABLE `t1` (\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  UNIQUE KEY `idx` (`name`)\n)
+t1    CREATE TABLE `t1` (\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  UNIQUE KEY `Idx` (`name`)\n)
 drop table t1;
 drop table if exists index01;
 create table index01(id int,name varchar(20),unique index(id));
