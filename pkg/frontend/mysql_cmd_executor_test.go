@@ -3194,6 +3194,10 @@ func TestPrepareReplacementRemovesPreviousStatementBeforeTxnCheck(t *testing.T) 
 	}
 }
 
+func TestGetPrepareStmtName(t *testing.T) {
+	require.Equal(t, "__mo_stmt_id_42", GetPrepareStmtName(42))
+}
+
 func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
 	setSessionAlloc("", NewLeakCheckAllocator())
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
