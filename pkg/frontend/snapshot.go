@@ -651,7 +651,11 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				string(stmt.Name),
 			)
 		}
-		if compile.ViewMetadataRefreshEnabled(ses.GetService()) {
+		var viewMetadataEnabled bool
+		if viewMetadataEnabled, err = prepareViewMetadataMutation(ctx, bh, ses.GetService()); err != nil {
+			return err
+		}
+		if viewMetadataEnabled {
 			var record *snapshotRecord
 			if record, err = getSnapshotByName(ctx, bh, string(stmt.Name)); err != nil {
 				return err
@@ -3007,8 +3011,9 @@ func seedMissingViewMetadataAfterCatalogReset(
 	ses *Session,
 	bh BackgroundExec,
 ) error {
-	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
-		return nil
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
 	}
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
 	return bh.Exec(systemCtx, compile.SeedMissingViewMetadataSQL(uint64(time.Now().UnixNano())))
@@ -3020,8 +3025,9 @@ func invalidateAccountViewMetadata(
 	bh BackgroundExec,
 	accountID uint32,
 ) error {
-	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
-		return nil
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
 	}
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
@@ -3037,8 +3043,9 @@ func reconcileAccountViewMetadata(
 	bh BackgroundExec,
 	accountID uint32,
 ) error {
-	if !compile.ViewMetadataRefreshEnabled(ses.GetService()) {
-		return nil
+	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
+	if err != nil || !enabled {
+		return err
 	}
 	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
@@ -3050,6 +3057,26 @@ func reconcileAccountViewMetadata(
 		}
 	}
 	return nil
+}
+
+func prepareViewMetadataMutation(
+	ctx context.Context,
+	bh BackgroundExec,
+	serviceID string,
+) (bool, error) {
+	if compile.ViewMetadataRefreshEnabled(serviceID) {
+		return true, nil
+	}
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	for _, sql := range compile.ViewMetadataRequireRevalidationSQL() {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, snapshotName string, account accountRecord) (err error) {

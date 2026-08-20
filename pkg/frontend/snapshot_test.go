@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,6 +39,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -133,7 +135,10 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
-		require.Empty(t, bh.executedSQLs)
+		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
+		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[1], "REVALIDATE_REQUIRED")
 	})
 
 	t.Run("success", func(t *testing.T) {
@@ -165,6 +170,75 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
 		require.ErrorIs(t, invalidateAccountViewMetadata(context.Background(), ses, bhFailure, 42), testErr)
 	})
+}
+
+func TestPrepareViewMetadataMutationCatalogCompatibilityAndFailures(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	disabled := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, disabled)
+		}
+	})
+	statements := compile.ViewMetadataRequireRevalidationSQL()
+
+	t.Run("typed missing table remains compatible", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2err[statements[0]] = moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
+		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+		require.NoError(t, err)
+		require.False(t, enabled)
+		require.Equal(t, statements[:1], bh.executedSQLs)
+	})
+
+	t.Run("ordinary failure aborts mutation", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		testErr := moerr.NewInternalErrorNoCtx("marker failed")
+		bh.sql2err[statements[1]] = testErr
+		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+		require.False(t, enabled)
+		require.ErrorIs(t, err, testErr)
+		require.Equal(t, statements[:2], bh.executedSQLs)
+	})
+}
+
+func TestPublicationInvalidationPersistsMarkerWhenCapabilityIsClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	runtime := moruntime.ServiceRuntime(ses.GetService())
+	disabled := &mockMOCluster{cnServices: []metadata.CNService{{
+		ServiceID: "old-cn", WorkState: metadata.WorkState_Working,
+	}}}
+	oldCluster, hadOldCluster := runtime.GetGlobalVariables(moruntime.ClusterService)
+	runtime.SetGlobalVariables(moruntime.ClusterService, disabled)
+	t.Cleanup(func() {
+		if hadOldCluster {
+			runtime.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.ClusterService, disabled)
+		}
+	})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, invalidatePublicationViewMetadata(context.Background(), bh, ses.GetService(),
+		&pubsub.PubInfo{PubAccountId: 7, DbId: 11}))
+	require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "source_database_id=11")
+	}
 }
 
 func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {

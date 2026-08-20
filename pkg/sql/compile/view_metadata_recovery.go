@@ -79,6 +79,14 @@ func viewMetadataRequireRevalidationSQL() []string {
 	}
 }
 
+// ViewMetadataRequireRevalidationSQL returns the statements that atomically
+// fence a lifecycle-unaware mutation. Frontend catalog mutations execute these
+// statements in their existing transaction when the capability barrier is
+// closed, matching Compile.viewMetadataRefreshAvailable.
+func ViewMetadataRequireRevalidationSQL() []string {
+	return viewMetadataRequireRevalidationSQL()
+}
+
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
 // skipped while the cluster capability barrier is closed.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {

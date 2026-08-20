@@ -687,8 +687,9 @@ func invalidatePublicationViewMetadata(
 	service string,
 	pub *pubsub.PubInfo,
 ) error {
-	if !compile.ViewMetadataRefreshEnabled(service) {
-		return nil
+	enabled, err := prepareViewMetadataMutation(ctx, bh, service)
+	if err != nil || !enabled {
+		return err
 	}
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
 	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
