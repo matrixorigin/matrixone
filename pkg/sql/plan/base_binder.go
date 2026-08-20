@@ -465,11 +465,10 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		},
 	}
 	bindingType, bindingFound := b.preparedParamBindingType(int32(astExpr.Offset))
-	if b.allParamCommonTypeTarget {
+	if b.directParamCommonTypeTarget {
 		if bindingFound {
 			param.Typ = makePlan2Type(&bindingType)
 		}
-		param.Typ.Enumvalues = "mo_all_param_result_dependency"
 		return param, nil
 	}
 	if bindingFound && b.decimalParamCommonTypeTarget {
@@ -3457,24 +3456,24 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		args = make([]*Expr, len(astArgs))
 		decimalParamCommonTypeTarget := b.decimalParamCommonTypeTarget
-		allParamCommonTypeTarget := b.allParamCommonTypeTarget
+		directParamCommonTypeTarget := b.directParamCommonTypeTarget
 		switch name {
 		case "coalesce", "greatest", "least":
 			b.decimalParamCommonTypeTarget = true
-			b.allParamCommonTypeTarget = len(astArgs) > 0
+			b.directParamCommonTypeTarget = len(astArgs) > 0
 			for _, arg := range astArgs {
 				if _, ok := unwrapParenExpr(arg).(*tree.ParamExpr); !ok {
-					b.allParamCommonTypeTarget = false
+					b.directParamCommonTypeTarget = false
 					break
 				}
 			}
 		default:
 			b.decimalParamCommonTypeTarget = false
-			b.allParamCommonTypeTarget = false
+			b.directParamCommonTypeTarget = false
 		}
 		defer func() {
 			b.decimalParamCommonTypeTarget = decimalParamCommonTypeTarget
-			b.allParamCommonTypeTarget = allParamCommonTypeTarget
+			b.directParamCommonTypeTarget = directParamCommonTypeTarget
 		}()
 		var functionContext numericFunctionContext
 		hasFunctionContext := false

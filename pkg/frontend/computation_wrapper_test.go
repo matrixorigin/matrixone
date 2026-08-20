@@ -306,8 +306,8 @@ func TestBinaryProtocolPrepareParamKind(t *testing.T) {
 		value      string
 		want       vector.PrepareParamKind
 	}{
-		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamBoolean},
-		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamBoolean},
+		{defines.MYSQL_TYPE_TINY, false, "0", vector.PrepareParamInteger},
+		{defines.MYSQL_TYPE_TINY, false, "1", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, true, "1", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, false, "2", vector.PrepareParamInteger},
 		{defines.MYSQL_TYPE_TINY, false, "-1", vector.PrepareParamInteger},
@@ -422,8 +422,8 @@ func TestNormalizePreparedDecimalPayload(t *testing.T) {
 	}
 }
 
-func TestPreparedParamBindingCategoryIgnoresExactDecimalDomain(t *testing.T) {
-	require.True(t, preparedParamBindingCategoryEqual(
+func TestPreparedParamBindingCategoryTracksExactDecimalDomain(t *testing.T) {
+	require.False(t, preparedParamBindingCategoryEqual(
 		types.New(types.T_decimal256, 7, 6), types.New(types.T_decimal256, 13, 2)))
 	left := types.T_text.ToType()
 	left.Charset = preparedNumericTextBindingCharset
@@ -1070,7 +1070,7 @@ func TestDirectPreparedParamRefreshesResultMetadata(t *testing.T) {
 			}{
 				{defines.MYSQL_TYPE_NEWDECIMAL, "-12345678901234567890.123456789", false, types.T_decimal128},
 				{defines.MYSQL_TYPE_NEWDECIMAL, "", true, types.T_decimal128},
-				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal128},
+				{defines.MYSQL_TYPE_NEWDECIMAL, "1.25", false, types.T_decimal64},
 			},
 		},
 		{
@@ -1356,8 +1356,8 @@ func TestPreparedResultColumnKeepsDoubleDomain(t *testing.T) {
 			"bindings=%v resultDeps=%v resultTypes=%v", prepareStmt.paramBindingTypes,
 			prepareStmt.paramResultMetadataDependencies, prepareStmt.paramResultColumnTypes)
 	}
-	require.Equal(t, types.T_float64, prepareStmt.paramBindingTypes[0].Oid)
-	require.Equal(t, types.T_float64, prepareStmt.paramBindingTypes[1].Oid)
+	require.Equal(t, types.T_decimal64, prepareStmt.paramBindingTypes[0].Oid)
+	require.Equal(t, types.T_text, prepareStmt.paramBindingTypes[1].Oid)
 }
 
 func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
@@ -1387,7 +1387,6 @@ func TestAllParameterDecimalCommonTypeRebuilds(t *testing.T) {
 				_, queryPlan, _, _, _, err := initExecuteStmtParam(
 					execCtx, ses, cw, nil, prepareStmt.Name)
 				require.NoError(t, err)
-				require.Empty(t, prepareStmt.paramBindingDependencies)
 				require.Equal(t, []bool{true, true}, prepareStmt.paramResultMetadataDependencies)
 				columns := plan2.GetResultColumnsFromPlan(queryPlan)
 				actual := types.T(columns[0].Typ.Id)

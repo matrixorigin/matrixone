@@ -275,6 +275,7 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 		var dependencies []bool
 		var traceOutput func(int32, int32, bool)
 		var traceExpr func(int32, *Expr, bool)
+		var traceColumn func(int32, *planpb.ColRef, bool)
 		markParam := func(param *planpb.ParamRef) {
 			if param == nil || param.Pos < 0 || int(param.Pos) >= paramCount {
 				return
@@ -300,14 +301,19 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					}
 					return
 				case "coalesce", "greatest", "least":
-					for _, arg := range fn.Args {
-						if containsPreparedParamMarker(arg, "mo_all_param_result_dependency") {
-							for _, valueArg := range fn.Args {
-								traceExpr(currentNodeID, valueArg, true)
-							}
-							return
+					allRuntime := len(fn.Args) > 0
+					for _, valueArg := range fn.Args {
+						if !containsPreparedParam(valueArg) {
+							allRuntime = false
+							break
 						}
 					}
+					for _, valueArg := range fn.Args {
+						if allRuntime || valueArg.ExactDecimalParam {
+							traceExpr(currentNodeID, valueArg, true)
+						}
+					}
+					return
 				case "case":
 					for i := 1; i < len(fn.Args); i += 2 {
 						traceExpr(currentNodeID, fn.Args[i], true)
@@ -329,27 +335,72 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 					return
 				}
 			}
-			if allowSetCast {
-				fn := expr.GetF()
-				if fn != nil {
-					if fn.Func == nil {
-						return
-					}
-					for _, arg := range fn.Args {
-						traceExpr(currentNodeID, arg, true)
-					}
+			if fn := expr.GetF(); fn != nil &&
+				(allowSetCast || preparedResultTypePropagatingFunction(fn.Func.GetObjName())) {
+				if fn.Func == nil {
 					return
 				}
+				for _, arg := range fn.Args {
+					traceExpr(currentNodeID, arg, true)
+				}
+				return
 			}
 			ref := expr.GetCol()
+			if ref != nil {
+				if currentNodeID >= 0 && int(currentNodeID) < len(query.Nodes) {
+					node := query.Nodes[currentNodeID]
+					if node != nil && node.NodeType == planpb.Node_AGG {
+						if ref.RelPos == -2 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.AggList) {
+							traceExpr(currentNodeID, node.AggList[ref.ColPos], true)
+							return
+						}
+						if ref.RelPos == -1 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.GroupBy) {
+							traceExpr(currentNodeID, node.GroupBy[ref.ColPos], true)
+							return
+						}
+					}
+					if node != nil && len(node.Children) == 1 {
+						traceOutput(node.Children[0], ref.ColPos, allowSetCast)
+						return
+					}
+				}
+				traceColumn(currentNodeID, ref, allowSetCast)
+			}
+		}
+		traceColumn = func(currentNodeID int32, ref *planpb.ColRef, allowSetCast bool) {
 			if ref == nil || currentNodeID < 0 || int(currentNodeID) >= len(query.Nodes) {
 				return
 			}
 			node := query.Nodes[currentNodeID]
-			if node == nil || len(node.Children) != 1 {
+			if node == nil {
 				return
 			}
-			traceOutput(node.Children[0], ref.ColPos, allowSetCast)
+			for tagPos, tag := range node.BindingTags {
+				if tag != ref.RelPos {
+					continue
+				}
+				if node.NodeType == planpb.Node_AGG {
+					if tagPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.GroupBy) {
+						traceExpr(currentNodeID, node.GroupBy[ref.ColPos], true)
+						return
+					}
+					if tagPos == 1 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.AggList) {
+						traceExpr(currentNodeID, node.AggList[ref.ColPos], true)
+						return
+					}
+				}
+				traceOutput(currentNodeID, ref.ColPos, allowSetCast)
+				return
+			}
+			for _, childID := range node.Children {
+				if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+					continue
+				}
+				child := query.Nodes[childID]
+				for childColPos := range child.ProjectList {
+					traceOutput(childID, int32(childColPos), allowSetCast)
+				}
+			}
 		}
 		traceOutput = func(currentNodeID, colPos int32, allowSetCast bool) {
 			allowSetCastKey := int32(0)
@@ -383,6 +434,32 @@ func PreparedParamResultMetadataDependencyColumns(p *Plan, paramCount int) [][]b
 		columnDependencies[columnPos] = dependencies
 	}
 	return columnDependencies
+}
+
+func preparedResultTypePropagatingFunction(name string) bool {
+	switch name {
+	case "abs", "max", "min", "sum":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsPreparedParam(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsPreparedParam(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsPreparedParamMarker(expr *Expr, marker string) bool {

@@ -273,3 +273,28 @@ func TestPreparedAllParameterResultTypeDependencies(t *testing.T) {
 		})
 	}
 }
+
+func TestPreparedNestedCommonTypeAndOutputLineageDependencies(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{"nested greatest", "prepare p from 'select greatest(abs(?), ?)'"},
+		{"nested arithmetic", "prepare p from 'select greatest(? + 0, ?)'"},
+		{"outer function", "prepare p from 'select abs(if(false, ?, ?))'"},
+		{"aggregate", "prepare p from 'select max(if(false, ?, ?))'"},
+		{"join lineage", "prepare p from 'select x from (select ? x limit 1) a join (select 1 y) b on true'"},
+		{"left join lineage", "prepare p from 'select x from (select ? x limit 1) a left join (select 1 y) b on true'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			prepare := logicPlan.GetDcl().GetPrepare()
+			require.NotNil(t, prepare)
+			require.Equal(t, []bool{true, true}[:len(prepare.ParamTypes)],
+				PreparedParamResultMetadataDependencies(prepare.Plan, len(prepare.ParamTypes)),
+				"plan=%v", prepare.Plan.GetQuery())
+		})
+	}
+}

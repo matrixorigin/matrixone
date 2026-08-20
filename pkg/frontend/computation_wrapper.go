@@ -708,18 +708,13 @@ func initExecuteStmtParamWithResolver(
 
 func binaryProtocolPrepareParamKind(
 	mysqlType defines.MysqlType,
-	isUnsigned bool,
-	value []byte,
+	_ bool,
+	_ []byte,
 ) vector.PrepareParamKind {
 	switch mysqlType {
 	case defines.MYSQL_TYPE_TINY:
-		// The binary protocol has no usable Boolean parameter type. Go's
-		// database/sql MySQL driver sends bool values as signed TINY 0/1, while
-		// other clients can use TINY for integers. Preserve unsigned and other
-		// TINY values as integers and restore the driver's bool values.
-		if !isUnsigned && (bytes.Equal(value, []byte("0")) || bytes.Equal(value, []byte("1"))) {
-			return vector.PrepareParamBoolean
-		}
+		// MYSQL_TYPE_TINY carries no Boolean identity. MySQL exposes signed
+		// TINY parameters as integers even when their payload is 0 or 1.
 		return vector.PrepareParamInteger
 	case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24,
 		defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG, defines.MYSQL_TYPE_BIT,
@@ -1153,7 +1148,7 @@ func preparedParamBindingCategoryEqual(left, right types.Type) bool {
 			(left.Size != preparedNumericExact || left.Width == right.Width && left.Scale == right.Scale)
 	}
 	if left.Oid.IsDecimal() && right.Oid.IsDecimal() {
-		return true
+		return left.Eq(right)
 	}
 	return left.Eq(right)
 }
@@ -1408,15 +1403,6 @@ func initExecuteStmtParamWithResolverInSession(
 	paramBindingTypes := preserveWiderPreparedParamBindings(
 		prepareStmt.paramBindingTypes, paramState.bindingTypes,
 		prepareStmt.paramBindingDependencies, len(preparePlan.ParamTypes))
-	paramBindingTypes = preservePreparedResultMetadataBindings(
-		prepareStmt.paramBindingTypes, paramBindingTypes,
-		prepareStmt.paramResultMetadataDependencies, len(preparePlan.ParamTypes))
-	paramBindingTypes = preservePreparedResultColumnBindings(
-		paramBindingTypes,
-		plan2.PreparedParamResultMetadataDependencyColumns(
-			preparePlan.Plan, len(preparePlan.ParamTypes)),
-		prepareStmt.paramResultColumnTypes,
-	)
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 
@@ -1532,11 +1518,6 @@ func initExecuteStmtParamWithResolverInSession(
 		convergedBindingTypes := paramState.bindingTypesFor(
 			newCommonDependencies, newExecutionDependencies, newResultDependencies,
 			len(newPreparePlan.ParamTypes))
-		convergedBindingTypes = preservePreparedResultColumnBindings(
-			convergedBindingTypes,
-			plan2.PreparedParamResultMetadataDependencyColumns(
-				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
-			prepareStmt.paramResultColumnTypes)
 		if !preparedParamBindingTypesEqualAtDependencies(
 			paramBindingTypes, convergedBindingTypes,
 			newCommonDependencies, newExecutionDependencies, newResultDependencies,
@@ -1559,11 +1540,6 @@ func initExecuteStmtParamWithResolverInSession(
 			finalBindingTypes := paramState.bindingTypesFor(
 				finalCommonDependencies, finalExecutionDependencies, finalResultDependencies,
 				len(newPreparePlan.ParamTypes))
-			finalBindingTypes = preservePreparedResultColumnBindings(
-				finalBindingTypes,
-				plan2.PreparedParamResultMetadataDependencyColumns(
-					newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
-				prepareStmt.paramResultColumnTypes)
 			if !slices.Equal(newCommonDependencies, finalCommonDependencies) ||
 				!slices.Equal(newExecutionDependencies, finalExecutionDependencies) ||
 				!slices.Equal(newResultDependencies, finalResultDependencies) ||
@@ -1588,7 +1564,13 @@ func initExecuteStmtParamWithResolverInSession(
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 			txnHaveDDL = sessionTxnHaveDDL(executionSes)
 		}
-		columns := getPreparedResultColumnsFromPlan(
+		if err = stabilizePreparedResultExpressions(
+			reqCtx, newPreparePlan.Plan, plan2.PreparedParamResultMetadataDependencyColumns(
+				newPreparePlan.Plan, len(newPreparePlan.ParamTypes)),
+			prepareStmt.paramResultColumnTypes); err != nil {
+			return nil, nil, nil, "", false, err
+		}
+		columns = getPreparedResultColumnsFromPlan(
 			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
 		prepareStmt.paramResultColumnTypes = preservePreparedResultColumnTypes(
 			prepareStmt.paramResultColumnTypes, columns)
@@ -1803,37 +1785,43 @@ func stablePreparedResultMetadataColumns(
 	return result
 }
 
-func preservePreparedResultColumnBindings(
-	bindingTypes []types.Type, dependencies [][]bool, resultTypes []types.Type,
-) []types.Type {
-	result := bindingTypes
-	cloned := false
-	for columnPos, positions := range dependencies {
-		if columnPos >= len(resultTypes) || !preparedResultTypeIsStableNumeric(resultTypes[columnPos]) {
+func stabilizePreparedResultExpressions(
+	ctx context.Context, p *plan.Plan, dependencies [][]bool, previous []types.Type,
+) error {
+	query := p.GetQuery()
+	if query == nil || len(query.Steps) == 0 {
+		return nil
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		step = int(query.ReturningStep)
+	}
+	if step < 0 || step >= len(query.Steps) {
+		return nil
+	}
+	nodeID := query.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return nil
+	}
+	projects := query.Nodes[nodeID].ProjectList
+	for i := range projects {
+		if i >= len(dependencies) || !slices.Contains(dependencies[i], true) || i >= len(previous) ||
+			!preparedResultTypeIsStableNumeric(previous[i]) || projects[i] == nil {
 			continue
 		}
-		columnType := resultTypes[columnPos]
-		for paramPos, dependent := range positions {
-			if dependent && paramPos < len(bindingTypes) &&
-				preparedResultTypeIsStableNumeric(bindingTypes[paramPos]) {
-				columnType = mergePreparedResultColumnType(columnType, bindingTypes[paramPos])
-			}
+		current := types.Type{Oid: types.T(projects[i].Typ.Id), Width: projects[i].Typ.Width, Scale: projects[i].Typ.Scale}
+		target := mergePreparedResultColumnType(previous[i], current)
+		if target.Eq(current) {
+			continue
 		}
-		if !cloned {
-			if result == nil {
-				result = make([]types.Type, len(positions))
-			} else {
-				result = clonePreparedParamBindingTypes(result)
-			}
-			cloned = true
+		targetType := plan.Type{Id: int32(target.Oid), Width: target.Width, Scale: target.Scale}
+		cast, err := plan2.MakePlan2CastExpr(ctx, projects[i], targetType)
+		if err != nil {
+			return err
 		}
-		for paramPos, dependent := range positions {
-			if dependent && paramPos < len(result) {
-				result[paramPos] = columnType
-			}
-		}
+		projects[i] = cast
 	}
-	return result
+	return nil
 }
 
 func preservePreparedResultColumnTypes(previous []types.Type, columns []*plan2.ColDef) []types.Type {
@@ -1870,12 +1858,10 @@ func mergePreparedResultColumnType(previous, current types.Type) types.Type {
 		return previous
 	}
 	if current.Oid.IsDecimal() {
-		if !previous.Oid.IsDecimal() {
-			return current
-		}
-		scale := max(previous.Scale, current.Scale)
-		width := max(previous.Width-previous.Scale, current.Width-current.Scale) + scale
-		return preparedResultDecimalType(width, scale)
+		// Width and scale describe one execution value, not independent
+		// dimensions that may be unioned across executions. Keep DECIMAL in its
+		// semantic category without manufacturing a wider physical domain.
+		return current
 	}
 	return previous
 }

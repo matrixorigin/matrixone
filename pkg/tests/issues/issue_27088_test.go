@@ -177,6 +177,7 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		stringCommonRows, err := stringCommonStmt.QueryContext(ctx,
 			"10", "2", "10", "2", "abc", "def")
 		require.NoError(t, err)
+		defer stringCommonRows.Close()
 		stringCommonColumns, err := stringCommonRows.ColumnTypes()
 		require.NoError(t, err)
 		require.Len(t, stringCommonColumns, 3)
@@ -192,7 +193,6 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		require.Equal(t, "abc", coalesceString)
 		require.False(t, stringCommonRows.Next())
 		require.NoError(t, stringCommonRows.Err())
-		require.NoError(t, stringCommonRows.Close())
 
 		nestedResultStmt, err := conn.PrepareContext(ctx, "select if(false, abs(?), ?)")
 		require.NoError(t, err)
@@ -208,6 +208,7 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 		} {
 			rows, err := nestedResultStmt.QueryContext(ctx, test.left, test.right)
 			require.NoError(t, err)
+			defer rows.Close()
 			columns, err := rows.ColumnTypes()
 			require.NoError(t, err)
 			require.Len(t, columns, 1)
@@ -218,7 +219,6 @@ func TestIssue27088BinaryPreparedINPreservesWireDomains(t *testing.T) {
 			require.Equal(t, test.wantValue, value)
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
 		}
 
 		for _, query := range []string{
