@@ -11294,7 +11294,7 @@ constraint_elem:
     {
         var IfNotExists = $3
         var KeyParts = $6
-        var Name = $4
+        var Name = tree.NewCStr($4, 1).Compare()
         var Refer = $8
         var Empty = true
         $$ = tree.NewForeignKey(

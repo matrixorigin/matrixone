@@ -104,6 +104,28 @@ func TestCreateIndexPreservesIndexIdentifierCase(t *testing.T) {
 	require.Equal(t, tree.Identifier("MixedCaseIdx"), createStmt.Name)
 }
 
+func TestForeignKeyNameRemainsCaseInsensitive(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"create table t (id int, parent_id int, foreign key MixedFK(parent_id) references t(id))", 1)
+	require.NoError(t, err)
+
+	createStmt, ok := stmt.(*tree.CreateTable)
+	require.True(t, ok)
+	foreignKey, ok := createStmt.Defs[2].(*tree.ForeignKey)
+	require.True(t, ok)
+	require.Equal(t, "mixedfk", foreignKey.Name)
+
+	stmt, err = ParseOne(context.Background(),
+		"alter table t drop foreign key MixedFK", 1)
+	require.NoError(t, err)
+
+	alterStmt, ok := stmt.(*tree.AlterTable)
+	require.True(t, ok)
+	drop, ok := alterStmt.Options[0].(*tree.AlterOptionDrop)
+	require.True(t, ok)
+	require.Equal(t, tree.Identifier("mixedfk"), drop.Name)
+}
+
 func TestSetNamesAssignmentKind(t *testing.T) {
 	tests := []struct {
 		name     string

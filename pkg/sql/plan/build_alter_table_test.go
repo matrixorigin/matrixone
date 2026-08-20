@@ -655,6 +655,35 @@ func TestAlterTableInplaceUsesOrderedForeignKeyState(t *testing.T) {
 	require.ErrorContains(t, err, "Can't DROP 'fk_x'")
 }
 
+func TestForeignKeyConstraintNameIsCaseInsensitiveAcrossLifecycle(t *testing.T) {
+	newMock := func() *MockOptimizer {
+		mock := NewMockOptimizer(false)
+		mock.ctxt.tables["t1"].Cols[1].Typ = mock.ctxt.tables["t1"].Cols[0].Typ
+		return mock
+	}
+
+	logicPlan, err := buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 ADD CONSTRAINT MixedFK FOREIGN KEY (b) REFERENCES t1(a), DROP FOREIGN KEY MixedFK`)
+	require.NoError(t, err)
+	require.Equal(t, "mixedfk",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[0].GetAddFk().GetFkey().GetName())
+	require.Equal(t, "mixedfk",
+		logicPlan.GetDdl().GetAlterTable().GetActions()[1].GetDrop().GetName())
+
+	_, err = buildSingleStmt(newMock(), t,
+		`ALTER TABLE t1 ADD CONSTRAINT MixedFK FOREIGN KEY (b) REFERENCES t1(a), ADD CONSTRAINT mixedfk FOREIGN KEY (b) REFERENCES t1(a)`)
+	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'mixedfk'")
+
+	_, err = buildSingleStmt(NewMockOptimizer(false), t,
+		`CREATE TABLE child_fk_case (
+			a BIGINT,
+			b BIGINT,
+			CONSTRAINT MixedFK FOREIGN KEY (a) REFERENCES t1(a),
+			CONSTRAINT mixedfk FOREIGN KEY (b) REFERENCES t1(a)
+		)`)
+	require.ErrorContains(t, err, "duplicate fk name mixedfk")
+}
+
 func TestAlterTableInplaceUsesOrderedSelfForeignKeyDependencies(t *testing.T) {
 	newMock := func(withUniqueIndex, withForeignKey bool) *MockOptimizer {
 		mock := NewMockOptimizer(false)

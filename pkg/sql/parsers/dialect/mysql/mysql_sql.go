@@ -27901,7 +27901,7 @@ yydefault:
 		{
 			var IfNotExists = yyDollar[3].ifNotExistsUnion()
 			var KeyParts = yyDollar[6].keyPartsUnion()
-			var Name = yyDollar[4].str
+			var Name = tree.NewCStr(yyDollar[4].str, 1).Compare()
 			var Refer = yyDollar[8].attributeReferenceUnion()
 			var Empty = true
 			yyLOCAL = tree.NewForeignKey(
