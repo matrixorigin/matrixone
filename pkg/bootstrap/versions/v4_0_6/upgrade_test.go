@@ -1007,7 +1007,7 @@ func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
 	stub := gostub.Stub(&versions.CheckTableDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, table string) (bool, error) {
 		require.Equal(t, uint32(42), accountID)
 		require.Equal(t, sysview.InformationDBConst, schema)
-		require.Equal(t, "CHARACTER_SETS", table)
+		require.Equal(t, "character_sets", table)
 		return exists, nil
 	})
 	defer stub.Reset()

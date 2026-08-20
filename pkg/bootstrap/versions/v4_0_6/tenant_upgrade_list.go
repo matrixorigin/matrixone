@@ -85,7 +85,7 @@ func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
 		UpgType:   versions.CREATE_NEW_TABLE,
 		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "CHARACTER_SETS")
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
 		},
 	}
 }
