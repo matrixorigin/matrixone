@@ -3640,6 +3640,36 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
+	tests := []struct {
+		name    string
+		typeSQL string
+		wantID  types.T
+	}{
+		{name: "text", typeSQL: "text(4000)", wantID: types.T_text},
+		{name: "blob", typeSQL: "blob(4000)", wantID: types.T_blob},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := runOneStmt(NewMockOptimizer(false), t,
+				"create table display_length (value "+test.typeSQL+")")
+			require.NoError(t, err)
+
+			tableDef := plan.GetDdl().GetCreateTable().GetTableDef()
+			var valueCol *ColDef
+			for _, col := range tableDef.Cols {
+				if col.Name == "value" {
+					valueCol = col
+					break
+				}
+			}
+			require.NotNil(t, valueCol)
+			require.Equal(t, int32(test.wantID), valueCol.Typ.Id)
+		})
+	}
+}
+
 func TestBuildCreateTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqlerrs := []string{
@@ -3807,6 +3837,42 @@ func TestBuildMongoDBExternalTableRejectsCheckConstraints(t *testing.T) {
 		_, err := runOneStmt(mock, t, sql)
 		require.ErrorContains(t, err, "CHECK constraints on external tables", sql)
 	}
+}
+
+func TestBuildMongoDBExternalTableRejectsGeneratedColumns(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	_, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_generated (
+			id VARCHAR(8) MONGODB_PATH '_id',
+			x INT GENERATED ALWAYS AS (1) STORED
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples',
+			"schema_mode"='explicit'
+		)`)
+	require.ErrorContains(t, err, "MongoDB external table does not support generated column 'x'")
+}
+
+func TestBuildMongoDBExternalTableRejectsOnUpdate(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().(*MockCompilerContext)
+	ctx.SetContext(context.WithValue(context.Background(), config.ParameterUnitKey, &config.ParameterUnit{
+		SV: &config.FrontendParameters{MongoDB: config.MongoDBParameters{Enable: true}},
+	}))
+
+	logicPlan, err := runOneStmt(mock, t, `
+		CREATE EXTERNAL TABLE tpch.mongo_on_update (
+			id VARCHAR(8) MONGODB_PATH '_id',
+			ts DATETIME(3) DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP MONGODB_PATH 'ts'
+		) ENGINE=MONGODB WITH (
+			"connection"='source', "database"='telemetry', "collection"='samples'
+		)`)
+	require.Nil(t, logicPlan)
+	require.ErrorContains(t, err, "MongoDB external table column 'ts' does not support ON UPDATE")
 }
 
 func TestBuildMongoDBExternalTablePreservesNotNullMapping(t *testing.T) {
