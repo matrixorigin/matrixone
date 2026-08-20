@@ -1392,6 +1392,36 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.True(t, tun.hasUnsafeClientState())
 	})
 
+	t.Run("fragmented command tracks every continuation", func(t *testing.T) {
+		tun := &tunnel{}
+		first := makeSimplePacket("select 1")
+		first[0], first[1], first[2] = 0xff, 0xff, 0xff
+		tun.trackClientRequest(first)
+		require.True(t, tun.hasUntransferableClientState())
+
+		middle := []byte{0xff, 0xff, 0xff, 1}
+		tun.trackClientRequest(middle)
+		require.True(t, tun.hasUntransferableClientState())
+
+		tun.trackClientRequest([]byte{0, 0, 0, 2})
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasUnsafeClientState())
+	})
+
+	t.Run("fragmented close stays gated through its final packet", func(t *testing.T) {
+		tun := &tunnel{}
+		first := makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 41)
+		first[0], first[1], first[2] = 0xff, 0xff, 0xff
+		commit := tun.trackClientRequest(first)
+		tun.commitClientRequest(commit)
+		require.True(t, tun.hasUntransferableClientState())
+
+		tun.trackClientRequest([]byte{0, 0, 0, 1})
+		require.False(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState(),
+			"the close tombstone still prevents connection-cache reuse")
+	})
+
 	t.Run("prepare ID reuse supersedes an older close", func(t *testing.T) {
 		tun := &tunnel{}
 		commit := tun.trackClientRequest(
@@ -1572,12 +1602,33 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun := &tunnel{}
 		tun.trackClientRequest(makeSimplePacket("load data local infile"))
 		request := makeSimplePacket("file name")
+		request[3] = 1
 		request[4] = 0xfb
 		tun.trackServerResponse(request)
+		data := makeSimplePacket("file contents")
+		data[3] = 2
+		tun.trackClientRequest(data)
+		tun.trackClientRequest([]byte{0, 0, 0, 3})
 		tun.trackServerResponse(makeSimplePacket("not terminal"))
 		require.True(t, tun.hasInFlightClientRequest())
 		tun.trackServerResponse(makeOKPacket(8))
 		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("command after local infile terminator stays non-transferable", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("load data local infile"))
+		request := makeSimplePacket("file name")
+		request[3] = 1
+		request[4] = 0xfb
+		tun.trackServerResponse(request)
+		tun.trackClientRequest([]byte{0, 0, 0, 2})
+
+		unexpected := makeSimplePacket("select 1")
+		unexpected[3] = 3
+		tun.trackClientRequest(unexpected)
+		tun.trackServerResponse(makeOKPacket(8))
+		require.True(t, tun.hasUntransferableClientState())
 	})
 
 	t.Run("single-packet and EOF commands", func(t *testing.T) {
@@ -1607,6 +1658,21 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		tun.trackServerResponse(makeOKPacket(8))
 		tun.trackServerResponse(makeOKPacket(8))
 		require.True(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("unexpected nonzero sequence stays non-transferable", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeSimplePacket("select 1"))
+		unexpected := makeSimplePacket("select 2")
+		unexpected[3] = 1
+		tun.trackClientRequest(unexpected)
+
+		// The first response must not make migration eligible: the CN accepts
+		// the second complete packet even though its sequence is malformed, so a
+		// second response may still be outstanding on the old connection.
+		tun.trackServerResponse(makeOKPacket(8))
+		require.True(t, tun.hasUntransferableClientState())
+		require.True(t, tun.hasUnsafeClientState())
 	})
 
 	t.Run("malformed OK stays conservative", func(t *testing.T) {

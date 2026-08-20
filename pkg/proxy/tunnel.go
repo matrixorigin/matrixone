@@ -160,8 +160,9 @@ type tunnel struct {
 		command                  frontend.CommandType
 		statementID              uint32
 		statementIDValid         bool
-		longDataContinuation     bool
-		longDataNextSequence     byte
+		requestContinuation      bool
+		localInfileUpload        bool
+		requestNextSequence      byte
 		phase                    responsePhase
 		legacyResultEOFSeen      bool
 		prepareMetadataRemaining uint32
@@ -386,21 +387,34 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
 	s := &t.requestBoundary
-	if s.longDataContinuation {
-		if msg[3] != s.longDataNextSequence {
+	if s.localInfileUpload {
+		if msg[3] != s.requestNextSequence {
 			s.ambiguous = true
 			return commit
 		}
-		s.longDataNextSequence++
+		s.requestNextSequence++
+		if mysqlPacketPayloadLength(msg) == 0 {
+			s.localInfileUpload = false
+		}
+		return commit
+	}
+	if s.requestContinuation {
+		if msg[3] != s.requestNextSequence {
+			s.ambiguous = true
+			return commit
+		}
+		s.requestNextSequence++
 		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
-			s.longDataContinuation = false
+			s.requestContinuation = false
 		}
 		return commit
 	}
 	if msg[3] != 0 {
-		if !s.inFlight {
-			s.ambiguous = true
-		}
+		// A non-zero sequence is safe only in one of the explicitly tracked
+		// multi-packet request phases above. The CN packet reader does not reject
+		// an otherwise unexpected sequence, so ignoring it here could let a
+		// second command execute without owning a tracked response.
+		s.ambiguous = true
 		return commit
 	}
 	if len(msg) < preRecvLen || mysqlPacketPayloadLength(msg) < 1 {
@@ -413,6 +427,10 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 		// command queue or guessing which response belongs to which request.
 		s.ambiguous = true
 		return commit
+	}
+	if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		s.requestContinuation = true
+		s.requestNextSequence = 1
 	}
 
 	cmd := frontend.CommandType(msg[4])
@@ -438,10 +456,6 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 		// Repeated chunks start a new unfenced generation too. A response that
 		// preceded this chunk says nothing about whether the backend received it.
 		s.pendingLongData[statementID] = false
-		if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
-			s.longDataContinuation = true
-			s.longDataNextSequence = 1
-		}
 		return commit
 	case frontend.COM_STMT_CLOSE:
 		if mysqlPacketPayloadLength(msg) < 5 || len(msg) < mysqlHeadLen+5 {
@@ -516,6 +530,8 @@ func (t *tunnel) hasUnsafeClientState() bool {
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
 	return t.requestBoundary.inFlight ||
+		t.requestBoundary.requestContinuation ||
+		t.requestBoundary.localInfileUpload ||
 		t.requestBoundary.ambiguous ||
 		t.requestBoundary.closedStatementsOverflow ||
 		t.requestBoundary.pendingLongDataOverflow ||
@@ -529,7 +545,9 @@ func (t *tunnel) hasUntransferableClientState() bool {
 	}
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
-	if t.requestBoundary.inFlight || t.requestBoundary.ambiguous ||
+	if t.requestBoundary.inFlight || t.requestBoundary.requestContinuation ||
+		t.requestBoundary.localInfileUpload ||
+		t.requestBoundary.ambiguous ||
 		t.requestBoundary.closedStatementsOverflow ||
 		(t.requestBoundary.pendingLongDataOverflow &&
 			!t.requestBoundary.pendingLongDataOverflowFenced) {
@@ -623,6 +641,10 @@ func (t *tunnel) clearMigratedStatementState() {
 }
 
 func (t *tunnel) resetTrackedRequestLocked() {
+	// Do not clear the framing substates here. A no-response command can commit
+	// after its first MaxPayload packet; its continuation must keep migration
+	// gated until the final packet is forwarded. A valid backend response only
+	// arrives after both substates have already closed.
 	t.requestBoundary.inFlight = false
 	t.requestBoundary.command = 0
 	t.requestBoundary.statementID = 0
@@ -690,6 +712,13 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 	defer t.requestBoundary.Unlock()
 	s := &t.requestBoundary
 	if !s.inFlight || s.ambiguous {
+		return
+	}
+	if s.requestContinuation || s.localInfileUpload {
+		// A backend response cannot complete while the corresponding client
+		// request is still being framed or uploaded. Keep this generation
+		// permanently non-transferable rather than guessing packet ownership.
+		s.ambiguous = true
 		return
 	}
 	if isErrPacket(msg) {
@@ -763,6 +792,8 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 	}
 	if isLoadDataLocalInfileRespPacket(msg) {
 		s.phase = responsePhaseLocalInfile
+		s.localInfileUpload = true
+		s.requestNextSequence = msg[3] + 1
 		return
 	}
 	// All other first packets begin a result set. Its terminal packet depends
