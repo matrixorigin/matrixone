@@ -1119,8 +1119,13 @@ message Node {
   // must not retain incoming keys in its hashmap.
   bool dedup_input_keys_unique = 83;
 
-	// VECTOR_INDEX_SCAN only: typed vector-index access-path description.
-	VectorIndexScan vector_index_scan = 84;
+  // JOIN only: the planner proved that the join is consumed by a scalar,
+  // single COUNT(*) aggregate which understands a zero-column batch whose
+  // row count carries the complete join multiplicity.
+  bool emit_compressed_row_count = 84;
+
+  // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
+  VectorIndexScan vector_index_scan = 85;
 }
 
 message SnapshotExtraInfo {

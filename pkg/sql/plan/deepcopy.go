@@ -296,6 +296,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		FilterIsBarrier:        node.FilterIsBarrier,
 		PartitionByCount:       node.PartitionByCount,
 		DedupInputKeysUnique:   node.DedupInputKeysUnique,
+		EmitCompressedRowCount: node.EmitCompressedRowCount,
 		SpillMem:               node.SpillMem,
 		RuntimeFilterProbeList: DeepCopyRuntimeFilterSpecList(
 			node.RuntimeFilterProbeList),

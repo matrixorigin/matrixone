@@ -254,16 +254,18 @@ func TestDeepCopyNodePreservesFuzzyRuntimeFilterDecision(t *testing.T) {
 	require.Equal(t, "uk", source.Fuzzymessage.ParentUniqueCols[0].Name)
 }
 
-func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
+func TestNodeExecutionFlagsSurviveCopiesAndSerialization(t *testing.T) {
 	source := &planpb.Node{
-		NodeType:             planpb.Node_FILTER,
-		FilterIsBarrier:      true,
-		DedupInputKeysUnique: true,
+		NodeType:               planpb.Node_FILTER,
+		FilterIsBarrier:        true,
+		DedupInputKeysUnique:   true,
+		EmitCompressedRowCount: true,
 	}
 
 	cloned := DeepCopyNode(source)
 	require.True(t, cloned.FilterIsBarrier)
 	require.True(t, cloned.DedupInputKeysUnique)
+	require.True(t, cloned.EmitCompressedRowCount)
 
 	payload, err := source.Marshal()
 	require.NoError(t, err)
@@ -271,6 +273,7 @@ func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {
 	require.NoError(t, roundTrip.Unmarshal(payload))
 	require.True(t, roundTrip.FilterIsBarrier)
 	require.True(t, roundTrip.DedupInputKeysUnique)
+	require.True(t, roundTrip.EmitCompressedRowCount)
 }
 
 var clonedTableDef *planpb.TableDef
