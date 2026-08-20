@@ -136,6 +136,66 @@ func TestSequenceRestoreMetadataAndOrdering(t *testing.T) {
 	})
 }
 
+func TestGetCreateSequenceSQLErrors(t *testing.T) {
+	ctx := context.Background()
+	wantErr := moerr.NewInternalErrorNoCtx("query failed")
+
+	t.Run("type query error", func(t *testing.T) {
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				return nil, wantErr
+			})
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing type metadata", func(t *testing.T) {
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				return nil, nil
+			})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("state query error", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return nil, wantErr
+			})
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("missing state metadata", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return nil, nil
+			})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	})
+
+	t.Run("invalid cycle state", func(t *testing.T) {
+		queryCount := 0
+		_, err := getCreateSequenceSQL(ctx, 42, "db1", "seq1",
+			func(context.Context, string, ...uint64) ([][]string, error) {
+				queryCount++
+				if queryCount == 1 {
+					return [][]string{{"BIGINT"}}, nil
+				}
+				return [][]string{{"1", "100", "7", "3", "invalid"}}, nil
+			})
+		require.ErrorContains(t, err, "invalid cycle state")
+	})
+}
+
 func TestRestoreSequenceState(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), uint32(10))
 	const createSQL = "create sequence `dst-db`.`seq` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"
@@ -172,6 +232,42 @@ func TestRestoreSequenceState(t *testing.T) {
 		require.Equal(t, []string{
 			"drop sequence if exists `dst-db`.`seq`",
 			createSQL,
+		}, bh.executedSQLs)
+	})
+
+	t.Run("stops when dropping the destination fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		dropSQL := "drop sequence if exists `dst-db`.`seq`"
+		wantErr := moerr.NewInternalErrorNoCtx("drop failed")
+		bh.sql2err[dropSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{dropSQL}, bh.executedSQLs)
+	})
+
+	t.Run("stops before copying state when delete fails", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		deleteSQL := "delete from `dst-db`.`seq` where true"
+		wantErr := moerr.NewInternalErrorNoCtx("delete failed")
+		bh.sql2err[deleteSQL] = wantErr
+
+		err := restoreSequence(
+			ctx, bh, createSQL,
+			"src-db", "seq", "dst-db", "seq",
+			12345, 10, 20,
+		)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{
+			"drop sequence if exists `dst-db`.`seq`",
+			createSQL,
+			deleteSQL,
 		}, bh.executedSQLs)
 	})
 }
