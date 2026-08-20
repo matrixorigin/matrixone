@@ -573,6 +573,9 @@ message MigrateConnFromResponse {
   // the migration size limit. Pre-v22 targets may use complete raw replay;
   // v22 targets must fail closed rather than re-evaluate raw SET expressions.
   bool UserDefinedVarsSnapshotTooLarge = 13;
+  // True only when the exporting CN verified that no prepared statement owns
+  // COM_STMT_SEND_LONG_DATA buffers omitted from the migration payload.
+  bool PreparedStmtLongDataChecked = 14;
 }
 
 message MigrateConnToRequest {
