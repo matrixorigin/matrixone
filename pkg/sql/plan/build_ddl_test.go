@@ -3640,6 +3640,36 @@ func TestBuildCreateTable(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestBuildCreateTableAcceptsTextBlobDisplayLength(t *testing.T) {
+	tests := []struct {
+		name    string
+		typeSQL string
+		wantID  types.T
+	}{
+		{name: "text", typeSQL: "text(4000)", wantID: types.T_text},
+		{name: "blob", typeSQL: "blob(4000)", wantID: types.T_blob},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plan, err := runOneStmt(NewMockOptimizer(false), t,
+				"create table display_length (value "+test.typeSQL+")")
+			require.NoError(t, err)
+
+			tableDef := plan.GetDdl().GetCreateTable().GetTableDef()
+			var valueCol *ColDef
+			for _, col := range tableDef.Cols {
+				if col.Name == "value" {
+					valueCol = col
+					break
+				}
+			}
+			require.NotNil(t, valueCol)
+			require.Equal(t, int32(test.wantID), valueCol.Typ.Id)
+		})
+	}
+}
+
 func TestBuildCreateTableError(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqlerrs := []string{
