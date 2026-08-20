@@ -1494,6 +1494,7 @@ type ChangeHandler struct {
 	coarseMaxRow    int
 	quick           bool
 	primarySeqnum   int
+	primaryIdx      int
 	scheduler       tasks.JobScheduler
 	mp              *mpool.MPool
 
@@ -1661,6 +1662,24 @@ func NewChangesHandlerWithPartitionStateRange(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
+	return NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
+		ctx, state, start, end, skipDeletes, maxRow, primarySeqnum, primarySeqnum, mp, fs,
+	)
+}
+
+// NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx is the range-aware
+// constructor for callers that keep logical column order separate from
+// persisted physical seqnums.
+func NewChangesHandlerWithPartitionStateRangeAndPrimaryIdx(
+	ctx context.Context,
+	state *PartitionState,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum, primaryIdx int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
 	stateStart := state.GetStart()
 	if stateStart.GT(&start) {
 		logutil.Info("ChangesHandlerWithPartitionStateRange: stateStart > start, proceeding with range-aware scan",
@@ -1678,6 +1697,7 @@ func NewChangesHandlerWithPartitionStateRange(
 		skipDeletes:              skipDeletes,
 		LogThreshold:             LogThreshold,
 		primarySeqnum:            primarySeqnum,
+		primaryIdx:               primaryIdx,
 		mp:                       mp,
 		scheduler:                tasks.NewParallelJobScheduler(LoadParallism),
 		enableCommitTSBlockPrune: true,
@@ -1749,6 +1769,7 @@ func newChangesHandlerWithCheckpointEntries(
 		skipDeletes:    skipDeletes,
 		LogThreshold:   LogThreshold,
 		primarySeqnum:  primarySeqnum,
+		primaryIdx:     primarySeqnum,
 		mp:             mp,
 		scheduler:      tasks.NewParallelJobScheduler(LoadParallism),
 		isRecoveryMode: isRecoveryMode,
@@ -1981,6 +2002,7 @@ func NewChangesHandler(
 		skipDeletes:   skipDeletes,
 		LogThreshold:  LogThreshold,
 		primarySeqnum: primarySeqnum,
+		primaryIdx:    primarySeqnum,
 		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 		pkFilter:      engine.PKFilterFromContext(ctx),
@@ -2066,7 +2088,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			dataEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 				return
 			}
 			return
@@ -2079,7 +2101,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 			tombstoneEnd = true
 			err = nil
 		} else if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 				return
 			}
 			return
@@ -2087,7 +2109,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 		if err != nil {
 			return
 		}
-		if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+		if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 			return
 		}
 		if tombstoneEnd && dataEnd {
@@ -2109,7 +2131,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 // The function takes:
 // - data: batch containing insert/update operations
 // - tombstone: batch containing delete operations
-// - primarySeqnum: index of primary key column
+// - primaryIdx: logical index of primary key column in the batch
 //
 // It works by:
 // 1. Building a map of all operations (both data and tombstone) keyed by pk
@@ -2123,7 +2145,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 // isRecoveryMode: When true (e.g., CDC restart from checkpoint), Case 2.2 (first insert, last delete)
 // will keep the delete to ensure downstream consistency. When false (normal operation),
 // Case 2.2 deletes all rows since the net effect is "no change".
-func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bool, isRecoveryMode bool) (err error) {
+func filterBatch(data, tombstone *batch.Batch, primaryIdx int, skipDeletes bool, isRecoveryMode bool) (err error) {
 	if data == nil || tombstone == nil {
 		return
 	}
@@ -2138,7 +2160,7 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int, skipDeletes bo
 	rowInfoMap := make(map[any][]rowInfo)
 
 	// Process data batch
-	dataPKIdx := primarySeqnum
+	dataPKIdx := primaryIdx
 	if len(data.Vecs) > 0 && data.Vecs[0] != nil && data.Vecs[0].GetType().Oid == types.T_Rowid {
 		dataPKIdx++
 	}
@@ -2336,7 +2358,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
 			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 					return
 				}
 				if data.Vecs[0].Length() > p.coarseMaxRow {
@@ -2353,7 +2375,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
 			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 					return
 				}
 				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
@@ -2371,7 +2393,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 			err = nil
 			if data != nil || tombstone != nil {
-				if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+				if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 					return
 				}
 				p.totalDuration += time.Since(t0)
@@ -2387,7 +2409,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
-			if err = filterBatch(data, tombstone, p.primarySeqnum, p.skipDeletes, p.isRecoveryMode); err != nil {
+			if err = filterBatch(data, tombstone, p.primaryIdx, p.skipDeletes, p.isRecoveryMode); err != nil {
 				return
 			}
 			p.totalDuration += time.Since(t0)
