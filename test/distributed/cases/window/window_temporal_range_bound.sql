@@ -60,5 +60,26 @@ select id, dt, sum(v) over (
 from t
 order by dt, id;
 
+-- TIME and TIMESTAMP use the same out-of-domain insertion-point rule.
+create table temporal_time_timestamp_bound(id int primary key, tm time(6), ts timestamp(6), v int);
+insert into temporal_time_timestamp_bound values
+  (1, '2562047787:59:59.999998', '9999-12-30 23:59:59.999999', 40),
+  (2, '2562047787:59:59.999999', '9999-12-31 23:59:59.999999', 50);
+
+select id, tm, sum(v) over (
+         order by tm
+         range between current row and interval 1 microsecond following
+       ) as s
+from temporal_time_timestamp_bound
+order by tm, id;
+
+select id, ts, sum(v) over (
+         order by ts
+         range between current row and interval 1 day following
+       ) as s
+from temporal_time_timestamp_bound
+order by ts, id;
+
 drop table t;
+drop table temporal_time_timestamp_bound;
 drop database window_temporal_range_bound;
