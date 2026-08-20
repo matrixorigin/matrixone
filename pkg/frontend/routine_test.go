@@ -483,6 +483,28 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	require.Equal(t, int64(7), resp.LastAffectedRows)
 }
 
+func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	prepared := &PrepareStmt{
+		Name:                GetPrepareStmtName(41),
+		getFromSendLongData: map[int]struct{}{0: {}},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	prepared.resetBinaryParamState()
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Len(t, resp.PrepareStmts, 1)
+	require.Equal(t, prepared.Name, resp.PrepareStmts[0].Name)
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
