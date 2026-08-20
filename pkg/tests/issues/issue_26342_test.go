@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -90,8 +91,8 @@ func TestIssue26342MoSubsModernUpdate(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, logicalPlan)
 		assertIssue26342MultiUpdateContexts(t, logicalPlan, hiddenTable)
-		require.Equal(t, 0, queryIssue26342MoSubKeyCount(t, ctx, sysDB, tenantID, pubAccount, pubA, subA))
-		require.Equal(t, 1, queryIssue26342MoSubKeyCount(t, ctx, sysDB, tenantID, pubAccount, pubA2, subA2))
+		require.Equal(t, 0, queryIssue26342MoSubKeyCountInternal(t, ctx, cn, tenantID, pubAccount, pubA, subA))
+		require.Equal(t, 1, queryIssue26342MoSubKeyCountInternal(t, ctx, cn, tenantID, pubAccount, pubA2, subA2))
 		require.Equal(t, hiddenBefore+2, queryIssue26342TableCount(t, ctx, sysDB, hiddenTable))
 
 		err = execIssue26342InternalSQL(ctx, cn, fmt.Sprintf(
@@ -100,8 +101,8 @@ func TestIssue26342MoSubsModernUpdate(t *testing.T) {
 			pubB, subB, pubAccount, pubA2, tenantID,
 		))
 		require.Error(t, err)
-		require.Equal(t, 1, queryIssue26342MoSubKeyCount(t, ctx, sysDB, tenantID, pubAccount, pubA2, subA2))
-		require.Equal(t, 1, queryIssue26342MoSubKeyCount(t, ctx, sysDB, tenantID, pubAccount, pubB, subB))
+		require.Equal(t, 1, queryIssue26342MoSubKeyCountInternal(t, ctx, cn, tenantID, pubAccount, pubA2, subA2))
+		require.Equal(t, 1, queryIssue26342MoSubKeyCountInternal(t, ctx, cn, tenantID, pubAccount, pubB, subB))
 		require.Equal(t, hiddenBefore+2, queryIssue26342TableCount(t, ctx, sysDB, hiddenTable))
 
 		require.NoError(t, execIssue26342InternalSQL(ctx, cn, fmt.Sprintf(
@@ -112,7 +113,7 @@ func TestIssue26342MoSubsModernUpdate(t *testing.T) {
 		require.NoError(t, execIssue26342InternalSQL(ctx, cn,
 			"update mo_catalog.mo_subs t1 inner join mo_catalog.mo_account t2 "+
 				"on t1.sub_account_id = t2.account_id set t1.sub_account_name = t2.account_name"))
-		require.Equal(t, tenantName, queryIssue26342SubAccountName(t, ctx, sysDB, tenantID, pubAccount, pubA2))
+		require.Equal(t, tenantName, queryIssue26342SubAccountNameInternal(t, ctx, cn, tenantID, pubAccount, pubA2))
 
 		_, err = tenantDB.ExecContext(ctx, fmt.Sprintf(
 			"update mo_catalog.mo_subs set status = status + 1 "+
@@ -120,8 +121,102 @@ func TestIssue26342MoSubsModernUpdate(t *testing.T) {
 			pubAccount, pubA2, tenantID,
 		))
 		require.Error(t, err)
-		require.Equal(t, int64(1), queryIssue26342MoSubStatus(t, ctx, sysDB, tenantID, pubAccount, pubA2))
+		require.Equal(t, int64(1), queryIssue26342MoSubStatusInternal(t, ctx, cn, tenantID, pubAccount, pubA2))
 	})
+}
+
+func queryIssue26342MoSubKeyCountInternal(
+	t *testing.T,
+	ctx context.Context,
+	cn embed.ServiceOperator,
+	tenantID uint32,
+	pubAccount string,
+	pubName string,
+	subName string,
+) int {
+	t.Helper()
+	result, err := testutils.GetSQLExecutor(cn).Exec(
+		ctx,
+		fmt.Sprintf(`
+			select count(*) from mo_catalog.mo_subs
+			where sub_account_id = %d and pub_account_name = '%s' and pub_name = '%s' and sub_name = '%s'`,
+			tenantID, pubAccount, pubName, subName),
+		executor.Options{}.
+			WithDatabase("mo_catalog").
+			WithAccountID(0).
+			WithWaitCommittedLogApplied(),
+	)
+	require.NoError(t, err)
+	count := testutils.ReadCount(result)
+	result.Close()
+	return count
+}
+
+func queryIssue26342SubAccountNameInternal(
+	t *testing.T,
+	ctx context.Context,
+	cn embed.ServiceOperator,
+	tenantID uint32,
+	pubAccount string,
+	pubName string,
+) string {
+	t.Helper()
+	result, err := testutils.GetSQLExecutor(cn).Exec(
+		ctx,
+		fmt.Sprintf(`
+			select sub_account_name from mo_catalog.mo_subs
+			where sub_account_id = %d and pub_account_name = '%s' and pub_name = '%s'`,
+			tenantID, pubAccount, pubName),
+		executor.Options{}.
+			WithDatabase("mo_catalog").
+			WithAccountID(0).
+			WithWaitCommittedLogApplied(),
+	)
+	require.NoError(t, err)
+	var name string
+	result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		values := executor.GetStringRows(cols[0])
+		if len(values) > 0 {
+			name = values[0]
+		}
+		return false
+	})
+	result.Close()
+	require.NotEmpty(t, name)
+	return name
+}
+
+func queryIssue26342MoSubStatusInternal(
+	t *testing.T,
+	ctx context.Context,
+	cn embed.ServiceOperator,
+	tenantID uint32,
+	pubAccount string,
+	pubName string,
+) int64 {
+	t.Helper()
+	result, err := testutils.GetSQLExecutor(cn).Exec(
+		ctx,
+		fmt.Sprintf(`
+			select status from mo_catalog.mo_subs
+			where sub_account_id = %d and pub_account_name = '%s' and pub_name = '%s'`,
+			tenantID, pubAccount, pubName),
+		executor.Options{}.
+			WithDatabase("mo_catalog").
+			WithAccountID(0).
+			WithWaitCommittedLogApplied(),
+	)
+	require.NoError(t, err)
+	var status int64
+	result.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		values := executor.GetFixedRows[int8](cols[0])
+		if len(values) > 0 {
+			status = int64(values[0])
+		}
+		return false
+	})
+	result.Close()
+	return status
 }
 
 func openIssue26342DB(t *testing.T, dsn string) *sql.DB {
@@ -254,59 +349,4 @@ func queryIssue26342MoSubsCount(
 		tenantID, pubAccount).Scan(&count)
 	require.NoError(t, err)
 	return count
-}
-
-func queryIssue26342MoSubKeyCount(
-	t *testing.T,
-	ctx context.Context,
-	db *sql.DB,
-	tenantID uint32,
-	pubAccount string,
-	pubName string,
-	subName string,
-) int {
-	t.Helper()
-	var count int
-	err := db.QueryRowContext(ctx, `
-		select count(*) from mo_catalog.mo_subs
-		where sub_account_id = ? and pub_account_name = ? and pub_name = ? and sub_name = ?`,
-		tenantID, pubAccount, pubName, subName).Scan(&count)
-	require.NoError(t, err)
-	return count
-}
-
-func queryIssue26342SubAccountName(
-	t *testing.T,
-	ctx context.Context,
-	db *sql.DB,
-	tenantID uint32,
-	pubAccount string,
-	pubName string,
-) string {
-	t.Helper()
-	var name string
-	err := db.QueryRowContext(ctx, `
-		select sub_account_name from mo_catalog.mo_subs
-		where sub_account_id = ? and pub_account_name = ? and pub_name = ?`,
-		tenantID, pubAccount, pubName).Scan(&name)
-	require.NoError(t, err)
-	return name
-}
-
-func queryIssue26342MoSubStatus(
-	t *testing.T,
-	ctx context.Context,
-	db *sql.DB,
-	tenantID uint32,
-	pubAccount string,
-	pubName string,
-) int64 {
-	t.Helper()
-	var status int64
-	err := db.QueryRowContext(ctx, `
-		select status from mo_catalog.mo_subs
-		where sub_account_id = ? and pub_account_name = ? and pub_name = ?`,
-		tenantID, pubAccount, pubName).Scan(&status)
-	require.NoError(t, err)
-	return status
 }
