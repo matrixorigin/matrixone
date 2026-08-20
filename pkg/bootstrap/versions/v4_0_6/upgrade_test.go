@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prashantv/gostub"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -27,7 +29,7 @@ import (
 )
 
 func TestUpgradeEntries(t *testing.T) {
-	require.Len(t, tenantUpgEntries, 3)
+	require.Len(t, tenantUpgEntries, 4)
 	require.Len(t, clusterUpgEntries, 1)
 	require.Equal(t, retireKafkaSinkDaemonTasks.UpgSql, clusterUpgEntries[0].UpgSql)
 	require.Equal(t, mongodb.TableConnections, tenantUpgEntries[0].TableName)
@@ -36,7 +38,12 @@ func TestUpgradeEntries(t *testing.T) {
 		require.Equal(t, versions.CREATE_NEW_TABLE, entry.UpgType)
 		require.Contains(t, strings.ToLower(entry.UpgSql), "create table mo_catalog.")
 	}
-	characterSets := tenantUpgEntries[2]
+	characterSetsTable := tenantUpgEntries[2]
+	require.Equal(t, sysview.InformationDBConst, characterSetsTable.Schema)
+	require.Equal(t, "CHARACTER_SETS", characterSetsTable.TableName)
+	require.Equal(t, versions.CREATE_NEW_TABLE, characterSetsTable.UpgType)
+	require.Equal(t, sysview.InformationSchemaCharacterSetsDDL, characterSetsTable.UpgSql)
+	characterSets := tenantUpgEntries[3]
 	require.Equal(t, sysview.InformationDBConst, characterSets.Schema)
 	require.Equal(t, "CHARACTER_SETS", characterSets.TableName)
 	require.Equal(t, versions.MODIFY_METADATA, characterSets.UpgType)
@@ -48,6 +55,34 @@ func TestUpgradeEntries(t *testing.T) {
 	require.Equal(t, "4.0.5", meta.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, meta.UpgradeTenant)
 	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), meta.VersionOffset)
+}
+
+func TestEnsureInformationSchemaCharacterSetsTableIsIdempotent(t *testing.T) {
+	entry := ensureInformationSchemaCharacterSetsTable()
+	exists := false
+	stub := gostub.Stub(&versions.CheckTableDefinition, func(_ executor.TxnExecutor, accountID uint32, schema, table string) (bool, error) {
+		require.Equal(t, uint32(42), accountID)
+		require.Equal(t, sysview.InformationDBConst, schema)
+		require.Equal(t, "character_sets", table)
+		return exists, nil
+	})
+	defer stub.Reset()
+
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		if sql == entry.UpgSql {
+			exists = true
+		}
+		return executor.Result{}, nil
+	}, nil)
+
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Equal(t, []string{sysview.InformationSchemaCharacterSetsDDL}, executed)
+
+	executed = nil
+	require.NoError(t, entry.Upgrade(txn, 42))
+	require.Empty(t, executed)
 }
 
 func TestPopulateInformationSchemaCharacterSetsIsIdempotent(t *testing.T) {
