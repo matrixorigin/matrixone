@@ -105,6 +105,14 @@ const (
 	ErrViewSelectTmpTable   uint16 = 20324
 	ErrCantChangeTxn        uint16 = 20325
 	ErrInvalidGroupFuncUse  uint16 = 20326
+	// ErrFtMatchingKeyNotFound: a MATCH() AGAINST() that no FULLTEXT index can serve.
+	// Its own code, not a bare ErrInvalidInput, so callers can identify it precisely --
+	// snapshot restore / PITR / CLONE must skip a view refused for this reason instead of
+	// aborting, and matching on message text there would be fragile.
+	ErrFtMatchingKeyNotFound uint16 = 20327
+	// Keep ErrCantChangeTxn and the upstream fulltext error code stable; this code is
+	// allocated separately for SELECT ... INTO statements returning multiple rows.
+	ErrTooManyRows uint16 = 20328
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -185,6 +193,9 @@ const (
 	ErrKeyDoesNotExist                          uint16 = 20475
 	ErrMaxPreparedStmtCountReached              uint16 = 20476
 	ErrFieldSpecifiedTwice                      uint16 = 20477
+	// Keep the error code added by the variables PR distinct from the
+	// field-duplicate code introduced on main.
+	ErrWrongNumberOfColumnsInSelect uint16 = 20478
 
 	// Group 5: rpc errors
 	//
@@ -436,8 +447,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrUpdateTableUsed:      {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
 	ErrWindowInvalidUse:     {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
 	ErrViewSelectTmpTable:   {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrTooManyRows:          {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
 	ErrCantChangeTxn:        {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
+	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
+	ErrFtMatchingKeyNotFound: {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -517,6 +532,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
 	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
+	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1038,6 +1054,20 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInvalidInput, msg)
 }
 
+// NewFtMatchingKeyNotFound reports a MATCH() AGAINST() that no FULLTEXT index can serve.
+// Use this rather than a hand-rolled invalid-input: the restore paths identify the refusal
+// by code (see pkg/frontend/snapshot.go) and must not depend on the wording.
+// FtMatchingKeyNotFoundMsg is exported because the error code does NOT survive every
+// transport: an error raised inside a statement run through the background executor comes
+// back reconstructed, and IsMoErrCode(err, ErrFtMatchingKeyNotFound) is then false. Callers
+// on that side of the boundary (snapshot restore, PITR) must fall back to the text, exactly
+// as canSkipRestoreViewError already does for "no such table".
+const FtMatchingKeyNotFoundMsg = "Can't find FULLTEXT index matching the column list"
+
+func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrFtMatchingKeyNotFound)
+}
+
 func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
 }
@@ -1547,6 +1577,14 @@ func NewOperandColumns(ctx context.Context, columns int) *Error {
 
 func NewErrSubqueryNo1Row(ctx context.Context) *Error {
 	return newError(ctx, ErrSubqueryNo1Row)
+}
+
+func NewTooManyRows(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyRows)
+}
+
+func NewWrongNumberOfColumnsInSelect(ctx context.Context) *Error {
+	return newError(ctx, ErrWrongNumberOfColumnsInSelect)
 }
 
 func NewDerivedMustHaveAlias(ctx context.Context) *Error {

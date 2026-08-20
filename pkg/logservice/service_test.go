@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -181,34 +182,28 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 func TestNewServiceRetry(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg0 := getServiceTestConfig()
-	genCfg0 := func() Config {
-		return cfg0
-	}
-	defer vfs.ReportLeakedFD(cfg0.FS, t)
-	service0, err := NewServiceWithRetry(genCfg0,
-		newFS(),
-		nil,
-		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-			return true
-		}),
-	)
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer func() {
-		assert.NoError(t, service0.Close())
-	}()
+	t.Cleanup(func() { _ = occupied.Close() })
+	cfg0.RaftAddress = occupied.Addr().String()
+	defer vfs.ReportLeakedFD(cfg0.FS, t)
 
 	var cfg Config
+	attempts := 0
 	first := true
 	genCfg := func() Config {
+		attempts++
 		if first {
 			first = false
 			return cfg0
-		} else {
-			cfg = getServiceTestConfig()
-			return cfg
 		}
+		if attempts == 2 {
+			require.NoError(t, occupied.Close())
+		}
+		cfg = getServiceTestConfig()
+		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
@@ -217,6 +212,7 @@ func TestNewServiceRetry(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
+	require.GreaterOrEqual(t, attempts, 2)
 	assert.NoError(t, service.Close())
 }
 

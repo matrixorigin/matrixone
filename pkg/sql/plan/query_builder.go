@@ -4248,7 +4248,13 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if len(cteRef.occurrences) == 0 {
 		builder.cteRefs = append(builder.cteRefs, cteRef)
 	}
-	if ctx.bindingNonRecurCte() {
+	// CTE reuse currently rewrites consumers reachable from the main query
+	// root. A CTE referenced while another CTE is being bound can also have
+	// consumers in separately appended steps, especially recursive anchor and
+	// member steps. Keep such nested references inline until reuse can rewrite
+	// the complete step graph; otherwise the added producer and an unreplaced
+	// consumer share one mutable subtree and column remapping visits it twice.
+	if ctx.bindingCte() {
 		cteRef.hasNestedUse = true
 		if ctx.cteState.cte != nil {
 			ctx.cteState.cte.hasNestedRef = true
@@ -7358,7 +7364,12 @@ func (builder *QueryBuilder) bindSelectClause(
 				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
 						if c.U64Val == 0 {
-							builder.isSkipResolveTableDef = true
+							// View metadata generation needs the complete catalog identity
+							// exposed by Resolve so it can persist reverse dependencies.
+							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
+							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
+								builder.isSkipResolveTableDef = true
+							}
 						}
 					}
 				}
@@ -10216,7 +10227,6 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	viewCtx.restoreViewMySQLSpecialTypes = true
 	viewCtx.snapshot = snapshot
-	viewCtx.lower = ctx.lower
 
 	viewData := ViewData{}
 	err = json.Unmarshal([]byte(viewDefString), &viewData)
@@ -10232,6 +10242,7 @@ func (builder *QueryBuilder) bindView(
 	if viewData.LowerCaseTableNames != nil {
 		viewLowerCaseTableNames = *viewData.LowerCaseTableNames
 	}
+	viewCtx.lower = viewLowerCaseTableNames
 	originStmts, err := mysql.ParseWithSQLMode(
 		builder.GetContext(), viewData.Stmt, viewLowerCaseTableNames, parserSQLMode)
 	defer func() {
@@ -10736,7 +10747,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			if len(schema) == 0 {
 				schema = builder.compCtx.DefaultDatabase()
 			}
-			key := schema + "." + table
+			lower := builder.compCtx.GetLowerCaseTableNames()
+			key := tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 			if chain, ok := ctx.remapOption.Rewrites[key]; ok && len(chain) > 0 {
 				// Apply the rewrite chain as stacked views: build the outermost
 				// (last) layer now. A reference to this same table inside that
@@ -10767,7 +10779,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				// Do not bind here to avoid double-binding. Instead, set the
 				// subquery context name so the outer AliasedTableExpr binds once.
 				if int(nodeID) < len(builder.ctxByNode) && builder.ctxByNode[nodeID] != nil {
-					builder.ctxByNode[nodeID].cteName = key
+					lower := builder.compCtx.GetLowerCaseTableNames()
+					builder.ctxByNode[nodeID].cteName =
+						tree.NewCStr(schema, lower).Compare() + "." + tree.NewCStr(table, lower).Compare()
 				}
 				ctx.remapOption = m
 				return
@@ -11196,7 +11210,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		plan.Node_SINK_SCAN,
 		plan.Node_RECURSIVE_SCAN,
 	}
-	lower := builder.compCtx.GetLowerCaseTableNames()
+	lower := ctx.lower
 	if node.NodeType == plan.Node_SINK_SCAN && alias.Alias != "" && len(node.BindingTags) > 0 && len(ctx.bindings) == 1 {
 		candidate := ctx.bindingByTag[node.BindingTags[0]]
 		if ctx.bindings[0] == candidate {

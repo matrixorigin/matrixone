@@ -1176,6 +1176,20 @@ func TestAdmissionPublishesOnlyProtectedSnapshot(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestBenchmarkLeaseManagerReadinessIsExplicit(t *testing.T) {
+	normal := NewLeaseManager(1, new(fakeProtector))
+	require.True(t, normal.Ready())
+	require.True(t, normal.Protected())
+	require.False(t, normal.BenchmarkReady())
+	require.False(t, normal.DurableReady())
+
+	benchmark := NewBenchmarkLeaseManager(1, new(fakeProtector))
+	require.True(t, benchmark.Ready())
+	require.True(t, benchmark.Protected())
+	require.True(t, benchmark.BenchmarkReady())
+	require.False(t, benchmark.DurableReady())
+}
+
 func TestAdmissionStartsTTLAfterSnapshotPreparation(t *testing.T) {
 	candidate, err := Export(scanQuery())
 	require.NoError(t, err)
@@ -1842,6 +1856,8 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 	validBody := appendBytes(nil, 1, wires[0])
 	validBody = appendBytes(validBody, 2, read.Schema)
 	verifiedTLS := testVerifiedTLS(testClientSPKI)
+	otherPairTLS := testVerifiedTLS([]byte("other-sidecar-subject-public-key-info"))
+	otherPairLeases := NewLeaseManager(1, new(fakeProtector))
 
 	tests := []struct {
 		name        string
@@ -1860,6 +1876,8 @@ func TestResolveHandlerRejectsInvalidRequests(t *testing.T) {
 		{name: "empty verified chain", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{}}}, manager: leases, want: http.StatusUnauthorized},
 		{name: "malformed request", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: []byte{0xff}, tls: verifiedTLS, manager: leases, want: http.StatusBadRequest},
 		{name: "resolver unavailable", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, want: http.StatusServiceUnavailable},
+		{name: "different sidecar identity", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: otherPairTLS, manager: leases, want: http.StatusNotFound},
+		{name: "different CN authority", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: validBody, tls: verifiedTLS, manager: otherPairLeases, want: http.StatusNotFound},
 		{name: "schema mismatch", method: http.MethodPost, path: ResolvePath, contentType: "application/x-protobuf", body: appendBytes(appendBytes(nil, 1, wires[0]), 2, []byte("wrong")), tls: verifiedTLS, manager: leases, want: http.StatusNotFound},
 	}
 	for _, tc := range tests {
@@ -1878,7 +1896,7 @@ func TestResolverServerLifecycle(t *testing.T) {
 	nondurable := NewLeaseManager(1, new(fakeProtector))
 	require.False(t, nondurable.DurableReady())
 	_, err := NewResolverServer("127.0.0.1:0", &tls.Config{}, nondurable, acceptResolveAudit())
-	require.ErrorContains(t, err, "replayed lease manager")
+	require.ErrorContains(t, err, "approved lease manager")
 	leases := NewPersistentLeaseManager(1, new(fakeProtector), new(fakeLeaseJournal))
 	require.NoError(t, leases.Replay(context.Background()))
 	require.True(t, leases.DurableReady())
@@ -1889,6 +1907,10 @@ func TestResolverServerLifecycle(t *testing.T) {
 		Certificates: []tls.Certificate{{Certificate: [][]byte{{1}}}},
 	}
 	auditor := acceptResolveAudit()
+	benchmark := NewBenchmarkLeaseManager(1, new(fakeProtector))
+	benchmarkServer, err := NewResolverServer("127.0.0.1:0", validTLS, benchmark, auditor)
+	require.NoError(t, err)
+	require.NoError(t, benchmarkServer.Close(context.Background()))
 	_, err = NewResolverServer("", validTLS, leases, auditor)
 	require.Error(t, err)
 	_, err = NewResolverServer("127.0.0.1:0", nil, leases, auditor)

@@ -787,6 +787,10 @@ message IndexReaderParam {
   DistRange dist_range = 4;
   int32 partition_cn_cnt = 5;
   int32 partition_cn_idx = 6;
+  // EXPLAIN-only annotation: the plan-time over-fetched candidate budget for a
+  // literal LIMIT (0 for a prepared LIMIT ?, whose over-fetch is computed at
+  // EXECUTE). Execution never reads it; the TVF derives its budget from `limit`.
+  uint64 over_fetch_limit = 7;
 }
 
 message Node {
