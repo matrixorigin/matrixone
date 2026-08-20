@@ -231,6 +231,132 @@ func TestBindUpdateProducesTypedPlannerRoutes(t *testing.T) {
 	}
 }
 
+func TestUpdateIrregularIndexLocksBeforeMaintenanceFanout(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		algo      string
+		tableType string
+	}{
+		{name: "ivfflat", algo: catalog.MoIndexIvfFlatAlgo.ToString(), tableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+		{name: "fulltext", algo: catalog.MOIndexFullTextAlgo.ToString(), tableType: catalog.FullTextIndex_TblType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			baseTable := mock.ctxt.tables["nation"]
+			baseTable.Indexes = []*planpb.IndexDef{{
+				IndexName:          "idx_irregular",
+				IndexTableName:     "idx_irregular_entries",
+				IndexAlgo:          test.algo,
+				IndexAlgoTableType: test.tableType,
+				Parts:              []string{"n_comment"},
+				TableExist:         true,
+			}}
+
+			stmt, err := parsers.ParseOne(
+				mock.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"UPDATE nation SET n_comment = 'updated' WHERE n_nationkey = 1",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+			rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+			require.NoError(t, err)
+
+			query := builder.qry
+			maintenanceSinkID := query.Steps[builder.irregularMaintSourceStep]
+			require.Equal(t, planpb.Node_SINK, query.Nodes[maintenanceSinkID].NodeType)
+
+			visited := make(map[int32]struct{})
+			var findBaseTableLock func(int32) int32
+			findBaseTableLock = func(nodeID int32) int32 {
+				if _, ok := visited[nodeID]; ok {
+					return -1
+				}
+				visited[nodeID] = struct{}{}
+				node := query.Nodes[nodeID]
+				if node.NodeType == planpb.Node_LOCK_OP {
+					for _, target := range node.LockTargets {
+						if target.TableId == baseTable.TblId {
+							return nodeID
+						}
+					}
+				}
+				for _, childID := range node.Children {
+					if lockID := findBaseTableLock(childID); lockID >= 0 {
+						return lockID
+					}
+				}
+				for _, sourceStep := range node.SourceStep {
+					if lockID := findBaseTableLock(query.Steps[sourceStep]); lockID >= 0 {
+						return lockID
+					}
+				}
+				return -1
+			}
+
+			lockID := findBaseTableLock(maintenanceSinkID)
+			require.NotEqual(t, int32(-1), lockID,
+				"all irregular-index maintenance branches must wait for the base-table lock")
+			require.Len(t, query.Nodes[lockID].Children, 1)
+			expectedImageCols := len(query.Nodes[query.Nodes[lockID].Children[0]].ProjectList)
+			require.Greater(t, expectedImageCols, 1)
+
+			baseLockCount := 0
+			for _, node := range query.Nodes {
+				for _, target := range node.LockTargets {
+					if target.TableId == baseTable.TblId {
+						baseLockCount++
+					}
+				}
+			}
+			require.Equal(t, 1, baseLockCount, "the existing base lock must be moved, not duplicated")
+
+			builder.qry.Steps = append(builder.qry.Steps, rootID)
+			query, err = builder.createQuery()
+			require.NoError(t, err)
+			lockNode := query.Nodes[lockID]
+			require.GreaterOrEqual(t, len(lockNode.ProjectList), expectedImageCols)
+			require.Len(t, query.Nodes[maintenanceSinkID].ProjectList, expectedImageCols)
+			for i, expr := range query.Nodes[maintenanceSinkID].ProjectList {
+				col := expr.GetCol()
+				require.NotNil(t, col)
+				require.Less(t, col.ColPos, int32(len(lockNode.ProjectList)))
+				require.Equal(t, int32(i), col.ColPos,
+					"the shared sink must preserve the final-row-image column order")
+				require.Equal(t, lockNode.ProjectList[i].Typ.Id, expr.Typ.Id)
+			}
+		})
+	}
+}
+
+func TestUpdateWithoutIrregularIndexKeepsLockAtDMLInput(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	baseTable := mock.ctxt.tables["nation"]
+	stmt, err := parsers.ParseOne(
+		mock.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"UPDATE nation SET n_name = 'updated' WHERE n_nationkey = 1",
+		1,
+	)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+	rootID, err := builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	require.NoError(t, err)
+
+	root := builder.qry.Nodes[rootID]
+	require.Equal(t, planpb.Node_MULTI_UPDATE, root.NodeType)
+	require.Len(t, root.Children, 1)
+	lockNode := builder.qry.Nodes[root.Children[0]]
+	require.Equal(t, planpb.Node_LOCK_OP, lockNode.NodeType)
+	require.NotEmpty(t, lockNode.LockTargets)
+	require.Equal(t, baseTable.TblId, lockNode.LockTargets[0].TableId)
+}
+
 func TestBindUpdateForeignKeyRoutingByAffectedColumns(t *testing.T) {
 	prepareEmpDept := func(mock *MockOptimizer) {
 		emp := mock.ctxt.tables["emp"]

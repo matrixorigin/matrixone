@@ -1194,10 +1194,26 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
 	// old PK and rebuilt after createQuery from this materialized step. Async
 	// indexes are deliberately absent and remain CDC-only.
+	hasInlineIrregularMaintenance := false
 	for i, indexes := range inlineIrregularIndexes {
 		if len(indexes) == 0 {
 			continue
 		}
+		// Gate every synchronous maintenance branch on the existing base/regular-
+		// index lock before the final row image is fanned out. Preserve the complete
+		// image because the shared sink and RETURNING consume it positionally.
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    dmlCtx.tableDefs[0],
+			BindingTags: []int32{finalProjTag},
+			LockTargets: lockTargets,
+		}, bindCtx)
+		if builder.preserveLockProjection == nil {
+			builder.preserveLockProjection = make(map[int32]struct{})
+		}
+		builder.preserveLockProjection[lastNodeID] = struct{}{}
+
 		alias := dmlCtx.aliases[i]
 		pkPos := finalColName2Idx[alias+"."+dmlCtx.tableDefs[i].Pkey.PkeyColName]
 		lastNodeID = builder.appendOnDupIrregularMaintSource(
@@ -1210,6 +1226,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			dmlCtx.tableDefs[i],
 			dmlCtx.objRefs[i],
 		)
+		hasInlineIrregularMaintenance = true
 		// Multi-target UPDATE is routed to the legacy planner before this point,
 		// so at most one target can require inline irregular maintenance here.
 		break
@@ -1221,13 +1238,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		UpdateCtxList: updateCtxList,
 	}
 
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_LOCK_OP,
-		Children:    []int32{lastNodeID},
-		TableDef:    dmlCtx.tableDefs[0],
-		BindingTags: []int32{builder.genNewBindTag()},
-		LockTargets: lockTargets,
-	}, bindCtx)
+	if !hasInlineIrregularMaintenance {
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lastNodeID},
+			TableDef:    dmlCtx.tableDefs[0],
+			BindingTags: []int32{builder.genNewBindTag()},
+			LockTargets: lockTargets,
+		}, bindCtx)
+	}
 	reCheckifNeedLockWholeTable(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)

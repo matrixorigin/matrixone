@@ -121,8 +121,14 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	case plan.Node_LOCK_OP:
+		childParentType := node.NodeType
+		if _, preserve := builder.preserveLockProjection[nodeID]; preserve {
+			// Keep the immediate PROJECT as the stable positional row-image boundary
+			// consumed by the shared irregular-maintenance sink.
+			childParentType = plan.Node_UNKNOWN
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, true, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
