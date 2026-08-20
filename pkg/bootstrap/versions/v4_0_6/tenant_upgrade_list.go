@@ -24,7 +24,20 @@ import (
 var tenantUpgEntries = []versions.UpgradeEntry{
 	newMongoDBCatalogTable(mongodb.TableConnections, mongodb.ConnectionsDDL),
 	newMongoDBCatalogTable(mongodb.TableMappings, mongodb.MappingsDDL),
+	ensureInformationSchemaCharacterSetsTable(),
 	populateInformationSchemaCharacterSets(),
+}
+
+func ensureInformationSchemaCharacterSetsTable() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.CREATE_NEW_TABLE,
+		UpgSql:    sysview.InformationSchemaCharacterSetsDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDefinition(txn, accountID, sysview.InformationDBConst, "character_sets")
+		},
+	}
 }
 
 func populateInformationSchemaCharacterSets() versions.UpgradeEntry {
