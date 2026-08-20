@@ -99,7 +99,7 @@ func (c *clientConn) migrateConnToContext(
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
-	if typedMigration {
+	if typedMigration || info.FoundRows != 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -109,6 +109,10 @@ func (c *clientConn) migrateConnToContext(
 			return err
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+		if info.FoundRows != 0 && !typedMigrationSupported {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate non-zero FOUND_ROWS state to a pre-v22 target")
+		}
 		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate typed system variables because the snapshot exceeds the connection migration size limit")

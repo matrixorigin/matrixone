@@ -250,6 +250,55 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 	})
 }
 
+func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{FoundRows: 11})
+		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v22 target")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToAllowsZeroFoundRowsForPreV22Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
+	})
+}
+
 func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
