@@ -2789,3 +2789,105 @@ func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
 		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
 }
+
+func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	tests := []struct {
+		name          string
+		ascending     []string
+		descending    []string
+		minimumAsc    []string
+		minimumDesc   []string
+		belowDomainBy int64
+		newVector     func([]string) *vector.Vector
+	}{
+		{
+			name:          "date",
+			ascending:     []string{"9999-12-30", "9999-12-31"},
+			descending:    []string{"9999-12-31", "9999-12-30"},
+			minimumAsc:    []string{"0001-01-01", "0001-01-02"},
+			minimumDesc:   []string{"0001-01-02", "0001-01-01"},
+			belowDomainBy: 2,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:          "datetime",
+			ascending:     []string{"9999-12-30 23:59:59.999999", "9999-12-31 23:59:59.999999"},
+			descending:    []string{"9999-12-31 23:59:59.999999", "9999-12-30 23:59:59.999999"},
+			minimumAsc:    []string{"0001-01-01 00:00:00.000000", "0001-01-02 00:00:00.000000"},
+			minimumDesc:   []string{"0001-01-02 00:00:00.000000", "0001-01-01 00:00:00.000000"},
+			belowDomainBy: 1,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil, values)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(1, types.Year)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(1, types.Year)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, types.Year)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, types.Year)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+	}
+
+	vec := tests[0].newVector(tests[0].ascending)
+	require.NotNil(t, vec)
+	defer vec.Free(mp)
+	_, err := searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MaxInt64, types.Year), false, false)
+	require.Error(t, err, "an invalid interval magnitude must not be treated as a domain boundary")
+}
