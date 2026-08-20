@@ -51,6 +51,31 @@ execute ps_nested_found_rows;
 select found_rows() as after_nested_prepared_second;
 deallocate prepare ps_nested_found_rows;
 
+-- Ordered regular-index Top-K pushdown must not truncate the stream counted by
+-- SQL_CALC_FOUND_ROWS.
+create table indexed_t(id bigint primary key, grp int, index idx_grp(grp));
+insert into indexed_t values (1, 1), (2, 1), (3, 1), (4, 2);
+select sql_calc_found_rows id from indexed_t where grp = 1 order by id limit 1;
+select found_rows() as after_ordered_index;
+
+-- FOUND_ROWS() itself must be evaluated on the coordinator when the scan is
+-- distributed to remote CNs.
+select sql_calc_found_rows id from t where id <= 3 limit 1;
+select found_rows(), id from t where id <= 3 order by id;
+
+-- The session row cap is an implicit top-level LIMIT and must own the complete
+-- SQL_CALC_FOUND_ROWS count for ordinary and cached prepared execution.
+set sql_select_limit = 1;
+select sql_calc_found_rows id from t where id <= 3 order by id;
+select found_rows() as after_sql_select_limit;
+prepare ps_session_limit from 'select sql_calc_found_rows id from t where id <= 3 order by id';
+execute ps_session_limit;
+select found_rows() as after_prepared_sql_select_limit;
+execute ps_session_limit;
+select found_rows() as after_prepared_sql_select_limit_second;
+deallocate prepare ps_session_limit;
+set sql_select_limit = 18446744073709551615;
+
 select id from t order by id limit 2;
 select found_rows() as after_plain;
 

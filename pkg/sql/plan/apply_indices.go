@@ -1411,7 +1411,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 					Flag: requirement.orderFlag,
 				}}
 				if covering && len(idxNode.FilterList) == 0 && requirement.limit != nil && requirement.canPushLim {
-					applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
+					builder.applyRegularIndexOrderedLimitParam(idxNode, idxNode.OrderBy[0], requirement.limit)
 				}
 			}
 			return accessNodeID, nil
@@ -1820,7 +1820,7 @@ func (builder *QueryBuilder) applyRegularIndexTopSort(ctx *regularIndexTopSortCo
 		Flag: ctx.sortNode.OrderBy[0].Flag,
 	})
 	if ctx.sortNode.Offset == nil && ctx.sortNode.RankOption == nil && ctx.pushOrderedLimit {
-		applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
+		builder.applyRegularIndexOrderedLimitParam(ctx.scanNode, ctx.scanNode.OrderBy[len(ctx.scanNode.OrderBy)-1], ctx.sortNode.Limit)
 	}
 
 	if !hasTopValueMessage(ctx.sortNode) {
@@ -1841,6 +1841,13 @@ func applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.Order
 		OrderBy: []*plan.OrderBySpec{DeepCopyOrderBySpec(orderBy)},
 		Limit:   DeepCopyExpr(limit),
 	}
+}
+
+func (builder *QueryBuilder) applyRegularIndexOrderedLimitParam(scanNode *plan.Node, orderBy *plan.OrderBySpec, limit *plan.Expr) {
+	if builder.sqlCalcFoundRows {
+		return
+	}
+	applyRegularIndexOrderedLimitParam(scanNode, orderBy, limit)
 }
 
 func isPositiveLiteralLimit(limit *plan.Expr) bool {
