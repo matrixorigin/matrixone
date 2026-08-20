@@ -274,6 +274,36 @@ func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
 }
 
+func TestWindowSlidingSumCapability(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tests := []struct {
+		name     string
+		aggID    int64
+		distinct bool
+		typ      types.Type
+		want     bool
+	}{
+		{name: "int32 sum", aggID: AggIdOfSum, typ: types.T_int32.ToType(), want: true},
+		{name: "int64 sum", aggID: AggIdOfSum, typ: types.T_int64.ToType(), want: true},
+		{name: "decimal64 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal64, 18, 2), want: true},
+		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
+		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
+		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
+		{name: "avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType()},
+		{name: "distinct sum", aggID: AggIdOfSum, distinct: true, typ: types.T_int32.ToType()},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exec, err := MakeAgg(mp, test.aggID, test.distinct, test.typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.Equal(t, test.want, SupportsWindowSliding(exec))
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestSumAvgBulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.T_int64.ToType()
