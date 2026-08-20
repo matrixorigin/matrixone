@@ -83,6 +83,54 @@ func TestLocalFSCanonicalizesEmptyRoot(t *testing.T) {
 	requireDirFilesClosed(t, local.dirFiles, func() { local.Close(ctx) })
 }
 
+func TestLocalFSEmptyRootAcrossFilesystems(t *testing.T) {
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skipf("/dev/shm is unavailable: %v", err)
+	}
+
+	destDir, err := os.MkdirTemp("/dev/shm", "matrixone-local-fs-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(destDir))
+	})
+
+	systemTempDir, err := os.MkdirTemp("/tmp", "matrixone-local-fs-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(systemTempDir))
+	})
+	destInfo, err := os.Stat(destDir)
+	require.NoError(t, err)
+	tempInfo, err := os.Stat(systemTempDir)
+	require.NoError(t, err)
+	if destInfo.Sys().(*syscall.Stat_t).Dev == tempInfo.Sys().(*syscall.Stat_t).Dev {
+		t.Skip("test requires the destination and system temp directory on different filesystems")
+	}
+
+	t.Setenv("TMPDIR", systemTempDir)
+	t.Chdir(destDir)
+
+	ctx := context.Background()
+	local, err := NewLocalFS(ctx, "local", "", DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { local.Close(ctx) })
+	require.Equal(t, destDir, local.RootPath())
+
+	require.NoError(t, local.Write(ctx, IOVector{
+		FilePath: "transfer/page",
+		Entries:  []IOEntry{{Size: 4, Data: []byte("page")}},
+		Policy:   SkipAllCache,
+	}))
+	require.FileExists(t, filepath.Join(destDir, "transfer", "page"))
+
+	writer, err := local.NewWriter(ctx, "stream/page")
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("page"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.FileExists(t, filepath.Join(destDir, "stream", "page"))
+}
+
 func (c *localBlockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
 	c.once.Do(func() { close(c.updateStarted) })
 	select {
