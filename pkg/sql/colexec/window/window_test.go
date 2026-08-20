@@ -3344,3 +3344,87 @@ func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int64](result))
 	result.Free(mp)
 }
+
+func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	orderValues := []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 05:30:00.000000", // 01:30 EDT
+		"2024-11-03 05:59:00.000000", // 01:59 EDT
+		"2024-11-03 06:00:00.000000", // 01:00 EST
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+		"2024-11-03 06:59:00.000000", // 01:59 EST
+		"2024-11-03 07:00:00.000000", // 02:00 EST
+		"2024-11-03 07:30:00.000000", // 02:30 EST
+	}
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name      string
+		want      []int32
+		lastIsNil bool
+	}{
+		{name: "first_value", want: []int32{1, 2, 3, 1, 2, 3, 7, 8}},
+		{name: "last_value", want: []int32{5, 7, 7, 5, 7, 7, 8, 8}},
+		{name: "nth_value", want: []int32{2, 3, 6, 2, 3, 6, 8, 0}, lastIsNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(orderValues))
+			for i, value := range orderValues {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8}, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			valueVecs := []*vector.Vector{values}
+			var nthVec *vector.Vector
+			if test.name == "nth_value" {
+				nthVec = testutil.MakeInt32Vector([]int32{2, 2, 2, 2, 2, 2, 2, 2}, nil, mp)
+				valueVecs = append(valueVecs, nthVec)
+				defer nthVec.Free(mp)
+			}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: valueVecs}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			result, err := ctr.processValueFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int32](result))
+			if test.lastIsNil {
+				require.True(t, result.IsNull(uint64(result.Length()-1)))
+			}
+			result.Free(mp)
+		})
+	}
+}
