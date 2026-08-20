@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -241,27 +242,19 @@ func startService(
 		}
 	}
 
-	fs, err := cfg.createFileService(ctx, st, cfg.mustGetServiceUUID())
+	if st == metadata.ServiceType_PROXY {
+		return startProxyService(cfg, stopper)
+	}
+
+	fs, err := initServiceFileServices(
+		ctx,
+		st,
+		cfg,
+		stopper,
+		fileservice.NewFileService,
+	)
 	if err != nil {
 		return err
-	}
-
-	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
-	if err != nil {
-		return err
-	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, cfg.mustGetServiceUUID()); err != nil {
-		return err
-	}
-
-	if err := clearSpillFiles(ctx, fs); err != nil {
-		return err
-	}
-
-	if globalEtlFS == nil {
-		globalEtlFS = etlFS
-		globalServiceType = st.String()
-		globalNodeId = cfg.mustGetServiceUUID()
 	}
 
 	switch st {
@@ -271,13 +264,56 @@ func startService(
 		return startTNService(cfg, stopper, fs, shutdownC)
 	case metadata.ServiceType_LOG:
 		return startLogService(cfg, stopper, fs, shutdownC)
-	case metadata.ServiceType_PROXY:
-		return startProxyService(cfg, stopper)
 	case metadata.ServiceType_PYTHON_UDF:
 		return startPythonUdfService(cfg, stopper)
 	default:
 		panic("unknown service type")
 	}
+}
+
+func initServiceFileServices(
+	ctx context.Context,
+	st metadata.ServiceType,
+	cfg *Config,
+	stopper *stopper.Stopper,
+	creator fileServiceCreator,
+) (*fileservice.FileServices, error) {
+	fs, err := cfg.createFileServiceWithCreator(
+		ctx,
+		st,
+		cfg.mustGetServiceUUID(),
+		creator,
+	)
+	if err != nil {
+		return nil, err
+	}
+	completed := false
+	defer func() {
+		if !completed {
+			fs.Close(context.Background())
+		}
+	}()
+
+	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, cfg.mustGetServiceUUID()); err != nil {
+		return nil, err
+	}
+
+	if err := clearSpillFiles(ctx, fs); err != nil {
+		return nil, err
+	}
+
+	if globalEtlFS == nil {
+		globalEtlFS = etlFS
+		globalServiceType = st.String()
+		globalNodeId = cfg.mustGetServiceUUID()
+	}
+
+	completed = true
+	return fs, nil
 }
 
 // serviceWG control motrace/mometric quit as last one.
@@ -436,24 +472,146 @@ func startProxyService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 	serviceWG.Add(1)
-	return stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
+	err := stopper.RunNamedTask("proxy-service", func(ctx context.Context) {
 		defer serviceWG.Done()
-		s, err := proxy.NewServer(
+		err := runProxyAfterFileServiceInitialization(
 			ctx,
-			cfg.getProxyConfig(),
-			proxy.WithRuntime(runtime.ServiceRuntime(cfg.getProxyConfig().UUID)),
+			func(ctx context.Context) (*fileservice.FileServices, error) {
+				return initServiceFileServices(
+					ctx,
+					metadata.ServiceType_PROXY,
+					cfg,
+					stopper,
+					func(
+						ctx context.Context,
+						fsCfg fileservice.Config,
+						counterSets []*perfcounter.CounterSet,
+					) (fileservice.FileService, error) {
+						return createProxyFileServiceWithRetry(
+							ctx,
+							fsCfg,
+							counterSets,
+							fileservice.NewFileService,
+							waitProxyFileServiceRetry,
+						)
+					},
+				)
+			},
+			func(ctx context.Context, fs *fileservice.FileServices) {
+				s, err := proxy.NewServer(
+					ctx,
+					cfg.getProxyConfig(),
+					proxy.WithRuntime(runtime.ServiceRuntime(cfg.getProxyConfig().UUID)),
+				)
+				if err != nil {
+					panic(err)
+				}
+				if err := s.Start(); err != nil {
+					panic(err)
+				}
+				<-ctx.Done()
+				if err := s.Close(); err != nil {
+					logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
+				}
+				goruntime.KeepAlive(fs)
+			},
 		)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			panic(err)
-		}
-		if err := s.Start(); err != nil {
-			panic(err)
-		}
-		<-ctx.Done()
-		if err := s.Close(); err != nil {
-			logutil.GetGlobalLogger().Error("failed to close proxy service", zap.Error(err))
 		}
 	})
+	if err != nil {
+		serviceWG.Done()
+	}
+	return err
+}
+
+func runProxyAfterFileServiceInitialization(
+	ctx context.Context,
+	initialize func(context.Context) (*fileservice.FileServices, error),
+	start func(context.Context, *fileservice.FileServices),
+) error {
+	fs, err := initialize(ctx)
+	if err != nil {
+		return err
+	}
+	start(ctx, fs)
+	return nil
+}
+
+const (
+	proxyFileServiceInitialRetryDelay = time.Second
+	proxyFileServiceMaxRetryDelay     = 30 * time.Second
+)
+
+type proxyFileServiceRetryWaiter func(context.Context, time.Duration) error
+
+func createProxyFileServiceWithRetry(
+	ctx context.Context,
+	cfg fileservice.Config,
+	counterSets []*perfcounter.CounterSet,
+	creator fileServiceCreator,
+	wait proxyFileServiceRetryWaiter,
+) (fileservice.FileService, error) {
+	startedAt := time.Now()
+	delay := proxyFileServiceInitialRetryDelay
+	attempt := 1
+	for {
+		service, err := creator(ctx, cfg, counterSets)
+		if err == nil {
+			if attempt > 1 {
+				logutil.GetGlobalLogger().Info(
+					"proxy.fileservice.startup.recovered",
+					zap.String("file-service", cfg.Name),
+					zap.String("backend", cfg.Backend),
+					zap.Int("attempts", attempt),
+					zap.Duration("elapsed", time.Since(startedAt)),
+				)
+			}
+			return service, nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if !fileservice.IsRetryableError(err) {
+			return nil, err
+		}
+
+		logutil.GetGlobalLogger().Warn(
+			"proxy.fileservice.startup.retry",
+			zap.String("file-service", cfg.Name),
+			zap.String("backend", cfg.Backend),
+			zap.Int("attempt", attempt),
+			zap.Duration("next-retry", delay),
+			zap.Error(err),
+		)
+		if err := wait(ctx, delay); err != nil {
+			return nil, err
+		}
+		delay = nextProxyFileServiceRetryDelay(delay)
+		attempt++
+	}
+}
+
+func nextProxyFileServiceRetryDelay(delay time.Duration) time.Duration {
+	if delay >= proxyFileServiceMaxRetryDelay/2 {
+		return proxyFileServiceMaxRetryDelay
+	}
+	return delay * 2
+}
+
+func waitProxyFileServiceRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // startPythonUdfService starts the python udf service.
@@ -499,8 +657,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)
 		initWG.Add(1)
 		collector := export.NewMOCollector(ctx, cfg.mustGetServiceUUID(), export.WithOBCollectorConfig(&SV.OBCollectorConfig))
-		stopper.RunNamedTask("trace", func(ctx context.Context) {
-			err, act := motrace.InitWithConfig(ctx,
+		if taskErr := stopper.RunNamedTask("trace", func(ctx context.Context) {
+			traceErr, act := motrace.InitWithConfig(ctx,
 				&SV,
 				motrace.WithService(cfg.mustGetServiceUUID()),
 				motrace.WithNode(UUID, nodeRole),
@@ -509,8 +667,8 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 				motrace.WithSQLExecutor(nil),
 			)
 			initWG.Done()
-			if err != nil {
-				panic(err)
+			if traceErr != nil {
+				panic(traceErr)
 			}
 			if !act {
 				return
@@ -519,15 +677,18 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			logutil.Info("motrace receive shutdown signal, wait other services shutdown complete.")
 			serviceWG.Wait()
 			// flush trace/log/error framework
-			if err = motrace.Shutdown(ctx); err != nil {
-				logutil.Warn("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
+			if shutdownErr := motrace.Shutdown(ctx); shutdownErr != nil {
+				logutil.Warn("Shutdown trace", logutil.ErrorField(shutdownErr), logutil.NoReportFiled())
 			}
 			logutil.Info("Shutdown motrace complete.")
-		})
+		}); taskErr != nil {
+			initWG.Done()
+			return taskErr
+		}
 		initWG.Wait()
 	}
 	if !SV.DisableMetric || SV.EnableMetricToProm {
-		stopper.RunNamedTask("metric", func(ctx context.Context) {
+		if taskErr := stopper.RunNamedTask("metric", func(ctx context.Context) {
 			if act := mometric.InitMetric(ctx, nil, &SV, UUID, nodeRole,
 				mometric.WithWriterFactory(writerFactory),
 				mometric.WithFrontendServerStarted(frontend.MoServerIsStarted),
@@ -537,7 +698,9 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 			<-ctx.Done()
 			mometric.StopMetricSync()
 			logutil.Info("Shutdown mometric complete.")
-		})
+		}); taskErr != nil {
+			return taskErr
+		}
 	}
 	if err = export.InitMerge(ctx, &SV); err != nil {
 		return err

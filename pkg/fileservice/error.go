@@ -21,8 +21,10 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/minio/minio-go/v7"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -48,6 +50,25 @@ func IsRetryableError(err error) bool {
 			statusCode == http.StatusTooManyRequests {
 			return true
 		}
+	}
+
+	var minioErr minio.ErrorResponse
+	if errors.As(err, &minioErr) {
+		statusCode := minioErr.StatusCode
+		if statusCode == http.StatusRequestTimeout ||
+			statusCode == http.StatusTooManyRequests ||
+			statusCode >= http.StatusInternalServerError {
+			return true
+		}
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
 	}
 
 	// unexpected EOF
