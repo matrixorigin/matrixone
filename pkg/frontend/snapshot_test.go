@@ -176,6 +176,73 @@ func TestRestoreSequenceState(t *testing.T) {
 	})
 }
 
+func TestSequenceRestoreEntryPoints(t *testing.T) {
+	const (
+		snapshotTS = int64(12345)
+		createSQL  = "create sequence `db1`.`seq1` as BIGINT increment by 3 minvalue 1 maxvalue 100 start with 7 no cycle"
+	)
+	sequence := &tableInfo{
+		dbName:    "db1",
+		tblName:   "seq1",
+		relKind:   catalog.SystemSequenceRel,
+		createSql: createSQL,
+	}
+	wantSQL := []string{
+		"drop sequence if exists `db1`.`seq1`",
+		createSQL,
+		"delete from `db1`.`seq1` where true",
+		"insert into `db1`.`seq1` select * from `db1`.`seq1` {MO_TS = 12345}",
+	}
+	accountCtx := defines.AttachAccountId(context.Background(), uint32(10))
+
+	tests := []struct {
+		name string
+		run  func(BackgroundExec) error
+	}{
+		{
+			name: "same-account snapshot restore",
+			run: func(bh BackgroundExec) error {
+				return recreateTable(accountCtx, "", bh, "snapshot1", sequence, 10, snapshotTS)
+			},
+		},
+		{
+			name: "PITR restore",
+			run: func(bh BackgroundExec) error {
+				return reCreateTableWithPitr(accountCtx, "", bh, "pitr1", snapshotTS, sequence)
+			},
+		},
+		{
+			name: "cross-account snapshot restore",
+			run: func(bh BackgroundExec) error {
+				return recreateTableFromTS(context.Background(), "", bh, sequence, snapshotTS, 10, 20)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+
+			require.NoError(t, tc.run(bh))
+			require.Equal(t, wantSQL, bh.executedSQLs)
+		})
+	}
+
+	t.Run("account identity is required", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		err := recreateTable(context.Background(), "", bh, "snapshot1", sequence, 10, snapshotTS)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs)
+
+		err = reCreateTableWithPitr(context.Background(), "", bh, "pitr1", snapshotTS, sequence)
+		require.Error(t, err)
+		require.Empty(t, bh.executedSQLs)
+	})
+}
+
 func TestMongoDBMappingsFollowExternalTableRestoreSkipPolicy(t *testing.T) {
 	info := &tableInfo{dbName: moCatalog, tblName: sqlmongodb.TableMappings, typ: "BASE TABLE"}
 	for _, accountID := range []uint32{sysAccountID, 7} {
