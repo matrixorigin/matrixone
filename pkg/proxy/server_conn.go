@@ -479,7 +479,18 @@ func (s *serverConn) HandleHandshakeContext(
 		resultC <- backendHandshakeResult{resp: resp, err: err}
 	}()
 
-	return s.awaitBackendHandshake(ctx, raw, resultC, joinInterrupt, tracker, timeout)
+	resp, err := s.awaitBackendHandshake(ctx, raw, resultC, joinInterrupt, tracker, timeout)
+	if err != nil {
+		return nil, err
+	}
+	// The backend handshake uses the frontend IO session, whose reads apply
+	// SessionTimeout as an absolute socket deadline. The connection is handed
+	// to the long-lived tunnel after this method returns, so that phase deadline
+	// must not survive into normal proxy traffic.
+	if err := raw.SetReadDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (s *serverConn) awaitBackendHandshake(
