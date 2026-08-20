@@ -513,7 +513,7 @@ func snapshotCheckpointsCanServe(
 		return false
 	}
 
-	base, err := validateSnapshotCheckpointChain(checkpointEntries)
+	hasAuthoritativeBase, err := validateSnapshotCheckpointChain(checkpointEntries)
 	if err != nil {
 		return false
 	}
@@ -523,7 +523,7 @@ func snapshotCheckpointsCanServe(
 	// incremental chain must start at the empty timestamp. A later incremental
 	// may cover ts numerically, but applying it to an empty partition would omit
 	// all state from the missing prefix.
-	if base == -1 {
+	if !hasAuthoritativeBase {
 		firstStart := checkpointEntries[0].GetStart()
 		if !firstStart.IsEmpty() {
 			return false
@@ -538,18 +538,23 @@ func snapshotCheckpointsCanServe(
 
 // validateSnapshotCheckpointChain validates the structural contract shared by
 // all snapshot-read consumers. A producer may retain one predecessor before a
-// global checkpoint, while a compacted checkpoint is a base only when it is
-// first. Only one authoritative base is allowed and entries after that base
-// (or the complete base-less chain) must be continuous.
+// global checkpoint. A compacted checkpoint is authoritative when first, but
+// ConsumeSnapCkps treats one appearing later as a continuation; that shape is
+// reachable while GC has published compacted metadata but has not yet removed
+// an older global metadata file.
 //
-// The returned base index is -1 for a base-less incremental chain.
+// The returned bool reports whether the chain contains an authoritative global
+// or compacted checkpoint for rebuilding a fresh partition. Stale predecessor
+// metadata does not change the authority of the checkpoint that follows it.
 func validateSnapshotCheckpointChain(
 	checkpointEntries []*checkpoint.CheckpointEntry,
-) (int, error) {
-	base := -1
+) (bool, error) {
+	hasAuthoritativeBase := false
+	globalIndex := -1
+	compactedIndex := -1
 	for i, entry := range checkpointEntries {
 		if entry == nil {
-			return -1, moerr.NewInternalErrorNoCtxf(
+			return false, moerr.NewInternalErrorNoCtxf(
 				"invalid nil checkpoint entry at index %d in snapshot read response", i,
 			)
 		}
@@ -557,7 +562,7 @@ func validateSnapshotCheckpointChain(
 		start := entry.GetStart()
 		end := entry.GetEnd()
 		if end.LT(&start) {
-			return -1, moerr.NewInternalErrorNoCtxf(
+			return false, moerr.NewInternalErrorNoCtxf(
 				"invalid checkpoint range at index %d in snapshot read response: %s-%s",
 				i, start.ToString(), end.ToString(),
 			)
@@ -566,84 +571,87 @@ func validateSnapshotCheckpointChain(
 		switch entry.GetType() {
 		case checkpoint.ET_Global:
 			if !start.IsEmpty() {
-				return -1, moerr.NewInternalErrorNoCtxf(
+				return false, moerr.NewInternalErrorNoCtxf(
 					"invalid global checkpoint start at index %d in snapshot read response: %s",
 					i, start.ToString(),
 				)
 			}
-			if base != -1 {
-				return -1, moerr.NewInternalErrorNoCtx(
-					"multiple base checkpoints in snapshot read response",
+			if globalIndex != -1 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"multiple global checkpoints in snapshot read response",
 				)
 			}
 			if i > 1 {
-				return -1, moerr.NewInternalErrorNoCtx(
+				return false, moerr.NewInternalErrorNoCtx(
 					"global checkpoint has more than one predecessor in snapshot read response",
 				)
 			}
-			base = i
+			globalIndex = i
+			hasAuthoritativeBase = true
 		case checkpoint.ET_Compacted:
-			if base != -1 {
-				return -1, moerr.NewInternalErrorNoCtx(
-					"multiple base checkpoints in snapshot read response",
+			if compactedIndex != -1 {
+				return false, moerr.NewInternalErrorNoCtx(
+					"multiple compacted checkpoints in snapshot read response",
 				)
 			}
-			if i != 0 {
-				return -1, moerr.NewInternalErrorNoCtx(
-					"compacted checkpoint is not first in snapshot read response",
-				)
-			}
-			base = i
+			compactedIndex = i
+			hasAuthoritativeBase = true
 		case checkpoint.ET_Incremental:
 		default:
-			return -1, moerr.NewInternalErrorNoCtxf(
+			return false, moerr.NewInternalErrorNoCtxf(
 				"unsupported checkpoint type %d at index %d in snapshot read response",
 				entry.GetType(), i,
 			)
 		}
 
 		if i > 0 {
-			previousEnd := checkpointEntries[i-1].GetEnd()
+			previous := checkpointEntries[i-1]
+			previousEnd := previous.GetEnd()
 			if end.LT(&previousEnd) {
-				return -1, moerr.NewInternalErrorNoCtxf(
+				return false, moerr.NewInternalErrorNoCtxf(
 					"out-of-order checkpoint end at index %d in snapshot read response",
 					i,
 				)
 			}
-		}
-	}
 
-	chainStart := 1
-	if base != -1 {
-		chainStart = base + 1
-	}
-	for i := chainStart; i < len(checkpointEntries); i++ {
-		previous := checkpointEntries[i-1]
-		previousEnd := previous.GetEnd()
-		currentStart := checkpointEntries[i].GetStart()
-
-		// An incremental checkpoint normally starts at previousEnd.Next().
-		// The first incremental after a global or compacted base can start at
-		// that base's synthetic end instead. Accept exactly those two producer
-		// contracts and reject gaps, overlaps, and out-of-order sets.
-		if !currentStart.Equal(&previousEnd) {
-			next := previousEnd.Next()
-			if !currentStart.Equal(&next) {
-				return -1, moerr.NewInternalErrorNoCtxf(
-					"checkpoint gap or overlap at index %d in snapshot read response",
-					i,
-				)
+			// Global and non-leading compacted entries are producer-supported
+			// replacement/continuation checkpoints, so their start can overlap
+			// prior history. Incrementals must remain continuous with the entry
+			// immediately before them.
+			if entry.GetType() == checkpoint.ET_Compacted {
+				next := previousEnd.Next()
+				if start.GT(&next) {
+					return false, moerr.NewInternalErrorNoCtxf(
+						"checkpoint gap before compacted entry at index %d in snapshot read response",
+						i,
+					)
+				}
 			}
-		} else if previous.GetType() != checkpoint.ET_Global &&
-			previous.GetType() != checkpoint.ET_Compacted {
-			return -1, moerr.NewInternalErrorNoCtxf(
-				"overlapping incremental checkpoint at index %d in snapshot read response",
-				i,
-			)
+			if entry.GetType() == checkpoint.ET_Incremental {
+				// Snapshot metadata selection uses >= to find a candidate after
+				// compacted metadata; that does not make a missing history range
+				// consumable. Checkpoint producers create continuations at the
+				// prior end or its successor, so keep larger gaps fail-closed.
+				if !start.Equal(&previousEnd) {
+					next := previousEnd.Next()
+					if !start.Equal(&next) {
+						return false, moerr.NewInternalErrorNoCtxf(
+							"checkpoint gap or overlap at index %d in snapshot read response",
+							i,
+						)
+					}
+				} else if previous.GetType() != checkpoint.ET_Global &&
+					previous.GetType() != checkpoint.ET_Compacted {
+					return false, moerr.NewInternalErrorNoCtxf(
+						"overlapping incremental checkpoint at index %d in snapshot read response",
+						i,
+					)
+				}
+			}
 		}
 	}
 
-	return base, nil
+	return hasAuthoritativeBase, nil
 }
 
 func parseSnapshotCheckpointEntries(

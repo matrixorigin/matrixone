@@ -1041,6 +1041,24 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = writer.WriteEnd(ctx)
 	assert.NoError(t, err)
+	// This test targets stale checkpoint coverage after the partition file is
+	// gone, not temporary TN checkpoint lag. A successful empty response keeps
+	// that contract isolated and avoids entering the shared bounded retry path.
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			func(
+				_ context.Context,
+				_ pbtxn.TxnMeta,
+				_ *cmd_util.SnapshotReadReq,
+				resp *cmd_util.SnapshotReadResp,
+			) (func(), error) {
+				resp.Succeed = true
+				return nil, nil
+			},
+		),
+	)
+	defer ssStub.Reset()
 
 	{
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)

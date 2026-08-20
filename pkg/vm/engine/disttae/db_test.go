@@ -231,18 +231,24 @@ func TestSnapshotCheckpointsCanServe(t *testing.T) {
 		{name: "compacted next boundary", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Compacted), newEntry(t6, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
 		{name: "incremental boundary", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t6, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
 		{name: "predecessor retained before global", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t6, checkpoint.ET_Global), newEntry(t6, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
+		{name: "global compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t0, t10, checkpoint.ET_Compacted), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
+		{name: "predecessor global compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t6, checkpoint.ET_Global), newEntry(t0, t10, checkpoint.ET_Compacted), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10, want: true},
+		{name: "compacted continuation after complete incremental prefix", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10, want: true},
 		{name: "multiple predecessors before global", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t6, t10, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Global)}, ts: t10},
-		{name: "compacted after predecessor", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10},
+		{name: "non-leading compacted supplies authoritative base", entries: []*checkpoint.CheckpointEntry{newEntry(t5, t10, checkpoint.ET_Incremental), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10, want: true},
+		{name: "gap before compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t10, t20, checkpoint.ET_Compacted)}, ts: t10},
 		{name: "gap", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "gap after global", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "gap after compacted", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Compacted), newEntry(t10, t20, checkpoint.ET_Incremental)}, ts: t10},
+		{name: "gap after global compacted continuation", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t0, t10, checkpoint.ET_Compacted), newEntry(t20, t20, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "shared incremental boundary", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Incremental), newEntry(t5, t20, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "overlap", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t10, checkpoint.ET_Incremental), newEntry(t5, t20, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "out of order", entries: []*checkpoint.CheckpointEntry{newEntry(t10, t20, checkpoint.ET_Incremental), newEntry(t0, t5, checkpoint.ET_Incremental)}, ts: t10},
 		{name: "nil checkpoint", entries: []*checkpoint.CheckpointEntry{nil}, ts: t10},
 		{name: "invalid global start", entries: []*checkpoint.CheckpointEntry{newEntry(t5, t20, checkpoint.ET_Global)}, ts: t10},
 		{name: "backup checkpoint", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t20, checkpoint.ET_Backup)}, ts: t10},
-		{name: "multiple bases", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t0, t20, checkpoint.ET_Global)}, ts: t10},
+		{name: "multiple global checkpoints", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Global), newEntry(t0, t20, checkpoint.ET_Global)}, ts: t10},
+		{name: "multiple compacted", entries: []*checkpoint.CheckpointEntry{newEntry(t0, t5, checkpoint.ET_Compacted), newEntry(t0, t20, checkpoint.ET_Compacted)}, ts: t10},
 	}
 
 	for _, test := range tests {
@@ -277,6 +283,8 @@ func TestParseSnapshotCheckpointEntries(t *testing.T) {
 		{name: "unsupported type", resp: &cmd_util.SnapshotReadResp{Succeed: true, Entries: []*cmd_util.CheckpointEntryResp{{Start: &t0, End: &t5, EntryType: int32(checkpoint.ET_Backup)}}}, wantErr: "unsupported checkpoint type"},
 		{name: "gapped chain", resp: &cmd_util.SnapshotReadResp{Succeed: true, Entries: []*cmd_util.CheckpointEntryResp{{Start: &t0, End: &t5, EntryType: int32(checkpoint.ET_Incremental)}, {Start: &t10, End: &t10, EntryType: int32(checkpoint.ET_Incremental)}}}, wantErr: "gap or overlap"},
 		{name: "valid chain", resp: &cmd_util.SnapshotReadResp{Succeed: true, Entries: []*cmd_util.CheckpointEntryResp{{Start: &t0, End: &t5, EntryType: int32(checkpoint.ET_Incremental)}, {Start: &t6, End: &t10, EntryType: int32(checkpoint.ET_Incremental)}}}, wantLen: 2, wantMin: types.TimestampToTS(t0), wantMax: types.TimestampToTS(t10)},
+		{name: "valid global compacted chain", resp: &cmd_util.SnapshotReadResp{Succeed: true, Entries: []*cmd_util.CheckpointEntryResp{{Start: &t0, End: &t5, EntryType: int32(checkpoint.ET_Global)}, {Start: &t0, End: &t10, EntryType: int32(checkpoint.ET_Compacted)}}}, wantLen: 2, wantMin: types.TimestampToTS(t0), wantMax: types.TimestampToTS(t10)},
+		{name: "valid incremental compacted chain", resp: &cmd_util.SnapshotReadResp{Succeed: true, Entries: []*cmd_util.CheckpointEntryResp{{Start: &t5, End: &t5, EntryType: int32(checkpoint.ET_Incremental)}, {Start: &t0, End: &t10, EntryType: int32(checkpoint.ET_Compacted)}}}, wantLen: 2, wantMin: types.TimestampToTS(t0), wantMax: types.TimestampToTS(t10)},
 	}
 
 	for _, test := range tests {

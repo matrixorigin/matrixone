@@ -190,6 +190,58 @@ func TestFilterSnapshotEntries(t *testing.T) {
 		assert.Equal(t, ET_Global, result[0].entryType)
 		assert.Equal(t, ET_Incremental, result[1].entryType)
 	})
+
+	t.Run("GlobalAndCompactedMetadataOverlap", func(t *testing.T) {
+		entries := []*CheckpointEntry{
+			{
+				start:     types.TS{},
+				end:       types.BuildTS(200, 0),
+				entryType: ET_Global,
+			},
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(300, 0),
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(300, 0),
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		assert.Len(t, result, 3)
+		assert.Equal(t, ET_Global, result[0].entryType)
+		assert.Equal(t, ET_Compacted, result[1].entryType)
+		assert.Equal(t, ET_Incremental, result[2].entryType)
+	})
+
+	t.Run("IncrementalAndCompactedMetadataOverlap", func(t *testing.T) {
+		entries := []*CheckpointEntry{
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(200, 0),
+				entryType: ET_Incremental,
+			},
+			{
+				start:     types.BuildTS(100, 0),
+				end:       types.BuildTS(300, 0),
+				entryType: ET_Compacted,
+			},
+			{
+				start:     types.BuildTS(300, 0),
+				end:       types.BuildTS(400, 0),
+				entryType: ET_Incremental,
+			},
+		}
+
+		result := filterSnapshotEntries(entries, &types.TS{})
+		assert.Len(t, result, 3)
+		assert.Equal(t, ET_Incremental, result[0].entryType)
+		assert.Equal(t, ET_Compacted, result[1].entryType)
+		assert.Equal(t, ET_Incremental, result[2].entryType)
+	})
 }
 
 func createMockCheckpointEntry(start, end int64) *CheckpointEntry {
