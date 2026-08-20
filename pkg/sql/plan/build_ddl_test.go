@@ -54,11 +54,12 @@ type rootSQLCompilerContext struct {
 
 type viewReplacementCompilerContext struct {
 	*rootSQLCompilerContext
-	building           bool
-	database           string
-	view               string
-	historicalSnapshot *Snapshot
-	timestampValid     bool
+	building            bool
+	database            string
+	view                string
+	historicalSnapshot  *Snapshot
+	timestampValid      bool
+	lowerCaseTableNames int64
 }
 
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {
@@ -77,6 +78,10 @@ func (c *viewReplacementCompilerContext) ResolveSnapshotWithSnapshotName(string)
 
 func (c *viewReplacementCompilerContext) CheckTimeStampValid(int64) (bool, error) {
 	return c.timestampValid, nil
+}
+
+func (c *viewReplacementCompilerContext) GetLowerCaseTableNames() int64 {
+	return c.lowerCaseTableNames
 }
 
 type captureSQLExecutor struct {
@@ -818,11 +823,11 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
-	newViewDef := func(t *testing.T, sql string) *plan.TableDef {
+	newViewDef := func(t *testing.T, sql, defaultDatabase string) *plan.TableDef {
 		t.Helper()
 		viewData, err := json.Marshal(ViewData{
 			Stmt:            sql,
-			DefaultDatabase: "tpch",
+			DefaultDatabase: defaultDatabase,
 			SecurityType:    "DEFINER",
 		})
 		require.NoError(t, err)
@@ -832,12 +837,15 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 		}
 	}
 
+	lctn0 := int64(0)
+	lctn2 := int64(2)
 	for _, test := range []struct {
 		name            string
 		sql             string
 		wantErr         string
 		wantIfNotExists bool
 		timestampValid  bool
+		lowerCaseMode   *int64
 	}{
 		{
 			name:    "direct reference",
@@ -848,6 +856,46 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 			name:    "indirect reference",
 			sql:     "create or replace view v as select n_nationkey from v2",
 			wantErr: "internal error: there is a recursive reference to the view v",
+		},
+		{
+			name:          "mixed case direct reference lctn2",
+			sql:           "create or replace view V as select n_nationkey from v",
+			wantErr:       "internal error: there is a recursive reference to the view V",
+			lowerCaseMode: &lctn2,
+		},
+		{
+			name:          "mixed case schema reference lctn2",
+			sql:           "create or replace view TPCH.V as select n_nationkey from tpch.v",
+			wantErr:       "internal error: there is a recursive reference to the view V",
+			lowerCaseMode: &lctn2,
+		},
+		{
+			name:          "mixed case indirect reference lctn2",
+			sql:           "create or replace view V as select * from v2",
+			wantErr:       "internal error: there is a recursive reference to the view V",
+			lowerCaseMode: &lctn2,
+		},
+		{
+			name:          "mixed case cross database reference lctn2",
+			sql:           "create or replace view TPCH.V as select * from other.v3",
+			wantErr:       "internal error: there is a recursive reference to the view V",
+			lowerCaseMode: &lctn2,
+		},
+		{
+			name:          "mixed case alter reference lctn2",
+			sql:           "alter view V as select n_nationkey from v",
+			wantErr:       "internal error: there is a recursive reference to the view V",
+			lowerCaseMode: &lctn2,
+		},
+		{
+			name:    "mixed case normalized reference lctn1",
+			sql:     "create or replace view V as select n_nationkey from v",
+			wantErr: "internal error: there is a recursive reference to the view v",
+		},
+		{
+			name:          "mixed case distinct reference lctn0",
+			sql:           "create or replace view V as select n_nationkey from v",
+			lowerCaseMode: &lctn0,
 		},
 		{
 			name: "historical snapshot reference",
@@ -902,11 +950,18 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			lowerCaseMode := int64(1)
+			if test.lowerCaseMode != nil {
+				lowerCaseMode = *test.lowerCaseMode
+			}
 			mock := NewMockCompilerContext(false)
-			mock.tables["v"] = newViewDef(t, "create view v as select n_nationkey from nation")
-			mock.tables["v2"] = newViewDef(t, "create view v2 as select n_nationkey from v")
+			mock.dbs["other"] = true
+			mock.tables["v"] = newViewDef(t, "create view v as select n_nationkey from nation", "tpch")
+			mock.tables["v2"] = newViewDef(t, "create view v2 as select * from v", "tpch")
+			mock.tables["v3"] = newViewDef(t, "create view v3 as select * from tpch.v", "other")
 			mock.objects["v"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v"}
 			mock.objects["v2"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "v2"}
+			mock.objects["v3"] = &plan.ObjectRef{SchemaName: "other", ObjName: "v3"}
 			ctx := &viewReplacementCompilerContext{
 				rootSQLCompilerContext: &rootSQLCompilerContext{
 					MockCompilerContext: mock,
@@ -915,10 +970,11 @@ func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 				historicalSnapshot: &Snapshot{
 					TS: &timestamp.Timestamp{PhysicalTime: 1},
 				},
-				timestampValid: test.timestampValid,
+				timestampValid:      test.timestampValid,
+				lowerCaseTableNames: lowerCaseMode,
 			}
 
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, lowerCaseMode)
 			require.NoError(t, err)
 			defer stmt.Free()
 

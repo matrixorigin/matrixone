@@ -65,6 +65,39 @@ a    b
 2    22
 3    33
 drop database replace_view_dep;
+set global lower_case_table_names = 2;
+use replace_view;
+drop database if exists replace_view_case_dep;
+drop view if exists case_v2;
+drop view if exists case_v;
+create view case_v as select * from t1 where a = 1;
+create or replace view Case_V as select * from case_v;
+internal error: there is a recursive reference to the view Case_V
+select * from case_v;
+a    b
+1    11
+create view case_v2 as select * from case_v;
+create or replace view CASE_V as select * from case_v2;
+internal error: there is a recursive reference to the view CASE_V
+select * from case_v;
+a    b
+1    11
+create database replace_view_case_dep;
+create view replace_view_case_dep.case_v3 as select * from replace_view.case_v;
+create or replace view replace_view.Case_V as select * from replace_view_case_dep.case_v3;
+internal error: there is a recursive reference to the view Case_V
+select * from case_v;
+a    b
+1    11
+alter view case_v as select * from case_v;
+internal error: there is a recursive reference to the view case_v
+select * from case_v;
+a    b
+1    11
+drop database replace_view_case_dep;
+drop view case_v2;
+drop view case_v;
+set global lower_case_table_names = 1;
 create table history_t (a int);
 insert into history_t values (11);
 create view history_v as select * from history_t;

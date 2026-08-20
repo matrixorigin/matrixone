@@ -10929,7 +10929,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			// snapshot belongs to a different catalog domain and is a valid source.
 			if !IsSnapshotValid(snapshot) {
 				if yes, dbOfView, nameOfView := builder.compCtx.GetBuildingAlterView(); yes {
-					if dbOfView == schema && nameOfView == table {
+					lowerCaseTableNames := builder.compCtx.GetLowerCaseTableNames()
+					databaseMatches := tree.NewCStr(dbOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(schema, lowerCaseTableNames).Compare()
+					viewMatches := tree.NewCStr(nameOfView, lowerCaseTableNames).Compare() ==
+						tree.NewCStr(table, lowerCaseTableNames).Compare()
+					if databaseMatches && viewMatches {
 						return 0, moerr.NewInternalErrorf(builder.GetContext(), "there is a recursive reference to the view %s", nameOfView)
 					}
 				}
