@@ -316,12 +316,14 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			}()
 			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
 			require.NoError(t, err)
-			ctasStmt, err := conn.PrepareContext(ctx,
-				"create table "+ctasTable+" as select ? as value")
-			require.NoError(t, err)
-			_, err = ctasStmt.ExecContext(ctx, int64(42))
-			require.NoError(t, err)
-			require.NoError(t, ctasStmt.Close())
+			func() {
+				ctasStmt, prepareErr := conn.PrepareContext(ctx,
+					"create table "+ctasTable+" as select ? as value")
+				require.NoError(t, prepareErr)
+				defer ctasStmt.Close()
+				_, execErr := ctasStmt.ExecContext(ctx, int64(42))
+				require.NoError(t, execErr)
+			}()
 			var ctasValue int64
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"select value from "+ctasTable).Scan(&ctasValue))
