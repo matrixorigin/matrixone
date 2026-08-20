@@ -9988,14 +9988,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 }
 
 func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, false)
+}
+
+// lockDatabaseForUDFCreation serializes function definitions in one database.
+// The caller must own a pessimistic transaction and keep it open through the
+// following exact-signature read and write.
+func lockDatabaseForUDFCreation(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	return checkDatabaseExistsOrNotWithLock(ctx, bh, dbName, true)
+}
+
+func checkDatabaseExistsOrNotWithLock(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	forUpdate bool,
+) (bool, error) {
 	var sqlForCheckDatabase string
 	var erArray []ExecResult
 	var err error
-	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	ctx, span := trace.Debug(ctx, "checkDatabaseExistsOrNot")
 	defer span.End()
 	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
+	}
+	if forUpdate {
+		sqlForCheckDatabase = strings.TrimSuffix(sqlForCheckDatabase, ";") + " for update;"
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sqlForCheckDatabase)
@@ -11007,11 +11026,25 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
-	bh := ses.GetBackgroundExec(execCtx.reqCtx)
+	// Exact function signatures need an exclusion boundary in every deployment
+	// mode. The catalog unique index documents the identity, but optimistic/SI
+	// transactions do not acquire FOR UPDATE locks. This private transaction is
+	// therefore explicitly pessimistic RC, locks the target database row, then
+	// rechecks and writes the signature before releasing that lock.
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
-	// Authenticate the target database before building the function metadata.
-	dbExists, err = checkDatabaseExistsOrNot(execCtx.reqCtx, bh, dbName)
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+
+	// Lock and authenticate the target database before the exact-signature
+	// read. The lock stays held through persistence and commit.
+	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
 	if err != nil {
 		return err
 	}
@@ -11067,14 +11100,6 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	if execResultArrayHasData(erArray) && !cf.Replace {
 		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
 	var body string
 	if cf.Language == string(tree.SQL) {
 		body = cf.Body

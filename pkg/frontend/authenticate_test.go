@@ -566,17 +566,29 @@ func Test_initFunction(t *testing.T) {
 		setPu("", pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		ctx = defines.AttachAccountId(ctx, sysAccountID)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		var executed []string
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			},
+		).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+		oldNewBackgroundExec := NewBackgroundExec
+		defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+		var forcedPessimisticRC bool
+		NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+			forcedPessimisticRC = len(opts) == 1 && opts[0] != nil && opts[0].forcePessimisticRC
+			return bh
+		}
 
 		locale := ""
 
@@ -619,6 +631,11 @@ func Test_initFunction(t *testing.T) {
 		}
 		err := InitFunction(ses, newTestExecCtx(ctx, ctrl), tenant, cu)
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(forcedPessimisticRC, convey.ShouldBeTrue)
+		convey.So(executed, convey.ShouldContain, "begin;")
+		convey.So(executed, convey.ShouldContain,
+			"select dat_id from mo_catalog.mo_database where datname = 'db' and account_id = 0 for update;")
+		convey.So(executed, convey.ShouldContain, "rollback;")
 	})
 }
 
